@@ -1,0 +1,8 @@
+packages:
+  - packages/*
+  - examples/*
+
+# Native addons the CLI needs: native-gles (WebGL2 for webgl-node) and sharp (images).
+onlyBuiltDependencies:
+  - native-gles
+  - sharp

@@ -1,0 +1,46 @@
+{
+  "name": "@drawcall/impostor",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Octahedral impostors for Three.js: bake in memory, render as one InstancedMesh, save as .glts.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "fflate": "^0.8.2",
+    "ktx-parse": "^2.0.0"
+  },
+  "peerDependencies": {
+    "three": ">=0.177.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.6",
+    "three": "^0.185.1",
+    "@types/three": "^0.185.0",
+    "webgl-node": "1.6.1"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/drawcall-ai/impostor.git",
+    "directory": "packages/impostor"
+  },
+  "homepage": "https://github.com/drawcall-ai/impostor#readme",
+  "bugs": {
+    "url": "https://github.com/drawcall-ai/impostor/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

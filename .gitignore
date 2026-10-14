@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+.artifacts/
+*.tsbuildinfo
+.DS_Store
+
+# Copied from the root by the publish workflow.
+packages/impostor/README.md
+packages/*/LICENSE
+*.tgz
+
+# Realistic test cases, fetched by examples/lab/scripts/cases.ts.
+examples/lab/public/cases/
