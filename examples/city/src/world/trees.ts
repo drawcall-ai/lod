@@ -1,4 +1,4 @@
-import type { InstancedLod } from "@drawcall/lod";
+import { type InstancedLod, simplify } from "@drawcall/lod";
 import * as THREE from "three";
 import { Random } from "../content/random.ts";
 import { step } from "../loading.ts";
@@ -11,11 +11,13 @@ import type { Plan } from "./plan.ts";
  * InstancedLod of the model, then a hemispherical impostor (they always stand upright)
  * out to the horizon. No simplified level between: decimated leaf cards look ragged,
  * while the impostor keeps every leaf's look. The switch heights are set for the frame
- * budget: the broadleaf scan has two million triangles, affordable for a few trees that
- * fill much of the view, so its impostor gets twice the resolution to stay sharp up close.
+ * budget: the broadleaf scan models every leaf in about 60 triangles, two million in all;
+ * a quarter of them (`ratio`) still shows each leaf's shape from a step away, and is
+ * affordable for the few dozen trees that stand that close in a forest. Its impostor gets
+ * twice the resolution to stay sharp up close.
  */
-const SPECIES: { id: string; groups?: string[][]; maxPixels: number; resolution?: number; frames?: number; cull?: number }[] = [
-  { id: "tree_small_02", maxPixels: 900, resolution: 256, frames: 10 },
+const SPECIES: { id: string; groups?: string[][]; ratio?: number; maxPixels: number; resolution?: number; frames?: number; cull?: number }[] = [
+  { id: "tree_small_02", ratio: 0.25, maxPixels: 900, resolution: 256, frames: 10 },
   { id: "searsia_lucida", groups: [["searsia_lucida_a_LOD0"], ["searsia_lucida_e_LOD0"]], maxPixels: 300 },
   { id: "pine_sapling_small", groups: [["pine_sapling_small_a"], ["pine_sapling_small_b"]], maxPixels: 300 },
   { id: "shrub_02", groups: [["shrub_02_a"], ["shrub_02_c"]], maxPixels: 300, cull: 2 },
@@ -26,10 +28,11 @@ const SPECIES: { id: string; groups?: string[][]; maxPixels: number; resolution?
 
 export async function trees(plan: Plan): Promise<InstancedLod[]> {
   const lods: InstancedLod[] = [];
-  for (const { id, groups, maxPixels, resolution, frames, cull } of SPECIES) {
+  for (const { id, groups, ratio, maxPixels, resolution, frames, cull } of SPECIES) {
     const spots = plan.models.get(id) ?? [];
     if (spots.length === 0) continue;
-    const sources = await variants(id, groups);
+    const scans = await variants(id, groups);
+    const sources = ratio === undefined ? scans : await Promise.all(scans.map((scan) => simplify(scan, { ratio })));
     const built = await step(id, () =>
       spread(
         id,
