@@ -55,7 +55,10 @@ export class Pipeline {
     const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
     // a new target rather than setSize, which leaves the depth texture at its old size
     this.target.dispose();
-    this.target = new THREE.WebGLRenderTarget(size.x, size.y, { samples: 4, type: THREE.HalfFloatType });
+    // At a pixel ratio of 2, 4 samples cost a quarter of the frame; 2 keep thin twigs and
+    // grass blades whole in motion (without, they break into crawling dashes) for half that.
+    const samples = this.renderer.getPixelRatio() >= 2 ? 2 : 4;
+    this.target = new THREE.WebGLRenderTarget(size.x, size.y, { samples, type: THREE.HalfFloatType });
     // reversed depth gains only with a float depth buffer
     this.target.depthTexture = new THREE.DepthTexture(size.x, size.y, THREE.FloatType);
   }
