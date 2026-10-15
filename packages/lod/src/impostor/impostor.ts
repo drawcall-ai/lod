@@ -52,6 +52,11 @@ export function boxCentre(b: Impostor["box"]): [number, number, number] {
   return [(b[0] + b[3]) / 2, (b[1] + b[4]) / 2, (b[2] + b[5]) / 2];
 }
 
+/** Half the box's edges. */
+export function boxExtent(b: Impostor["box"]): [number, number, number] {
+  return [(b[3] - b[0]) / 2, (b[4] - b[1]) / 2, (b[5] - b[2]) / 2];
+}
+
 /** Radius of the sphere around the box: the depth channel's unit. */
 export function boundingRadius(b: Impostor["box"]): number {
   return Math.hypot(b[3] - b[0], b[4] - b[1], b[5] - b[2]) / 2;

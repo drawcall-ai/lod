@@ -88,6 +88,8 @@ const VERTEX_PARS =
 uniform vec3 impostorViewer;
 // Where the card sits within an instance's space; identity except under InstancedLod.
 uniform mat4 impostorPlacement;
+// Half the edges of the source's bounding box.
+uniform vec3 impostorExtent;
 
 // Orthographic, read off the projection: three only sets its isOrthographic uniform for
 // some materials (not the depth materials of shadow passes).
@@ -131,7 +133,12 @@ const BEGIN_VERTEX = /* glsl */ `
   vec3 impostorT;
   vec3 impostorB;
   impostorBasis(impostorView, impostorT, impostorB);
-  vec3 transformed = impostorCentre + (impostorT * position.x + impostorB * position.y) * (2.0 * impostorHalfSize * impostorGrow);
+  // The card covers the box as seen from here, plus the frame's empty border (the bake's
+  // PAD) for the filtered edge, and no more than the frame: every pixel of it runs the
+  // whole shader, and a square frame is mostly empty for a tall plant.
+  vec2 impostorBox = vec2(dot(abs(impostorT), impostorExtent), dot(abs(impostorB), impostorExtent)) + 0.06 * impostorHalfSize;
+  vec2 impostorCard = 2.0 * impostorGrow * min(impostorBox, vec2(impostorHalfSize));
+  vec3 transformed = impostorCentre + impostorT * (position.x * impostorCard.x) + impostorB * (position.y * impostorCard.y);
 
   // The three frames around the view direction and their barycentric weights.
   float last = impostorFrames - 1.0;

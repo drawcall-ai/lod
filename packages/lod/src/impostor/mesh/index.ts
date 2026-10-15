@@ -23,7 +23,7 @@ import { fadeUniforms, registerFade } from "../../fade.js";
 import { TinyCaster } from "../../shadow.js";
 import { acquireTextures, releaseTextures } from "./textures.js";
 import { sameClass } from "../../three.js";
-import { boundingRadius, boxCentre, validateImpostor, type Impostor, type ImpostorMap } from "../impostor.js";
+import { boundingRadius, boxCentre, boxExtent, validateImpostor, type Impostor, type ImpostorMap } from "../impostor.js";
 import { applyEdits, type Edit } from "../../patch.js";
 import { FRAGMENT, fragmentLit } from "./fragment.js";
 import { VERTEX, vertexLit } from "./vertex.js";
@@ -126,6 +126,7 @@ export class ImpostorMesh extends InstancedMesh<PlaneGeometry, MeshStandardMater
       ...fading,
       impostorCentre: { value: new Vector3(...boxCentre(impostor.box)) },
       impostorRadius: { value: boundingRadius(impostor.box) },
+      impostorExtent: { value: new Vector3(...boxExtent(impostor.box)) },
       impostorBase: { value: layer("base") },
       impostorNormalDepth: { value: layer("normalDepth") },
       impostorOrm: { value: layer("orm") },

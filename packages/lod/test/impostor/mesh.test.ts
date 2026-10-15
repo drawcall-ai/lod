@@ -1,4 +1,5 @@
 import {
+  BoxGeometry,
   Matrix4,
   Mesh,
   ShaderChunk,
@@ -108,11 +109,16 @@ describe("ImpostorMesh", { timeout: GPU_TIMEOUT }, () => {
     expect(hits.map((h) => [h.instanceId, h.distance])).toEqual([[1, 9]]);
   });
 
-  it("looks like the real object", async () => {
-    const knot = new Mesh(new TorusKnotGeometry(1, 0.3, 128, 16), new MeshStandardMaterial({ color: 0xd06030, roughness: 0.6 }));
+  it.each([
+    ["a knot", new TorusKnotGeometry(1, 0.3, 128, 16), new Vector3(3, 2, 7), 30],
+    // From afar, so perspective adds no slack: the card, far narrower than the frame for
+    // this box, must still not cut its outline.
+    ["a tall thin box from the side", new BoxGeometry(0.3, 3, 0.3).rotateY(0.5), new Vector3(0, 1, 40), 6],
+  ])("looks like the real object: %s", async (_, geometry, eye, fov) => {
+    const knot = new Mesh(geometry, new MeshStandardMaterial({ color: 0xd06030, roughness: 0.6 }));
     const mesh = new ImpostorMesh(await bakeImpostor(knot, { renderer, resolution: 128 }));
-    const camera = new PerspectiveCamera(30, 1, 0.1, 100);
-    camera.position.set(3, 2, 7);
+    const camera = new PerspectiveCamera(fov, 1, 0.1, 100);
+    camera.position.copy(eye);
     camera.lookAt(0, 0, 0);
     const render = (object: Object3D) => {
       const target = new WebGLRenderTarget(96, 96, { samples: 4 });
@@ -135,7 +141,7 @@ describe("ImpostorMesh", { timeout: GPU_TIMEOUT }, () => {
       if (a || b) either++;
     }
     // No lights, so both render black: compare silhouettes.
-    expect(both / either).toBeGreaterThan(0.85);
+    expect(both / either).toBeGreaterThan(0.9);
     mesh.dispose();
   });
 });
