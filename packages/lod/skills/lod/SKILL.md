@@ -69,9 +69,10 @@ Lod.debug = true; // tint levels to see where each draws
 
 ## How the parts combine
 
-- **Switching is by on-screen height** in drawing-buffer pixels, so the device pixel ratio
-  counts. `Lod.quality` scales every measurement: below 1, cheaper levels take over
-  sooner — the global performance knob.
+- **Switching is by on-screen height in CSS pixels:** a high-density screen picks the
+  levels a standard one does and pays for its extra pixels in fill only. `Lod.quality`
+  scales every measurement: below 1, cheaper levels take over sooner — the global
+  performance knob (set it to the pixel ratio to switch by device pixels).
 - **Near a switch both levels draw** and split the pixels with a dither, so nothing pops.
   Elsewhere only one level is visible: hidden levels cost nothing and cast no shadow.
   Each level's switch size must stay far enough below the previous one's for one fade to

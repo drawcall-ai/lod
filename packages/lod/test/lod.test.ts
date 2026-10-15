@@ -194,6 +194,21 @@ describe("Lod", { timeout: GPU_TIMEOUT }, () => {
     expect(visible(target)).toEqual([2]);
   });
 
+  it("measures in CSS pixels: the renderer's over its pixel ratio", () => {
+    const target = lod();
+    const scene = new Scene().add(target);
+    place(150, 64);
+    renderer.setPixelRatio(2);
+    try {
+      render(scene);
+      render(scene);
+    } finally {
+      renderer.setPixelRatio(1);
+    }
+    // 150 px of a 64 px target is 75 CSS px at pixel ratio 2: level 2, not level 1.
+    expect(visible(target)).toEqual([2]);
+  });
+
   it("splits the pixels between both sides of a fade, though they share a material and are instanced", () => {
     const material = new MeshBasicMaterial();
     const pair = () => {

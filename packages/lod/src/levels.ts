@@ -16,7 +16,7 @@ export const FADE = 0.1;
 export interface LodLevel {
   readonly object: Object3D;
   /**
-   * The largest on-screen height, in drawing-buffer pixels, at which this level is used
+   * The largest on-screen height, in CSS pixels, at which this level is used
    * (heights are × `Lod.quality`). Level 0, the source, has Infinity.
    * Every further level's must be at most 0.9 of the previous one's, so that one fade has
    * ended before the next begins.

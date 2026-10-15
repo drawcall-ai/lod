@@ -28,7 +28,12 @@ export class View {
 
 const viewport = new Vector4();
 
-/** The viewport height each camera draws at, as the meshes of one Lod see it. */
+/**
+ * The viewport height each camera draws at, as the meshes of one Lod see it, in CSS
+ * pixels: the renderer's pixels over its pixel ratio. A high-density screen then picks
+ * the levels a standard one does, and pays for its extra pixels only in fill, not in
+ * finer levels its viewer can barely tell apart.
+ */
 export class Viewports {
   private readonly heights = new WeakMap<Camera, number>();
 
@@ -42,7 +47,7 @@ export class Viewports {
     const previous = mesh.onBeforeRender;
     mesh.onBeforeRender = (renderer, scene, camera, geometry, material, group) => {
       previous.call(mesh, renderer, scene, camera, geometry, material, group);
-      this.heights.set(camera, renderer.getCurrentViewport(viewport).w);
+      this.heights.set(camera, renderer.getCurrentViewport(viewport).w / renderer.getPixelRatio());
     };
   }
 }

@@ -60,11 +60,6 @@ export class Pipeline {
     this.target.depthTexture = new THREE.DepthTexture(size.x, size.y, THREE.FloatType);
   }
 
-  /** The drawing-buffer height the levels are measured against. */
-  get height(): number {
-    return this.target.height;
-  }
-
   render(scene: THREE.Scene, camera: THREE.Camera): void {
     const { renderer } = this;
     this.timer?.begin();

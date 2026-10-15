@@ -20,7 +20,8 @@ const view = new View();
  *
  * three's WebGLRenderer calls `update(camera)` while it lists the scene (as for its own
  * LOD), before shadow maps render. The height uses the viewport the camera last drew one
- * of the levels' meshes in (1080 px before that), so several views each get their own.
+ * of the levels' meshes in, in CSS pixels (1080 before that), so several views each get
+ * their own.
  *
  * Fades are measured from the viewing camera in every pass. In shadow passes, which are
  * often orthographic, an impostor's shadow dithers with it and a mesh's shadow is whole,

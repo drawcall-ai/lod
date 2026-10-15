@@ -24,7 +24,7 @@ const eye = new THREE.Vector3();
  * its InstancedLods, its children, sort the new instances in the same frame.
  */
 export class Patches extends THREE.Object3D {
-  /** Drawing-buffer height that reaches are measured on, as the package measures levels; the app sets it. */
+  /** View height in CSS pixels that reaches are measured on, as the package measures levels; the app sets it. */
   static height = 1080;
   readonly isLOD = true;
   autoUpdate = true;
@@ -110,7 +110,7 @@ export class Patches extends THREE.Object3D {
 /**
  * The distance within which an object `size` metres across (bounding diameter) stands
  * taller than `pixels` on screen for `camera`, measured as the package measures levels:
- * on a drawing buffer `height` pixels tall, times `quality`.
+ * on a view `height` CSS pixels tall, times `quality`.
  */
 export function reachFor(camera: THREE.Camera, size: number, pixels: number, height: number, quality: number): number {
   const scale = ((camera.projectionMatrix.elements[5] ?? 1) * height) / 2;

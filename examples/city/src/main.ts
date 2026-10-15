@@ -115,7 +115,7 @@ ui.bind({
 
 function resize(): void {
   pipeline.setSize(innerWidth, innerHeight);
-  Patches.height = pipeline.height;
+  Patches.height = innerHeight;
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
 }

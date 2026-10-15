@@ -82,7 +82,7 @@ export async function cover(plan: Plan, zones: Zones): Promise<Patches[]> {
     const view = new THREE.PerspectiveCamera(50);
     // the measure is symmetric: given a distance, it returns the on-screen height there
     const cull = reachFor(view, size, kind.reach, 800, 1);
-    // tiles that can be within reach on a 1600 px tall drawing buffer
+    // tiles that can be within reach on a 1600 px tall view
     const chunks = Math.ceil((Math.PI * (2 * kind.reach + TILE) ** 2) / (TILE * TILE));
     const tiles = new GroundTiles(plan, kind.density, where(plan, kind.ground), kind.scale, sources.length);
     const perTile = tiles.perKind;
