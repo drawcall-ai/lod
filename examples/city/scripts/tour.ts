@@ -1,11 +1,16 @@
-// Loads the city in headless Chromium on the real GPU at 1280 × 800, stops the tour at
-// each of its keys and saves a screenshot plus frame time, triangles, draw calls and
-// instances per level to .artifacts/tour/.
+// Loads the city in headless Chromium on the real GPU, by default at a 14" MacBook Pro's
+// 1512 × 982 CSS pixels at device pixel ratio 2, stops the tour at each of its keys and
+// saves a screenshot plus frame times, triangles, draw calls and instances per level to
+// .artifacts/<out>/.
 //
-//   pnpm --filter @drawcall/lod-example-city tour [--query=debug] [--frames=30] [--keys=1,5] [--cold]
+//   pnpm --filter @drawcall/lod-example-city tour [--size=1512x982] [--dpr=2] [--no-terrain]
+//     [--query=debug] [--keys=1,5] [--out=tour] [--cold]
 //
-// --query adds page URL parameters, --keys shoots only those keys, --cold empties the
-// browser profile (and with it the page's bake cache) first.
+// Frame time is per frame of 12 drawn back to back with one wait for the GPU at the end,
+// the median of 5 runs: still at the key and moving on along the tour; cpu is one frame's
+// CPU work. --no-terrain leaves the ground mesh out, --query adds page URL parameters,
+// --keys shoots only those keys, --cold empties the browser profile (and with it the
+// page's bake cache) first.
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
@@ -14,7 +19,6 @@ import { createServer } from "vite";
 interface Measure {
   ms: number;
   cpu: number;
-  gpu: number | null;
   calls: number;
   triangles: number;
   kinds: { name: string; levels: { instances: number; triangles: number }[] }[];
@@ -25,15 +29,18 @@ interface City {
   loadMs: number;
   keys: { name: string; time: number }[];
   seek(time: number): void;
-  measure(frames: number): Measure;
+  measure(frames: number, runs: number, move?: number): Measure;
 }
 declare const window: { city: City };
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const args = process.argv.slice(2);
 const flag = (name: string) => args.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
-const out = fileURLToPath(new URL("../.artifacts/tour/", import.meta.url));
-const frames = Number(flag("frames") ?? 30);
+const out = fileURLToPath(new URL(`../.artifacts/${flag("out") ?? "tour"}/`, import.meta.url));
+const [width, height] = (flag("size") ?? "1512x982").split("x").map(Number);
+const dpr = Number(flag("dpr") ?? 2);
+if (!width || !height || !dpr) throw new Error("--size takes <width>x<height> and --dpr a number");
+const query = [flag("query"), args.includes("--no-terrain") && "terrain=0"].filter(Boolean).join("&");
 const only = flag("keys")?.split(",").map(Number);
 // a full run replaces the last one's shots
 if (!only) await rm(out, { recursive: true, force: true });
@@ -48,7 +55,8 @@ const profile = fileURLToPath(new URL("../.artifacts/browser/", import.meta.url)
 if (args.includes("--cold")) await rm(profile, { recursive: true, force: true });
 const browser = await chromium.launchPersistentContext(profile, {
   headless: true,
-  viewport: { width: 1280, height: 800 },
+  viewport: { width, height },
+  deviceScaleFactor: dpr,
   args: ["--use-angle=metal", "--enable-gpu", "--ignore-gpu-blocklist"],
 });
 const page = await browser.newPage();
@@ -57,32 +65,34 @@ page.on("console", (m) => console.error(`[page ${m.type()}]`, m.text()));
 const failed = new Promise<never>((_, reject) => page.on("pageerror", reject));
 
 try {
-  await page.goto(`${url}?shot&${flag("query") ?? ""}`);
+  await page.goto(`${url}?shot&${query}`);
   await Promise.race([page.waitForFunction(() => "city" in window, null, { timeout: 600_000 }), failed]);
   const loadMs = await page.evaluate(() => window.city.loadMs);
   const keys = await page.evaluate(() => window.city.keys);
-  const rows: (Measure & { name: string; time: number })[] = [];
+  const rows: (Measure & { name: string; time: number; moving: { ms: number; cpu: number } })[] = [];
   for (const [i, key] of keys.entries()) {
     if (only && !only.includes(i + 1)) continue;
     await page.evaluate((t) => window.city.seek(t), key.time);
     // a few real frames: textures upload, fades settle; then untimed ones, so the patches
     // filled around the new pose and their first draws are not in the timing
     await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(r)))));
-    await page.evaluate(() => window.city.measure(10));
-    const measure = await page.evaluate((n) => window.city.measure(n), frames);
+    await page.evaluate(() => window.city.measure(12, 1));
+    const measure = await page.evaluate(() => window.city.measure(12, 5));
+    const { ms, cpu } = await page.evaluate(() => window.city.measure(12, 5, 1 / 60));
+    const moving = { ms, cpu };
     const file = `${String(i + 1).padStart(2, "0")}-${key.name.replace(/\s+/g, "-")}.png`;
     await page.screenshot({ path: out + file });
-    rows.push({ ...key, ...measure });
+    rows.push({ ...key, ...measure, moving });
     const m = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
     const levels = measure.kinds.map((k) => `${k.name}: ${k.levels.map((l) => `${m(l.instances)}(${m(l.triangles)})`).join(" ")}`).join(", ");
     const cascades = measure.cascades
       .map((c) => `${c.texel < 0.01 ? `${(c.texel * 1000).toPrecision(2)}mm` : `${c.texel.toPrecision(2)}m`}/${c.casters}`)
       .join(" ");
     console.log(
-      `${file.padEnd(24)} ${measure.ms.toFixed(1).padStart(6)} ms (cpu ${measure.cpu.toFixed(1)})  gpu ${measure.gpu?.toFixed(1) ?? "-"}  ${(measure.triangles / 1e6).toFixed(2)}M tris  ${measure.calls} draws  shadows ${cascades}  ${levels}`,
+      `${file.padEnd(24)} ${measure.ms.toFixed(1).padStart(5)} ms (cpu ${measure.cpu.toFixed(1)})  moving ${moving.ms.toFixed(1).padStart(5)} ms (cpu ${moving.cpu.toFixed(1)})  ${(measure.triangles / 1e6).toFixed(2)}M tris  ${measure.calls} draws  shadows ${cascades}  ${levels}`,
     );
   }
-  await writeFile(`${out}tour.json`, JSON.stringify({ loadMs, rows }, null, 2));
+  await writeFile(`${out}tour.json`, JSON.stringify({ width, height, dpr, query, loadMs, rows }, null, 2));
   console.log(`load ${(loadMs / 1000).toFixed(1)} s; results in ${out}`);
 } finally {
   await browser.close();

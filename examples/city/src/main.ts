@@ -1,7 +1,8 @@
 // The city showcase: a 4 × 4 km world from a seed, every kind of content on the levels
 // that suit it, a scripted flight from two kilometres up to a ladybird, free flight.
-// ?shot hides the overlay and pins the pixel ratio to 1 (scripts/tour.ts); ?seed=<n>
-// changes the world; ?debug tints levels and ?quality=<q> sets Lod.quality from the start.
+// ?shot hides the overlay (scripts/tour.ts); ?seed=<n> changes the world; ?debug tints
+// levels and ?quality=<q> sets Lod.quality from the start; ?terrain=0 leaves the ground
+// mesh out (everything still stands where the ground would be; roads and the creek stay).
 // window.city exposes the tour and frame measurements to scripts/tour.ts.
 import * as THREE from "three";
 import { Lod } from "@drawcall/lod";
@@ -30,6 +31,7 @@ import { trees } from "./world/trees.ts";
 
 const params = new URLSearchParams(location.search);
 const shot = params.has("shot");
+const terrain = params.get("terrain") !== "0";
 Lod.debug = params.has("debug");
 Lod.quality = Number(params.get("quality") ?? 1);
 if (shot) document.body.classList.add("shot");
@@ -40,7 +42,7 @@ THREE.DefaultLoadingManager.onProgress = (url, loaded, total) => ui.progress(`Do
 building.onProgress = (name, loaded, total) => ui.progress(`Building ${name}…`, 0.25 + (0.75 * loaded) / Math.max(total, 14));
 
 await loadManifest();
-const pipeline = new Pipeline({ preserveDrawingBuffer: shot, pixelRatio: shot ? 1 : Math.min(devicePixelRatio, 2) });
+const pipeline = new Pipeline({ preserveDrawingBuffer: shot, pixelRatio: Math.min(devicePixelRatio, 2) });
 // hidden until the world is built: an empty canvas would sit over the page meanwhile
 pipeline.canvas.style.visibility = "hidden";
 document.body.prepend(pipeline.canvas);
@@ -65,11 +67,14 @@ scene.fog = new THREE.FogExp2(haze, 1.7e-4);
 
 const world = plan(Number(params.get("seed") ?? 7));
 const zones = { fields: world.fields, forests: world.forests, parcels: { texture: world.land.texture(), extent: EXTENT }, town: TOWN };
-const ground = world.terrain.mesh(terrainMaterial(zones));
-// the ground's shader is the costliest per pixel and much of it ends up under corn, grass
-// and houses: drawn last of the opaque objects, depth testing skips what they cover
-ground.renderOrder = 1;
-scene.add(ground, roads(world), water(world.terrain));
+if (terrain) {
+  const ground = world.terrain.mesh(terrainMaterial(zones));
+  // the ground's shader is the costliest per pixel and much of it ends up under corn, grass
+  // and houses: drawn last of the opaque objects, depth testing skips what they cover
+  ground.renderOrder = 1;
+  scene.add(ground);
+}
+scene.add(roads(world), water(world.terrain));
 
 const houseLods = await houses(world);
 const treeLods = await trees(world);
@@ -172,24 +177,39 @@ const api = {
     time = t;
     for (let i = 0; i < 4; i++) frame(0);
   },
-  /** Draws `frames` frames at the current pose, each waited for on the GPU; the median time and what the last one drew. */
-  measure(frames: number) {
+  /**
+   * Times frames at the current pose: `runs` times, `frames` frames back to back with one
+   * wait for the GPU after the last, so CPU and GPU overlap as in the live loop. `ms` is
+   * the median run's time per frame, `cpu` the median time of one frame's CPU work. With
+   * `move`, each frame of a run moves on that many seconds of tour from the pose, which
+   * comes back after. What was drawn is the pose's own frame.
+   */
+  measure(frames: number, runs: number, move = 0) {
     const gl = pipeline.renderer.getContext();
     const pixel = new Uint8Array(4);
-    const times: number[] = [];
+    const wait = () => gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+    const start = time;
+    const perFrame: number[] = [];
     const cpu: number[] = [];
-    for (let i = 0; i < frames; i++) {
+    wait();
+    for (let r = 0; r < runs; r++) {
       const t0 = performance.now();
-      frame(0);
-      cpu.push(performance.now() - t0);
-      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
-      times.push(performance.now() - t0);
+      for (let i = 0; i < frames; i++) {
+        time = start + i * move;
+        const t1 = performance.now();
+        frame(0);
+        cpu.push(performance.now() - t1);
+      }
+      wait();
+      perFrame.push((performance.now() - t0) / frames);
     }
+    time = start;
+    frame(0);
+    wait();
     const median = (list: number[]) => list.sort((a, b) => a - b)[Math.floor(list.length / 2)] ?? 0;
     return {
-      ms: median(times),
+      ms: median(perFrame),
       cpu: median(cpu),
-      gpu: pipeline.gpuMs,
       ...pipeline.drawn,
       kinds: counts(),
       cascades: sun.cascades.map((c) => ({ ...c.drawn })),
