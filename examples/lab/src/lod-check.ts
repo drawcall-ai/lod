@@ -1,13 +1,16 @@
 import * as THREE from "three";
-import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
-import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
-import { bakedLod, lodReady, simplifyLod, simplifyStats } from "./lod";
+import { bakeMesh, simplify, type BakeMeshOptions } from "@drawcall/lod";
+import { errorOf } from "../../../packages/lod/src/levels.js";
+import { at } from "./must.js";
+import { context2d, gpuName, png } from "./page.js";
+import { subject } from "./subjects.js";
 
-// Standalone page (lod.html): mesh LODs next to their originals. Does not import
-// @drawcall/impostor. Driven by scripts/lod-check.ts through window.lodCheck.run().
+// Standalone page (lod.html): simplified and baked levels next to their source, with
+// their render error against it. Driven by scripts/lod-check.ts through window.lodCheck.run().
 
-const defaultRatios = [0.25, 0.05, 0.01];
+const SUBJECTS = ["tree", "pine", "rock", "fence", "wall", "house"];
+const RATIOS = [0.25, 0.05];
 const views: Array<{ azimuth: number; elevation: number; zoom?: number }> = [
   { azimuth: 35, elevation: 12 },
   { azimuth: 160, elevation: 30 },
@@ -16,16 +19,6 @@ const views: Array<{ azimuth: number; elevation: number; zoom?: number }> = [
 ];
 const TILE = 300;
 
-const gltf = new GLTFLoader().setDRACOLoader(new DRACOLoader().setDecoderPath("/draco/"));
-const model = (file: string) => async () => (await gltf.loadAsync(`/models/${file}`)).scene;
-const subjects: Array<{ name: string; load: () => Promise<THREE.Object3D> }> = [
-  { name: "tree", load: model("CommonTree_3.glb") },
-  { name: "pine", load: model("Pine_2.glb") },
-  { name: "rock", load: model("Rock_Medium_1.glb") },
-  { name: "fence", load: model("quaternius-platformer-fence.glb") },
-  { name: "wall", load: async () => wall() },
-];
-
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(1);
 renderer.toneMapping = THREE.NeutralToneMapping;
@@ -33,29 +26,42 @@ document.body.append(renderer.domElement);
 const pmrem = new THREE.PMREMGenerator(renderer);
 const environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
+const materialsOf = (mesh: THREE.Mesh): THREE.Material[] => [mesh.material].flat();
+
 function triangles(object: THREE.Object3D) {
   let n = 0;
-  object.traverse((o) => {
-    const m = o as THREE.Mesh;
-    if (!m.isMesh) return;
-    const g = m.geometry;
+  object.traverse((node) => {
+    if (!(node instanceof THREE.Mesh)) return;
+    const g: THREE.BufferGeometry = node.geometry;
     n += (g.index ? g.index.count : g.getAttribute("position").count) / 3;
   });
   return n;
 }
 
+/** Width and height of a texture's image, whatever kind of image it is. */
+function imageSize(image: unknown): { width: number; height: number } {
+  if (
+    typeof image === "object" &&
+    image !== null &&
+    "width" in image &&
+    "height" in image &&
+    typeof image.width === "number" &&
+    typeof image.height === "number"
+  )
+    return { width: image.width, height: image.height };
+  throw new Error(`lod-check: a texture image without a size: ${String(image)}`);
+}
+
 function textureBytes(object: THREE.Object3D) {
   const seen = new Set<THREE.Texture>();
-  object.traverse((o) => {
-    const m = o as THREE.Mesh;
-    if (!m.isMesh) return;
-    for (const mat of Array.isArray(m.material) ? m.material : [m.material])
-      for (const v of Object.values(mat)) if (v instanceof THREE.Texture) seen.add(v);
+  object.traverse((node) => {
+    if (!(node instanceof THREE.Mesh)) return;
+    for (const material of materialsOf(node)) for (const v of Object.values(material)) if (v instanceof THREE.Texture) seen.add(v);
   });
   let bytes = 0;
   for (const t of seen) {
-    const img = t.image as { width: number; height: number };
-    bytes += img.width * img.height * 4 * (t.generateMipmaps ? 4 / 3 : 1);
+    const { width, height } = imageSize(t.image);
+    bytes += width * height * 4 * (t.generateMipmaps ? 4 / 3 : 1);
   }
   return Math.round(bytes);
 }
@@ -71,35 +77,56 @@ function sceneFor(object: THREE.Object3D) {
   return scene;
 }
 
-type Mode = "lit" | "albedo" | "normal";
+export type Mode = "lit" | "albedo" | "normal";
 
-/** Copy of `object` rendered as unlit base colour or as view-space normals, for checking a bake. */
-function debugView(object: THREE.Object3D, mode: Mode): THREE.Object3D {
+/** `material` drawing unlit base colour or view-space normals, for checking a bake. */
+function inMode(material: THREE.Material, mode: Exclude<Mode, "lit">): THREE.Material {
+  if (!(material instanceof THREE.MeshStandardMaterial)) throw new Error(`lod-check: ${mode} view of a ${material.type}`);
+  const { side, alphaTest, map } = material;
+  if (mode === "albedo") return new THREE.MeshBasicMaterial({ side, alphaTest, map, color: material.color, vertexColors: material.vertexColors });
+  const normals = new THREE.MeshNormalMaterial({
+    side,
+    normalMap: material.normalMap,
+    normalMapType: material.normalMapType,
+    normalScale: material.normalScale,
+  });
+  if (!map || alphaTest <= 0) return normals;
+  // The cut-out still needs the colour map's alpha: discard by it in onBeforeCompile.
+  const uvTransform = `mat3(${map.matrix.elements.join(", ")})`;
+  normals.onBeforeCompile = (shader) => {
+    shader.uniforms.alphaSource = { value: map };
+    shader.vertexShader = shader.vertexShader.replace(
+      "void main() {",
+      `varying vec2 vAlphaUv;\nvoid main() {\nvAlphaUv = (${uvTransform} * vec3(uv, 1.0)).xy;`,
+    );
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "void main() {",
+      `uniform sampler2D alphaSource;\nvarying vec2 vAlphaUv;\nvoid main() {\nif (texture2D(alphaSource, vAlphaUv).a < ${alphaTest.toFixed(3)}) discard;`,
+    );
+  };
+  return normals;
+}
+
+/** `object` as drawn in `mode`: itself when lit, else a copy with converted materials. */
+function viewIn(object: THREE.Object3D, mode: Mode): THREE.Object3D {
   if (mode === "lit") return object;
   const copy = object.clone(true);
-  copy.traverse((o) => {
-    const m = o as THREE.Mesh;
-    if (!m.isMesh) return;
-    const convert = (x: THREE.Material) => {
-      const s = x as THREE.MeshStandardMaterial;
-      const common = { side: s.side, alphaTest: s.alphaTest };
-      if (mode === "albedo") return new THREE.MeshBasicMaterial({ ...common, map: s.map, color: s.color, vertexColors: s.vertexColors });
-      // Normal view: the cut-out still needs the colour map's alpha, so draw normals via a
-      // MeshNormalMaterial and discard by alpha in onBeforeCompile.
-      const n = new THREE.MeshNormalMaterial({ side: s.side, normalMap: s.normalMap, normalMapType: s.normalMapType, normalScale: s.normalScale });
-      if (s.map && s.alphaTest > 0) {
-        n.onBeforeCompile = (shader) => {
-          shader.uniforms.alphaSource = { value: s.map };
-          shader.vertexShader = shader.vertexShader.replace("void main() {", "varying vec2 vAlphaUv;\nvoid main() {\nvAlphaUv = (" + JSON.stringify(Array.from(s.map!.matrix.elements)).replace("[", "mat3(").replace("]", ")") + " * vec3(uv, 1.0)).xy;");
-          shader.fragmentShader = shader.fragmentShader.replace("void main() {", "uniform sampler2D alphaSource;\nvarying vec2 vAlphaUv;\nvoid main() {\nif (texture2D(alphaSource, vAlphaUv).a < " + s.alphaTest.toFixed(3) + ") discard;");
-        };
-      }
-      return n;
-    };
-    m.material = Array.isArray(m.material) ? m.material.map(convert) : convert(m.material);
+  copy.traverse((node) => {
+    if (!(node instanceof THREE.Mesh)) return;
+    const converted = materialsOf(node).map((material) => inMode(material, mode));
+    node.material = Array.isArray(node.material) ? converted : at(converted, 0);
   });
   return copy;
 }
+
+const cameraPosition = (view: (typeof views)[number], sphere: THREE.Sphere, distance: number, into: THREE.Vector3) => {
+  const az = THREE.MathUtils.degToRad(view.azimuth);
+  const el = THREE.MathUtils.degToRad(view.elevation);
+  return into
+    .set(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el))
+    .multiplyScalar(distance / (view.zoom ?? 1))
+    .add(sphere.center);
+};
 
 async function sheet(name: string, columns: Array<{ label: string; object: THREE.Object3D }>, sphere: THREE.Sphere) {
   const w = columns.length * TILE;
@@ -107,13 +134,11 @@ async function sheet(name: string, columns: Array<{ label: string; object: THREE
   renderer.setSize(w, h, false);
   renderer.setScissorTest(true);
   const camera = new THREE.PerspectiveCamera(30, 1, sphere.radius * 0.05, sphere.radius * 20);
-  const distance = sphere.radius / Math.sin(THREE.MathUtils.degToRad(15)) * 1.02;
+  const distance = (sphere.radius / Math.sin(THREE.MathUtils.degToRad(15))) * 1.02;
   columns.forEach((column, c) => {
     const scene = sceneFor(column.object);
     views.forEach((view, r) => {
-      const az = THREE.MathUtils.degToRad(view.azimuth);
-      const el = THREE.MathUtils.degToRad(view.elevation);
-      camera.position.set(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el)).multiplyScalar(distance / (view.zoom ?? 1)).add(sphere.center);
+      cameraPosition(view, sphere, distance, camera.position);
       camera.lookAt(sphere.center);
       // WebGL viewport y is bottom-up.
       const y = h - (r + 1) * TILE;
@@ -127,7 +152,7 @@ async function sheet(name: string, columns: Array<{ label: string; object: THREE
   const canvas = document.createElement("canvas");
   canvas.width = w;
   canvas.height = h + 22;
-  const ctx = canvas.getContext("2d")!;
+  const ctx = context2d(canvas);
   ctx.fillStyle = "#111";
   ctx.fillRect(0, 0, w, 22);
   ctx.drawImage(renderer.domElement, 0, 22);
@@ -139,141 +164,117 @@ async function sheet(name: string, columns: Array<{ label: string; object: THREE
   return canvas.toDataURL("image/png");
 }
 
-/** Debug view of a baked texture (rows bottom-up, i.e. v up). */
-function textureImage(texture: THREE.DataTexture, opaque = false) {
-  const { width, height, data } = texture.image as { width: number; height: number; data: Uint8Array };
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d")!;
-  const pixels = new ImageData(width, height);
-  for (let y = 0; y < height; y++) {
-    const row = data.subarray((height - 1 - y) * width * 4, (height - y) * width * 4);
-    pixels.data.set(row, y * width * 4);
-  }
-  if (opaque) for (let i = 3; i < pixels.data.length; i += 4) pixels.data[i] = 255;
-  ctx.putImageData(pixels, 0, 0);
-  return canvas.toDataURL("image/png");
+/** Baked texture `texture` (rows bottom-up, i.e. v up) as a PNG data URL. */
+function textureImage(texture: THREE.Texture | null): string {
+  if (!(texture instanceof THREE.DataTexture)) throw new Error("lod-check: a baked map is not a DataTexture");
+  const { width, height, data } = texture.image;
+  if (!(data instanceof Uint8Array)) throw new Error("lod-check: a baked map is not 8-bit");
+  return png(data, width, height);
 }
 
-async function run(only?: string[], ratios = defaultRatios, modes: Mode[] = ["lit"]) {
-  await lodReady;
-  const results: Record<string, unknown>[] = [];
+/** One level's numbers; `error` is the one the package measured and switches by. */
+export interface Measured {
+  label: string;
+  triangles: number;
+  ms: number;
+  textureBytes: number;
+  error: number | undefined;
+  colorError: number;
+  coverageError: number;
+}
+
+async function run(only = SUBJECTS, ratios = RATIOS, modes: Mode[] = ["lit"]) {
+  const results: Array<{ name: string; triangles: number; textureBytes: number; levels: Measured[] }> = [];
   const images: Record<string, string> = {};
-  for (const subject of subjects) {
-    if (only && !only.includes(subject.name)) continue;
-    const original = await subject.load();
-    const box = new THREE.Box3().setFromObject(original);
-    const sphere = box.getBoundingSphere(new THREE.Sphere());
-    const columns = [{ label: `original ${triangles(original)}`, object: original }];
-    const simple: Record<string, unknown>[] = [];
-    const baked: Record<string, unknown>[] = [];
-    for (const ratio of ratios) {
-      Object.assign(simplifyStats, { strict: 0, permissive: 0, sloppy: 0 });
+  for (const name of only) {
+    const { load, low } = subject(name);
+    const source = await load();
+    const sphere = new THREE.Box3().setFromObject(source).getBoundingSphere(new THREE.Sphere());
+    const columns = [{ label: `source ${triangles(source)}`, object: source }];
+    const levels: Measured[] = [];
+    const measure = async (label: string, build: () => Promise<THREE.Object3D>) => {
       const t0 = performance.now();
-      const lod = simplifyLod(original, ratio);
-      const ms = performance.now() - t0;
-      simple.push({ ratio, triangles: triangles(lod), ms: Math.round(ms), textureBytes: textureBytes(lod), methods: { ...simplifyStats } });
-      columns.push({ label: `simple ${ratio} ${triangles(lod)}`, object: lod });
-    }
-    for (const ratio of ratios) {
-      const lod = await bakedLod(original, ratio);
-      const info = lod.userData.lod as Record<string, number>;
-      baked.push({ ratio, ...Object.fromEntries(Object.entries(info).map(([k, v]) => [k, Math.round(v * 1000) / 1000])) });
-      columns.push({ label: `baked ${ratio} ${info.triangles}`, object: lod });
-      if (ratio === ratios[1]) {
-        const mesh = lod.children[0] as THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>;
-        images[`${subject.name}-baked-${ratio}-color`] = textureImage(mesh.material.map as THREE.DataTexture);
-        images[`${subject.name}-baked-${ratio}-normal`] = textureImage(mesh.material.normalMap as THREE.DataTexture);
-        images[`${subject.name}-baked-${ratio}-orm`] = textureImage(mesh.material.roughnessMap as THREE.DataTexture);
-      }
+      const level = await build();
+      const ms = Math.round(performance.now() - t0);
+      levels.push({ label, triangles: triangles(level), ms, textureBytes: textureBytes(level), error: errorOf(level), ...renderError(source, level, sphere) });
+      columns.push({ label: `${label} ${triangles(level)}`, object: level });
+      return level;
+    };
+    for (const ratio of ratios) await measure(`simplified ${ratio}`, () => simplify(source, { ratio }));
+    const variants: Array<{ label: string; options: BakeMeshOptions }> = ratios.map((ratio) => ({ label: String(ratio), options: { ratio } }));
+    if (low) variants.push({ label: "low", options: { low: low() } });
+    for (const [i, variant] of variants.entries()) {
+      const baked = await measure(`baked ${variant.label}`, () => bakeMesh(source, variant.options));
+      if (i !== 1 && variant.label !== "low") continue;
+      if (!(baked instanceof THREE.Mesh) || !(baked.material instanceof THREE.MeshStandardMaterial))
+        throw new Error("lod-check: a baked level is not one standard mesh");
+      const { map, normalMap, roughnessMap } = baked.material;
+      const prefix = `${name}-baked-${variant.label}`;
+      images[`${prefix}-color`] = textureImage(map);
+      images[`${prefix}-normal`] = textureImage(normalMap);
+      images[`${prefix}-orm`] = textureImage(roughnessMap);
     }
     for (const mode of modes)
-      images[`${subject.name}-${mode === "lit" ? "sheet" : mode}`] = await sheet(subject.name, columns.map((c) => ({ label: c.label, object: debugView(c.object, mode) })), sphere);
-    results.push({ name: subject.name, triangles: triangles(original), textureBytes: textureBytes(original), simple, baked });
+      images[`${name}-${mode === "lit" ? "sheet" : mode}`] = await sheet(
+        name,
+        columns.map((c) => ({ label: c.label, object: viewIn(c.object, mode) })),
+        sphere,
+      );
+    results.push({ name, triangles: triangles(source), textureBytes: textureBytes(source), levels });
   }
-  return { renderer: rendererName(), results, images };
+  return { renderer: gpuName(renderer.getContext()), results, images };
 }
 
-function rendererName() {
-  const gl = renderer.getContext();
-  const ext = gl.getExtension("WEBGL_debug_renderer_info");
-  return ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : "unknown";
+const ERROR_SIZE = 256;
+const errorTarget = new THREE.WebGLRenderTarget(ERROR_SIZE, ERROR_SIZE, { samples: 4 });
+
+/** `object` alone from `camera` on a transparent background, as pixels. */
+function errorPixels(object: THREE.Object3D, camera: THREE.Camera): Uint8Array {
+  const scene = sceneFor(object);
+  scene.background = null;
+  renderer.setRenderTarget(errorTarget);
+  renderer.setClearColor(0x000000, 0);
+  renderer.clear();
+  renderer.render(scene, camera);
+  scene.remove(object);
+  const pixels = new Uint8Array(ERROR_SIZE * ERROR_SIZE * 4);
+  renderer.readRenderTargetPixels(errorTarget, 0, 0, ERROR_SIZE, ERROR_SIZE, pixels);
+  return pixels;
 }
 
-// --- procedural brick wall ------------------------------------------------------------
-
-function wall(): THREE.Object3D {
-  const W = 512;
-  const H = 256;
-  const rows = 4;
-  const perRow = 4;
-  const mortar = 6;
-  const color = document.createElement("canvas");
-  color.width = W;
-  color.height = H;
-  const ctx = color.getContext("2d")!;
-  ctx.fillStyle = "#b9b2a6";
-  ctx.fillRect(0, 0, W, H);
-  const height = new Float32Array(W * H);
-  let seed = 7;
-  const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-  const bh = H / rows;
-  const bw = W / perRow;
-  for (let r = 0; r < rows; r++)
-    for (let b = -1; b < perRow; b++) {
-      const x0 = b * bw + (r % 2 ? bw / 2 : 0) + mortar / 2;
-      const y0 = r * bh + mortar / 2;
-      const shade = 0.75 + rand() * 0.3;
-      ctx.fillStyle = `rgb(${Math.round(160 * shade)}, ${Math.round(70 * shade)}, ${Math.round(50 * shade)})`;
-      ctx.fillRect(x0, y0, bw - mortar, bh - mortar);
-      // Bevelled brick: height rises over `bevel` pixels from the mortar.
-      const bevel = 5;
-      for (let y = Math.ceil(y0); y < y0 + bh - mortar; y++)
-        for (let x = Math.ceil(x0); x < x0 + bw - mortar; x++) {
-          if (x < 0 || x >= W) continue;
-          const edge = Math.min(x - x0, x0 + bw - mortar - x, y - y0, y0 + bh - mortar - y);
-          height[y * W + x] = Math.min(1, (edge + 0.5) / bevel);
-        }
+/**
+ * How far `level` renders from `source`, over the sheet's whole-object views (not the
+ * close-up) at 256 px: mean colour difference in 8-bit steps over the pixels both cover
+ * (`colorError`), and the share of the pixels either covers that only one does
+ * (`coverageError`).
+ */
+function renderError(source: THREE.Object3D, level: THREE.Object3D, sphere: THREE.Sphere) {
+  const camera = new THREE.PerspectiveCamera(30, 1, sphere.radius * 0.05, sphere.radius * 20);
+  const distance = (sphere.radius / Math.sin(THREE.MathUtils.degToRad(15))) * 1.02;
+  let colour = 0;
+  let mismatched = 0;
+  let covered = 0;
+  let both = 0;
+  for (const view of views.filter((view) => view.zoom === undefined)) {
+    cameraPosition(view, sphere, distance, camera.position);
+    camera.lookAt(sphere.center);
+    const a = errorPixels(source, camera);
+    const b = errorPixels(level, camera);
+    for (let i = 0; i < a.length; i += 4) {
+      const inA = at(a, i + 3) > 127;
+      const inB = at(b, i + 3) > 127;
+      if (!inA && !inB) continue;
+      covered++;
+      if (inA !== inB) {
+        mismatched++;
+        continue;
+      }
+      both++;
+      for (let c = 0; c < 3; c++) colour += Math.abs(at(a, i + c) - at(b, i + c)) / 3;
     }
-  // Tangent-space normal map from the height field. Canvas textures upload with flipY, so
-  // image +y is -v: n = normalize(-dh/du, -dh/dv, 1/strength) with dh/dv = -dh/dy.
-  const normal = document.createElement("canvas");
-  normal.width = W;
-  normal.height = H;
-  const nctx = normal.getContext("2d")!;
-  const pixels = nctx.createImageData(W, H);
-  const h = (x: number, y: number) => height[((y + H) % H) * W + ((x + W) % W)]!;
-  const strength = 3;
-  for (let y = 0; y < H; y++)
-    for (let x = 0; x < W; x++) {
-      const dx = (h(x + 1, y) - h(x - 1, y)) * 0.5 * strength;
-      const dy = (h(x, y + 1) - h(x, y - 1)) * 0.5 * strength;
-      const n = new THREE.Vector3(-dx, dy, 1).normalize();
-      const o = (y * W + x) * 4;
-      pixels.data[o] = (n.x * 0.5 + 0.5) * 255;
-      pixels.data[o + 1] = (n.y * 0.5 + 0.5) * 255;
-      pixels.data[o + 2] = (n.z * 0.5 + 0.5) * 255;
-      pixels.data[o + 3] = 255;
-    }
-  nctx.putImageData(pixels, 0, 0);
-  const map = new THREE.CanvasTexture(color);
-  map.colorSpace = THREE.SRGBColorSpace;
-  const normalMap = new THREE.CanvasTexture(normal);
-  for (const t of [map, normalMap]) {
-    t.wrapS = t.wrapT = THREE.RepeatWrapping;
-    t.repeat.set(10, 4); // one tile = 2 m x 1 m on the long faces
-    t.anisotropy = 8;
   }
-  // Segmented so the simplifier has something to remove (a 12-triangle box would not change).
-  const mesh = new THREE.Mesh(
-    new THREE.BoxGeometry(20, 4, 1, 40, 8, 2),
-    new THREE.MeshStandardMaterial({ map, normalMap, roughness: 0.85, metalness: 0 }),
-  );
-  mesh.position.y = 2;
-  const group = new THREE.Group();
-  group.add(mesh);
-  return group;
+  renderer.setRenderTarget(null);
+  return { colorError: Math.round((colour / both) * 100) / 100, coverageError: Math.round((mismatched / covered) * 1000) / 1000 };
 }
 
 declare global {

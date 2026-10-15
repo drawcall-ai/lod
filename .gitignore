@@ -2,11 +2,12 @@ node_modules/
 dist/
 coverage/
 .artifacts/
+.claude/worktrees/
 *.tsbuildinfo
 .DS_Store
 
 # Copied from the root by the publish workflow.
-packages/impostor/README.md
+packages/lod/README.md
 packages/*/LICENSE
 *.tgz
 

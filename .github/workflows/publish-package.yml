@@ -32,14 +32,14 @@ jobs:
             echo "Expected a stable release tag such as v0.1.0" >&2
             exit 1
           fi
-          npm --prefix packages/impostor pkg set version="$version"
+          npm --prefix packages/lod pkg set version="$version"
       - name: Copy package documentation
         run: |
-          cp README.md packages/impostor/README.md
-          cp LICENSE packages/impostor/LICENSE
+          cp README.md packages/lod/README.md
+          cp LICENSE packages/lod/LICENSE
       - name: Pack package
         run: pnpm --filter "./packages/*" -r pack --pack-destination "$RUNNER_TEMP/packages"
       - name: Publish
-        run: npm publish "$RUNNER_TEMP/packages/drawcall-impostor-${RELEASE_TAG#v}.tgz" --access public --provenance --tag latest
+        run: npm publish "$RUNNER_TEMP/packages/drawcall-lod-${RELEASE_TAG#v}.tgz" --access public --provenance --tag latest
         env:
           RELEASE_TAG: ${{ github.ref_name }}

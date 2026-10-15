@@ -1,8 +1,9 @@
 // Realistic test cases as `.glts` files: CC0 Poly Haven scans and procedural ez-tree
 // trees at game-realistic triangle budgets, instead of the low-poly Quaternius set.
-// Downloads the 1k glTFs next to each script into public/cases/<id>/ (git-ignored).
+// Downloads the 1k glTFs next to each script into public/cases/<id>/ (git-ignored);
+// files already there are kept.
 //
-//   npx tsx scripts/cases.ts
+//   pnpm --filter @drawcall/lod-example-lab cases
 //
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -25,7 +26,7 @@ interface Tree {
   preset: string;
   seed: number;
 }
-export const CASES: Record<string, { why: string } & (Scan | Tree | Remote)> = {
+const CASES: Record<string, { why: string } & (Scan | Tree | Remote)> = {
   oak: { why: "broadleaf card tree, ~22k tris (ez-tree Oak Large)", preset: "Oak Large", seed: 3 },
   ash: { why: "broadleaf card tree, ~20k tris (ez-tree Ash Medium)", preset: "Ash Medium", seed: 5 },
   spruce: { why: "conifer card tree, ~19k tris (ez-tree Pine Large)", preset: "Pine Large", seed: 7 },
@@ -49,12 +50,38 @@ export const CASES: Record<string, { why: string } & (Scan | Tree | Remote)> = {
   },
 };
 
-const curl = async (url: string) => {
-  const response = await fetch(url, { headers: { "User-Agent": "drawcall-impostor-lab" } });
+async function get(url: string): Promise<Response> {
+  const response = await fetch(url, { headers: { "User-Agent": "drawcall-lod-lab" } });
   if (!response.ok) throw new Error(`${response.status} ${url}`);
-  return Buffer.from(await response.arrayBuffer());
-};
-const exists = (file: URL) => stat(file).then(() => true, () => false);
+  return response;
+}
+const curl = async (url: string) => Buffer.from(await (await get(url)).arrayBuffer());
+
+// Readers for the Poly Haven API's JSON, which fail on any answer of another shape.
+function fields(value: unknown): Array<[string, unknown]> {
+  if (typeof value !== "object" || value === null) throw new Error(`cases: Poly Haven answered ${JSON.stringify(value)} for an object`);
+  return Object.entries(value);
+}
+function field(value: unknown, key: string): unknown {
+  const found = fields(value).find(([k]) => k === key);
+  if (!found) throw new Error(`cases: Poly Haven answered without "${key}"`);
+  return found[1];
+}
+function text(value: unknown): string {
+  if (typeof value !== "string") throw new Error(`cases: Poly Haven answered ${JSON.stringify(value)} for a URL`);
+  return value;
+}
+
+/** The 1k glTF of Poly Haven asset `asset`: its URL and the files it includes, by path. */
+async function polyHaven(asset: string): Promise<{ url: string; include: Array<[path: string, url: string]> }> {
+  const gltf = field(field(field(await (await get(`https://api.polyhaven.com/files/${asset}`)).json(), "gltf"), "1k"), "gltf");
+  return { url: text(field(gltf, "url")), include: fields(field(gltf, "include")).map(([path, file]) => [path, text(field(file, "url"))]) };
+}
+const exists = (file: URL) =>
+  stat(file).then(
+    () => true,
+    () => false,
+  );
 
 /** Shared by every case: foliage as cutout (games never blend it), meshes cast shadows. */
 const PREPARE = `
@@ -79,10 +106,14 @@ import { loadingManager, scene } from "@drawcall/glts";
 ${PREPARE}
 const gltf = await new GLTFLoader(loadingManager).loadAsync(new URL("./${file}", import.meta.url).href);
 let root = gltf.scene;
-${keep ? `root = gltf.scene.getObjectByName(${JSON.stringify(keep)});
+${
+  keep
+    ? `root = gltf.scene.getObjectByName(${JSON.stringify(keep)});
 root.removeFromParent();
 // Variants are laid out side by side; bring this one to the origin.
-root.position.x = root.position.z = 0;` : ""}
+root.position.x = root.position.z = 0;`
+    : ""
+}
 prepare(root);
 scene.add(root);
 `;
@@ -148,14 +179,11 @@ for (const [id, c] of Object.entries(CASES)) {
     if (!(await exists(new URL(c.file, dir)))) await writeFile(new URL(c.file, dir), await curl(c.url));
     await writeFile(new URL(`${id}.glts`, dir), remoteScript(id, c.file));
   } else {
-    const info = (await (await fetch(`https://api.polyhaven.com/files/${c.asset}`, { headers: { "User-Agent": "drawcall-impostor-lab" } })).json()) as {
-      gltf: Record<string, { gltf: { url: string; include: Record<string, { url: string }> } }>;
-    };
-    const entry = info.gltf["1k"]!.gltf;
     const file = `${c.asset}.gltf`;
     if (!(await exists(new URL(file, dir)))) {
+      const entry = await polyHaven(c.asset);
       await writeFile(new URL(file, dir), await curl(entry.url));
-      for (const [path, { url }] of Object.entries(entry.include)) {
+      for (const [path, url] of entry.include) {
         const target = new URL(path, dir);
         await mkdir(dirname(target.pathname), { recursive: true });
         await writeFile(target, await curl(url));

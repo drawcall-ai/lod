@@ -1,18 +1,15 @@
 import * as THREE from "three";
 import { GLTSLoader } from "@drawcall/glts";
-import {
-  ImpostorMesh,
-  bakeImpostor,
-  boxCentre,
-  decodeImpostor,
-  encodeImpostor,
-  boundingRadius,
-  writeImpostorGlts,
-} from "@drawcall/impostor";
+import { ImpostorMesh, bakeImpostor, decodeImpostor, encodeImpostor } from "@drawcall/lod";
+import { boundingRadius, boxCentre } from "../../../packages/lod/src/impostor/impostor.js";
+import { writeImpostorGlts } from "./glts.js";
+import { at } from "./must.js";
+import { context2d, gpuName } from "./page.js";
 
-// End-to-end check that a `.glts` written by writeImpostorGlts loads through the real
-// GLTSLoader and renders the same pixels as an ImpostorMesh built directly from the
-// decoded data. Driven by scripts/glts-e2e.ts through `window.gltsCheck.run()`.
+// Standalone page (glts.html): a `.glts` written by writeImpostorGlts must load through
+// the real GLTSLoader and render the same pixels as an ImpostorMesh built directly from
+// the decoded data, single and instanced, and free what it uploaded on dispose. Driven by
+// scripts/glts-e2e.ts through window.gltsCheck.run().
 
 const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
 renderer.setPixelRatio(1);
@@ -37,7 +34,7 @@ function subject(): THREE.Object3D {
   knot.position.y = 1;
   const canvas = document.createElement("canvas");
   canvas.width = canvas.height = 128;
-  const ctx = canvas.getContext("2d")!;
+  const ctx = context2d(canvas);
   ctx.fillStyle = "#3fa34d";
   ctx.beginPath();
   ctx.arc(64, 64, 56, 0, Math.PI * 2);
@@ -47,10 +44,7 @@ function subject(): THREE.Object3D {
   ctx.clearRect(56, 56, 16, 16);
   const map = new THREE.CanvasTexture(canvas);
   map.colorSpace = THREE.SRGBColorSpace;
-  const leaf = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.8, 0.8),
-    new THREE.MeshStandardMaterial({ map, alphaTest: 0.5, side: THREE.DoubleSide }),
-  );
+  const leaf = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.8), new THREE.MeshStandardMaterial({ map, alphaTest: 0.5, side: THREE.DoubleSide }));
   leaf.position.set(0.7, 0.4, 0.3);
   leaf.rotation.set(-0.4, 0.6, 0);
   group.add(knot, leaf);
@@ -94,14 +88,14 @@ function compare(a: Shot, b: Shot) {
   for (let i = 0; i < a.pixels.length; i += 4) {
     let pixelMax = 0;
     for (let c = 0; c < 3; c++) {
-      const d = Math.abs(a.pixels[i + c]! - b.pixels[i + c]!);
+      const d = Math.abs(at(a.pixels, i + c) - at(b.pixels, i + c));
       sum += d;
       pixelMax = Math.max(pixelMax, d);
     }
     max = Math.max(max, pixelMax);
     if (pixelMax > 2) differing++;
-    if (a.pixels[i]! + a.pixels[i + 1]! + a.pixels[i + 2]! > 0) coverageA++;
-    if (b.pixels[i]! + b.pixels[i + 1]! + b.pixels[i + 2]! > 0) coverageB++;
+    if (at(a.pixels, i) + at(a.pixels, i + 1) + at(a.pixels, i + 2) > 0) coverageA++;
+    if (at(b.pixels, i) + at(b.pixels, i + 1) + at(b.pixels, i + 2) > 0) coverageB++;
   }
   const count = a.pixels.length / 4;
   return { maxDiff: max, meanDiff: sum / (count * 3), differingPixels: differing, coverageGlts: coverageA / count, coverageDirect: coverageB / count };
@@ -113,7 +107,7 @@ function sideBySide(a: Shot, b: Shot): string {
   const canvas = document.createElement("canvas");
   canvas.width = width * 3;
   canvas.height = height;
-  const ctx = canvas.getContext("2d")!;
+  const ctx = context2d(canvas);
   const image = ctx.createImageData(width * 3, height);
   for (let y = 0; y < height; y++)
     for (let x = 0; x < width; x++) {
@@ -121,8 +115,8 @@ function sideBySide(a: Shot, b: Shot): string {
       for (let panel = 0; panel < 3; panel++) {
         const dst = (y * width * 3 + panel * width + x) * 4;
         for (let c = 0; c < 3; c++) {
-          const va = a.pixels[src + c]!;
-          const vb = b.pixels[src + c]!;
+          const va = at(a.pixels, src + c);
+          const vb = at(b.pixels, src + c);
           image.data[dst + c] = panel === 0 ? va : panel === 1 ? vb : Math.min(255, Math.abs(va - vb) * 8);
         }
         image.data[dst + 3] = 255;
@@ -132,10 +126,11 @@ function sideBySide(a: Shot, b: Shot): string {
   return canvas.toDataURL("image/png");
 }
 
-function find(root: THREE.Object3D): THREE.Object3D | undefined {
-  let found: THREE.Object3D | undefined;
+function find(root: THREE.Object3D): THREE.InstancedMesh | undefined {
+  let found: THREE.InstancedMesh | undefined;
   root.traverse((o) => {
-    if ((o as { isImpostorMesh?: boolean }).isImpostorMesh) found ??= o;
+    // A flag, not instanceof: the script draws with its own copy of the package.
+    if (o instanceof THREE.InstancedMesh && "isImpostorMesh" in o) found ??= o;
   });
   return found;
 }
@@ -144,7 +139,7 @@ function grid(index: number, spacing: number, offset: THREE.Vector3): THREE.Matr
   const col = index % 25;
   const row = Math.floor(index / 25);
   const rotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), index * 0.37);
-  const scale = 0.8 + 0.4 * ((index * 7) % 5) / 4;
+  const scale = 0.8 + (0.4 * ((index * 7) % 5)) / 4;
   return new THREE.Matrix4().compose(
     new THREE.Vector3((col - 12) * spacing, 0, (row - 9.5) * spacing).add(offset),
     rotation,
@@ -167,14 +162,14 @@ async function run() {
   const sphere = boundingRadius(impostor.box);
   const centre = new THREE.Vector3(...boxCentre(impostor.box));
   const result: Record<string, unknown> = {
-    renderer: rendererName(),
+    renderer: gpuName(renderer.getContext()),
     impostor: { frames: impostor.frames, size: impostor.size, layout: impostor.layout, maps: impostor.maps, halfSize: impostor.halfSize, sphere },
     encodedBytes: encoded.length,
     gltsSourceChars: source.length,
   };
   // Base64 of the KTX2 file plus a header of well under 2 KB.
   checks.sourceLength = source.length > Math.ceil(encoded.length / 3) * 4 && source.length < Math.ceil(encoded.length / 3) * 4 + 2048;
-  checks.sourceImport = /from "@drawcall\/impostor@\d+\.\d+\.\d+"/.test(source);
+  checks.sourceImport = /from "@drawcall\/lod@\d+\.\d+\.\d+"/.test(source);
 
   renderer.info.autoReset = false;
   const memoryBefore = { ...renderer.info.memory };
@@ -210,7 +205,7 @@ async function run() {
   // ---- instances: loadInstancesAsync(url, 500) in a grid
   const count = 500;
   const instances = await loader.loadInstancesAsync(url, count);
-  const instancedMesh = find(instances) as THREE.InstancedMesh | undefined;
+  const instancedMesh = find(instances);
   checks.instancesIsImpostorMesh = instancedMesh !== undefined;
   checks.instancesCount = instances.count === count && instancedMesh?.count === count;
   const directMany = new ImpostorMesh(decodeImpostor(encodeImpostor(impostor)), count);
@@ -269,7 +264,7 @@ async function run() {
     try {
       dispose();
     } catch (error) {
-      disposeErrors.push(`${name}: ${(error as Error).stack ?? String(error)}`);
+      disposeErrors.push(`${name}: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
     }
   }
   URL.revokeObjectURL(url);
@@ -285,15 +280,7 @@ async function run() {
 
   result.pageErrors = [...errors];
   checks.noPageErrors = errors.length === 0;
-  result.checks = checks;
-  result.pass = Object.values(checks).every(Boolean);
-  return { result, images };
-}
-
-function rendererName(): string {
-  const gl = renderer.getContext();
-  const ext = gl.getExtension("WEBGL_debug_renderer_info");
-  return String(ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER));
+  return { result: { ...result, checks, pass: Object.values(checks).every(Boolean) }, images };
 }
 
 declare global {

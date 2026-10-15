@@ -1,5 +1,5 @@
 {
-  "name": "impostor-monorepo",
+  "name": "lod-monorepo",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.18.0",
@@ -8,15 +8,14 @@
     "typecheck": "pnpm -r --if-present typecheck",
     "test": "pnpm -r --if-present test",
     "check": "pnpm build && pnpm typecheck && pnpm test",
-    "lab": "pnpm --filter @drawcall/impostor-example-lab dev",
+    "lab": "pnpm --filter @drawcall/lod-example-lab dev",
+    "city": "pnpm --filter @drawcall/lod-example-city dev",
     "format": "prettier --write ."
   },
   "devDependencies": {
-    "@types/node": "^24.13.6",
-    "@types/three": "^0.185.0",
-    "prettier": "^3.9.6",
-    "three": "0.185.1",
-    "typescript": "^5.9.3",
-    "vitest": "^4.0.17"
+    "prettier": "^3.9.6"
+  },
+  "prettier": {
+    "printWidth": 160
   }
 }

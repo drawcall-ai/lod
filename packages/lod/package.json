@@ -1,0 +1,68 @@
+{
+  "name": "@drawcall/lod",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Level of detail for three.js: octahedral impostors, simplified and baked meshes, with dithered switching by on-screen size. WebGLRenderer only.",
+  "keywords": [
+    "three",
+    "threejs",
+    "lod",
+    "hlod",
+    "impostor",
+    "octahedral-impostor",
+    "mesh-simplification",
+    "texture-baking"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "test": "vitest run",
+    "xatlas": "node --experimental-strip-types --no-warnings scripts/xatlas.ts"
+  },
+  "dependencies": {
+    "fflate": "^0.8.2",
+    "ktx-parse": "^2.0.0",
+    "meshoptimizer": "^1.3.0",
+    "three-mesh-bvh": "^0.9.15"
+  },
+  "peerDependencies": {
+    "three": ">=0.185.0 <0.186.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.6",
+    "@types/three": "^0.185.0",
+    "three": "^0.185.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.17",
+    "webgl-node": "1.6.1",
+    "xatlas-wasm": "0.1.3"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/drawcall-ai/lod.git",
+    "directory": "packages/lod"
+  },
+  "homepage": "https://github.com/drawcall-ai/lod#readme",
+  "bugs": {
+    "url": "https://github.com/drawcall-ai/lod/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

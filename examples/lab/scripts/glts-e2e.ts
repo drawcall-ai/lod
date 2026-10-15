@@ -1,45 +1,29 @@
-// Loads a generated impostor `.glts` through the real @drawcall/glts loader in headless
-// Chromium on the real GPU, compares it with a directly built ImpostorMesh and writes
-// side-by-side images (glts | direct | 8x difference) to .artifacts/glts.
+// Loads a generated impostor `.glts` through the real @drawcall/glts loader (see
+// src/glts-check.ts), compares it with a directly built ImpostorMesh and writes
+// side-by-side images (glts | direct | 8x difference) and result.json to .artifacts/glts.
+// Exits non-zero on failure.
 //
-//   npx tsx scripts/glts-e2e.ts
+//   pnpm --filter @drawcall/lod-example-lab glts
 //
-import { mkdir, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { chromium } from "@playwright/test";
-import { createServer } from "vite";
+import { artifacts, open, savePng } from "./lab.ts";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const out = new URL("../../../.artifacts/glts/", import.meta.url);
-await mkdir(out, { recursive: true });
-
-const server = await createServer({ root, logLevel: "error", server: { port: 5198, strictPort: false } });
-await server.listen();
-const url = server.resolvedUrls!.local[0]!;
-
-const browser = await chromium.launch({ headless: true, args: ["--use-angle=metal", "--enable-gpu", "--ignore-gpu-blocklist"] });
+const out = await artifacts("glts");
+const { page, close } = await open("glts.html", "gltsCheck");
 let pass = false;
 try {
-  const page = await browser.newPage();
-  page.on("console", (m) => m.type() === "error" && console.error("[page]", m.text()));
-  page.on("pageerror", (e) => console.error("[page]", e.message));
-  await page.goto(`${url}glts.html`);
-  await page.waitForFunction(() => "gltsCheck" in window);
-
-  type Check = { run(): Promise<{ result: Record<string, unknown>; images: Record<string, string> }> };
-  const { result, images } = await page.evaluate(() => (window as unknown as { gltsCheck: Check }).gltsCheck.run());
-  for (const [name, dataUrl] of Object.entries(images))
-    await writeFile(new URL(`${name}.png`, out), Buffer.from(dataUrl.split(",")[1]!, "base64"));
+  const { result, images } = await page.evaluate(() => window.gltsCheck.run());
+  for (const [name, image] of Object.entries(images)) await savePng(out, name, image);
   await writeFile(new URL("result.json", out), JSON.stringify(result, null, 2));
   console.log(JSON.stringify(result, null, 2));
-  pass = result.pass === true;
-  const failed = Object.entries(result.checks as Record<string, boolean>).filter(([, ok]) => !ok).map(([name]) => name);
+  pass = result.pass;
+  const failed = Object.entries(result.checks)
+    .filter(([, ok]) => !ok)
+    .map(([name]) => name);
   console.log(pass ? "PASS" : `FAIL: ${failed.join(", ")}`);
   console.log(`images: ${fileURLToPath(out)}`);
-} catch (error) {
-  console.error(error);
 } finally {
-  await browser.close();
-  await server.close();
+  await close();
 }
 process.exit(pass ? 0 : 1);

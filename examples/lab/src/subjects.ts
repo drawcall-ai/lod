@@ -1,26 +1,46 @@
 import * as THREE from "three";
-import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
-import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { GLTSLoader } from "@drawcall/glts";
-import type { BakeOptions } from "@drawcall/impostor";
+import type { BakeImpostorOptions } from "@drawcall/lod";
+import { bricks, house, houseShell, tiled } from "./house.js";
+import { gltfLoader } from "./page.js";
 
 // Test subjects, each chosen to break a specific part of the technique.
 
-export interface Subject {
+interface Subject {
   name: string;
   why: string;
-  bake?: BakeOptions;
+  /** impostor bake options it needs */
+  bake?: BakeImpostorOptions;
   load(): Promise<THREE.Object3D>;
+  /** its authored low mesh, for a baked level */
+  low?(): THREE.Object3D;
 }
 
-const gltf = new GLTFLoader().setDRACOLoader(new DRACOLoader().setDecoderPath("/draco/"));
+const gltf = gltfLoader();
 const model = (file: string) => async () => (await gltf.loadAsync(`/models/${file}`)).scene;
 // Realistic cases (scripts/cases.ts): each is a .glts file, loaded as an app would.
 const glts = new GLTSLoader(new THREE.LoadingManager(), { cdnURL: new URL("/esm/", location.origin).href });
 const realistic = (id: string) => async () => glts.loadAsync(`/cases/${id}/${id}.glts`);
-const CASES = ["oak", "ash", "spruce", "quiver", "shrub", "rooibos", "fern02", "boulder", "rock07", "cliffstone", "moonrock", "car", "barrel", "streetlamp", "grass", "mansion"];
+const CASES = [
+  "oak",
+  "ash",
+  "spruce",
+  "quiver",
+  "shrub",
+  "rooibos",
+  "fern02",
+  "boulder",
+  "rock07",
+  "cliffstone",
+  "moonrock",
+  "car",
+  "barrel",
+  "streetlamp",
+  "grass",
+  "mansion",
+];
 
-export const subjects: Subject[] = [
+const subjects: Subject[] = [
   { name: "tree", why: "alpha-tested foliage, the main use case", load: model("CommonTree_3.glb") },
   { name: "pine", why: "dense needle cards, dark interior", load: model("Pine_2.glb") },
   { name: "dead", why: "thin branches: sub-pixel detail and mip erosion", load: model("DeadTree_2.glb") },
@@ -36,6 +56,7 @@ export const subjects: Subject[] = [
   { name: "asteroid", why: "full-sphere layout, seen from below", bake: { layout: "full" }, load: async () => asteroid() },
   { name: "wall", why: "20:4:1 brick wall: the non-uniform worst case", load: async () => wall() },
   { name: "log", why: "a 10:1 log lying down: elongated", load: async () => log() },
+  { name: "house", why: "hard surface with small geometric detail and an authored low shell", load: async () => house(), low: houseShell },
   ...CASES.map((id) => ({ name: id, why: "realistic case (scripts/cases.ts)", load: realistic(id) })),
 ];
 
@@ -52,10 +73,7 @@ function pbrGrid(): THREE.Object3D {
   const geometry = new THREE.SphereGeometry(0.42, 48, 24);
   for (let i = 0; i < 4; i++)
     for (let j = 0; j < 4; j++) {
-      const mesh = new THREE.Mesh(
-        geometry,
-        new THREE.MeshStandardMaterial({ color: 0xc8c8c8, metalness: i / 3, roughness: 0.08 + (j / 3) * 0.9 }),
-      );
+      const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: 0xc8c8c8, metalness: i / 3, roughness: 0.08 + (j / 3) * 0.9 }));
       mesh.position.set((i - 1.5) * 1, (j - 1.5) * 1 + 2, 0);
       group.add(mesh);
     }
@@ -80,7 +98,7 @@ function lamp(): THREE.Object3D {
 
 function asteroid(): THREE.Object3D {
   const geometry = new THREE.IcosahedronGeometry(1, 5);
-  const p = geometry.getAttribute("position") as THREE.BufferAttribute;
+  const p = geometry.getAttribute("position");
   const v = new THREE.Vector3();
   for (let i = 0; i < p.count; i++) {
     v.fromBufferAttribute(p, i);
@@ -93,30 +111,12 @@ function asteroid(): THREE.Object3D {
   return new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: 0x8a7f74, roughness: 0.9, flatShading: true }));
 }
 
-/** A brick texture drawn on a canvas, tiled along the wall. */
-function bricks(): THREE.Texture {
-  const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = 256;
-  const ctx = canvas.getContext("2d")!;
-  ctx.fillStyle = "#c9c2b4";
-  ctx.fillRect(0, 0, 256, 256);
-  for (let row = 0; row < 8; row++)
-    for (let col = -1; col < 5; col++) {
-      const shade = 150 + ((row * 7 + col * 13) % 5) * 12;
-      ctx.fillStyle = `rgb(${shade}, ${shade * 0.45}, ${shade * 0.32})`;
-      ctx.fillRect(col * 64 + (row % 2) * 32 + 3, row * 32 + 3, 58, 26);
-    }
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-  return texture;
-}
-
 function wall(): THREE.Object3D {
-  const geometry = new THREE.BoxGeometry(20, 4, 1);
-  const map = bricks();
-  map.repeat.set(5, 1);
-  const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ map, roughness: 0.9 }));
+  const { map, normalMap } = bricks();
+  // One tile = 2 m x 1 m on the long faces.
+  const material = new THREE.MeshStandardMaterial({ map: tiled(map, 10, 4), normalMap: tiled(normalMap, 10, 4), roughness: 0.85, metalness: 0 });
+  // Segmented so the simplifier has something to remove (a 12-triangle box would not change).
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(20, 4, 1, 40, 8, 2), material);
   mesh.position.y = 2;
   const group = new THREE.Group();
   group.add(mesh);
@@ -124,10 +124,7 @@ function wall(): THREE.Object3D {
 }
 
 function log(): THREE.Object3D {
-  const mesh = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.3, 0.34, 6, 24, 1),
-    new THREE.MeshStandardMaterial({ color: 0x6b4a2e, roughness: 0.85 }),
-  );
+  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.34, 6, 24, 1), new THREE.MeshStandardMaterial({ color: 0x6b4a2e, roughness: 0.85 }));
   mesh.rotation.z = Math.PI / 2;
   mesh.position.y = 0.34;
   const group = new THREE.Group();
@@ -140,4 +137,10 @@ const seen = new Set<string>();
 for (const s of subjects) {
   if (seen.has(s.name)) throw new Error(`duplicate subject name "${s.name}"`);
   seen.add(s.name);
+}
+
+export function subject(name: string): Subject {
+  const found = subjects.find((s) => s.name === name);
+  if (!found) throw new Error(`unknown subject "${name}"; known: ${subjects.map((s) => s.name).join(", ")}`);
+  return found;
 }

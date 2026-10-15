@@ -1,27 +1,33 @@
 {
-  "name": "@drawcall/impostor-example-lab",
+  "name": "@drawcall/lod-example-lab",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "cases": "node --experimental-strip-types --no-warnings scripts/cases.ts",
+    "bench": "node --experimental-strip-types --no-warnings scripts/bench.ts",
+    "probe": "node --experimental-strip-types --no-warnings scripts/probe.ts",
+    "lod-check": "node --experimental-strip-types --no-warnings scripts/lod-check.ts",
+    "glts": "node --experimental-strip-types --no-warnings scripts/glts-e2e.ts",
+    "fade": "node --experimental-strip-types --no-warnings scripts/fade.ts",
+    "switching": "node --experimental-strip-types --no-warnings scripts/switching.ts",
+    "instanced": "node --experimental-strip-types --no-warnings scripts/instanced.ts",
+    "depth": "node --experimental-strip-types --no-warnings scripts/depth.ts",
+    "interior": "node --experimental-strip-types --no-warnings scripts/interior.ts"
   },
   "dependencies": {
     "@drawcall/glts": "^0.12.0",
-    "@drawcall/impostor": "workspace:*",
+    "@drawcall/lod": "workspace:*",
     "three": "^0.185.1"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",
+    "@types/node": "^24.13.6",
     "@types/three": "^0.185.0",
-    "comlink": "^4.4.2",
-    "ktx2-encoder": "0.6.0",
-    "meshoptimizer": "^1.3.0",
-    "three-mesh-bvh": "^0.9.15",
     "typescript": "^5.9.3",
-    "vite": "^8.2.1",
-    "xatlasjs": "^0.2.0"
+    "vite": "^8.2.1"
   }
 }
