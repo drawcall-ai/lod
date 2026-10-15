@@ -1,0 +1,90 @@
+// Loads the city in headless Chromium on the real GPU at 1280 × 800, stops the tour at
+// each of its keys and saves a screenshot plus frame time, triangles, draw calls and
+// instances per level to .artifacts/tour/.
+//
+//   pnpm --filter @drawcall/lod-example-city tour [--query=debug] [--frames=30] [--keys=1,5] [--cold]
+//
+// --query adds page URL parameters, --keys shoots only those keys, --cold empties the
+// browser profile (and with it the page's bake cache) first.
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { chromium } from "@playwright/test";
+import { createServer } from "vite";
+
+interface Measure {
+  ms: number;
+  cpu: number;
+  gpu: number | null;
+  calls: number;
+  triangles: number;
+  kinds: { name: string; levels: { instances: number; triangles: number }[] }[];
+  /** Per shadow cascade, finest first: its texel (m) and the casters it drew. */
+  cascades: { texel: number; casters: number }[];
+}
+interface City {
+  loadMs: number;
+  keys: { name: string; time: number }[];
+  seek(time: number): void;
+  measure(frames: number): Measure;
+}
+declare const window: { city: City };
+
+const root = fileURLToPath(new URL("..", import.meta.url));
+const args = process.argv.slice(2);
+const flag = (name: string) => args.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
+const out = fileURLToPath(new URL("../.artifacts/tour/", import.meta.url));
+const frames = Number(flag("frames") ?? 30);
+const only = flag("keys")?.split(",").map(Number);
+// a full run replaces the last one's shots
+if (!only) await rm(out, { recursive: true, force: true });
+await mkdir(out, { recursive: true });
+
+const server = await createServer({ root, logLevel: "error", server: { port: 5192, strictPort: false } });
+await server.listen();
+const url = server.resolvedUrls?.local[0];
+if (!url) throw new Error("vite did not report a local URL");
+// a profile of its own keeps the page's bake cache between runs; --cold starts it empty
+const profile = fileURLToPath(new URL("../.artifacts/browser/", import.meta.url));
+if (args.includes("--cold")) await rm(profile, { recursive: true, force: true });
+const browser = await chromium.launchPersistentContext(profile, {
+  headless: true,
+  viewport: { width: 1280, height: 800 },
+  args: ["--use-angle=metal", "--enable-gpu", "--ignore-gpu-blocklist"],
+});
+const page = await browser.newPage();
+page.on("console", (m) => console.error(`[page ${m.type()}]`, m.text()));
+// an error while loading ends the run instead of waiting out the timeout
+const failed = new Promise<never>((_, reject) => page.on("pageerror", reject));
+
+try {
+  await page.goto(`${url}?shot&${flag("query") ?? ""}`);
+  await Promise.race([page.waitForFunction(() => "city" in window, null, { timeout: 600_000 }), failed]);
+  const loadMs = await page.evaluate(() => window.city.loadMs);
+  const keys = await page.evaluate(() => window.city.keys);
+  const rows: (Measure & { name: string; time: number })[] = [];
+  for (const [i, key] of keys.entries()) {
+    if (only && !only.includes(i + 1)) continue;
+    await page.evaluate((t) => window.city.seek(t), key.time);
+    // a few real frames: textures upload, fades settle; then untimed ones, so the patches
+    // filled around the new pose and their first draws are not in the timing
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(r)))));
+    await page.evaluate(() => window.city.measure(10));
+    const measure = await page.evaluate((n) => window.city.measure(n), frames);
+    const file = `${String(i + 1).padStart(2, "0")}-${key.name.replace(/\s+/g, "-")}.png`;
+    await page.screenshot({ path: out + file });
+    rows.push({ ...key, ...measure });
+    const m = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
+    const levels = measure.kinds.map((k) => `${k.name}: ${k.levels.map((l) => `${m(l.instances)}(${m(l.triangles)})`).join(" ")}`).join(", ");
+    const cascades = measure.cascades
+      .map((c) => `${c.texel < 0.01 ? `${(c.texel * 1000).toPrecision(2)}mm` : `${c.texel.toPrecision(2)}m`}/${c.casters}`)
+      .join(" ");
+    console.log(
+      `${file.padEnd(24)} ${measure.ms.toFixed(1).padStart(6)} ms (cpu ${measure.cpu.toFixed(1)})  gpu ${measure.gpu?.toFixed(1) ?? "-"}  ${(measure.triangles / 1e6).toFixed(2)}M tris  ${measure.calls} draws  shadows ${cascades}  ${levels}`,
+    );
+  }
+  await writeFile(`${out}tour.json`, JSON.stringify({ loadMs, rows }, null, 2));
+  console.log(`load ${(loadMs / 1000).toFixed(1)} s; results in ${out}`);
+} finally {
+  await browser.close();
+  await server.close();
+}

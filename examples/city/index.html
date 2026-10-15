@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>City — @drawcall/lod</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #9fb4c8;
+        font:
+          12px/1.45 ui-sans-serif,
+          system-ui,
+          sans-serif;
+        color: #f2f2ee;
+      }
+      canvas {
+        display: block;
+        touch-action: none;
+      }
+      .panel {
+        position: fixed;
+        background: rgba(20, 22, 24, 0.62);
+        backdrop-filter: blur(8px);
+        border-radius: 8px;
+        padding: 10px 12px;
+      }
+      #controls {
+        top: 12px;
+        left: 12px;
+        width: 250px;
+      }
+      #controls h1 {
+        font-size: 13px;
+        font-weight: 600;
+        margin: 0 0 6px;
+      }
+      #controls label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 4px 0;
+      }
+      #controls input[type="range"] {
+        flex: 1;
+      }
+      #controls button {
+        font: inherit;
+        color: inherit;
+        background: rgba(255, 255, 255, 0.14);
+        border: 0;
+        border-radius: 4px;
+        padding: 3px 10px;
+        cursor: pointer;
+      }
+      #stats {
+        font-variant-numeric: tabular-nums;
+        white-space: pre;
+        font-family: ui-monospace, monospace;
+        font-size: 11px;
+        margin-top: 6px;
+        opacity: 0.9;
+      }
+      .hint {
+        opacity: 0.6;
+        margin-top: 6px;
+      }
+      #loading {
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 320px;
+        text-align: center;
+      }
+      #bar {
+        height: 3px;
+        background: rgba(255, 255, 255, 0.15);
+        margin-top: 8px;
+        border-radius: 2px;
+      }
+      #bar div {
+        height: 100%;
+        width: 0;
+        background: #f2f2ee;
+        border-radius: 2px;
+        transition: width 0.2s;
+      }
+      body.shot .panel {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="controls" class="panel" hidden>
+      <h1>A town, from 2 km to 2 mm</h1>
+      <label><button id="play">Pause</button><input id="time" type="range" min="0" max="1" step="0.01" value="0" /></label>
+      <label><input id="debug" type="checkbox" /> tint levels (Lod.debug)</label>
+      <label>Lod.quality <input id="quality" type="range" min="0.25" max="2" step="0.05" value="1" /><span id="qualityValue">1.00</span></label>
+      <div id="stats"></div>
+      <div class="hint">Drag to look, WASD/QE to fly, wheel for pace. <a href="viewer.html" style="color: inherit">Content viewer</a></div>
+    </div>
+    <div id="loading" class="panel">
+      <div id="status">Loading…</div>
+      <div id="bar"><div></div></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

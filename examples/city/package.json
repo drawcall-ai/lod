@@ -1,0 +1,32 @@
+{
+  "name": "@drawcall/lod-example-city",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "assets": "node --experimental-strip-types --no-warnings scripts/fetch-assets.ts",
+    "shots": "node --experimental-strip-types --no-warnings scripts/shots.ts",
+    "tour": "node --experimental-strip-types --no-warnings scripts/tour.ts"
+  },
+  "dependencies": {
+    "@drawcall/lod": "workspace:*",
+    "n8ao": "^2.0.1",
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "@gltf-transform/core": "^4.2.1",
+    "@gltf-transform/extensions": "^4.2.1",
+    "@gltf-transform/functions": "^4.2.1",
+    "@playwright/test": "^1.59.1",
+    "@types/node": "^24.13.6",
+    "@types/three": "^0.185.0",
+    "fflate": "^0.8.3",
+    "meshoptimizer": "^1.3.0",
+    "sharp": "^0.35.5",
+    "typescript": "^5.9.3",
+    "vite": "^8.2.1"
+  }
+}

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>City content</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #111;
+        font:
+          13px/1.4 system-ui,
+          sans-serif;
+        color: #eee;
+      }
+      canvas {
+        display: block;
+      }
+      #panel {
+        position: fixed;
+        top: 10px;
+        left: 10px;
+        padding: 8px 10px;
+        background: rgba(0, 0, 0, 0.55);
+        border-radius: 6px;
+      }
+      #panel select {
+        font: inherit;
+      }
+      body.shot #panel {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="panel">
+      <select id="item"></select>
+      <button id="close">close</button>
+      <button id="medium">medium</button>
+      <div id="stats"></div>
+    </div>
+    <script type="module" src="/src/viewer/main.ts"></script>
+  </body>
+</html>
