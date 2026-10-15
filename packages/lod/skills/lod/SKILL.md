@@ -22,7 +22,9 @@ Which levels to build, by asset:
 
 - **Foliage** — trees, bushes, grass, plants, anything of alpha-tested leaf cards → an
   impostor only (the loader's default). A simplified level in between tears the cards
-  apart.
+  apart. A scan that models every leaf in many triangles is different: draw it from its
+  own `simplify` copy (around a quarter of the triangles keeps the leaves' shape; far
+  fewer smears them) and use that as the source.
 - **Hard-surface props** — rocks, vehicles, furniture → simplified, then impostor.
   Low-poly props need no levels: an impostor costs more than they do.
 - **Buildings** → baked (experimental), then impostor. The baked level is one low mesh
@@ -126,6 +128,23 @@ Lod.debug = true; // tint levels to see where each draws
   tile without seams. Switch the plants on top per plant, by their own distance, not
   per patch: the hand-over then follows a smooth contour around the camera instead of
   patch edges.
+
+## Performance
+
+- **Tune switch sizes on a standard screen.** They are in CSS pixels, so the choice holds
+  on a high-density one; size anything of your own that reacts to on-screen size (how
+  far plants exist, how many) in CSS pixels too, or a high-density screen multiplies it.
+- **A heavy source decides the frame** wherever many copies show it at once (inside a
+  forest). Lighten the source first, then let its impostor take over earlier — a larger
+  `maxPixels` on the impostor level: lowering it keeps more copies at the source.
+- **Impostors cost fill.** Every pixel of a card runs the shader, and the depth-parallax
+  walk is most of it. Keep parallax for impostors seen large — without it they ghost
+  (doubled trunks) — and turn it off only for impostors that only ever show small or
+  densely packed, such as a field's plants.
+- **On high-density screens** multisampling costs a large share of the frame. Two samples
+  keep most of the quality; none makes thin geometry (twigs, grass) crawl in motion,
+  while impostors fall back to a dithered edge that holds up. The canvas's `antialias`
+  takes the browser's sample count: to choose it, render into a target with `samples`.
 
 ## Shadows
 
