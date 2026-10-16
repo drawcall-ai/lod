@@ -68,6 +68,17 @@ export const FADE_DISCARD = /* glsl */ `
   if (lodFadeDiscard(lodFade, vLodFadeSubtense)) discard;
 `;
 
+/**
+ * `FADE_DISCARD` for an ImpostorMesh's shadow maps: fading in, it casts nothing until the
+ * finer level is gone. A mesh level casts whole while it draws (three's depth materials
+ * know no fade), and a dithered impostor shadow on top of it would cast double. Fading
+ * out, toward a coarser level or none, it dithers as in the view.
+ */
+export const FADE_SHADOW_DISCARD = /* glsl */ `
+  if (lodFade.x < lodFade.y && vLodFadeSubtense > lodFade.x) discard;
+  if (lodFadeDiscard(vec4(0.0, 0.0, lodFade.zw), vLodFadeSubtense)) discard;
+`;
+
 /** The debug tint (see `Lod.debug`), white when off. */
 export const FADE_TINT = /* glsl */ `
   diffuseColor.rgb *= lodTint;

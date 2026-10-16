@@ -48,6 +48,14 @@ describe("ImpostorMesh", { timeout: GPU_TIMEOUT }, () => {
     expect(lit.fragmentShader).not.toContain("#include <map_fragment>");
   });
 
+  it("casts nothing while it fades in, where the finer level casts whole", () => {
+    const mesh = new ImpostorMesh(make());
+    const shadows = [mesh.customDepthMaterial, mesh.customDistanceMaterial];
+    for (const material of shadows) expect(material?.defines?.IMPOSTOR_SHADOW).toBe("");
+    expect(mesh.material.defines?.IMPOSTOR_SHADOW).toBeUndefined();
+    expect(compile(mesh.material).fragmentShader).toContain("#ifdef IMPOSTOR_SHADOW");
+  });
+
   it("lights with three's chunks as they are when it compiles, at the resolved surface", () => {
     const original = ShaderChunk.lights_fragment_begin;
     ShaderChunk.lights_fragment_begin = `${original}\n// patched after the package loaded`;

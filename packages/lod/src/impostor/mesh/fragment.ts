@@ -1,5 +1,5 @@
 import { ShaderChunk } from "three";
-import { FADE_DISCARD, FADE_FRAGMENT_PARS, FADE_TINT } from "../../fade.js";
+import { FADE_DISCARD, FADE_FRAGMENT_PARS, FADE_SHADOW_DISCARD, FADE_TINT } from "../../fade.js";
 import { replaceOrThrow, type Edit } from "../../patch.js";
 import { SHADOW_RAY_PARS, SHARED_PARS } from "./vertex.js";
 
@@ -174,7 +174,11 @@ const ALPHATEST_FRAGMENT = /* glsl */ `
     diffuseColor.a = 1.0;
   }
   // The fade comes last, after every derivative above.
-  ${FADE_DISCARD}
+  #ifdef IMPOSTOR_SHADOW
+    ${FADE_SHADOW_DISCARD}
+  #else
+    ${FADE_DISCARD}
+  #endif
   ${FADE_TINT}
 `;
 

@@ -168,10 +168,10 @@ export class ImpostorMesh extends InstancedMesh<PlaneGeometry, MeshStandardMater
     // Shadow passes: the same card, baked surface depth and coverage, facing the light.
     // No parallax walk there: shadow maps cover far more impostor pixels than the view,
     // and shadows are too soft to show it. Shadow maps sample the depth texture, so the
-    // surface depth puts the resolved surface into them, not the card. three sets these
-    // materials' side and alphaTest itself.
+    // surface depth puts the resolved surface into them, not the card. They fade as
+    // FADE_SHADOW_DISCARD says. three sets these materials' side and alphaTest itself.
     const { IMPOSTOR_PARALLAX: _, ...rest } = defines;
-    const shadowDefines = { ...rest, IMPOSTOR_PIXEL_DEPTH: "" };
+    const shadowDefines = { ...rest, IMPOSTOR_PIXEL_DEPTH: "", IMPOSTOR_SHADOW: "" };
     this.customDepthMaterial = new MeshDepthMaterial();
     patch(this.customDepthMaterial, () => [...VERTEX, ...FRAGMENT, PIXEL_DEPTH], uniforms, shadowDefines);
     this.customDistanceMaterial = new MeshDistanceMaterial();

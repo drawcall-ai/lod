@@ -165,7 +165,7 @@ Lod.debug = true; // tint levels to see where each draws
 
 - **Levels are chosen once, from the viewing camera,** and every shadow map draws the
   same ones: far cascades see impostors and baked levels, never the sources. During a
-  fade an impostor's shadow fades with it while a mesh level's is whole, so both cast.
+  fade the finer level casts alone: an impostor taking over casts once it is gone.
 - **Casters narrower than a texel** of a directional light's shadow map draw nothing into
   it (a `Lod` by its whole object, an `InstancedLod` level by its largest instance), so
   coarse cascades skip small crowds by themselves.

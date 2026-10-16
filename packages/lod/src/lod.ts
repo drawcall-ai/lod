@@ -24,9 +24,10 @@ const view = new View();
  * their own.
  *
  * Fades are measured from the viewing camera in every pass. In shadow passes, which are
- * often orthographic, an impostor's shadow dithers with it and a mesh's shadow is whole,
- * so both cast while fading. An orthographic viewing camera has no distance to dither
- * by: levels switch by on-screen size there too, but at once.
+ * often orthographic, the finer level casts alone while a fade lasts: a mesh's shadow is
+ * whole, and an impostor fading in casts once the finer level is gone (fading out, its
+ * shadow dithers with it). An orthographic viewing camera has no distance to dither by:
+ * levels switch by on-screen size there too, but at once.
  *
  * Levels are children of the Lod in its space, any Object3D: meshes, an ImpostorMesh, a
  * group, another Lod. Each mesh draws with its own faded copy of its material; the
