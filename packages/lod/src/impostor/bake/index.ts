@@ -136,6 +136,8 @@ export async function bakeImpostor(object: Object3D, options: BakeImpostorOption
   }
   if (!atlases.some((atlas) => atlas.covered())) throw new Error("bakeImpostor: nothing visible was baked");
   for (const atlas of atlases) atlas.fillGutters();
+  const sum = (way: "own" | "turned") => atlases.reduce((total, atlas) => total + atlas.agreement[way], 0);
+  if (sum("turned") > sum("own")) for (const atlas of atlases) atlas.useTurned();
 
   const layers = maps.map((map, i) =>
     atlases.map((atlas) => {
@@ -144,7 +146,7 @@ export async function bakeImpostor(object: Object3D, options: BakeImpostorOption
       return layer;
     }),
   );
-  const impostor: Impostor = { version: 2, layout, frames, size: cell * frames, box, halfSize, maps, layers };
+  const impostor: Impostor = { version: 3, layout, frames, size: cell * frames, box, halfSize, maps, layers };
   validateImpostor(impostor);
   return impostor;
 }
@@ -162,14 +164,16 @@ async function bakeMip(atlas: Atlas, supersample: number, renderer: WebGLRendere
   const side = atlas.cell * supersample;
   const per = Math.max(1, Math.min(frames, Math.floor(TILE / side)));
   const width = per * side;
+  // one target per map, then the second way to store the normals (see Atlas)
+  const count = maps.length + 1;
   const target = new WebGLRenderTarget(width, width, {
-    count: maps.length,
+    count,
     type: FloatType,
     minFilter: NearestFilter,
     magFilter: NearestFilter,
     depthBuffer: true,
   });
-  const pixels = maps.map(() => new Float32Array(width * width * 4));
+  const pixels = Array.from({ length: count }, () => new Float32Array(width * width * 4));
   try {
     for (let row0 = 0; row0 < frames; row0 += per)
       for (let col0 = 0; col0 < frames; col0 += per) {

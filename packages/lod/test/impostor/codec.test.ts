@@ -20,7 +20,7 @@ function random(length: number, seed = 1): Uint8Array {
 
 function make(maps: ImpostorMap[], size = 32, frames = 8): Impostor {
   return {
-    version: 2,
+    version: 3,
     layout: "hemi",
     frames,
     size,

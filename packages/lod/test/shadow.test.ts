@@ -12,7 +12,7 @@ import { renderer } from "./webgl.js";
 const box = () => new Mesh(new BoxGeometry(2, 2, 2), new MeshBasicMaterial());
 
 const impostor = (): Impostor => ({
-  version: 2,
+  version: 3,
   layout: "full",
   frames: 4,
   size: 16,

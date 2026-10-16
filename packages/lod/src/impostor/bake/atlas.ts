@@ -11,11 +11,21 @@ const NEIGHBOURS = [
   [0, -1],
 ] as const;
 
-/** One mip of the atlas being baked: one RGBA8 layer per map, plus each texel's coverage. */
+/**
+ * One mip of the atlas being baked: one RGBA8 layer per map, plus each texel's coverage.
+ * The bake stores the normals two ways (see its materials): the maps hold the surface's
+ * own normals, `turned` the shading normals turned toward the camera, each with the share
+ * of the surface that shades with the normal rather than its opposite (in orm.a). One way
+ * is kept for the whole impostor, as texels filtered together must mean the same thing.
+ */
 export class Atlas {
   readonly size: number;
   readonly layers: Uint8Array[];
   readonly coverage: Float32Array;
+  /** Turned normal in RGB, the share of the surface that shades with it in A. */
+  readonly turned: Uint8Array;
+  /** How far each way's normals agree, summed over the texels by coverage: the averages' lengths. */
+  readonly agreement = { own: 0, turned: 0 };
 
   constructor(
     readonly maps: ImpostorMap[],
@@ -25,18 +35,36 @@ export class Atlas {
     this.size = frames * cell;
     this.layers = maps.map(() => new Uint8Array(this.size * this.size * 4));
     this.coverage = new Float32Array(this.size * this.size);
+    this.turned = new Uint8Array(this.size * this.size * 4);
+  }
+
+  /** Keep the turned normals: write them over the own normals and their shares. */
+  useTurned(): void {
+    const normalDepth = this.layer("normalDepth");
+    const orm = this.layer("orm");
+    for (let i = 0; i < this.turned.length; i += 4) {
+      for (let k = 0; k < 3; k++) normalDepth[i + k] = this.turned[i + k] ?? 0;
+      orm[i + 3] = this.turned[i + 3] ?? 0;
+    }
+  }
+
+  private layer(map: ImpostorMap): Uint8Array {
+    const layer = this.layers[this.maps.indexOf(map)];
+    if (!layer) throw new Error(`Atlas: no ${map} layer`);
+    return layer;
   }
 
   /**
    * Box-filter one supersampled frame into cell (col, row): the `cell * ss` square at
-   * (x0, y0) of `pixels[m]`, map m as RGBA floats `width` wide. Every value is weighted by
-   * coverage, so the silhouette's colour is the object's colour rather than a mix with
-   * the cleared background; coverage itself is the plain average.
+   * (x0, y0) of `pixels[m]`, map m as RGBA floats `width` wide, then the turned normals.
+   * Every value is weighted by coverage, so the silhouette's colour is the object's colour
+   * rather than a mix with the cleared background; coverage itself is the plain average.
    */
   write(pixels: Float32Array[], width: number, ss: number, col: number, row: number, x0: number, y0: number): void {
     const { cell, size, maps, layers } = this;
     const [alpha] = pixels;
-    if (!alpha || pixels.length !== maps.length) throw new Error("Atlas.write: one pixel array per map");
+    if (!alpha || pixels.length !== maps.length + 1) throw new Error("Atlas.write: one pixel array per map, then the turned normals");
+    const sources = [...maps, "turned" as const];
     for (let y = 0; y < cell; y++)
       for (let x = 0; x < cell; x++) {
         const out = ((row * cell + y) * size + col * cell + x) * 4;
@@ -46,11 +74,10 @@ export class Atlas {
         const cover = weight / (ss * ss);
         this.coverage[out / 4] = cover;
         if (weight === 0) continue;
-        for (let m = 0; m < maps.length; m++) {
+        sources.forEach((map, m) => {
           const source = pixels[m];
-          const layer = layers[m];
-          const map = maps[m];
-          if (!source || !layer || !map) throw new Error(`Atlas.write: no pixels for map ${m}`);
+          const layer = map === "turned" ? this.turned : layers[m];
+          if (!source || !layer) throw new Error(`Atlas.write: no pixels for ${map}`);
           let r = 0;
           let g = 0;
           let b = 0;
@@ -64,8 +91,11 @@ export class Atlas {
               b += (source[i + 2] ?? 0) * w;
               a += (source[i + 3] ?? 0) * w;
             }
-          store(map, layer, out, r / weight, g / weight, b / weight, map === "base" ? cover : a / weight);
-        }
+          [r, g, b, a] = [r / weight, g / weight, b / weight, a / weight];
+          if (map === "normalDepth") this.agreement.own += cover * Math.hypot(r * 2 - 1, g * 2 - 1, b * 2 - 1);
+          if (map === "turned") this.agreement.turned += cover * Math.hypot(r * 2 - 1, g * 2 - 1, b * 2 - 1);
+          store(layer, out, [r, g, b, map === "base" ? cover : a], map === "base" || map === "emissive");
+        });
       }
   }
 
@@ -109,36 +139,26 @@ export class Atlas {
         queue[tail++] = ny * cell + nx;
         const to = ((y0 + ny) * size + x0 + nx) * 4;
         // Base keeps zero coverage; the other layers' alpha is data (depth) and spreads too.
-        for (let m = 0; m < this.layers.length; m++) {
-          const layer = this.layers[m];
-          if (!layer) continue;
+        this.layers.forEach((layer, m) => {
           const n = this.maps[m] === "base" ? 3 : 4;
           for (let k = 0; k < n; k++) layer[to + k] = layer[from + k] ?? 0;
-        }
+        });
+        for (let k = 0; k < 4; k++) this.turned[to + k] = this.turned[from + k] ?? 0;
       }
     }
   }
 }
 
-/** Pack one texel of `map` into `layer` at byte `out`. */
-function store(map: ImpostorMap, layer: Uint8Array, out: number, r: number, g: number, b: number, a: number): void {
-  if (map === "base" || map === "emissive") {
-    layer[out] = toSrgb(r);
-    layer[out + 1] = toSrgb(g);
-    layer[out + 2] = toSrgb(b);
-  } else if (map === "normalDepth") {
-    // Renormalise the averaged normal before packing.
-    const nx = r * 2 - 1;
-    const ny = g * 2 - 1;
-    const nz = b * 2 - 1;
-    const length = Math.hypot(nx, ny, nz) || 1;
-    layer[out] = Math.round((nx / length) * 127.5 + 127.5);
-    layer[out + 1] = Math.round((ny / length) * 127.5 + 127.5);
-    layer[out + 2] = Math.round((nz / length) * 127.5 + 127.5);
-  } else {
-    layer[out] = Math.round(r * 255);
-    layer[out + 1] = Math.round(g * 255);
-    layer[out + 2] = Math.round(b * 255);
-  }
+/**
+ * Pack one texel into `layer` at byte `out`: colour as sRGB if `srgb`, the rest linearly.
+ * An averaged normal keeps its length, which says how far the normals it averages agree
+ * and is lit by: renormalised, a texel of leaves facing every which way would light as one
+ * smooth surface turned to the camera.
+ */
+function store(layer: Uint8Array, out: number, [r, g, b, a]: readonly [number, number, number, number], srgb: boolean): void {
+  const encode = srgb ? toSrgb : (v: number) => Math.round(v * 255);
+  layer[out] = encode(r);
+  layer[out + 1] = encode(g);
+  layer[out + 2] = encode(b);
   layer[out + 3] = Math.round(a * 255);
 }

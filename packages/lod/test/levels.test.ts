@@ -13,7 +13,7 @@ const thresholds = (lod: { levels: ReadonlyArray<{ maxPixels: number }> }) => lo
 
 /** An impostor of a 2-unit box seen whole in frames of 4 texels: two texels span a pixel at 4 × r / (2 × 1.5) px. */
 const impostor = (): Impostor => ({
-  version: 2,
+  version: 3,
   layout: "full",
   frames: 4,
   size: 16,

@@ -6,18 +6,30 @@ import { bakeImpostor, decodeImpostor, encodeImpostor, type Impostor } from "@dr
  * `encodeImpostor` and read with `decodeImpostor`. The key is a fingerprint of what the
  * bake sees: every vertex, index and colour of the source, its materials' settings and
  * the pixels of their textures, and the bake options. Change the content and the key
- * changes with it; nothing is ever read back stale.
+ * changes with it; nothing is ever read back stale. The key does not see the baker:
+ * when the package bakes differently, name a new store (older ones are deleted).
  */
-const STORE = "city-impostors-v1";
+const STORE = "city-impostors-v2";
 
 export async function cachedImpostor(source: THREE.Object3D, options: { resolution?: number; frames?: number }): Promise<Impostor> {
   const key = `/${fingerprint(source)}-${options.resolution ?? "d"}-${options.frames ?? "d"}.ktx2`;
-  const store = await caches.open(STORE);
+  const store = await openStore();
   const hit = await store.match(key);
   if (hit) return decodeImpostor(await hit.arrayBuffer());
   const impostor = await bakeImpostor(source, { layout: "hemi", ...options });
   await store.put(key, new Response(new Uint8Array(encodeImpostor(impostor))));
   return impostor;
+}
+
+let opened: Promise<Cache> | null = null;
+
+/** The store, once older stores are gone. */
+function openStore(): Promise<Cache> {
+  opened ??= (async () => {
+    for (const name of await caches.keys()) if (name.startsWith("city-impostors-") && name !== STORE) await caches.delete(name);
+    return caches.open(STORE);
+  })();
+  return opened;
 }
 
 /** FNV-1a over everything a bake reads from `root`, as hex. */

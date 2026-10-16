@@ -60,7 +60,7 @@ describe("simplify", () => {
 
   it("simplifies an InstancedMesh's geometry, keeps ImpostorMeshes and refuses an InstancedLod", async () => {
     const impostor: Impostor = {
-      version: 2,
+      version: 3,
       layout: "full",
       frames: 4,
       size: 16,

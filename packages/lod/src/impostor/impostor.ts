@@ -5,11 +5,11 @@ export type ImpostorLayout = "hemi" | "full";
  * The atlas maps, in the order they are stored. Each is one RGBA8 layer:
  *
  * - `base`: base colour (sRGB) in RGB, coverage in A.
- * - `normalDepth`: object-space normal of the surface's front side in RGB
- *   (`n * 0.5 + 0.5`), depth in A.
- * - `orm`: occlusion, roughness, metalness in RGB (glTF / three order); in A, the share
- *   of the surface whose front faced the camera (two-sided materials, whose normal
- *   three turns toward the viewer; 1 everywhere else).
+ * - `normalDepth`: an object-space normal n in RGB (`n * 0.5 + 0.5`), depth in A. The
+ *   surface shades with n on the share of it in orm.a and with -n on the rest; the
+ *   length of n is how far the normals it averages agree (1: all one way).
+ * - `orm`: occlusion, roughness, metalness in RGB (glTF / three order), and in A the
+ *   share of the surface that shades with n.
  * - `emissive`: emissive colour (sRGB) in RGB, A unused. Only when something emits.
  */
 export const MAPS = ["base", "normalDepth", "orm", "emissive"] as const;
@@ -27,7 +27,7 @@ export type ImpostorMap = (typeof MAPS)[number];
  * toward the camera that baked the frame and 0 is away from it.
  */
 export interface Impostor {
-  version: 2;
+  version: 3;
   layout: ImpostorLayout;
   /** frames per atlas side */
   frames: number;
@@ -73,7 +73,7 @@ export function validateImpostor(value: unknown): asserts value is Impostor {
   if (typeof value !== "object" || value === null) fail("not an object");
   const fields: Partial<Record<keyof Impostor, unknown>> = value;
   const { version, layout, frames, size, box, halfSize, maps, layers } = fields;
-  if (version !== 2) fail(`unsupported version ${String(version)}; bake it again`);
+  if (version !== 3) fail(`unsupported version ${String(version)}; bake it again`);
   if (layout !== "hemi" && layout !== "full") fail(`unknown layout "${String(layout)}"`);
   if (!isNumber(frames) || !Number.isInteger(frames) || frames < 2) fail("frames must be an integer >= 2");
   if (!isNumber(size) || !Number.isInteger(size) || size <= 0 || size % frames !== 0)

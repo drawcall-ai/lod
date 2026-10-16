@@ -96,6 +96,8 @@ Lod.debug = true; // tint levels to see where each draws
   `Lod`'s level. `Lod.fade` is the share of a level's `maxPixels` its fade spans.
 - **Saving results:** only impostors can be saved and loaded again (`encodeImpostor`,
   `decodeImpostor` → `ImpostorMesh`); simplified and baked levels are built at load time.
+  A package update that bakes differently refuses older files ("unsupported version"):
+  bake them again, and empty any cache of them.
 - **`dispose()` frees everything,** the source included. Clones share geometry and
   textures: dispose only once no clone draws any more.
 
@@ -110,7 +112,12 @@ Lod.debug = true; // tint levels to see where each draws
 - **Custom lighting is not baked.** Impostors and baked levels keep the surface (colour,
   normal, roughness) and light it as a standard material: lighting changed in
   `onBeforeCompile`, such as leaves glowing in back light, is lost, and such foliage
-  reads darker once its impostor shows. Tint the impostor's material `color` to match.
+  reads darker once its impostor shows, worst against the light. Give the impostor the
+  same lighting: once the `Lod` or `InstancedLod` is built, wrap the `onBeforeCompile` of
+  each `ImpostorMesh` under it (call the one it has first, extend `customProgramCacheKey`)
+  and insert your code before `void main()`. Its shader defines `IMPOSTOR_LIT`; its
+  normal is an average whose length says how far the leaves under it agree, so light by
+  `impostorCosine(normal, direction)` where you would clamp `dot(normal, direction)`.
 - **Jitter dense plantings** in position and rotation. Bakes and impostor views look
   along parallel rays: plants on a grid leave straight gaps there that no perspective
   view of the real plants shows.

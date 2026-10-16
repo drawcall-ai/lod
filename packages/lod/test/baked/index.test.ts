@@ -149,7 +149,7 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
 
   it("refuses ImpostorMeshes, which have no surface to read", async () => {
     const impostor: Impostor = {
-      version: 2,
+      version: 3,
       layout: "full",
       frames: 4,
       size: 16,

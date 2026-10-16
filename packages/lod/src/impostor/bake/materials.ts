@@ -56,6 +56,8 @@ layout(location = 2) out highp vec4 impostorOrm;
 #ifdef IMPOSTOR_EMISSIVE
 layout(location = 3) out highp vec4 impostorEmissive;
 #endif
+// after the maps: the other way to store the normals (see BAKE_WRITE)
+layout(location = IMPOSTOR_TURNED) out highp vec4 impostorTurned;
 uniform float impostorDistance;
 uniform float impostorRadius;
 uniform float impostorTextureBias;
@@ -67,23 +69,31 @@ const BAKE_WRITE = /* glsl */ `
 #else
   float impostorAo = 1.0;
 #endif
-  // Two-sided surfaces: three turns the normal toward whichever side faces the camera.
-  // Store the surface's own normal and, in orm.a, whether its front faced the camera; the
-  // runtime picks the side per pixel with that probability. Averaging the flipped normals
-  // instead would keep only the majority side: on cut-out foliage with painted canopy
-  // normals, that erases the sunlit leaves.
+  // Two ways to store the normals three shades with, each a normal and the share of the
+  // surface that shades with it rather than its opposite; the bake keeps the one whose
+  // normals agree more once averaged (see Atlas):
+  // - the surface's own normal and the share whose front faced the camera (on two-sided
+  //   surfaces three turns the normal toward the camera; this undoes it). Painted canopy
+  //   normals of cut-out foliage agree this way, which three turns inward on every leaf
+  //   seen from behind.
+  // - the shading normal turned toward the camera and the share that faced it already.
+  //   Real leaf normals agree this way, which three turns toward the camera on every leaf.
+  // This camera is orthographic, looking along -z.
   #if defined( DOUBLE_SIDED ) && !defined( FLAT_SHADED )
-    vec3 impostorSurface = normal * faceDirection;
+    vec3 impostorOwn = normal * faceDirection;
     float impostorFront = faceDirection * 0.5 + 0.5;
   #else
-    vec3 impostorSurface = normal;
+    vec3 impostorOwn = normal;
     float impostorFront = 1.0;
   #endif
-  vec3 impostorNormal = normalize((vec4(impostorSurface, 0.0) * viewMatrix).xyz);
+  float impostorFacing = step(0.0, normal.z);
+  vec3 impostorNormal = normalize((vec4(impostorOwn, 0.0) * viewMatrix).xyz);
+  vec3 impostorTurnedNormal = normalize((vec4(normal * (impostorFacing * 2.0 - 1.0), 0.0) * viewMatrix).xyz);
   float impostorDepth = 0.5 + 0.5 * (impostorDistance - vViewPosition.z) / impostorRadius;
   gl_FragColor = vec4(clamp(diffuseColor.rgb * IMPOSTOR_OPACITY, 0.0, 1.0), clamp(IMPOSTOR_COVERAGE, 0.0, 1.0));
   impostorNormalDepth = vec4(impostorNormal * 0.5 + 0.5, clamp(impostorDepth, 0.0, 1.0));
   impostorOrm = vec4(impostorAo, roughnessFactor, metalnessFactor, impostorFront);
+  impostorTurned = vec4(impostorTurnedNormal * 0.5 + 0.5, impostorFacing);
 #ifdef IMPOSTOR_EMISSIVE
   impostorEmissive = vec4(clamp(totalEmissiveRadiance, 0.0, 1.0), 1.0);
 #endif
@@ -151,7 +161,13 @@ function bakeMaterial(source: Material, settings: BakeSettings): { material: Mes
   material.onBeforeCompile = (shader: WebGLProgramParametersWithUniforms, renderer) => {
     userCompile.call(material, shader, renderer);
     Object.assign(shader.uniforms, settings.uniforms);
-    shader.defines = { ...shader.defines, IMPOSTOR_COVERAGE: coverage, IMPOSTOR_OPACITY: opacity, ...(settings.emissive ? { IMPOSTOR_EMISSIVE: "" } : {}) };
+    shader.defines = {
+      ...shader.defines,
+      IMPOSTOR_COVERAGE: coverage,
+      IMPOSTOR_OPACITY: opacity,
+      IMPOSTOR_TURNED: settings.emissive ? "4" : "3",
+      ...(settings.emissive ? { IMPOSTOR_EMISSIVE: "" } : {}),
+    };
     applyEdits(shader, EDITS);
   };
   material.customProgramCacheKey = () => `impostor-bake|${coverage}|${opacity}|${settings.emissive}|${key}`;

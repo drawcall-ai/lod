@@ -14,6 +14,7 @@ import {
   PlaneGeometry,
   RGBAFormat,
   SRGBColorSpace,
+  IcosahedronGeometry,
   SphereGeometry,
   TorusKnotGeometry,
   type Object3D,
@@ -21,6 +22,7 @@ import {
 import { describe, expect, it } from "vitest";
 import { bakeImpostor } from "../../src/impostor/bake/index.js";
 import type { Impostor } from "../../src/impostor/impostor.js";
+import { frameDirection } from "../../src/impostor/octahedral.js";
 import { ImpostorMesh } from "../../src/impostor/mesh/index.js";
 import { InstancedLod } from "../../src/instanced/index.js";
 import { GPU_TIMEOUT, renderer } from "../webgl.js";
@@ -51,6 +53,24 @@ const red = (impostor: Impostor, m: number) => {
   return sum / covered;
 };
 
+/**
+ * Per frame of mip level `m` (`frames` square cells), the texel at the cell's centre:
+ * the frame's direction, its coverage, decoded normal and front share.
+ */
+const centres = (impostor: Impostor, m: number) => {
+  const [colour, normalDepth, orm] = [0, 1, 2].map((i) => impostor.layers[i]?.[m]);
+  if (!colour || !normalDepth || !orm) throw new Error(`no level ${m}`);
+  const size = impostor.size >> m;
+  const cell = size / impostor.frames;
+  return Array.from({ length: impostor.frames ** 2 }, (_, f) => {
+    const [col, row] = [f % impostor.frames, Math.floor(f / impostor.frames)];
+    const i = ((row * cell + Math.floor(cell / 2)) * size + col * cell + Math.floor(cell / 2)) * 4;
+    const normal = [0, 1, 2].map((k) => (normalDepth[i + k] ?? 0) / 127.5 - 1);
+    return { direction: frameDirection(impostor.layout, impostor.frames, col, row), cover: colour[i + 3] ?? 0, normal, front: (orm[i + 3] ?? 0) / 255 };
+  });
+};
+const dot = (a: number[], b: number[]) => a.reduce((sum, x, i) => sum + x * (b[i] ?? 0), 0);
+
 describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
   it("bakes colour, normal+depth and ORM, and emissive only when something visible emits", async () => {
     const knot = new Mesh(new TorusKnotGeometry(1, 0.3, 64, 8), new MeshStandardMaterial({ color: 0xd06030 }));
@@ -64,6 +84,63 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
     const hidden = new Mesh(new SphereGeometry(0.2), new MeshStandardMaterial({ emissive: 0xffaa00 }));
     hidden.visible = false;
     expect((await bake(new Group().add(knot.clone(), hidden))).maps).toEqual(["base", "normalDepth", "orm"]);
+  });
+
+  it("stores the normals three shades with: turned around for the share in orm.a", async () => {
+    // A two-sided card with its own normals, which three turns toward the camera, and one
+    // painted to face away from its front, which three turns away on either side.
+    const real = new PlaneGeometry(2, 2);
+    const painted = real.clone();
+    const normals = painted.getAttribute("normal");
+    for (let i = 0; i < normals.count; i++) normals.setZ(i, -normals.getZ(i));
+    for (const [geometry, toCamera] of [
+      [real, 1],
+      [painted, -1],
+    ] as const) {
+      const seen = centres(await bake(new Mesh(geometry, new MeshStandardMaterial({ side: DoubleSide }))), 0);
+      const facing = seen.filter((c) => c.cover > 0 && Math.abs(c.direction[2]) > 0.5);
+      expect(facing.length).toBeGreaterThan(4);
+      for (const c of facing) expect(toCamera * (c.front * 2 - 1) * dot(c.normal, c.direction)).toBeGreaterThan(0.45);
+    }
+  });
+
+  it("keeps leaves facing every which way from cancelling out", async () => {
+    // Strips far narrower than a texel's samples, at irregular widths, each facing +z or -z
+    // at random as real leaves do: three turns all of them toward the camera, while their
+    // own normals cancel out wherever a texel's samples hit both.
+    const positions: number[] = [];
+    const normals: number[] = [];
+    let seed = 7;
+    const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    for (let a = -1; a < 1;) {
+      const b = Math.min(1, a + 0.002 + random() * 0.01);
+      const up = random() < 0.5;
+      const quad = up ? [a, -1, b, -1, b, 1, a, -1, b, 1, a, 1] : [a, -1, a, 1, b, 1, a, -1, b, 1, b, -1];
+      for (let v = 0; v < 6; v++) {
+        positions.push(quad[v * 2] ?? 0, quad[v * 2 + 1] ?? 0, 0);
+        normals.push(0, 0, up ? 1 : -1);
+      }
+      a = b;
+    }
+    const geometry = new BufferGeometry()
+      .setAttribute("position", new Float32BufferAttribute(positions, 3))
+      .setAttribute("normal", new Float32BufferAttribute(normals, 3));
+    const strips = new Mesh(geometry, new MeshStandardMaterial({ side: DoubleSide }));
+    const seen = centres(await bakeImpostor(strips, { renderer, resolution: 32, supersample: 4 }), 0);
+    const facing = seen.filter((c) => c.cover > 0 && Math.abs(c.direction[2]) > 0.5);
+    expect(facing.length).toBeGreaterThan(4);
+    // how much of the shading normal (+-z, toward the camera) is left, on average
+    const kept = facing.reduce((sum, c) => sum + ((c.front * 2 - 1) * dot(c.normal, c.direction)) / Math.abs(c.direction[2]), 0) / facing.length;
+    expect(kept).toBeGreaterThan(0.95);
+  });
+
+  it("keeps how far the normals it averages agree as the normal's length", async () => {
+    const facets = await bake(new Mesh(new IcosahedronGeometry(1, 1), new MeshStandardMaterial({ flatShading: true })));
+    const length = (c: { normal: number[] }) => Math.hypot(...c.normal);
+    // Up close a texel sees one facet; one texel per frame sees half the ball.
+    for (const c of centres(facets, 0)) expect(length(c)).toBeGreaterThan(0.95);
+    const last = (facets.layers[0]?.length ?? 1) - 1;
+    for (const c of centres(facets, last)) expect(length(c)).toBeLessThan(0.85);
   });
 
   it("ignores the material's blending: additive bakes the same atlas", async () => {

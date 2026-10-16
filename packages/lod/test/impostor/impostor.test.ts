@@ -6,7 +6,7 @@ const chain = <T>(level: (size: number) => T) => [16, 8, 4].map(level);
 const bytes = (size: number) => new Uint8Array(size * size * 4);
 
 const valid: Impostor = {
-  version: 2,
+  version: 3,
   layout: "hemi",
   frames: 4,
   size: 16,

@@ -199,23 +199,47 @@ const ROUGHNESS = /* glsl */ `
 // Replaces <normal_fragment_begin>.
 const NORMAL = /* glsl */ `
   float faceDirection = 1.0;
-  // orm.a is the share of the surface here whose front faced the camera: pick the side
-  // with that probability, as the real two-sided surface shows it. The choice is fixed
-  // per texel of the mip being read (of the strongest frame), so it sits on the object
-  // like leaves do instead of crawling across the screen.
+  // orm.a is the share of the surface here that shades with the baked normal rather than
+  // its opposite (see Impostor): pick one with that probability, as the real surface
+  // shows them. The choice is fixed per texel of the mip being read (of the strongest
+  // frame), so it sits on the object like leaves do instead of crawling across the screen.
   vec2 impostorStrong = impostorW.x >= max(impostorW.y, impostorW.z) ? impostorA0 : impostorW.y >= impostorW.z ? impostorA1 : impostorA2;
   float impostorLevel = exp2(ceil(max(log2(max(impostorTexels, 1e-4)), 0.0)));
   vec2 impostorTexel = floor(impostorStrong * impostorSize / impostorLevel);
   float impostorRandom = fract(sin(dot(impostorTexel, vec2(12.9898, 78.233))) * 43758.5453);
   float impostorSide = impostorRandom < impostorOrmValue.a ? 1.0 : -1.0;
   vec3 normal = impostorSide * normalize(mat3(vImpostorNormalX, vImpostorNormalY, vImpostorNormalZ) * impostorN);
-  // Averaged normals come out short where they disagree (mip levels, blended frames,
-  // foliage). Renormalised, the average lights as one smooth surface facing the mean
-  // direction: too bright for a canopy. Keeping the length as the spread lights
-  // shorter normals toward their average irradiance (Toksvig, for diffuse).
+  // Averaged normals come out short where they disagree (within a texel, across mip
+  // levels and blended frames, all over foliage). The length is kept as their spread:
+  // see impostorCosine, which lights by it.
   normal *= clamp(length(impostorN), 0.0, 1.0);
   vec3 nonPerturbedNormal = normal;
 `;
+
+// The mean of saturate(dot(n, direction)) over the normals an averaged `normal` stands
+// for, whose length is how far they agree. Fitted to normals spread over the half of the
+// sphere that faces the camera (all a view shows of a surface), within 0.01: exact for
+// light along the mean and at length 1, where it is the clamped cosine.
+const COSINE = /* glsl */ `
+float impostorCosine(vec3 normal, vec3 direction) {
+  float along = dot(normal, direction);
+  float agree = dot(normal, normal);
+  return 0.5 * (along + sqrt(along * along + (1.0 - agree) * (1.0 - along * along / max(agree, 1e-8)) / 3.0));
+}
+`;
+
+// Replaces <lights_physical_pars_fragment>, as it is when the material compiles: direct
+// diffuse light by impostorCosine instead of the clamped cosine of the mean normal. That
+// one leaves a canopy unlit wherever its mean normal is side-on to the sun, where the real
+// leaves, tilted every which way, catch a good part of it; renormalised, the mean lights
+// the canopy as one smooth surface. Specular keeps three's terms: its roughness widens
+// with the spread instead (see ROUGHNESS).
+function diffuse(): string {
+  const lambert = "reflectedLight.directDiffuse += irradiance * BRDF_Lambert( material.diffuseContribution );";
+  const spread =
+    "reflectedLight.directDiffuse += impostorCosine( geometryNormal, directLight.direction ) * directLight.color * BRDF_Lambert( material.diffuseContribution );";
+  return COSINE + replaceOrThrow(ShaderChunk.lights_physical_pars_fragment, lambert, spread);
+}
 
 const EMISSIVE = /* glsl */ `
   #include <emissivemap_fragment>
@@ -272,5 +296,6 @@ export const fragmentLit = (): Edit[] => [
   ["fragment", "#include <normal_fragment_begin>", NORMAL],
   ["fragment", "#include <emissivemap_fragment>", EMISSIVE],
   ["fragment", "#include <aomap_fragment>", AO],
+  ["fragment", "#include <lights_physical_pars_fragment>", diffuse()],
   ["fragment", "#include <lights_fragment_begin>", lights()],
 ];

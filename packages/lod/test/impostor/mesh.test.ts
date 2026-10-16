@@ -22,7 +22,7 @@ import { isTexture } from "../../src/three.js";
 import { GPU_TIMEOUT, compile, renderer } from "../webgl.js";
 
 const make = (): Impostor => ({
-  version: 2,
+  version: 3,
   layout: "full",
   frames: 4,
   size: 16,
@@ -44,6 +44,7 @@ describe("ImpostorMesh", { timeout: GPU_TIMEOUT }, () => {
     const lit = compile(mesh.material);
     expect(lit.vertexShader).toContain("impostorEncode(impostorView)");
     expect(lit.fragmentShader).toContain("impostorShadowS");
+    expect(lit.fragmentShader).toContain("impostorCosine( geometryNormal, directLight.direction )");
     expect(lit.fragmentShader).not.toContain("#include <map_fragment>");
   });
 
