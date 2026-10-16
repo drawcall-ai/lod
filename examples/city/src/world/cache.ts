@@ -9,7 +9,7 @@ import { bakeImpostor, decodeImpostor, encodeImpostor, type Impostor } from "@dr
  * changes with it; nothing is ever read back stale. The key does not see the baker:
  * when the package bakes differently, name a new store (older ones are deleted).
  */
-const STORE = "city-impostors-v2";
+const STORE = "city-impostors-v3";
 
 export async function cachedImpostor(source: THREE.Object3D, options: { resolution?: number; frames?: number }): Promise<Impostor> {
   const key = `/${fingerprint(source)}-${options.resolution ?? "d"}-${options.frames ?? "d"}.ktx2`;
