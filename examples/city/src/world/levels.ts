@@ -32,13 +32,15 @@ export async function baked(source: THREE.Object3D, low: THREE.Object3D, texture
  * A hemispherical impostor (everything here stands upright), from the bake cache when
  * the same source was baked before: `resolution` pixels per view
  * over `frames` views per atlas side (the package's defaults where not given), drawn with `draw`.
+ * Baked for `maxPixels` too: switch heights here are well above where an impostor is
+ * sharp, and up to them it keeps the source's look at that height.
  */
 export async function impostor(
   source: THREE.Object3D,
   options: { maxPixels?: number; resolution?: number; frames?: number; draw?: ImpostorMeshOptions } = {},
 ): Promise<Level> {
   const { maxPixels, resolution, frames, draw = {} } = options;
-  const object = new ImpostorMesh(await cachedImpostor(source, { resolution, frames }), 1, draw);
+  const object = new ImpostorMesh(await cachedImpostor(source, { resolution, frames, maxPixels }), 1, draw);
   object.castShadow = object.receiveShadow = true;
   return { object, maxPixels };
 }
