@@ -17,11 +17,12 @@ export interface FoliageOptions {
  *   leaves the same way, by their averaged normals.
  * - for cut-out leaves, alpha to coverage plus a mip-dependent alpha boost: plain alpha
  *   testing loses coverage in smaller mips, which makes distant needles and leaves vanish.
+ *   Three's shadow pass runs none of this: see `leafShadows`.
  */
 export function foliage(m: THREE.MeshStandardMaterial, { translucency, tint = "#e4ff8a" }: FoliageOptions): void {
   if (m.alphaTest > 0) m.alphaToCoverage = true;
   // an impostor's material is alpha-tested too, but by its own test of the baked coverage
-  const leaves = m.alphaTest > 0 && m.map !== null;
+  const leaves = isLeaves(m);
   const color = new THREE.Color(tint);
   const previous = m.onBeforeCompile;
   const key = m.customProgramCacheKey.bind(m);
@@ -51,23 +52,12 @@ export function foliage(m: THREE.MeshStandardMaterial, { translucency, tint = "#
       void main() {`,
     );
     if (!leaves) return;
-    shader.fragmentShader = replace(
-      shader.fragmentShader,
-      "#include <alphatest_fragment>",
-      /* glsl */ `#if defined(USE_ALPHATEST) && defined(USE_MAP)
-      {
-        vec2 texel = vMapUv * vec2(textureSize(map, 0));
-        float mip = max(0.0, 0.5 * log2(max(dot(dFdx(texel), dFdx(texel)), dot(dFdy(texel), dFdy(texel)))));
-        diffuseColor.a *= 1.0 + mip * 0.25;
-      }
-      #endif
-      #include <alphatest_fragment>`,
-    );
+    boostAlpha(shader);
   };
   m.customProgramCacheKey = () => `${key()}|foliage-${leaves}`;
 }
 
-/** Applies `foliage` to every alpha-tested material of a loaded plant model. */
+/** Applies `foliage` to every alpha-tested material of a loaded plant model, and `leafShadows` to its meshes. */
 export function foliageModel(root: THREE.Object3D, options: FoliageOptions): void {
   const seen = new Set<THREE.Material>();
   root.traverse((o) => {
@@ -78,17 +68,65 @@ export function foliageModel(root: THREE.Object3D, options: FoliageOptions): voi
       foliage(m, options);
     }
   });
+  leafShadows(root);
 }
 
 /**
- * Applies `foliage` to the impostors a Lod or InstancedLod under `root` draws: they light
- * the baked surface as a standard material, which knows nothing of the leaves'
- * translucency.
+ * Applies `foliage` to the impostors a Lod or InstancedLod under `root` draws, which light
+ * the baked surface as a standard material and know nothing of the leaves' translucency,
+ * and `leafShadows` to its other meshes, which neither three's clones nor an
+ * InstancedLod's meshes inherit.
  */
-export function foliageImpostors(root: THREE.Object3D, options: FoliageOptions): void {
+export function foliageLevels(root: THREE.Object3D, options: FoliageOptions): void {
   root.traverse((o) => {
     if (o instanceof ImpostorMesh) foliage(o.material, options);
   });
+  leafShadows(root);
+}
+
+/**
+ * Gives every mesh under `root` that draws cut-out leaves a depth material with their
+ * alpha boost, so it casts the coverage it draws. Three's own depth material runs no
+ * onBeforeCompile: without this, trees cast thinner shadows than they show while their
+ * impostors cast what they show, and the shade under a tree changes as it hands over.
+ * Three hands the depth material each drawn material's map and alpha test.
+ */
+function leafShadows(root: THREE.Object3D): void {
+  root.traverse((o) => {
+    if (!(o instanceof THREE.Mesh) || o instanceof ImpostorMesh) return;
+    const materials: THREE.Material[] = Array.isArray(o.material) ? o.material : [o.material];
+    const leaves = materials.filter(isLeaves);
+    if (leaves.length === 0) return;
+    // three reuses one depth material for every group of a mesh, without refreshing its map
+    if (leaves.length !== materials.length || new Set(leaves.map((m) => m.map)).size > 1) {
+      throw new Error(`foliage: "${o.name}" draws leaves with other materials; split it to cast their shadows`);
+    }
+    const depth = new THREE.MeshDepthMaterial();
+    depth.onBeforeCompile = boostAlpha;
+    depth.customProgramCacheKey = () => "foliage-leaves";
+    o.customDepthMaterial = depth;
+  });
+}
+
+/** Cut-out leaves: their alpha is boosted (see `foliage`). An impostor's material has no map. */
+function isLeaves(m: THREE.Material): m is THREE.Material & { map: THREE.Texture } {
+  return m.alphaTest > 0 && "map" in m && m.map instanceof THREE.Texture;
+}
+
+/** Boosts alpha by the mip the map is read at, before the alpha test. */
+function boostAlpha(shader: THREE.WebGLProgramParametersWithUniforms): void {
+  shader.fragmentShader = replace(
+    shader.fragmentShader,
+    "#include <alphatest_fragment>",
+    /* glsl */ `#if defined(USE_ALPHATEST) && defined(USE_MAP)
+    {
+      vec2 texel = vMapUv * vec2(textureSize(map, 0));
+      float mip = max(0.0, 0.5 * log2(max(dot(dFdx(texel), dFdx(texel)), dot(dFdy(texel), dFdy(texel)))));
+      diffuseColor.a *= 1.0 + mip * 0.25;
+    }
+    #endif
+    #include <alphatest_fragment>`,
+  );
 }
 
 /** `source` with `search` replaced by `by`; throws if three or the package changed it. */

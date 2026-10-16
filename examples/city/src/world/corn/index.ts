@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { ImpostorMesh, type InstancedLod, Lod } from "@drawcall/lod";
 import { cornPlant } from "../../content/corn/index.ts";
 import { LEAF_FOLIAGE } from "../../content/corn/leaf.ts";
-import { foliageImpostors } from "../../content/foliage.ts";
+import { foliageLevels } from "../../content/foliage.ts";
 import { step } from "../../loading.ts";
 import { heroPlant } from "../hero.ts";
 import { culled, diameter, impostor, instanced } from "../levels.ts";
@@ -117,7 +117,7 @@ export class Corn extends THREE.Object3D {
       ...heroPlant({ ...hero, seed: seeds[hero.variant] ?? 1 }, { object: far, maxPixels: own.maxPixels }, plan.terrain),
     });
     // the plants' impostors, far and the hero's
-    foliageImpostors(corn, LEAF_FOLIAGE);
+    foliageLevels(corn, LEAF_FOLIAGE);
     return corn;
   }
 

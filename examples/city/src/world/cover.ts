@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { Lod } from "@drawcall/lod";
 import { Random } from "../content/random.ts";
 import { step } from "../loading.ts";
-import { foliageImpostors } from "../content/foliage.ts";
+import { foliageLevels } from "../content/foliage.ts";
 import { MODEL_FOLIAGE, variants } from "../content/models.ts";
 import { type ClumpShape, grassClump, grassMaterial } from "../content/grass.ts";
 import { groundShading, type Zones } from "../content/terrain.ts";
@@ -98,7 +98,7 @@ export async function cover(plan: Plan, zones: Zones): Promise<Patches[]> {
           // out, where the tufts are gone: they receive shadows but cast none
           for (const level of [source, ...levels.map((l) => l.object)]) level.traverse((o) => (o.castShadow = false));
           const lod = instanced(kind.name, source, levels, chunks * perTile);
-          foliageImpostors(lod, MODEL_FOLIAGE);
+          foliageLevels(lod, MODEL_FOLIAGE);
           return lod;
         }),
       ),
