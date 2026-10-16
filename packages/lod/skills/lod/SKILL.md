@@ -120,9 +120,12 @@ Lod.debug = true; // tint levels to see where each draws
   `impostorCosine(normal, direction)` where you would clamp `dot(normal, direction)`.
 - **Alpha changed in `onBeforeCompile`** (a boost that keeps distant leaves from thinning
   out) never reaches shadow maps: three casts with its own depth material, while an
-  impostor casts the coverage it shows. The impostor then shades itself more than its
-  source does, most visibly against the light. Patch the depth pass the same way
-  (`ShaderChunk`; `DEPTH_PACKING` is defined there) where the shadows must match.
+  impostor casts the coverage it shows, so the shade in and under the object changes as
+  its impostor takes over. Once the `Lod` or `InstancedLod` is built, give each mesh
+  under it that draws such a material a `customDepthMaterial` (`customDistanceMaterial`
+  for point lights) with the same change; three hands it the drawn material's `map` and
+  alpha test. The level meshes do not keep one set on the source. A mesh has one depth
+  material for all its groups, so such leaves need a mesh of their own.
 - **Jitter dense plantings** in position and rotation. Bakes and impostor views look
   along parallel rays: plants on a grid leave straight gaps there that no perspective
   view of the real plants shows.
