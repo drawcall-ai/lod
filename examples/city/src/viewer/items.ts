@@ -9,6 +9,7 @@ import { facades } from "../content/house/facades.ts";
 import { ceiling } from "../content/house/furnishings.ts";
 import { ladybird } from "../content/ladybird.ts";
 import { foliageModel } from "../content/foliage.ts";
+import { MODEL_FOLIAGE } from "../content/models.ts";
 import { assetUrl, manifest, surface } from "../content/materials.ts";
 import { streetSign } from "../content/sign.ts";
 import { terrain } from "../content/terrain.ts";
@@ -36,7 +37,7 @@ async function model(id: string): Promise<Item> {
   scene.traverse((o) => {
     o.castShadow = o.receiveShadow = true;
   });
-  foliageModel(scene, { translucency: 0.6 });
+  foliageModel(scene, MODEL_FOLIAGE);
   return { object: scene, ground: terrain() };
 }
 

@@ -1,10 +1,13 @@
 import * as THREE from "three";
 import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { foliageModel } from "./foliage.ts";
+import { type FoliageOptions, foliageModel } from "./foliage.ts";
 import { assetUrl, manifest } from "./materials.ts";
 
 const gltf = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
+
+/** The foliage shading of the models' cut-out leaves. */
+export const MODEL_FOLIAGE: FoliageOptions = { translucency: 0.6 };
 
 /**
  * The variants of a fetched model (Poly Haven lays them side by side), each as its own
@@ -16,7 +19,7 @@ export async function variants(id: string, groups?: string[][]): Promise<THREE.O
   const entry = manifest().models[id];
   if (!entry) throw new Error(`model ${id} is not in the manifest`);
   const { scene } = await gltf.loadAsync(assetUrl(entry.file));
-  foliageModel(scene, { translucency: 0.6 });
+  foliageModel(scene, MODEL_FOLIAGE);
   scene.updateMatrixWorld(true);
   return (groups ?? entry.variants.map((name) => [name])).map((names) => {
     const root = new THREE.Group();

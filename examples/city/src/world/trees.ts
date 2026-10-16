@@ -2,7 +2,8 @@ import { type InstancedLod, simplify } from "@drawcall/lod";
 import * as THREE from "three";
 import { Random } from "../content/random.ts";
 import { step } from "../loading.ts";
-import { variants } from "../content/models.ts";
+import { foliageImpostors } from "../content/foliage.ts";
+import { MODEL_FOLIAGE, variants } from "../content/models.ts";
 import { culled, impostor, spread } from "./levels.ts";
 import type { Plan } from "./plan.ts";
 
@@ -45,6 +46,7 @@ export async function trees(plan: Plan): Promise<InstancedLod[]> {
         foliageTint,
       ),
     );
+    for (const lod of built) foliageImpostors(lod, MODEL_FOLIAGE);
     lods.push(...built);
   }
   return lods;

@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { foliage } from "../foliage.ts";
+import { type FoliageOptions, foliage } from "../foliage.ts";
 import { MeshBuilder } from "../geometry.ts";
 import { once } from "../materials.ts";
 import { Random } from "../random.ts";
@@ -16,14 +16,17 @@ const green: Palette = { base: "#86a23c", body: "#538223", tip: "#a09a46", rib: 
 const husk: Palette = { base: "#b8c886", body: "#9bb466", tip: "#c4c088", rib: "#d8e4b0" };
 const dry: Palette = { base: "#a0905a", body: "#b39a62", tip: "#8a6e44", rib: "#d2c296" };
 
-/** Living maize blades; per-leaf variation comes through vertex colours. */
-export const leafMaterial = once(() => bladeMaterial("corn-leaf", green, 0.75));
-/** Dead lower leaves: straw coloured, hardly translucent. */
-export const dryLeafMaterial = once(() => bladeMaterial("corn-leaf-dry", dry, 0.25));
-/** Ear husks: paler and more yellow than the blades, with the same parallel fibres. */
-export const huskMaterial = once(() => bladeMaterial("corn-husk", husk, 0.6));
+/** The foliage shading of living blades, which make up most of a plant. */
+export const LEAF_FOLIAGE: FoliageOptions = { translucency: 0.75 };
 
-function bladeMaterial(name: string, palette: Palette, translucency: number): THREE.MeshPhysicalMaterial {
+/** Living maize blades; per-leaf variation comes through vertex colours. */
+export const leafMaterial = once(() => bladeMaterial("corn-leaf", green, LEAF_FOLIAGE));
+/** Dead lower leaves: straw coloured, hardly translucent. */
+export const dryLeafMaterial = once(() => bladeMaterial("corn-leaf-dry", dry, { translucency: 0.25 }));
+/** Ear husks: paler and more yellow than the blades, with the same parallel fibres. */
+export const huskMaterial = once(() => bladeMaterial("corn-husk", husk, { translucency: 0.6 }));
+
+function bladeMaterial(name: string, palette: Palette, shading: FoliageOptions): THREE.MeshPhysicalMaterial {
   const { color, normal } = bladeTextures(palette);
   const m = new THREE.MeshPhysicalMaterial({
     name,
@@ -38,7 +41,7 @@ function bladeMaterial(name: string, palette: Palette, translucency: number): TH
     sheenColor: new THREE.Color("#b9d98a"),
     side: THREE.DoubleSide,
   });
-  foliage(m, { translucency });
+  foliage(m, shading);
   return m;
 }
 

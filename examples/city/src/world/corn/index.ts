@@ -1,6 +1,8 @@
 import * as THREE from "three";
 import { ImpostorMesh, type InstancedLod, Lod } from "@drawcall/lod";
 import { cornPlant } from "../../content/corn/index.ts";
+import { LEAF_FOLIAGE } from "../../content/corn/leaf.ts";
+import { foliageImpostors } from "../../content/foliage.ts";
 import { step } from "../../loading.ts";
 import { heroPlant } from "../hero.ts";
 import { culled, diameter, impostor, instanced } from "../levels.ts";
@@ -106,7 +108,7 @@ export class Corn extends THREE.Object3D {
     const own = levels[hero.variant]?.[0];
     const far = own?.object;
     if (!own || !(far instanceof ImpostorMesh)) throw new Error("the hero's variant has no impostor level");
-    return new Corn({
+    const corn = new Corn({
       covers,
       skirt,
       plants: sources.map((source, v) => instanced(`corn plant ${v + 1}`, source, levels[v] ?? [], CHUNKS * (perTile[v] ?? 0))),
@@ -114,6 +116,9 @@ export class Corn extends THREE.Object3D {
       plantSize: Math.max(...sources.map(diameter)),
       ...heroPlant({ ...hero, seed: seeds[hero.variant] ?? 1 }, { object: far, maxPixels: own.maxPixels }, plan.terrain),
     });
+    // the plants' impostors, far and the hero's
+    foliageImpostors(corn, LEAF_FOLIAGE);
+    return corn;
   }
 
   /**
