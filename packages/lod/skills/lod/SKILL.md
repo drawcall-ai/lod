@@ -118,6 +118,11 @@ Lod.debug = true; // tint levels to see where each draws
   and insert your code before `void main()`. Its shader defines `IMPOSTOR_LIT`; its
   normal is an average whose length says how far the leaves under it agree, so light by
   `impostorCosine(normal, direction)` where you would clamp `dot(normal, direction)`.
+- **Alpha changed in `onBeforeCompile`** (a boost that keeps distant leaves from thinning
+  out) never reaches shadow maps: three casts with its own depth material, while an
+  impostor casts the coverage it shows. The impostor then shades itself more than its
+  source does, most visibly against the light. Patch the depth pass the same way
+  (`ShaderChunk`; `DEPTH_PACKING` is defined there) where the shadows must match.
 - **Jitter dense plantings** in position and rotation. Bakes and impostor views look
   along parallel rays: plants on a grid leave straight gaps there that no perspective
   view of the real plants shows.
@@ -228,6 +233,9 @@ GLTSLoader(manager))`. Inside a `.glts` script, register the contextual `gltsLoa
 - **Baked levels read textures on the CPU:** compressed textures (KTX2) fail the bake.
   Emissive, clearcoat and transmission are not baked; glass bakes opaque in its own
   colour unless it looks into an interior. Only alpha-tested surfaces cut holes.
+- **Specular level is not baked** (`specularIntensity`, `specularColor`, glTF
+  `KHR_materials_specular`): impostors reflect like a plain dielectric, so a source with
+  its specular turned down shows brighter once its impostor takes over.
 - **Clones of a built level** made by hand lose the measured error their switch size
   comes from; clone the whole `Lod` instead.
 - **Large worlds** (kilometres to millimetres) z-fight with the default depth buffer.
