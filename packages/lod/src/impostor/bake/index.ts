@@ -51,7 +51,8 @@ const PAD = 0.06;
  * Each frame is an orthographic look at the bounding-box centre, rendered once per mip
  * level at that level's size. The object's materials are rendered unlit into one target
  * per map: base colour + coverage, object-space normal + depth,
- * occlusion/roughness/metalness and, if needed, emissive.
+ * occlusion/roughness/metalness and, if needed, emissive. A material that changes three's
+ * default specular adds the object's mean specular (see `Impostor.specular`).
  */
 export async function bakeImpostor(object: Object3D, options: BakeImpostorOptions = {}): Promise<Impostor> {
   const layout = options.layout ?? "full";
@@ -90,15 +91,17 @@ export async function bakeImpostor(object: Object3D, options: BakeImpostorOption
   const settings: BakeSettings = {
     uniforms: { impostorDistance: { value: distance }, impostorRadius: { value: radius }, impostorTextureBias: { value: Math.log2(supersample) } },
     emissive: false,
+    specular: false,
   };
   const swapped = swapMaterials(source, settings);
   settings.emissive = options.emissive ?? swapped.emits;
+  settings.specular = swapped.specular;
   const maps: ImpostorMap[] = settings.emissive ? [...MAPS] : ["base", "normalDepth", "orm"];
 
   // Every mip level is rendered, not filtered from the one above: the source does not look
   // the same at every size (alpha-tested leaves whose texture mips mix in the dark texels
   // around them darken with distance), and filtering would freeze the look of the largest.
-  const atlases = Array.from({ length: Math.log2(cell) + 1 }, (_, m) => new Atlas(maps, frames, cell >> m));
+  const atlases = Array.from({ length: Math.log2(cell) + 1 }, (_, m) => new Atlas(maps, frames, cell >> m, settings.specular));
   const renderer = options.renderer ?? sharedRenderer();
   const scene = new Scene();
   scene.add(source);
@@ -147,6 +150,9 @@ export async function bakeImpostor(object: Object3D, options: BakeImpostorOption
     }),
   );
   const impostor: Impostor = { version: 3, layout, frames, size: cell * frames, box, halfSize, maps, layers };
+  const [top] = atlases;
+  if (!top) throw new Error("bakeImpostor: no mip levels");
+  if (settings.specular) impostor.specular = top.meanSpecular();
   validateImpostor(impostor);
   return impostor;
 }
@@ -164,8 +170,8 @@ async function bakeMip(atlas: Atlas, supersample: number, renderer: WebGLRendere
   const side = atlas.cell * supersample;
   const per = Math.max(1, Math.min(frames, Math.floor(TILE / side)));
   const width = per * side;
-  // one target per map, then the second way to store the normals (see Atlas)
-  const count = maps.length + 1;
+  // one target per map, then the second way to store the normals (see Atlas), then the specular
+  const count = maps.length + (atlas.specular ? 2 : 1);
   const target = new WebGLRenderTarget(width, width, {
     count,
     type: FloatType,

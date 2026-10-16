@@ -10,6 +10,7 @@ import {
   Ray,
   Sphere,
   Vector3,
+  Vector4,
   type Camera,
   type Intersection,
   type Material,
@@ -73,6 +74,7 @@ function settings(impostor: Impostor, options: ImpostorMeshOptions) {
   if (parallax > 0) defines.IMPOSTOR_PARALLAX = String(parallax);
   if (options.pixelDepth) defines.IMPOSTOR_PIXEL_DEPTH = "";
   if (impostor.maps.includes("emissive")) defines.IMPOSTOR_EMISSIVE = "";
+  if (impostor.specular) defines.IMPOSTOR_SPECULAR = "";
   return { alphaTest, defines };
 }
 
@@ -131,6 +133,7 @@ export class ImpostorMesh extends InstancedMesh<PlaneGeometry, MeshStandardMater
       impostorNormalDepth: { value: layer("normalDepth") },
       impostorOrm: { value: layer("orm") },
       impostorEmissive: { value: layer("emissive") },
+      impostorSpecular: { value: new Vector4(...(impostor.specular ?? [0, 0, 0, 0])) },
       impostorFrames: { value: impostor.frames },
       impostorSize: { value: impostor.size },
       impostorHalfSize: { value: impostor.halfSize },

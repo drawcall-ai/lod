@@ -40,6 +40,13 @@ export interface Impostor {
   /** `base`, `normalDepth`, `orm`, then `emissive` if it was baked */
   maps: ImpostorMap[];
   /**
+   * The dielectric specular three lights the surface with, F0 (linear RGB) then F90,
+   * averaged over the whole object as the frames show it. Only when a material changes
+   * it from three's 0.04 and 1 (a MeshPhysicalMaterial's ior, specularIntensity,
+   * specularColor or their maps).
+   */
+  specular?: [number, number, number, number];
+  /**
    * One per entry in `maps`: its mip chain of RGBA8 arrays, `size >> level` square, from
    * `size` down to one texel per frame (`frames` square). The levels are baked, not
    * filtered from level 0. An ImpostorMesh's textures share these arrays, so they stay in
@@ -72,7 +79,7 @@ export function validateImpostor(value: unknown): asserts value is Impostor {
   }
   if (typeof value !== "object" || value === null) fail("not an object");
   const fields: Partial<Record<keyof Impostor, unknown>> = value;
-  const { version, layout, frames, size, box, halfSize, maps, layers } = fields;
+  const { version, layout, frames, size, box, halfSize, maps, specular, layers } = fields;
   if (version !== 3) fail(`unsupported version ${String(version)}; bake it again`);
   if (layout !== "hemi" && layout !== "full") fail(`unknown layout "${String(layout)}"`);
   if (!isNumber(frames) || !Number.isInteger(frames) || frames < 2) fail("frames must be an integer >= 2");
@@ -83,6 +90,8 @@ export function validateImpostor(value: unknown): asserts value is Impostor {
   if (!isNumber(halfSize) || halfSize <= 0) fail("halfSize must be a positive number");
   if (!Array.isArray(maps) || maps.length < 3 || !maps.every((map, i) => map === MAPS[i]))
     fail(`maps must be base, normalDepth, orm, optionally followed by emissive; got ${String(maps)}`);
+  if (specular !== undefined && !(Array.isArray(specular) && specular.length === 4 && specular.every((v) => isNumber(v) && v >= 0 && v <= 1)))
+    fail("specular must be 4 numbers in [0, 1]");
   if (!Array.isArray(layers) || layers.length !== maps.length) fail("one layer per map");
   const cell = size / frames;
   if (!Number.isInteger(Math.log2(cell))) fail(`frame size ${cell} is not a power of two`);

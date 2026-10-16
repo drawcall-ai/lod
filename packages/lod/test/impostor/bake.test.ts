@@ -9,17 +9,21 @@ import {
   LinearMipmapLinearFilter,
   Matrix4,
   Mesh,
+  MeshPhysicalMaterial,
   MeshStandardMaterial,
   NearestFilter,
+  PerspectiveCamera,
   PlaneGeometry,
+  PointLight,
   RGBAFormat,
+  Scene,
   SRGBColorSpace,
   IcosahedronGeometry,
   SphereGeometry,
   TorusKnotGeometry,
   type Object3D,
 } from "three";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { bakeImpostor } from "../../src/impostor/bake/index.js";
 import type { Impostor } from "../../src/impostor/impostor.js";
 import { frameDirection } from "../../src/impostor/octahedral.js";
@@ -84,6 +88,29 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
     const hidden = new Mesh(new SphereGeometry(0.2), new MeshStandardMaterial({ emissive: 0xffaa00 }));
     hidden.visible = false;
     expect((await bake(new Group().add(knot.clone(), hidden))).maps).toEqual(["base", "normalDepth", "orm"]);
+  });
+
+  it("bakes the mean specular only when a material changes it, which the impostor lights with", async () => {
+    const sphere = (material: MeshStandardMaterial) => new Mesh(new SphereGeometry(1, 32, 16), material);
+    expect((await bake(sphere(new MeshStandardMaterial()))).specular).toBeUndefined();
+
+    const impostor = await bake(sphere(new MeshPhysicalMaterial({ specularColor: 0x202020 })));
+    const [r = 1, g = 1, b = 1, f90 = 0] = impostor.specular ?? [];
+    // three's 0.04 scaled by the linear specularColor
+    for (const f0 of [r, g, b]) expect(f0).toBeCloseTo(0.04 * 0.0144, 3);
+    expect(f90).toBeCloseTo(1, 2);
+
+    const mesh = new ImpostorMesh(impostor);
+    const errors = vi.spyOn(console, "error");
+    try {
+      const camera = new PerspectiveCamera();
+      camera.position.set(0, 0, 4);
+      renderer.render(new Scene().add(mesh, new PointLight(0xffffff, 10)), camera);
+      expect(errors).not.toHaveBeenCalled();
+    } finally {
+      errors.mockRestore();
+      mesh.dispose();
+    }
   });
 
   it("stores the normals three shades with: turned around for the share in orm.a", async () => {

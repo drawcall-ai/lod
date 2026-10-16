@@ -13,6 +13,9 @@ uniform sampler2D impostorOrm;
 #ifdef IMPOSTOR_EMISSIVE
 uniform sampler2D impostorEmissive;
 #endif
+#ifdef IMPOSTOR_SPECULAR
+uniform vec4 impostorSpecular;
+#endif
 uniform float impostorSize;
 uniform float impostorMultisample;
 ${SHARED_PARS}
@@ -248,6 +251,17 @@ const EMISSIVE = /* glsl */ `
   #endif
 `;
 
+// After <lights_physical_fragment>: the baked dielectric F0 (RGB) and F90 (A) in place of
+// three's defaults, which the impostor's MeshStandardMaterial has no settings for.
+const SPECULAR = /* glsl */ `
+  #include <lights_physical_fragment>
+  #ifdef IMPOSTOR_SPECULAR
+    material.specularColor = impostorSpecular.rgb;
+    material.specularColorBlended = mix(material.specularColor, diffuseColor.rgb, metalnessFactor);
+    material.specularF90 = impostorSpecular.a;
+  #endif
+`;
+
 // After <aomap_fragment>: the baked occlusion, applied the way three applies an aoMap.
 const AO = /* glsl */ `
   #include <aomap_fragment>
@@ -295,6 +309,7 @@ export const fragmentLit = (): Edit[] => [
   ["fragment", "#include <metalnessmap_fragment>", "#include <metalnessmap_fragment>\n  metalnessFactor *= impostorOrmValue.b;"],
   ["fragment", "#include <normal_fragment_begin>", NORMAL],
   ["fragment", "#include <emissivemap_fragment>", EMISSIVE],
+  ["fragment", "#include <lights_physical_fragment>", SPECULAR],
   ["fragment", "#include <aomap_fragment>", AO],
   ["fragment", "#include <lights_physical_pars_fragment>", diffuse()],
   ["fragment", "#include <lights_fragment_begin>", lights()],

@@ -1,4 +1,4 @@
-import type { BatchedMesh, Color, InstancedMesh, Material, Mesh, MeshStandardMaterial, Object3D, SkinnedMesh, Texture } from "three";
+import type { BatchedMesh, Color, InstancedMesh, Material, Mesh, MeshPhysicalMaterial, MeshStandardMaterial, Object3D, SkinnedMesh, Texture } from "three";
 import type { InstancedLod } from "./instanced/index.js";
 import type { ImpostorMesh } from "./impostor/mesh/index.js";
 
@@ -18,6 +18,7 @@ export const isInstancedLod = (node: Object3D): node is InstancedLod => flag(nod
 export const isLOD = (node: Object3D): node is Object3D & { isLOD: true; autoUpdate: boolean; readonly levels: ReadonlyArray<{ readonly object: Object3D }> } =>
   flag(node, "isLOD");
 export const isStandard = (material: Material): material is MeshStandardMaterial => flag(material, "isMeshStandardMaterial");
+export const isPhysical = (material: Material): material is MeshPhysicalMaterial => flag(material, "isMeshPhysicalMaterial");
 export const isTexture = (value: unknown): value is Texture => flag(value, "isTexture");
 export const isColor = (value: unknown): value is Color => flag(value, "isColor");
 

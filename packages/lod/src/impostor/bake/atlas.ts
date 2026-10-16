@@ -17,6 +17,8 @@ const NEIGHBOURS = [
  * own normals, `turned` the shading normals turned toward the camera, each with the share
  * of the surface that shades with the normal rather than its opposite (in orm.a). One way
  * is kept for the whole impostor, as texels filtered together must mean the same thing.
+ * With `specular`, the bake also writes each surface's dielectric specular, of which only
+ * the coverage-weighted sum is kept, for its mean.
  */
 export class Atlas {
   readonly size: number;
@@ -26,11 +28,14 @@ export class Atlas {
   readonly turned: Uint8Array;
   /** How far each way's normals agree, summed over the texels by coverage: the averages' lengths. */
   readonly agreement = { own: 0, turned: 0 };
+  /** F0 RGB and F90 summed over the texels by coverage, and the coverage summed. */
+  private readonly specularSum = { value: [0, 0, 0, 0], coverage: 0 };
 
   constructor(
     readonly maps: ImpostorMap[],
     readonly frames: number,
     readonly cell: number,
+    readonly specular: boolean,
   ) {
     this.size = frames * cell;
     this.layers = maps.map(() => new Uint8Array(this.size * this.size * 4));
@@ -56,15 +61,18 @@ export class Atlas {
 
   /**
    * Box-filter one supersampled frame into cell (col, row): the `cell * ss` square at
-   * (x0, y0) of `pixels[m]`, map m as RGBA floats `width` wide, then the turned normals.
+   * (x0, y0) of `pixels[m]`, map m as RGBA floats `width` wide, then the turned normals,
+   * then the specular if baked.
    * Every value is weighted by coverage, so the silhouette's colour is the object's colour
    * rather than a mix with the cleared background; coverage itself is the plain average.
    */
   write(pixels: Float32Array[], width: number, ss: number, col: number, row: number, x0: number, y0: number): void {
     const { cell, size, maps, layers } = this;
     const [alpha] = pixels;
-    if (!alpha || pixels.length !== maps.length + 1) throw new Error("Atlas.write: one pixel array per map, then the turned normals");
+    if (!alpha || pixels.length !== maps.length + (this.specular ? 2 : 1))
+      throw new Error("Atlas.write: one pixel array per map, then the turned normals, then the specular if baked");
     const sources = [...maps, "turned" as const];
+    const specular = this.specular ? pixels[maps.length + 1] : undefined;
     for (let y = 0; y < cell; y++)
       for (let x = 0; x < cell; x++) {
         const out = ((row * cell + y) * size + col * cell + x) * 4;
@@ -74,14 +82,9 @@ export class Atlas {
         const cover = weight / (ss * ss);
         this.coverage[out / 4] = cover;
         if (weight === 0) continue;
-        sources.forEach((map, m) => {
-          const source = pixels[m];
-          const layer = map === "turned" ? this.turned : layers[m];
-          if (!source || !layer) throw new Error(`Atlas.write: no pixels for ${map}`);
-          let r = 0;
-          let g = 0;
-          let b = 0;
-          let a = 0;
+        // The coverage-weighted mean of `source` over this texel's samples.
+        const average = (source: Float32Array): [number, number, number, number] => {
+          let [r, g, b, a] = [0, 0, 0, 0];
           for (let sy = 0; sy < ss; sy++)
             for (let sx = 0; sx < ss; sx++) {
               const i = first + (sy * width + sx) * 4;
@@ -91,12 +94,31 @@ export class Atlas {
               b += (source[i + 2] ?? 0) * w;
               a += (source[i + 3] ?? 0) * w;
             }
-          [r, g, b, a] = [r / weight, g / weight, b / weight, a / weight];
+          return [r / weight, g / weight, b / weight, a / weight];
+        };
+        if (specular) {
+          const sum = this.specularSum;
+          sum.value = average(specular).map((v, k) => (sum.value[k] ?? 0) + cover * v);
+          sum.coverage += cover;
+        }
+        sources.forEach((map, m) => {
+          const source = pixels[m];
+          const layer = map === "turned" ? this.turned : layers[m];
+          if (!source || !layer) throw new Error(`Atlas.write: no pixels for ${map}`);
+          const [r, g, b, a] = average(source);
           if (map === "normalDepth") this.agreement.own += cover * Math.hypot(r * 2 - 1, g * 2 - 1, b * 2 - 1);
           if (map === "turned") this.agreement.turned += cover * Math.hypot(r * 2 - 1, g * 2 - 1, b * 2 - 1);
           store(layer, out, [r, g, b, map === "base" ? cover : a], map === "base" || map === "emissive");
         });
       }
+  }
+
+  /** The coverage-weighted mean of the baked specular: F0 RGB, then F90. */
+  meanSpecular(): [number, number, number, number] {
+    const { value, coverage } = this.specularSum;
+    if (!this.specular || coverage === 0) throw new Error("Atlas.meanSpecular: no specular was baked");
+    const [r = 0, g = 0, b = 0, f90 = 0] = value.map((v) => v / coverage);
+    return [r, g, b, f90];
   }
 
   /** Whether any texel of any frame was covered. */

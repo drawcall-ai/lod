@@ -1,6 +1,6 @@
 import { MeshStandardMaterial, NoBlending, type Material, type Object3D, type WebGLProgramParametersWithUniforms } from "three";
 import { applyEdits, type Edit } from "../../patch.js";
-import { isMesh, isStandard } from "../../three.js";
+import { isMesh, isPhysical, isStandard } from "../../three.js";
 
 /** What every bake material reads, shared by all of them and set once per bake. */
 export interface BakeSettings {
@@ -12,15 +12,17 @@ export interface BakeSettings {
   };
   /** whether the atlas has an emissive layer, which every material then writes */
   emissive: boolean;
+  /** whether every material also writes its dielectric specular, after the turned normals */
+  specular: boolean;
 }
 
 /**
  * Replace the materials of every visible mesh under `root` with bake materials, which
  * render the surface values unlit into the atlas maps. Returns the bake materials (to
- * dispose) and whether any of them emits light.
+ * dispose), whether any of them emits light and whether any changes three's default specular.
  */
-export function swapMaterials(root: Object3D, settings: BakeSettings): { materials: Material[]; emits: boolean } {
-  const baked = new Map<Material, { material: MeshStandardMaterial; emits: boolean }>();
+export function swapMaterials(root: Object3D, settings: BakeSettings): { materials: Material[]; emits: boolean; specular: boolean } {
+  const baked = new Map<Material, { material: MeshStandardMaterial; emits: boolean; specular: boolean }>();
   const plain = new Set<string>();
   root.traverseVisible((node) => {
     // Lines, points and sprites would write their colour into the data targets. Layers
@@ -40,7 +42,7 @@ export function swapMaterials(root: Object3D, settings: BakeSettings): { materia
   });
   if (plain.size > 0) console.warn(`bakeImpostor: ${[...plain].join(", ")} bake as a plain rough MeshStandardMaterial with their color/map only`);
   const entries = [...baked.values()];
-  return { materials: entries.map((e) => e.material), emits: entries.some((e) => e.emits) };
+  return { materials: entries.map((e) => e.material), emits: entries.some((e) => e.emits), specular: entries.some((e) => e.specular) };
 }
 
 /**
@@ -58,6 +60,9 @@ layout(location = 3) out highp vec4 impostorEmissive;
 #endif
 // after the maps: the other way to store the normals (see BAKE_WRITE)
 layout(location = IMPOSTOR_TURNED) out highp vec4 impostorTurned;
+#ifdef IMPOSTOR_SPECULAR
+layout(location = IMPOSTOR_SPECULAR) out highp vec4 impostorSpecular;
+#endif
 uniform float impostorDistance;
 uniform float impostorRadius;
 uniform float impostorTextureBias;
@@ -96,6 +101,9 @@ const BAKE_WRITE = /* glsl */ `
   impostorTurned = vec4(impostorTurnedNormal * 0.5 + 0.5, impostorFacing);
 #ifdef IMPOSTOR_EMISSIVE
   impostorEmissive = vec4(clamp(totalEmissiveRadiance, 0.0, 1.0), 1.0);
+#endif
+#ifdef IMPOSTOR_SPECULAR
+  impostorSpecular = vec4(material.specularColor, material.specularF90);
 #endif
 `;
 
@@ -136,7 +144,7 @@ const STANDARD_KEYS = [
 /** Built-in materials whose look the standard keys carry over; others only keep their color/map. */
 const MAPPED = new Set(["MeshBasicMaterial", "MeshLambertMaterial", "MeshPhongMaterial", "MeshToonMaterial", "MeshMatcapMaterial"]);
 
-function bakeMaterial(source: Material, settings: BakeSettings): { material: MeshStandardMaterial; emits: boolean } {
+function bakeMaterial(source: Material, settings: BakeSettings): { material: MeshStandardMaterial; emits: boolean; specular: boolean } {
   // Read before any wrapping: three's default key is onBeforeCompile.toString(), the
   // same for every wrapper below, so a later call would let materials share programs.
   const key = source.customProgramCacheKey();
@@ -145,6 +153,7 @@ function bakeMaterial(source: Material, settings: BakeSettings): { material: Mes
   material.visible = source.visible && source.colorWrite;
   const { emissive: e, emissiveIntensity, emissiveMap } = material;
   const emits = material.visible && ((e.r + e.g + e.b) * emissiveIntensity > 0 || emissiveMap !== null);
+  const specular = material.visible && changesSpecular(material);
   // Coverage is the material's alpha where it cuts the surface out: alpha-to-coverage (no
   // multisampling here, so it would cover the card), or a blended material's texture
   // alpha. A blended material's uniform opacity (glass) is no hole: it folds into the
@@ -167,11 +176,19 @@ function bakeMaterial(source: Material, settings: BakeSettings): { material: Mes
       IMPOSTOR_OPACITY: opacity,
       IMPOSTOR_TURNED: settings.emissive ? "4" : "3",
       ...(settings.emissive ? { IMPOSTOR_EMISSIVE: "" } : {}),
+      ...(settings.specular ? { IMPOSTOR_SPECULAR: settings.emissive ? "5" : "4" } : {}),
     };
     applyEdits(shader, EDITS);
   };
-  material.customProgramCacheKey = () => `impostor-bake|${coverage}|${opacity}|${settings.emissive}|${key}`;
-  return { material, emits };
+  material.customProgramCacheKey = () => `impostor-bake|${coverage}|${opacity}|${settings.emissive}|${settings.specular}|${key}`;
+  return { material, emits, specular };
+}
+
+/** Whether `material` lights with other than three's dielectric F0 0.04 and F90 1 (KHR_materials_specular). */
+function changesSpecular(material: MeshStandardMaterial): boolean {
+  if (!isPhysical(material)) return false;
+  const { ior, specularIntensity, specularColor: c, specularIntensityMap, specularColorMap } = material;
+  return ior !== 1.5 || specularIntensity !== 1 || c.r !== 1 || c.g !== 1 || c.b !== 1 || specularIntensityMap !== null || specularColorMap !== null;
 }
 
 /** A standard material that renders like `source`: a clone, or the standard keys carried over. */

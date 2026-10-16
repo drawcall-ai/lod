@@ -236,9 +236,10 @@ GLTSLoader(manager))`. Inside a `.glts` script, register the contextual `gltsLoa
 - **Baked levels read textures on the CPU:** compressed textures (KTX2) fail the bake.
   Emissive, clearcoat and transmission are not baked; glass bakes opaque in its own
   colour unless it looks into an interior. Only alpha-tested surfaces cut holes.
-- **Specular level is not baked** (`specularIntensity`, `specularColor`, glTF
-  `KHR_materials_specular`): impostors reflect like a plain dielectric, so a source with
-  its specular turned down shows brighter once its impostor takes over.
+- **Specular level** (`ior`, `specularIntensity`, `specularColor`, glTF
+  `KHR_materials_specular`) reaches an impostor only as one average for the whole object,
+  so parts or maps that differ in it reflect alike; baked levels reflect like a plain
+  dielectric, so a source with its specular turned down shows brighter at them.
 - **Clones of a built level** made by hand lose the measured error their switch size
   comes from; clone the whole `Lod` instead.
 - **Large worlds** (kilometres to millimetres) z-fight with the default depth buffer.
