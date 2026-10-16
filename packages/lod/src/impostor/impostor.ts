@@ -69,6 +69,17 @@ export function boundingRadius(b: Impostor["box"]): number {
   return Math.hypot(b[3] - b[0], b[4] - b[1], b[5] - b[2]) / 2;
 }
 
+/**
+ * On-screen height of the object at which two atlas texels span one pixel: the default
+ * `LodLevel.maxPixels` of an impostor. An impostor blends filtered reads of several
+ * views, so it keeps the source's colour detail only down to about two texels per pixel.
+ */
+export function texelPixels(impostor: Pick<Impostor, "size" | "frames" | "box" | "halfSize">): number {
+  const cell = impostor.size / impostor.frames;
+  // A frame spans 2 × halfSize of the object; the height measured is its bounding diameter.
+  return (cell * boundingRadius(impostor.box)) / (2 * impostor.halfSize);
+}
+
 const isNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const isBox = (v: unknown): v is Impostor["box"] => Array.isArray(v) && v.length === 6 && v.every(isNumber);
 

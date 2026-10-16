@@ -25,7 +25,7 @@ import {
 } from "three";
 import { describe, expect, it, vi } from "vitest";
 import { bakeImpostor } from "../../src/impostor/bake/index.js";
-import type { Impostor } from "../../src/impostor/impostor.js";
+import { texelPixels, type Impostor } from "../../src/impostor/impostor.js";
 import { frameDirection } from "../../src/impostor/octahedral.js";
 import { ImpostorMesh } from "../../src/impostor/mesh/index.js";
 import { InstancedLod } from "../../src/instanced/index.js";
@@ -177,7 +177,7 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
     normal.layers.forEach((layer, i) => layer.forEach((level, m) => expect(Buffer.compare(level, additive.layers[i]?.[m] ?? new Uint8Array())).toBe(0)));
   });
 
-  it("renders every mip level at its own size, where the source may look different", async () => {
+  it("renders every mip level at its own size, where the source may look different, and the top one at maxPixels", async () => {
     // A texture whose own mip levels darken, as leaves with dark texels around them do.
     const mipmaps = Array.from({ length: 9 }, (_, m) => {
       const size = 256 >> m;
@@ -190,9 +190,15 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
     map.generateMipmaps = false;
     map.minFilter = LinearMipmapLinearFilter;
     map.needsUpdate = true;
-    const impostor = await bake(new Mesh(new PlaneGeometry(2, 2), new MeshStandardMaterial({ map, side: DoubleSide })), "hemi");
+    const plane = new Mesh(new PlaneGeometry(2, 2), new MeshStandardMaterial({ map, side: DoubleSide }));
+    const impostor = await bake(plane, "hemi");
     // Filtered from level 0, every level would keep its brightness.
     expect(red(impostor, 0) - red(impostor, 3)).toBeGreaterThan(40);
+    // Drawn up to 8 times its sharp height, the top level reads the texture 3 levels finer.
+    const sharp = texelPixels(impostor);
+    const close = await bakeImpostor(plane, { renderer, layout: "hemi", resolution: 32, maxPixels: 8 * sharp });
+    expect(red(close, 0) - red(impostor, 0)).toBeGreaterThan(40);
+    expect(red(close, 3)).toBeCloseTo(red(impostor, 3), 0);
   });
 
   it("keeps the cut-out of alpha-to-coverage materials", async () => {
@@ -231,6 +237,7 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
     await expect(bakeImpostor(knot, { renderer, frames: 1 })).rejects.toThrow(/frames/);
     await expect(bakeImpostor(knot, { renderer, resolution: 0 })).rejects.toThrow(/resolution/);
     await expect(bakeImpostor(knot, { renderer, supersample: 1.5 })).rejects.toThrow(/supersample/);
+    await expect(bakeImpostor(knot, { renderer, maxPixels: 0 })).rejects.toThrow(/maxPixels/);
     const point = new BufferGeometry().setAttribute("position", new Float32BufferAttribute([1, 1, 1, 1, 1, 1, 1, 1, 1], 3));
     await expect(bakeImpostor(new Mesh(point, new MeshStandardMaterial()), { renderer })).rejects.toThrow(/no extent/);
   });

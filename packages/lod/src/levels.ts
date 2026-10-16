@@ -1,5 +1,5 @@
 import { Color, Vector4, type Object3D } from "three";
-import { boundingRadius, type Impostor } from "./impostor/impostor.js";
+import { texelPixels } from "./impostor/impostor.js";
 import { isImpostorMesh } from "./three.js";
 
 // The levels Lod and InstancedLod share: their thresholds, the defaults of those, and
@@ -120,17 +120,6 @@ function resolve(levels: readonly Level[]): void {
     level.value = level.index === 0 ? Infinity : (level.explicit ?? Math.max(level.base, 2 * next));
     next = level.value;
   }
-}
-
-/**
- * On-screen height of `impostor`'s object at which two atlas texels span one pixel. An
- * impostor blends filtered reads of several views, so it keeps the source's colour
- * detail only down to about two texels per pixel, not one.
- */
-function texelPixels(impostor: Impostor): number {
-  const cell = impostor.size / impostor.frames;
-  // A frame spans 2 × halfSize of the object; the height measured is its bounding diameter.
-  return (cell * boundingRadius(impostor.box)) / (2 * impostor.halfSize);
 }
 
 /** Throws unless each level's fade ends before the next one's begins (see `LodLevel.maxPixels`). */

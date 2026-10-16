@@ -2,12 +2,12 @@ import { MeshStandardMaterial, NoBlending, type Material, type Object3D, type We
 import { applyEdits, type Edit } from "../../patch.js";
 import { isMesh, isPhysical, isStandard } from "../../three.js";
 
-/** What every bake material reads, shared by all of them and set once per bake. */
+/** What every bake material reads, shared by all of them and set per bake (the texture bias per mip level). */
 export interface BakeSettings {
   uniforms: {
     impostorDistance: { value: number };
     impostorRadius: { value: number };
-    /** mip bias of every texture read: log2 of the supersampling, so textures are read at the texel's size */
+    /** mip bias of every texture read, per mip level: textures are read at the size of a texel (see `bakeImpostor`) */
     impostorTextureBias: { value: number };
   };
   /** whether the atlas has an emissive layer, which every material then writes */

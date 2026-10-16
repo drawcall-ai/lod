@@ -151,7 +151,10 @@ Lod.debug = true; // tint levels to see where each draws
   far plants exist, how many) in CSS pixels too, or a high-density screen multiplies it.
 - **A heavy source decides the frame** wherever many copies show it at once (inside a
   forest). Lighten the source first, then let its impostor take over earlier — a larger
-  `maxPixels` on the impostor level: lowering it keeps more copies at the source.
+  `maxPixels` on the impostor level: lowering it keeps more copies at the source. Bake
+  that impostor with the same `maxPixels`: above its default it shows its top mip
+  magnified, which otherwise keeps the look of the source at the bake's size — foliage
+  denser and darker than the leaves it replaces up close.
 - **Impostors cost fill.** Every pixel of a card runs the shader, and the depth-parallax
   walk is most of it. Keep parallax for impostors seen large — without it they ghost
   (doubled trunks) — and turn it off only for impostors that only ever show small or

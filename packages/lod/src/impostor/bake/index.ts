@@ -1,6 +1,6 @@
 import { FloatType, Matrix4, NearestFilter, OrthographicCamera, Scene, Vector3, WebGLRenderTarget, type WebGLRenderer, type Object3D } from "three";
 import { clone } from "three/addons/utils/SkeletonUtils.js";
-import { MAPS, boundingRadius, validateImpostor, type Impostor, type ImpostorLayout, type ImpostorMap } from "../impostor.js";
+import { MAPS, boundingRadius, texelPixels, validateImpostor, type Impostor, type ImpostorLayout, type ImpostorMap } from "../impostor.js";
 import { frameBasis, frameDirection, type Vec3 } from "../octahedral.js";
 import { boundingBox, forEachMesh, forEachVertex, showDetail } from "../../bounds.js";
 import { pause } from "../../pause.js";
@@ -23,6 +23,15 @@ export interface BakeImpostorOptions {
    * down to a power of two so mip levels never mix two views; default 128.
    */
   resolution?: number;
+  /**
+   * Largest on-screen height (CSS pixels, as `LodLevel.maxPixels`) the impostor will be
+   * drawn at, when that is above the height where it is sharp (its default maxPixels).
+   * Larger, it shows its top mip magnified, which then reads the source's textures as
+   * sharp as they are at this height: alpha-tested leaves keep the coverage and colour
+   * they show up close, not the denser, darker look of their texture's small mips.
+   * Default: the height where it is sharp.
+   */
+  maxPixels?: number;
   /**
    * bake an emissive layer; default: when any material emits. It is stored as 0..1
    * sRGB, so emissive * emissiveIntensity above 1 is clipped.
@@ -62,6 +71,7 @@ export async function bakeImpostor(object: Object3D, options: BakeImpostorOption
   if (!Number.isInteger(frames) || frames < 2) throw new Error("bakeImpostor: frames must be an integer >= 2");
   if (!Number.isFinite(resolution) || resolution < 4) throw new Error("bakeImpostor: resolution must be a number >= 4");
   if (!Number.isInteger(supersample) || supersample < 1) throw new Error("bakeImpostor: supersample must be an integer >= 1");
+  if (options.maxPixels !== undefined && !(options.maxPixels > 0)) throw new Error("bakeImpostor: maxPixels must be > 0");
   const cell = 2 ** Math.floor(Math.log2(resolution));
 
   // SkeletonUtils.clone rebinds skinned meshes to cloned bones; Object3D.clone would
@@ -88,8 +98,11 @@ export async function bakeImpostor(object: Object3D, options: BakeImpostorOption
   const halfSize = fittedHalfSize(source, centre, directions) * (1 + PAD);
 
   const distance = 2 * radius + 1e-3;
+  // Textures are read at the size of an atlas texel; the top mip's at the size of a pixel at maxPixels.
+  const sharp = texelPixels({ size: cell * frames, frames, box, halfSize });
+  const textureBias = (m: number) => Math.log2(supersample) - (m === 0 ? Math.log2(Math.max(1, (options.maxPixels ?? sharp) / sharp)) : 0);
   const settings: BakeSettings = {
-    uniforms: { impostorDistance: { value: distance }, impostorRadius: { value: radius }, impostorTextureBias: { value: Math.log2(supersample) } },
+    uniforms: { impostorDistance: { value: distance }, impostorRadius: { value: radius }, impostorTextureBias: { value: 0 } },
     emissive: false,
     specular: false,
   };
@@ -133,7 +146,10 @@ export async function bakeImpostor(object: Object3D, options: BakeImpostorOption
   try {
     if (!renderer.extensions.has("EXT_color_buffer_float"))
       throw new Error("bakeImpostor: this WebGL context cannot render to float targets (EXT_color_buffer_float)");
-    for (const atlas of atlases) await bakeMip(atlas, supersample, renderer, scene, camera, views);
+    for (const [m, atlas] of atlases.entries()) {
+      settings.uniforms.impostorTextureBias.value = textureBias(m);
+      await bakeMip(atlas, supersample, renderer, scene, camera, views);
+    }
   } finally {
     for (const material of swapped.materials) material.dispose();
   }
