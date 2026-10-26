@@ -51,6 +51,20 @@ For many copies, `loader.loadInstancesAsync(url, count)` gives an `InstancedLod`
 draw per level and mesh, each instance switching by its own size on screen; place them
 with `setMatrixAt`.
 
+For vegetation, apply one shared breeze after building the levels:
+
+```ts
+import { Wind } from "@drawcall/lod";
+
+const wind = new Wind({ direction: [1, 0.3], speed: 0.25 });
+wind.apply(tree, { amplitude: 0.2 }); // source, cheaper levels and shadows sway together
+// Before rendering each frame:
+wind.time = elapsedSeconds;
+```
+
+The same call works on an `InstancedLod` or a standalone mesh. Objects without wind
+keep their static rendering path.
+
 Bring your own levels with `new Lod([source, ...levels])` or
 `new InstancedLod([source, ...levels], count)`: any `Object3D`, including another `Lod`
 (but not inside an `InstancedLod`). `Lod.quality` trades detail for speed globally,

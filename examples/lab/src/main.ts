@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
-import { ImpostorMesh, Lod, bakeImpostor, type BakeImpostorOptions, type Impostor, type ImpostorMeshOptions } from "@drawcall/lod";
+import { ImpostorMesh, Lod, Wind, bakeImpostor, type BakeImpostorOptions, type Impostor, type ImpostorMeshOptions } from "@drawcall/lod";
 import { boundingRadius, boxCentre } from "../../../packages/lod/src/impostor/impostor.js";
 import { FADE } from "../../../packages/lod/src/levels.js";
 import type { View } from "./bench.js";
@@ -288,9 +288,16 @@ window.probe = probe;
 
 const params = new URLSearchParams(location.search);
 if (!params.has("auto")) {
-  await prepare(params.get("subject") ?? "tree");
+  const name = params.get("subject") ?? "tree";
+  await prepare(name);
   const { object, mesh, impostor } = shown();
   const radius = boundingRadius(impostor.box);
+  const wind = new Wind({ direction: [1, 0.35], speed: 0.22 });
+  if (subject(name).vegetation && params.get("wind") !== "0") {
+    const amplitude = (impostor.box[4] - impostor.box[1]) * 0.04;
+    wind.apply(object, { amplitude });
+    wind.apply(mesh, { amplitude });
+  }
   object.position.x = -radius * 1.1;
   mesh.position.x = radius * 1.1;
   scene.background = new THREE.Color(0x87a0b8);
@@ -305,7 +312,8 @@ if (!params.has("auto")) {
   };
   addEventListener("resize", resize);
   resize();
-  renderer.setAnimationLoop(() => {
+  renderer.setAnimationLoop((milliseconds) => {
+    wind.time = milliseconds / 1000;
     controls.update();
     renderer.render(scene, view);
   });

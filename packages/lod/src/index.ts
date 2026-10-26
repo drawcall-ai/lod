@@ -1,5 +1,6 @@
 export { type LevelRequest, type LodRequest, LodLoader } from "./loader.js";
 export { Lod } from "./lod.js";
+export { Wind, type WindOptions, type SwayOptions } from "./wind/index.js";
 export { InstancedLod } from "./instanced/index.js";
 export { type InstancedLodLevel, type LodLevel } from "./levels.js";
 export { type SimplifyOptions, simplify } from "./simplify.js";

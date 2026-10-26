@@ -1,6 +1,6 @@
 ---
 name: lod
-description: Use @drawcall/lod to give three.js objects levels of detail — load a model and get a simplified mesh, a baked low-poly mesh or an octahedral impostor that switch by on-screen size with a dithered fade, or switch your own levels — including crowds of instances, buildings whose windows show the rooms behind them (interior mapping), shadows over large worlds, and preparing models that bake into good impostors. Use when a WebGLRenderer scene has many or large objects seen from far away; not for WebGPURenderer, skinned or animated objects, or glass objects.
+description: Use @drawcall/lod to give three.js objects levels of detail — load a model and get a simplified mesh, a baked low-poly mesh or an octahedral impostor that switch by on-screen size with a dithered fade, or switch your own levels — including crowds of instances, vegetation swaying in wind, buildings whose windows show the rooms behind them (interior mapping), shadows over large worlds, and preparing models that bake into good impostors. Use when a WebGLRenderer scene has many or large objects seen from far away; not for WebGPURenderer, skinned animation, or glass objects.
 ---
 
 # Level of detail with @drawcall/lod
@@ -70,6 +70,14 @@ Lod.debug = true; // tint levels to see where each draws
 ```
 
 ## How the parts combine
+
+- **Vegetation in wind:** build and bake the resting asset first, then apply one `Wind`
+  to the completed `Lod` or `InstancedLod`. Update its time before rendering. This keeps
+  source, simplified, baked and impostor levels together during transitions; share the
+  same breeze across plants. Apply to individual plants or their instance batches,
+  rather than a whole forest hierarchy. Broad sway moves the whole plant; it does not
+  animate individual branches or leaves. Independent objects attached to a plant need
+  to follow its motion too.
 
 - **Switching is by on-screen height in CSS pixels:** a high-density screen picks the
   levels a standard one does and pays for its extra pixels in fill only. `Lod.quality`

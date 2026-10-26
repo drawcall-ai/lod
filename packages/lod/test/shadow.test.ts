@@ -7,6 +7,7 @@ import { Lod } from "../src/lod.js";
 import { isInstancedMesh, isMesh } from "../src/three.js";
 import { must } from "./must.js";
 import { renderer } from "./webgl.js";
+import { Wind } from "../src/wind/index.js";
 
 /** A 2 × 2 × 2 box: about 3.5 across its bounding sphere. */
 const box = () => new Mesh(new BoxGeometry(2, 2, 2), new MeshBasicMaterial());
@@ -75,6 +76,17 @@ describe("casters smaller than a shadow texel", () => {
     mesh.updateMatrixWorld();
     expect(drawnInto(mesh, sun(800))).toBe(2);
     expect(drawnInto(mesh, sun(1200))).toBe(0);
+    mesh.dispose();
+  });
+
+  it("keeps a wind impostor's shadow until its whole sway envelope is subtexel", () => {
+    const mesh = new ImpostorMesh(impostor());
+    mesh.updateMatrixWorld();
+    // The resting diameter is 3.46 units; sway adds two units on either side.
+    expect(drawnInto(mesh, sun(500))).toBe(0);
+    new Wind().apply(mesh, { amplitude: 2 });
+    expect(drawnInto(mesh, sun(500))).toBe(1);
+    expect(drawnInto(mesh, sun(800))).toBe(0);
     mesh.dispose();
   });
 });

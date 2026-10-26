@@ -23,6 +23,8 @@ export class Slots {
   radius = 0;
   /** Whether the slots changed since the last `measure`. */
   private changed = true;
+  /** Maximum displacement as a share of each instance's resting radius. */
+  private padding = 0;
   private low = Infinity;
   private high = -1;
   /** Per-instance colours and the level's colour attribute, once colours are set. */
@@ -69,6 +71,12 @@ export class Slots {
     this.write(this.slot(i), i);
   }
 
+  /** Change the culling envelope without moving instances or uploading their buffers. */
+  padBounds(ratio: number): void {
+    this.padding = ratio;
+    this.changed = true;
+  }
+
   /** Bound the instances in the slots again if they changed, from their spheres (`x`, `y`, `z`, `r` per instance). */
   measure(x: Float32Array, y: Float32Array, z: Float32Array, r: Float32Array): void {
     if (!this.changed) return;
@@ -97,7 +105,14 @@ export class Slots {
     }
     this.radius = radius;
     if (this.length === 0) this.sphere.makeEmpty();
-    else box.set(min.set(x0, y0, z0), max.set(x1, y1, z1)).getBoundingSphere(this.sphere);
+    else {
+      box.set(min.set(x0, y0, z0), max.set(x1, y1, z1)).getBoundingSphere(this.sphere);
+      if (this.padding > 0) {
+        const displacement = radius * this.padding;
+        this.sphere.radius += displacement;
+        this.radius += displacement;
+      }
+    }
   }
 
   private slot(i: number): number {

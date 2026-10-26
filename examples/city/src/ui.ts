@@ -1,4 +1,4 @@
-import { Lod } from "@drawcall/lod";
+import { Lod, type Wind } from "@drawcall/lod";
 import type { LevelCount } from "./stats.ts";
 
 function element<T extends Element>(selector: string, type: new () => T): T {
@@ -18,12 +18,18 @@ export class Ui {
   private readonly stats = element("#stats", HTMLDivElement);
 
   /** Connects the controls to the tour and the package's global settings. */
-  bind(tour: { duration: number; toggle: () => boolean; seek: (time: number) => void }): void {
+  bind(tour: { duration: number; toggle: () => boolean; seek: (time: number) => void }, wind?: Wind): void {
     this.time.max = String(tour.duration);
     this.play.addEventListener("click", () => (this.play.textContent = tour.toggle() ? "Pause" : "Play"));
     this.time.addEventListener("input", () => {
       tour.seek(Number(this.time.value));
       this.play.textContent = "Play";
+    });
+    const strength = element("#wind", HTMLInputElement);
+    strength.disabled = !wind;
+    strength.value = String(wind?.strength ?? 0);
+    strength.addEventListener("input", () => {
+      if (wind) wind.strength = Number(strength.value);
     });
     const debug = element("#debug", HTMLInputElement);
     debug.checked = Lod.debug;

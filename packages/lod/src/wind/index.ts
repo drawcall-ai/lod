@@ -1,0 +1,200 @@
+import { Box3, Matrix4, ObjectSpaceNormalMap, Vector2, type Mesh, type Object3D } from "three";
+import { boundingBox } from "../bounds.js";
+import { isBatchedMesh, isImpostorMesh, isInstancedLod, isInstancedMesh, isLOD, isMesh, isSkinnedMesh } from "../three.js";
+import { WIND_BOUNDS, type WindBounds } from "./hooks.js";
+import { windMaterials } from "./material.js";
+import { windBounds } from "./bounds.js";
+
+export interface WindOptions {
+  /** Horizontal world-space X/Z direction; normalized on assignment. Default [1, 0]. */
+  direction?: readonly [number, number];
+  /** Oscillations per second; default 0.25. */
+  speed?: number;
+}
+
+export interface SwayOptions {
+  /** Maximum sideways displacement at baseY + height, in the root's units. */
+  amplitude: number;
+  /** Fixed base in the root's space; defaults to the source's lowest point. */
+  baseY?: number;
+  /** Height above the fixed base; defaults to the source's top minus baseY. */
+  height?: number;
+}
+
+const bindings = new WeakMap<Object3D, { wind: Wind; options: SwayOptions }>();
+const attached = new WeakSet<Mesh>();
+const identity = new Matrix4();
+
+/**
+ * A shared GPU breeze: an affine sway, fixed at the base and linear with height.
+ * Bake/build levels first, apply once to the completed Lod, InstancedLod, mesh or
+ * mesh group, then set time once before rendering each frame. All levels and shadow
+ * passes share the motion. Simplified and baked meshes need no special preparation.
+ *
+ * Instances derive their phase from the undeformed root's world position, so slot
+ * sorting never changes it. The breeze follows the root's horizontal plane; upright
+ * trees with different rotations still follow the same world direction.
+ *
+ * Bounds cover strength 0..1. Geometry, instance matrices and LOD lists are not updated
+ * by the clock. CPU raycasts still hit the rest pose. Mesh placements within a root
+ * must stay fixed after applying; move/rotate/scale the root or its instances instead.
+ * Nested LODs and nested instance batches must be applied individually.
+ * Lod, InstancedLod and ImpostorMesh clones retain the shared breeze. For ordinary
+ * Mesh/Group clones, apply to each clone too: three shares their material but does not
+ * copy the custom shadow materials or mesh-level culling bounds.
+ * Tangent-space normal maps are supported; object-space normal maps are not.
+ */
+export class Wind {
+  private readonly uniforms = {
+    windTime: { value: 0 },
+    windSpeed: { value: 0.25 },
+    windStrength: { value: 1 },
+    windDirection: { value: new Vector2(1, 0) },
+  };
+
+  constructor({ direction = [1, 0], speed = 0.25 }: WindOptions = {}) {
+    this.direction = direction;
+    this.speed = speed;
+  }
+
+  /** Shared animation time in seconds; update once per frame, before any render pass. */
+  get time(): number {
+    return this.uniforms.windTime.value;
+  }
+  set time(value: number) {
+    finite(value, "time");
+    this.uniforms.windTime.value = value;
+  }
+
+  /** Oscillations per second; zero freezes the time-dependent part of the phase. */
+  get speed(): number {
+    return this.uniforms.windSpeed.value;
+  }
+  set speed(value: number) {
+    nonnegative(value, "speed");
+    this.uniforms.windSpeed.value = value;
+  }
+
+  /** Global amplitude multiplier in [0, 1]. Zero keeps the wind shader but draws the rest pose. */
+  get strength(): number {
+    return this.uniforms.windStrength.value;
+  }
+  set strength(value: number) {
+    nonnegative(value, "strength");
+    if (value > 1) throw new Error("Wind: strength must be in [0, 1]");
+    this.uniforms.windStrength.value = value;
+  }
+
+  get direction(): readonly [number, number] {
+    const { x, y } = this.uniforms.windDirection.value;
+    return [x, y];
+  }
+  set direction([x, z]: readonly [number, number]) {
+    finite(x, "direction.x");
+    finite(z, "direction.z");
+    if (Math.hypot(x, z) === 0) throw new Error("Wind: direction must be nonzero");
+    this.uniforms.windDirection.value.set(x, z).normalize();
+  }
+
+  /** Attach once, after constructing all levels. Objects without this call keep their original shaders. */
+  apply(root: Object3D, { amplitude, baseY, height }: SwayOptions): void {
+    if (bindings.has(root)) throw new Error("Wind: already applied to this object");
+    nonnegative(amplitude, "amplitude");
+    const box = sourceBox(root);
+    if (box.isEmpty()) throw new Error("Wind: object has no geometry");
+    const base = baseY ?? box.min.y;
+    const size = height ?? box.max.y - base;
+    finite(base, "baseY");
+    finite(size, "height");
+    if (size <= 0) throw new Error("Wind: height must be positive");
+    const meshes: Mesh[] = [];
+    root.traverse((node) => {
+      if (node !== root && isLOD(node)) throw new Error("Wind: apply to nested LODs individually");
+      if (!isMesh(node)) return;
+      if (attached.has(node)) throw new Error("Wind: a mesh already belongs to a wind root");
+      if (isSkinnedMesh(node) || isBatchedMesh(node)) throw new Error("Wind: skinned and batched meshes are not supported");
+      if (node !== root && isInstancedMesh(node) && !isInstancedLod(root) && !(isImpostorMesh(node) && node.count === 1))
+        throw new Error("Wind: apply to nested instance batches individually");
+      if ([node.material].flat().some((material) => material.type === "ShaderMaterial" || material.type === "RawShaderMaterial"))
+        throw new Error("Wind: requires three's built-in mesh materials");
+      if (
+        [node.material]
+          .flat()
+          .some((material) => "normalMapType" in material && material.normalMapType === ObjectSpaceNormalMap && "normalMap" in material && material.normalMap)
+      )
+        throw new Error("Wind: use tangent-space normal maps");
+      meshes.push(node);
+    });
+    if (meshes.length === 0) throw new Error("Wind: object has no meshes");
+    root.updateWorldMatrix(true, true);
+    invertible(root.matrixWorld);
+    const inverse = root.matrixWorld.clone().invert();
+    const placed = meshes.map((mesh) => {
+      // InstancedLod has already placed ordinary geometry in instance space; its
+      // impostors carry placement separately. Avoid roundoff defeating the fast path.
+      const placement = mesh === root || isInstancedLod(root) ? identity.clone() : inverse.clone().multiply(mesh.matrixWorld);
+      invertible(placement);
+      return { mesh, placement };
+    });
+    const shape = { value: new Vector2(amplitude / size, base) };
+    const padding = (amplitude * Math.max(Math.abs(box.min.y - base), Math.abs(box.max.y - base))) / size;
+    if (hasBounds(root)) root[WIND_BOUNDS](padding);
+    for (const { mesh, placement } of placed) {
+      if (!isInstancedLod(root)) windBounds(mesh, placement, amplitude, base, size);
+      windMaterials(
+        mesh,
+        {
+          ...this.uniforms,
+          windShape: shape,
+          windPlacement: { value: placement },
+          windFromRoot: { value: placement.clone().invert() },
+        },
+        !placement.equals(identity),
+      );
+      attached.add(mesh);
+    }
+    bindings.set(root, { wind: this, options: { amplitude, baseY: base, height: size } });
+  }
+}
+
+function hasBounds(root: Object3D): root is Object3D & WindBounds {
+  return WIND_BOUNDS in root;
+}
+
+function sourceBox(root: Object3D): Box3 {
+  if (isLOD(root)) {
+    for (const { object } of root.levels) {
+      const box = boundingBox(object);
+      if (box.isEmpty()) continue;
+      if (object.matrixAutoUpdate) object.updateMatrix();
+      return box.applyMatrix4(object.matrix);
+    }
+    return new Box3();
+  }
+  if (isImpostorMesh(root)) return new Box3().setFromArray(root.impostor.box);
+  if (isInstancedMesh(root)) {
+    root.geometry.computeBoundingBox();
+    return root.geometry.boundingBox?.clone() ?? new Box3();
+  }
+  return boundingBox(root);
+}
+
+function invertible(matrix: Matrix4): void {
+  const determinant = matrix.determinant();
+  if (!Number.isFinite(determinant) || determinant === 0) throw new Error("Wind: root and mesh placements must be finite and invertible");
+}
+
+function finite(value: number, name: string): void {
+  if (!Number.isFinite(value)) throw new Error(`Wind: ${name} must be finite`);
+}
+
+function nonnegative(value: number, name: string): void {
+  finite(value, name);
+  if (value < 0) throw new Error(`Wind: ${name} must be nonnegative`);
+}
+
+/** Rebuilt LODs and impostors share the clock, with their own placements and bounds. */
+export function copyWind(source: Object3D, target: Object3D): void {
+  const binding = bindings.get(source);
+  if (binding) binding.wind.apply(target, binding.options);
+}

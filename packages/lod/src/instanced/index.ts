@@ -24,6 +24,8 @@ import { Lod } from "../lod.js";
 import { skipTinyShadows } from "../shadow.js";
 import { isImpostorMesh, isInstancedMesh, isLOD, isMesh, rejectSkinned, sameClass } from "../three.js";
 import { View, Viewports } from "../view.js";
+import { WIND_BOUNDS } from "../wind/hooks.js";
+import { copyWind } from "../wind/index.js";
 import { Sorter } from "./sort.js";
 
 const IDENTITY = new Matrix4();
@@ -231,6 +233,10 @@ export class InstancedLod extends Object3D {
     if (!Number.isInteger(index) || index < 0 || index >= this.count) throw new Error(`InstancedLod: index ${index} is not in 0..${this.count - 1}`);
   }
 
+  [WIND_BOUNDS](padding: number): void {
+    this.sorter?.padBounds(padding / this.sphere.radius);
+  }
+
   /** Sort the instances into levels for `camera`; three's renderer calls this itself while `autoUpdate`. */
   update(camera: Camera): void {
     const { entries, sorter } = this;
@@ -307,6 +313,7 @@ export class InstancedLod extends Object3D {
     copyThresholds(source.entries, this.entries);
     this.forceLevel = source.forceLevel;
     this.autoUpdate = source.autoUpdate;
+    copyWind(source, this);
     return this;
   }
 

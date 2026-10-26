@@ -145,6 +145,14 @@ const originals = new WeakMap<Material, Material>();
 export const registerFade = (material: Material, uniforms: FadeUniforms): void => void faded.set(material, uniforms);
 export const fadeUniformsOf = (material: Material): FadeUniforms | undefined => faded.get(material);
 
+/** A runtime material copy keeps its fade state, while rebuilt LODs start from the original. */
+export function inheritFade(source: Material, target: Material): void {
+  const uniforms = faded.get(source);
+  if (!uniforms) return;
+  faded.set(target, uniforms);
+  originals.set(target, originalOf(source));
+}
+
 const EDITS: Edit[] = [
   ["vertex", "#include <common>", `#include <common>\n${FADE_VERTEX_PARS}`],
   [

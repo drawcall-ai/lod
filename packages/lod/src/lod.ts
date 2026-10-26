@@ -6,6 +6,8 @@ import { FADE, Level, cloneLevels, copyThresholds, estimate, fadingWith, levelAt
 import { skipTinyShadows } from "./shadow.js";
 import { isImpostorMesh, isLOD, isMesh, rejectSkinned } from "./three.js";
 import { View, Viewports } from "./view.js";
+import { WIND_BOUNDS } from "./wind/hooks.js";
+import { copyWind } from "./wind/index.js";
 
 const view = new View();
 
@@ -59,6 +61,7 @@ export class Lod extends Object3D {
   private readonly entries: Level[] = [];
   /** Bounding sphere of the source (see the constructor) in the Lod's own space. */
   private sphere = new Sphere();
+  private casterRadius = 0;
   private readonly viewports = new Viewports();
 
   /**
@@ -78,6 +81,7 @@ export class Lod extends Object3D {
     for (const object of objects) rejectSkinned(object, "Lod");
     const { own, placed } = measureLevels(objects, "Lod");
     this.sphere = placed;
+    this.casterRadius = placed.radius;
     this.add(...objects);
     this.updateWorldMatrix(true, true);
     const inverse = this.matrixWorld.clone().invert();
@@ -99,10 +103,14 @@ export class Lod extends Object3D {
     const inner = nested || (node !== level.object && isLOD(node));
     if (isMesh(node)) {
       if (!inner) fadeMesh(node, level, this.sphere, inverse.clone().multiply(node.matrixWorld));
-      if (!inner && !isImpostorMesh(node)) skipTinyShadows(node, () => 2 * this.sphere.radius * this.matrixWorld.getMaxScaleOnAxis());
+      if (!inner && !isImpostorMesh(node)) skipTinyShadows(node, () => 2 * this.casterRadius * this.matrixWorld.getMaxScaleOnAxis());
       this.viewports.watch(node);
     }
     for (const child of node.children) this.hook(child, level, inner, inverse);
+  }
+
+  [WIND_BOUNDS](padding: number): void {
+    this.casterRadius += padding;
   }
 
   /** Pick and fade levels for `camera`; three's renderer calls this itself while `autoUpdate`. */
@@ -137,6 +145,7 @@ export class Lod extends Object3D {
     copyThresholds(source.entries, this.entries);
     this.forceLevel = source.forceLevel;
     this.autoUpdate = source.autoUpdate;
+    copyWind(source, this);
     return this;
   }
 

@@ -80,6 +80,14 @@ export class Sorter {
     this.anyDirty = true;
   }
 
+  /** Enlarge only culling bounds, keeping selection radii, slots and matrix buffers unchanged. */
+  padBounds(ratio: number): void {
+    for (const slots of this.slots) {
+      slots.padBounds(ratio);
+      slots.measure(this.cx, this.cy, this.cz, this.r);
+    }
+  }
+
   get changed(): boolean {
     return this.anyDirty;
   }

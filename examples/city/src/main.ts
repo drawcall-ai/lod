@@ -3,9 +3,10 @@
 // ?shot hides the overlay (scripts/tour.ts); ?seed=<n> changes the world; ?debug tints
 // levels and ?quality=<q> sets Lod.quality from the start; ?terrain=0 leaves the ground
 // mesh out (everything still stands where the ground would be; roads and the creek stay).
+// ?wind=0 builds vegetation without wind, for a static performance baseline.
 // window.city exposes the tour and frame measurements to scripts/tour.ts.
 import * as THREE from "three";
-import { Lod } from "@drawcall/lod";
+import { type InstancedLod, Lod, Wind } from "@drawcall/lod";
 import { loadManifest } from "./content/materials.ts";
 import { terrainMaterial } from "./content/terrain.ts";
 import { Fly } from "./flight/fly.ts";
@@ -82,6 +83,25 @@ const propLods = await props(world);
 const corn = await Corn.build(world);
 const groundCover = await cover(world, zones);
 scene.add(...houseLods, ...treeLods, ...propLods, corn, ...groundCover);
+
+const wind = params.get("wind") === "0" ? undefined : new Wind({ direction: [1, 0.35], speed: 0.22 });
+if (wind) {
+  sway(wind, treeLods, 0.025);
+  for (const patches of groundCover) sway(wind, patches.lods, 0.07);
+  sway(wind, corn.plants.lods, 0.04);
+  // The millimetre close-up follows the ladybird's rest-pose seat on the hero plant.
+  // Its separate insect Lod and the distant field covers stay still.
+}
+
+/** Top displacement as a share of plant height, so small plants never sway like trees. */
+function sway(wind: Wind, lods: InstancedLod[], fraction: number): void {
+  for (const lod of lods) {
+    const source = lod.levels[0];
+    if (!source) throw new Error(`${lod.name}: no source level for wind`);
+    const box = new THREE.Box3().setFromObject(source.object);
+    wind.apply(lod, { amplitude: (box.max.y - box.min.y) * fraction });
+  }
+}
 sun.castBy(scene);
 /** The content by kind, each counted on its own. */
 const kinds = [
@@ -98,20 +118,23 @@ const tour = new Tour(route(world, corn));
 let time = 0;
 let playing = !shot;
 const fly = new Fly(pipeline.canvas, camera, (at) => at.y - world.terrain.height(at.x, at.z));
-ui.bind({
-  duration: tour.duration,
-  toggle: () => {
-    fly.release();
-    playing = !playing;
-    if (playing && time >= tour.duration) time = 0;
-    return playing;
+ui.bind(
+  {
+    duration: tour.duration,
+    toggle: () => {
+      fly.release();
+      playing = !playing;
+      if (playing && time >= tour.duration) time = 0;
+      return playing;
+    },
+    seek: (t) => {
+      fly.release();
+      playing = false;
+      time = t;
+    },
   },
-  seek: (t) => {
-    fly.release();
-    playing = false;
-    time = t;
-  },
-});
+  wind,
+);
 
 function resize(): void {
   pipeline.setSize(innerWidth, innerHeight);
@@ -124,6 +147,7 @@ resize();
 
 /** Moves the camera by `dt` seconds of tour or flight and draws a frame. */
 function frame(dt: number): void {
+  if (wind) wind.time += dt;
   let focus: number;
   if (fly.touched) focus = fly.update(dt);
   else {
@@ -169,6 +193,7 @@ function counts() {
 /** For scripts/tour.ts: jump along the tour and time frames there. */
 const api = {
   loadMs,
+  wind,
   keys: tour.keys.map((k) => ({ name: k.name, time: k.time })),
   /** Stop the tour at `t` seconds and draw a few frames so every patch fills and every fade settles. */
   seek(t: number): void {
@@ -182,13 +207,14 @@ const api = {
    * wait for the GPU after the last, so CPU and GPU overlap as in the live loop. `ms` is
    * the median run's time per frame, `cpu` the median time of one frame's CPU work. With
    * `move`, each frame of a run moves on that many seconds of tour from the pose, which
-   * comes back after. What was drawn is the pose's own frame.
+   * comes back after. Wind advances at 60 Hz in both cases. What was drawn is the pose's own frame.
    */
   measure(frames: number, runs: number, move = 0) {
     const gl = pipeline.renderer.getContext();
     const pixel = new Uint8Array(4);
     const wait = () => gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
     const start = time;
+    const breeze = wind?.time ?? 0;
     const perFrame: number[] = [];
     const cpu: number[] = [];
     wait();
@@ -196,6 +222,7 @@ const api = {
       const t0 = performance.now();
       for (let i = 0; i < frames; i++) {
         time = start + i * move;
+        if (wind) wind.time = breeze + i / 60;
         const t1 = performance.now();
         frame(0);
         cpu.push(performance.now() - t1);
@@ -204,6 +231,7 @@ const api = {
       perFrame.push((performance.now() - t0) / frames);
     }
     time = start;
+    if (wind) wind.time = breeze;
     frame(0);
     wait();
     const median = (list: number[]) => list.sort((a, b) => a - b)[Math.floor(list.length / 2)] ?? 0;

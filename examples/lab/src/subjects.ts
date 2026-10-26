@@ -9,6 +9,8 @@ import { gltfLoader } from "./page.js";
 interface Subject {
   name: string;
   why: string;
+  /** Living plants sway in the interactive comparison. */
+  vegetation?: boolean;
   /** impostor bake options it needs */
   bake?: BakeImpostorOptions;
   load(): Promise<THREE.Object3D>;
@@ -41,12 +43,12 @@ const CASES = [
 ];
 
 const subjects: Subject[] = [
-  { name: "tree", why: "alpha-tested foliage, the main use case", load: model("CommonTree_3.glb") },
-  { name: "pine", why: "dense needle cards, dark interior", load: model("Pine_2.glb") },
+  { name: "tree", vegetation: true, why: "alpha-tested foliage, the main use case", load: model("CommonTree_3.glb") },
+  { name: "pine", vegetation: true, why: "dense needle cards, dark interior", load: model("Pine_2.glb") },
   { name: "dead", why: "thin branches: sub-pixel detail and mip erosion", load: model("DeadTree_2.glb") },
-  { name: "twisted", why: "asymmetric silhouette: wrong frame choice is obvious", load: model("TwistedTree_2.glb") },
-  { name: "bush", why: "small, wide and low: horizon views dominate", load: model("Bush_Common_Flowers.glb") },
-  { name: "fern", why: "flat fronds seen edge-on", load: model("Fern_1.glb") },
+  { name: "twisted", vegetation: true, why: "asymmetric silhouette: wrong frame choice is obvious", load: model("TwistedTree_2.glb") },
+  { name: "bush", vegetation: true, why: "small, wide and low: horizon views dominate", load: model("Bush_Common_Flowers.glb") },
+  { name: "fern", vegetation: true, why: "flat fronds seen edge-on", load: model("Fern_1.glb") },
   { name: "rock", why: "solid, smooth shading: normals and depth must be right", load: model("Rock_Medium_1.glb") },
   { name: "fence", why: "thin flat object: degenerate edge-on frames", load: model("quaternius-platformer-fence.glb") },
   { name: "sign", why: "text-like detail and an off-centre pivot", load: model("quaternius-platformer-sign-2.glb") },
@@ -57,7 +59,12 @@ const subjects: Subject[] = [
   { name: "wall", why: "20:4:1 brick wall: the non-uniform worst case", load: async () => wall() },
   { name: "log", why: "a 10:1 log lying down: elongated", load: async () => log() },
   { name: "house", why: "hard surface with small geometric detail and an authored low shell", load: async () => house(), low: houseShell },
-  ...CASES.map((id) => ({ name: id, why: "realistic case (scripts/cases.ts)", load: realistic(id) })),
+  ...CASES.map((id) => ({
+    name: id,
+    why: "realistic case (scripts/cases.ts)",
+    vegetation: ["oak", "ash", "spruce", "quiver", "shrub", "rooibos", "fern02", "grass"].includes(id),
+    load: realistic(id),
+  })),
 ];
 
 function knot(): THREE.Object3D {

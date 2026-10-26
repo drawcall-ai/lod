@@ -28,6 +28,7 @@ import { boundingRadius, boxCentre, boxExtent, validateImpostor, type Impostor, 
 import { applyEdits, type Edit } from "../../patch.js";
 import { FRAGMENT, fragmentLit } from "./fragment.js";
 import { VERTEX, vertexLit } from "./vertex.js";
+import { copyWind } from "../../wind/index.js";
 
 export interface ImpostorMeshOptions {
   /** coverage below which a pixel is empty, in (0, 1); default 0.5 */
@@ -162,7 +163,7 @@ export class ImpostorMesh extends InstancedMesh<PlaneGeometry, MeshStandardMater
 
     super(geometry, material, count);
     this.impostor = impostor;
-    internals.set(this, { options, placement: uniforms.impostorPlacement.value, diameter: null });
+    internals.set(this, { options, placement: uniforms.impostorPlacement.value, diameter: null, radius: uniforms.impostorRadius.value });
     this.drawState = drawState;
 
     // Shadow passes: the same card, baked surface depth and coverage, facing the light.
@@ -203,7 +204,7 @@ export class ImpostorMesh extends InstancedMesh<PlaneGeometry, MeshStandardMater
 
   /** The largest instance's diameter in world units. */
   private casterDiameter(): number {
-    const { diameter } = internalsOf(this);
+    const { diameter, radius } = internalsOf(this);
     if (diameter) return diameter();
     const { largest, instanceMatrix } = this;
     if (largest.version !== instanceMatrix.version || largest.count !== this.count) {
@@ -212,7 +213,7 @@ export class ImpostorMesh extends InstancedMesh<PlaneGeometry, MeshStandardMater
       largest.scale = 0;
       for (let i = 0; i < this.count; i++) largest.scale = Math.max(largest.scale, this.getMatrixAt(i, matrix).getMaxScaleOnAxis());
     }
-    return 2 * boundingRadius(this.impostor.box) * largest.scale * this.matrixWorld.getMaxScaleOnAxis();
+    return 2 * radius * largest.scale * this.matrixWorld.getMaxScaleOnAxis();
   }
 
   private trackCamera(camera: Camera): void {
@@ -227,6 +228,7 @@ export class ImpostorMesh extends InstancedMesh<PlaneGeometry, MeshStandardMater
     this.material = material;
     this.geometry = geometry;
     internalsOf(this).placement.copy(internalsOf(source).placement);
+    copyWind(source, this);
     return this;
   }
 
@@ -277,6 +279,8 @@ const point = new Vector3();
 interface Internals {
   options: ImpostorMeshOptions;
   placement: Matrix4;
+  /** Rest bounds, expanded by wind when attached; independent of atlas reconstruction. */
+  radius: number;
   /** The largest instance's diameter in world units, when someone else measures it. */
   diameter: (() => number) | null;
 }
@@ -287,6 +291,11 @@ function internalsOf(mesh: ImpostorMesh): Internals {
   const found = internals.get(mesh);
   if (!found) throw new Error("ImpostorMesh: not built by its constructor");
   return found;
+}
+
+/** Keep tiny-shadow rejection consistent with an animated card's culling envelope. */
+export function impostorCasterRadius(mesh: ImpostorMesh, radius: number): void {
+  internalsOf(mesh).radius = radius;
 }
 
 /**
