@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { cachedImpostor } from "./cache.ts";
 import { bakeMesh, ImpostorMesh, type ImpostorMeshOptions, InstancedLod, type Lod, simplify } from "@drawcall/lod";
 

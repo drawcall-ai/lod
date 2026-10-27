@@ -1,5 +1,5 @@
 import { type InstancedLod, Lod } from "@drawcall/lod";
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { house, houseInterior } from "../content/house/index.ts";
 import { church } from "../content/church.ts";

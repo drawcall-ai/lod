@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { axes, type Field, type Road } from "./plan.ts";
 
 /**

@@ -1,6 +1,6 @@
 ---
 name: lod
-description: Use @drawcall/lod to give three.js objects levels of detail — load a model and get a simplified mesh, a baked low-poly mesh or an octahedral impostor that switch by on-screen size with a dithered fade, or switch your own levels — including crowds of instances, vegetation swaying in wind, buildings whose windows show the rooms behind them (interior mapping), shadows over large worlds, and preparing models that bake into good impostors. Use when a WebGLRenderer scene has many or large objects seen from far away; not for WebGPURenderer, skinned animation, or glass objects.
+description: Use @drawcall/lod to give three.js objects levels of detail — load a model and get a simplified mesh, a baked low-poly mesh or an octahedral impostor that switch by on-screen size with a dithered fade, or switch your own levels — including crowds of instances, vegetation swaying in wind, buildings whose windows show the rooms behind them (interior mapping), shadows over large worlds, and preparing models that bake into good impostors. Use when a WebGPURenderer scene (`three/webgpu`) has many or large objects seen from far away; not for WebGLRenderer, skinned animation, or glass objects.
 ---
 
 # Level of detail with @drawcall/lod
@@ -41,6 +41,7 @@ Which levels to build, by asset:
   (see "Impostor-ready assets").
 
 ```ts
+import * as THREE from "three/webgpu";
 import { Lod, LodLoader, bakeMesh } from "@drawcall/lod";
 
 const manager = new THREE.LoadingManager();
@@ -92,12 +93,11 @@ Lod.debug = true; // tint levels to see where each draws
 - **Clone instead of loading twice:** loading builds and bakes every time; `clone()`
   shares geometry and textures. For hundreds of copies use `InstancedLod`, as a `Lod` per
   copy costs draws per copy.
-- **`InstancedLod` sorts on the CPU** when the camera or a matrix moved. Keep its own
-  transform uniformly scaled (instances may scale any way). Its levels are templates,
-  not scene objects; they cannot hold nested `Lod`s or InstancedMeshes. Each level is
-  culled by the bounds of the instances it draws, in the view and in every shadow map,
-  but the cheapest level spans nearly the whole crowd: over a large area, one
-  `InstancedLod` per region lets regions out of view skip their draws.
+- **Split large crowds into regions:** use one `InstancedLod` per region so regions
+  outside the view or a shadow map can skip their draws. Check that your target devices
+  offer the required WebGPU feature `indirect-first-instance`. Keep the batch's own
+  transform uniformly scaled (instances may scale any way). Build its levels as
+  templates without nested `Lod`s or InstancedMeshes; use `Lod` for hierarchies.
 - **Hierarchies on top** (a field whose plants exist only near the camera): level 0 may
   be an empty `Object3D`, and the `Lod` measures by the first level that draws. Draw the
   detail yourself where level 0 shows: `levelOf` on an `InstancedLod`, `visible` on a
@@ -118,22 +118,11 @@ Lod.debug = true; // tint levels to see where each draws
   colour texture, and the colour bled out into the transparent texels: black there
   darkens every mip, so the source darkens with distance and its bakes with it.
 - **Custom lighting is not baked.** Impostors and baked levels keep the surface (colour,
-  normal, roughness) and light it as a standard material: lighting changed in
-  `onBeforeCompile`, such as leaves glowing in back light, is lost, and such foliage
-  reads darker once its impostor shows, worst against the light. Give the impostor the
-  same lighting: once the `Lod` or `InstancedLod` is built, wrap the `onBeforeCompile` of
-  each `ImpostorMesh` under it (call the one it has first, extend `customProgramCacheKey`)
-  and insert your code before `void main()`. Its shader defines `IMPOSTOR_LIT`; its
-  normal is an average whose length says how far the leaves under it agree, so light by
-  `impostorCosine(normal, direction)` where you would clamp `dot(normal, direction)`.
-- **Alpha changed in `onBeforeCompile`** (a boost that keeps distant leaves from thinning
-  out) never reaches shadow maps: three casts with its own depth material, while an
-  impostor casts the coverage it shows, so the shade in and under the object changes as
-  its impostor takes over. Once the `Lod` or `InstancedLod` is built, give each mesh
-  under it that draws such a material a `customDepthMaterial` (`customDistanceMaterial`
-  for point lights) with the same change; three hands it the drawn material's `map` and
-  alpha test. The level meshes do not keep one set on the source. A mesh has one depth
-  material for all its groups, so such leaves need a mesh of their own.
+  normal, roughness) and light it as a standard material: lighting a source's node
+  material changes on top, such as leaves glowing in back light, is lost, and such
+  foliage reads darker once its impostor shows, worst against the light. Give each
+  `ImpostorMesh`'s material (a `MeshStandardNodeMaterial`) the same change once the
+  `Lod` or `InstancedLod` is built, for example as an `emissiveNode`.
 - **Jitter dense plantings** in position and rotation. Bakes and impostor views look
   along parallel rays: plants on a grid leave straight gaps there that no perspective
   view of the real plants shows.
@@ -176,63 +165,38 @@ Lod.debug = true; // tint levels to see where each draws
 
 - **Levels are chosen once, from the viewing camera,** and every shadow map draws the
   same ones: far cascades see impostors and baked levels, never the sources. During a
-  fade the finer level casts alone: an impostor taking over casts once it is gone.
+  fade both levels cast, dithered as they draw, so the object casts one shadow.
 - **Casters narrower than a texel** of a directional light's shadow map draw nothing into
-  it (a `Lod` by its whole object, an `InstancedLod` level by its largest instance), so
-  coarse cascades skip small crowds by themselves.
-- **Cascaded or custom shadows: patch three's `ShaderChunk`s,** not single materials.
-  Changed chunks reach every faded copy and every impostor, whenever they were built, as
-  long as the patch runs before those materials first compile. Impostors light from the
-  surface they resolve, so a patch that computes shadow coordinates from
-  `geometryPosition` works for them unchanged. A per-material setup (three's `CSM` addon)
-  must run on the level meshes' materials after the `Lod` is built: the material you
-  passed in is no longer drawn.
+  it, so coarse cascades skip small casters by themselves.
+- **Shadow setups on the light or renderer reach every level**; impostors cast and
+  receive at the surface they resolve. A per-material setup must run on the level
+  meshes' materials after the `Lod` is built: the material you passed in is no longer
+  drawn.
 - **Open models leak light** (eaves, window reveals, single walls): three casts with back
   faces only. Set `shadowSide = DoubleSide` on their materials, with about a texel of
   shadow `bias` against acne.
-- **Under reversed depth,** three's PCF shadows darken everything beyond the shadow
-  camera's `far`: set it to reach past everything that receives shadows.
 
 ## Pitfalls
 
-- **Materials are replaced.** A `Lod` draws each mesh with its own faded copy of the
-  material; the material you passed in is no longer drawn. Edit the material on the
-  level's mesh after building. Custom `ShaderMaterial`s need three's standard chunks.
+- **Materials are replaced.** A `Lod` draws each mesh with a faded node-material copy of
+  its material; the material you passed in is no longer drawn. Edit the material on the
+  level's mesh after building. `ShaderMaterial`s are refused: write them as node
+  materials.
 - **Levels are read once,** when the `Lod` is built: meshes added or moved later are
   neither faded nor measured right. Build a new `Lod` instead.
 - **Skinned meshes are refused,** and animation is ignored.
 - **Orthographic cameras** switch by on-screen size too, but swap levels at once.
 - **Several cameras:** each is measured at the viewport height it last drew the `Lod`
-  at; a camera's first frame assumes a typical screen.
+  at; a camera's first frame assumes a typical screen. An `InstancedLod` holds one
+  selection at a time: a render nested in another (a reflection, a `CubeCamera`) that
+  sees it replaces the selection the outer render draws, so keep it off the layers such
+  cameras see. Renders one after the other are fine.
 - **Many `Lod`s appearing at once hitch** while three sets up each mesh's material; draw
   crowds with `InstancedLod`.
 - **Lines, points and sprites** in a level draw but do not fade. Raycasts hit the source
   only, whatever level shows.
 - **Canvas alpha:** impostor edges use alpha-to-coverage, which leaves fractional alpha
-  in the canvas, so the page shows through, even with `alpha: false` in Chrome. Force
-  alpha to 1 after each frame with a pass that keeps the colour. Do not do it with raw GL
-  and `renderer.resetState()`: the reset turns off reversed depth.
-
-  ```ts
-  import { FullScreenQuad } from "three/addons/postprocessing/Pass.js";
-
-  const opaque = new FullScreenQuad(
-    new THREE.MeshBasicMaterial({
-      blending: THREE.CustomBlending,
-      blendSrc: THREE.ZeroFactor,
-      blendDst: THREE.OneFactor, // colour stays
-      blendSrcAlpha: THREE.OneFactor,
-      blendDstAlpha: THREE.ZeroFactor, // alpha becomes 1
-      depthTest: false,
-      depthWrite: false,
-    }),
-  );
-
-  renderer.render(scene, camera);
-  renderer.autoClear = false;
-  opaque.render(renderer);
-  renderer.autoClear = true;
-  ```
+  in the frame, so the page shows through: create the renderer with `alpha: false`.
 
 - **Impostor layout `"hemi"`** covers views from the horizon up only: right for upright
   trees, rocks and buildings, wrong for anything seen from below.
@@ -254,9 +218,7 @@ GLTSLoader(manager))`. Inside a `.glts` script, register the contextual `gltsLoa
 - **Clones of a built level** made by hand lose the measured error their switch size
   comes from; clone the whole `Lod` instead.
 - **Large worlds** (kilometres to millimetres) z-fight with the default depth buffer.
-  Every level works with three's `reversedDepthBuffer` or `logarithmicDepthBuffer`.
-  Reversed depth only gains precision in a float depth buffer, which the canvas does not
-  have: render into a target with a `FloatType` `DepthTexture`.
+  Every level works with the renderer's `reversedDepthBuffer`.
 
 ## Interiors
 

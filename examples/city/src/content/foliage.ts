@@ -1,5 +1,26 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
+import {
+  Fn,
+  color,
+  dFdx,
+  dFdy,
+  dot,
+  log2,
+  materialOpacity,
+  max,
+  normalView,
+  positionViewDirection,
+  pow,
+  saturate,
+  uv,
+  vec2,
+  vec3,
+  vec4,
+} from "three/tsl";
 import { ImpostorMesh } from "@drawcall/lod";
+import { isShadowPass } from "../../../../packages/lod/src/three.ts";
+import { isNodeOf } from "../../../../packages/lod/src/tsl.ts";
+import { baseColor } from "./materials.ts";
 
 export interface FoliageOptions {
   /** Share of sunlight a leaf passes on to its shaded side (0–1). */
@@ -9,128 +30,129 @@ export interface FoliageOptions {
 }
 
 /**
- * Turns a standard or physical leaf material into foliage, on top of whatever its
- * onBeforeCompile does already:
- * - translucency: sunlight hitting the far side of a thin leaf shows on the near side, so
- *   back-lit leaves glow instead of turning black. It rides on the direct-light term, so it
- *   is shadowed exactly like front light. On an impostor's material, it lights the baked
- *   leaves the same way, by their averaged normals.
- * - for cut-out leaves, alpha to coverage plus a mip-dependent alpha boost: plain alpha
- *   testing loses coverage in smaller mips, which makes distant needles and leaves vanish.
- *   Three's shadow pass runs none of this: see `leafShadows`.
+ * A leaf material, lit with translucency: sunlight hitting the far side of a thin leaf
+ * shows on the near side, so back-lit leaves glow instead of turning black. It rides on
+ * the direct-light term, so it is shadowed exactly like front light. Set up by `foliage`.
+ * Its own class so that the copies the package draws levels with (clones) keep it.
  */
-export function foliage(m: THREE.MeshStandardMaterial, { translucency, tint = "#e4ff8a" }: FoliageOptions): void {
-  if (m.alphaTest > 0) m.alphaToCoverage = true;
-  // an impostor's material is alpha-tested too, but by its own test of the baked coverage
-  const leaves = isLeaves(m);
-  const color = new THREE.Color(tint);
-  const previous = m.onBeforeCompile;
-  const key = m.customProgramCacheKey.bind(m);
-  m.onBeforeCompile = (shader, renderer) => {
-    previous.call(m, shader, renderer);
-    shader.uniforms.translucency = { value: translucency };
-    shader.uniforms.translucencyTint = { value: color };
-    // just before main: after three's lighting functions, which an impostor's shader replaces
-    shader.fragmentShader = replace(
-      shader.fragmentShader,
-      "void main() {",
-      /* glsl */ `uniform float translucency;
-      uniform vec3 translucencyTint;
-      void RE_Direct_Foliage(const in IncidentLight directLight, const in vec3 geometryPosition, const in vec3 geometryNormal, const in vec3 geometryViewDir, const in vec3 geometryClearcoatNormal, const in PhysicalMaterial material, inout ReflectedLight reflectedLight) {
-        RE_Direct_Physical(directLight, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, material, reflectedLight);
-        #ifdef IMPOSTOR_LIT
-          float behind = impostorCosine(geometryNormal, -directLight.direction);
-        #else
-          float behind = saturate(-dot(geometryNormal, directLight.direction));
-        #endif
-        // light scatters forward through the leaf: strongest when looking toward the sun
-        float forward = 0.35 + 0.65 * pow(saturate(dot(geometryViewDir, -directLight.direction)), 3.0);
-        reflectedLight.directDiffuse += directLight.color * material.diffuseColor * translucencyTint * translucency * behind * forward;
-      }
-      #undef RE_Direct
-      #define RE_Direct RE_Direct_Foliage
-      void main() {`,
-    );
-    if (!leaves) return;
-    boostAlpha(shader);
-  };
-  m.customProgramCacheKey = () => `${key()}|foliage-${leaves}`;
+export class Foliage extends THREE.MeshPhysicalNodeMaterial {
+  translucency = 0;
+  readonly tint = new THREE.Color(1, 1, 1);
+
+  override setupLightingModel(): THREE.PhysicalLightingModel {
+    return new Translucent(super.setupLightingModel(), this.translucency, this.tint);
+  }
+
+  // The lighting model is no node: materials alike in their nodes would share a shader.
+  override customProgramCacheKey(): string {
+    return `${super.customProgramCacheKey()}|${foliageKey(this.translucency, this.tint)}`;
+  }
 }
 
-/** Applies `foliage` to every alpha-tested material of a loaded plant model, and `leafShadows` to its meshes. */
+const foliageKey = (translucency: number, tint: THREE.Color) => `foliage-${translucency}-${tint.getHexString()}`;
+
+/**
+ * Makes `m` foliage with `options`. Cut-out leaves also get alpha to coverage and a
+ * mip-dependent alpha boost, in the view and in shadow maps alike: plain alpha testing
+ * loses coverage in smaller mips, which makes distant needles and leaves vanish.
+ */
+export function foliage(m: Foliage, { translucency, tint = "#e4ff8a" }: FoliageOptions): Foliage {
+  m.translucency = translucency;
+  m.tint.set(tint);
+  if (!(m.alphaTest > 0 && m.map)) return m;
+  m.alphaToCoverage = true;
+  const boost = boostOf(m.map);
+  m.opacityNode = materialOpacity.mul(boost);
+  // A shadow pass multiplies the map's alpha by the colour's: there the colour is the boost alone.
+  m.colorNode = Fn((builder) => (isShadowPass(builder.material) ? vec4(vec3(1), boost) : baseColor))();
+  return m;
+}
+
+/** A plant model's leaf material `m` (standard, as loaded) as foliage. */
+export const leafOf = (m: THREE.MeshStandardMaterial, options: FoliageOptions): Foliage => foliage(new Foliage().copy(m), options);
+
+/** Turns every alpha-tested material of a loaded plant model into foliage. */
 export function foliageModel(root: THREE.Object3D, options: FoliageOptions): void {
-  const seen = new Set<THREE.Material>();
+  const made = new Map<THREE.Material, Foliage>();
+  const swap = (m: THREE.Material): THREE.Material => {
+    if (!(m instanceof THREE.MeshStandardMaterial) || m.alphaTest === 0) return m;
+    let leaf = made.get(m);
+    if (!leaf) made.set(m, (leaf = leafOf(m, options)));
+    return leaf;
+  };
   root.traverse((o) => {
-    if (!(o instanceof THREE.Mesh)) return;
-    for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
-      if (seen.has(m) || !(m instanceof THREE.MeshStandardMaterial) || m.alphaTest === 0) continue;
-      seen.add(m);
-      foliage(m, options);
-    }
+    if (o instanceof THREE.Mesh) o.material = Array.isArray(o.material) ? o.material.map(swap) : swap(o.material);
   });
-  leafShadows(root);
 }
 
 /**
- * Applies `foliage` to the impostors a Lod or InstancedLod under `root` draws, which light
- * the baked surface as a standard material and know nothing of the leaves' translucency,
- * and `leafShadows` to its other meshes, which neither three's clones nor an
- * InstancedLod's meshes inherit.
+ * Gives the impostors a Lod or InstancedLod under `root` draws the leaves' translucency:
+ * they light the baked surface as a standard material, by its averaged normals.
  */
-export function foliageLevels(root: THREE.Object3D, options: FoliageOptions): void {
+export function foliageLevels(root: THREE.Object3D, { translucency, tint = "#e4ff8a" }: FoliageOptions): void {
+  const shade = new THREE.Color(tint);
   root.traverse((o) => {
-    if (o instanceof ImpostorMesh) foliage(o.material, options);
-  });
-  leafShadows(root);
-}
-
-/**
- * Gives every mesh under `root` that draws cut-out leaves a depth material with their
- * alpha boost, so it casts the coverage it draws. Three's own depth material runs no
- * onBeforeCompile: without this, trees cast thinner shadows than they show while their
- * impostors cast what they show, and the shade under a tree changes as it hands over.
- * Three hands the depth material each drawn material's map and alpha test.
- */
-function leafShadows(root: THREE.Object3D): void {
-  root.traverse((o) => {
-    if (!(o instanceof THREE.Mesh) || o instanceof ImpostorMesh) return;
-    const materials: THREE.Material[] = Array.isArray(o.material) ? o.material : [o.material];
-    const leaves = materials.filter(isLeaves);
-    if (leaves.length === 0) return;
-    // three reuses one depth material for every group of a mesh, without refreshing its map
-    if (leaves.length !== materials.length || new Set(leaves.map((m) => m.map)).size > 1) {
-      throw new Error(`foliage: "${o.name}" draws leaves with other materials; split it to cast their shadows`);
-    }
-    const depth = new THREE.MeshDepthMaterial();
-    depth.onBeforeCompile = boostAlpha;
-    depth.customProgramCacheKey = () => "foliage-leaves";
-    o.customDepthMaterial = depth;
+    if (!(o instanceof ImpostorMesh)) return;
+    const m = o.material;
+    const lighting = m.setupLightingModel.bind(m);
+    const key = m.customProgramCacheKey.bind(m);
+    m.setupLightingModel = () => new Translucent(lighting(), translucency, shade);
+    m.customProgramCacheKey = () => `${key()}|${foliageKey(translucency, shade)}`;
   });
 }
 
-/** Cut-out leaves: their alpha is boosted (see `foliage`). An impostor's material has no map. */
-function isLeaves(m: THREE.Material): m is THREE.Material & { map: THREE.Texture } {
-  return m.alphaTest > 0 && "map" in m && m.map instanceof THREE.Texture;
+/** Boosts alpha by the mip `map` is read at. */
+function boostOf(map: THREE.Texture) {
+  const image: unknown = map.image;
+  if (typeof image !== "object" || image === null || !("width" in image) || !("height" in image) || typeof image.width !== "number" || typeof image.height !== "number")
+    throw new Error(`foliage: the leaves' map "${map.name}" has no image to measure`);
+  const texel = uv().mul(vec2(image.width, image.height));
+  const mip = max(log2(max(dot(dFdx(texel), dFdx(texel)), dot(dFdy(texel), dFdy(texel)))).mul(0.5), 0);
+  return mip.mul(0.25).add(1);
 }
 
-/** Boosts alpha by the mip the map is read at, before the alpha test. */
-function boostAlpha(shader: THREE.WebGLProgramParametersWithUniforms): void {
-  shader.fragmentShader = replace(
-    shader.fragmentShader,
-    "#include <alphatest_fragment>",
-    /* glsl */ `#if defined(USE_ALPHATEST) && defined(USE_MAP)
-    {
-      vec2 texel = vMapUv * vec2(textureSize(map, 0));
-      float mip = max(0.0, 0.5 * log2(max(dot(dFdx(texel), dFdx(texel)), dot(dFdy(texel), dFdy(texel)))));
-      diffuseColor.a *= 1.0 + mip * 0.25;
-    }
-    #endif
-    #include <alphatest_fragment>`,
-  );
-}
+/** `lighting` with the translucency added to its direct light. */
+class Translucent extends THREE.PhysicalLightingModel {
+  constructor(
+    private readonly lighting: THREE.PhysicalLightingModel,
+    private readonly share: number,
+    private readonly tint: THREE.Color,
+  ) {
+    super();
+  }
 
-/** `source` with `search` replaced by `by`; throws if three or the package changed it. */
-function replace(source: string, search: string, by: string): string {
-  if (!source.includes(search)) throw new Error(`foliage: "${search}" not found in the shader`);
-  return source.replace(search, () => by);
+  override direct(input: Parameters<THREE.PhysicalLightingModel["direct"]>[0], builder: THREE.NodeBuilder): void {
+    this.lighting.direct(input, builder);
+    const { lightDirection, lightColor, reflectedLight } = input;
+    const { directDiffuse } = reflectedLight;
+    if (!isNodeOf(lightDirection, "vec3", builder) || !isNodeOf(lightColor, "color", builder) || !isNodeOf(directDiffuse, "vec3", builder))
+      throw new Error("foliage: three's direct light is not a direction, a colour and a sum");
+    const behind = saturate(dot(normalView, lightDirection).negate());
+    // light scatters forward through the leaf: strongest when looking toward the sun
+    const forward = pow(saturate(dot(positionViewDirection, lightDirection.negate())), 3).mul(0.65).add(0.35);
+    directDiffuse.addAssign(behind.mul(forward).mul(this.share).mul(lightColor).mul(THREE.TSL.diffuseContribution).mul(color(this.tint)));
+  }
+
+  // Everything else is the wrapped model's.
+  override start(builder: THREE.NodeBuilder): void {
+    this.lighting.start(builder);
+  }
+  override finish(builder: THREE.NodeBuilder): void {
+    this.lighting.finish(builder);
+  }
+  override directRectArea(input: Parameters<THREE.PhysicalLightingModel["directRectArea"]>[0], builder: THREE.NodeBuilder): void {
+    this.lighting.directRectArea(input, builder);
+  }
+  override indirect(builder: THREE.NodeBuilder): void {
+    this.lighting.indirect(builder);
+  }
+  override indirectDiffuse(builder: THREE.NodeBuilder): void {
+    this.lighting.indirectDiffuse(builder);
+  }
+  override indirectSpecular(builder: THREE.NodeBuilder): void {
+    this.lighting.indirectSpecular(builder);
+  }
+  override ambientOcclusion(builder: THREE.NodeBuilder): void {
+    this.lighting.ambientOcclusion(builder);
+  }
 }

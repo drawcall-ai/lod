@@ -21,6 +21,8 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Install the browser the package's tests run in, on WebGPU
+        run: pnpm --filter @drawcall/lod exec playwright install --with-deps chromium
       - name: Build, typecheck, and test
         run: pnpm check
       - name: Set release version

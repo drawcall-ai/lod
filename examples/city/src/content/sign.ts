@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { box, Parts } from "./geometry.ts";
 import { surface } from "./materials.ts";
 

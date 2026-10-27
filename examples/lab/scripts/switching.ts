@@ -33,7 +33,7 @@ try {
       `${name}: ${p.steps} steps, worst change ${p.worst.change.toFixed(3)} at ${p.worst.pixels.toFixed(1)} px, ${p.worst.ratio.toFixed(2)}x the steps around it`;
     console.log(`     ${line("swapped at once", hard)}`);
     check(faded.worst.ratio < 3 && faded.worst.ratio < hard.worst.ratio / 2, line("faded", faded));
-    console.log(`     1000 new Lods: first frame ${r.firstDraw.firstMs.toFixed(1)} ms, next ${r.firstDraw.nextMs.toFixed(1)} ms (CPU + finish)`);
+    console.log(`     1000 new Lods: first frame ${r.firstDraw.firstMs.toFixed(1)} ms, next ${r.firstDraw.nextMs.toFixed(1)} ms (CPU + a read-back)`);
   }
 } finally {
   await close();

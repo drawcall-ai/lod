@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { columnBounds, facades } from "./facades.ts";
 import { heights, type HouseParams, wallThickness as t } from "./params.ts";
 import type { Opening } from "./wall.ts";

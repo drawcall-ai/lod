@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { GLTFExporter } from "three/addons/exporters/GLTFExporter.js";
 import { InstancedLod, LodLoader, type LevelRequest, type Lod } from "@drawcall/lod";
 import { boundingSphere } from "../../../packages/lod/src/bounds.js";
@@ -18,7 +18,7 @@ import { subject } from "./subjects.js";
 //   alone changes.
 // - flicker: mean change per frame of a slow orbit at native resolution (MSAA, no
 //   supersampling), as a ratio to the source's.
-// - cost: frame time per instance of an InstancedLod forced to one level, instances in
+// - cost: GPU time per instance of an InstancedLod forced to one level, instances in
 //   a grid at the measured height, filling the target.
 
 // ------------------------------------------------------------------ subject and levels
@@ -165,23 +165,23 @@ function score(reference: Uint8Array, image: Uint8Array, size: number, into: Sta
  * Every level in `keys` against the source at `height` px over `views`, and the floor.
  * With `sheetView` set, that view's images go into the contact sheet.
  */
-function measure(height: number, views: View[], keys: string[], sheetView = -1) {
+async function measure(height: number, views: View[], keys: string[], sheetView = -1) {
   const { source } = current();
   const size = canvasSize(height);
   const floor = emptyStats();
   const levels: Record<string, Stats> = Object.fromEntries(keys.map((key) => [key, emptyStats()]));
-  views.forEach((view, v) => {
+  for (const [v, view] of views.entries()) {
     aim(view, height, size);
-    const reference = capture(source, size);
+    const reference = await capture(source, size);
     if (!reference.some((value, i) => i % 4 === 3 && value > 0)) throw new Error(`bench: the source covers nothing at ${height} px`);
-    score(reference, capture(source, size, K, 0.5), size, floor);
+    score(reference, await capture(source, size, K, 0.5), size, floor);
     if (v === sheetView) sheet.draw("source", height, reference, size);
     for (const key of keys) {
-      const image = capture(built(key), size);
+      const image = await capture(built(key), size);
       score(reference, image, size, must(levels[key], key));
       if (v === sheetView) sheet.draw(key, height, image, size);
     }
-  });
+  }
   freeTargets();
   return { floor, levels };
 }
@@ -195,7 +195,7 @@ const overGrey = (pixels: Uint8Array, p: number, c: number) => {
 };
 
 /** Mean change per pixel (0..1, over grey) between consecutive frames of a slow orbit. */
-function orbitChange(object: THREE.Object3D, view: View, height: number, steps: number): number {
+async function orbitChange(object: THREE.Object3D, view: View, height: number, steps: number): Promise<number> {
   const size = canvasSize(height);
   // A quarter pixel per frame at the bounding sphere's edge.
   const step = 0.25 / (height / 2);
@@ -203,7 +203,7 @@ function orbitChange(object: THREE.Object3D, view: View, height: number, steps: 
   let change = 0;
   for (let i = 0; i < steps; i++) {
     aim(view, height, size, i * step);
-    const frame = capture(object, size, 1);
+    const frame = await capture(object, size, 1);
     if (previous) {
       let sum = 0;
       for (let p = 0; p < frame.length; p += 4)
@@ -218,13 +218,13 @@ function orbitChange(object: THREE.Object3D, view: View, height: number, steps: 
 }
 
 /** Each level's orbit change at `height`, as a ratio to the source's, summed over `views`. */
-function flicker(height: number, views: View[], keys: string[], steps = 8) {
+async function flicker(height: number, views: View[], keys: string[], steps = 8) {
   const { source } = current();
   let reference = 0;
   const changes = new Map(keys.map((key) => [key, 0]));
   for (const view of views) {
-    reference += orbitChange(source, view, height, steps);
-    for (const key of keys) changes.set(key, must(changes.get(key), key) + orbitChange(built(key), view, height, steps));
+    reference += await orbitChange(source, view, height, steps);
+    for (const key of keys) changes.set(key, must(changes.get(key), key) + (await orbitChange(built(key), view, height, steps)));
   }
   freeTargets();
   return Object.fromEntries([...changes].map(([key, change]) => [key, change / Math.max(reference, 1e-9)]));
@@ -236,25 +236,33 @@ function flicker(height: number, views: View[], keys: string[], steps = 8) {
 const COST_SIDE = 4096;
 
 /**
- * Milliseconds per frame drawing the scene into `target`: `frames` frames back to back,
- * then a one-pixel read that waits for the GPU, over the wall clock; median of
- * `repeats` such runs, and their spread ((max - min) / median). Timer queries under
- * ANGLE/Metal proved too noisy for this.
+ * GPU milliseconds of a frame drawing the scene into `target` (every pass and compute
+ * dispatch, from timestamp queries), awaiting each frame's queries before the next:
+ * the median of `repeats` runs of `frames` frames, and their spread
+ * ((max - min) / median).
  */
-function frameMs(target: THREE.WebGLRenderTarget, view: THREE.Camera, frames: number, repeats: number): { ms: number; spread: number } {
-  const pixel = new Uint8Array(4);
-  renderer.setRenderTarget(target);
-  const sync = () => renderer.readRenderTargetPixels(target, 0, 0, 1, 1, pixel);
-  for (let i = 0; i < 3; i++) renderer.render(scene, view);
-  sync();
+async function frameMs(target: THREE.RenderTarget, view: THREE.Camera, frames: number, repeats: number): Promise<{ ms: number; spread: number }> {
+  if (!renderer.hasFeature("timestamp-query")) throw new Error("bench.cost needs the GPU's timestamp-query feature");
+  // Discard queries left by captures or shader warm-up before timing this target.
+  await Promise.all([renderer.resolveTimestampsAsync("render"), renderer.resolveTimestampsAsync("compute")]);
+  const run = async () => {
+    let total = 0;
+    for (let i = 0; i < frames; i++) {
+      const computed = renderer.info.compute.calls;
+      renderer.setRenderTarget(target);
+      renderer.render(scene, view);
+      renderer.setRenderTarget(null);
+      const [passes, selection] = await Promise.all([
+        renderer.resolveTimestampsAsync("render"),
+        renderer.info.compute.calls > computed ? renderer.resolveTimestampsAsync("compute") : Promise.resolve(0),
+      ]);
+      total += (passes ?? 0) + (selection ?? 0);
+    }
+    return total / frames;
+  };
+  await run();
   const runs: number[] = [];
-  for (let r = 0; r < repeats; r++) {
-    const start = performance.now();
-    for (let i = 0; i < frames; i++) renderer.render(scene, view);
-    sync();
-    runs.push((performance.now() - start) / frames);
-  }
-  renderer.setRenderTarget(null);
+  for (let r = 0; r < repeats; r++) runs.push(await run());
   runs.sort((a, b) => a - b);
   const ms = at(runs, Math.floor(runs.length / 2));
   return { ms, spread: (at(runs, runs.length - 1) - at(runs, 0)) / ms };
@@ -265,13 +273,13 @@ function frameMs(target: THREE.WebGLRenderTarget, view: THREE.Camera, frames: nu
  * InstancedLod forced to the level, instances on a grid facing the camera, each
  * `height` px tall, the grid filling the target. The empty frame's time is subtracted.
  */
-function cost(height: number, keys: string[], frames = 20, repeats = 5) {
+async function cost(height: number, keys: string[], frames = 20, repeats = 5) {
   const { levels, sphere } = current();
   const first = at(levels, 0);
   const cols = Math.max(1, Math.min(64, Math.floor(COST_SIDE / (1.15 * height))));
   const count = cols * cols;
   const side = Math.ceil(cols * 1.15 * height);
-  const target = new THREE.WebGLRenderTarget(side, side, { samples: 4, colorSpace: THREE.SRGBColorSpace });
+  const target = new THREE.RenderTarget(side, side, { samples: 4, colorSpace: THREE.SRGBColorSpace });
   const { center, radius } = sphere;
   const spacing = 2 * radius * 1.15;
   const view = new THREE.PerspectiveCamera(20, 1, 0.1, 1e6);
@@ -283,8 +291,8 @@ function cost(height: number, keys: string[], frames = 20, repeats = 5) {
   view.updateProjectionMatrix();
   scene.background = new THREE.Color(0x808080);
   // The empty frame is timed right before and after each level: the GPU's clocks drift.
-  const timeEmpty = () => frameMs(target, view, frames, repeats).ms;
-  let empty = timeEmpty();
+  const timeEmpty = async () => (await frameMs(target, view, frames, repeats)).ms;
+  let empty = await timeEmpty();
   const matrix = new THREE.Matrix4();
   const micros: Record<string, number> = {};
   const spread: Record<string, number> = {};
@@ -301,13 +309,12 @@ function cost(height: number, keys: string[], frames = 20, repeats = 5) {
       instanced.setMatrixAt(i, matrix.makeRotationY(((i * 2654435761) % 1000) * 0.00628).setPosition(x, y, 0));
     }
     scene.add(instanced);
-    const frame = frameMs(target, view, frames, repeats);
+    const frame = await frameMs(target, view, frames, repeats);
     scene.remove(instanced);
-    const after = timeEmpty();
+    const after = await timeEmpty();
     micros[key] = ((frame.ms - (empty + after) / 2) / count) * 1000;
     spread[key] = frame.spread;
     empty = after;
-    instanced.traverse((node) => node instanceof THREE.InstancedMesh && node.dispose());
   }
   scene.background = null;
   target.dispose();
@@ -350,7 +357,7 @@ class Sheet {
 }
 const sheet = new Sheet();
 
-const info = () => ({ renderer: gpuName(renderer.getContext()), sheetHeights: SHEET_HEIGHTS });
+const info = async () => ({ renderer: await gpuName(), sheetHeights: SHEET_HEIGHTS });
 
 const bench = { prepare, measure, flicker, cost, sheet: () => sheet.canvas.toDataURL("image/png"), info };
 declare global {

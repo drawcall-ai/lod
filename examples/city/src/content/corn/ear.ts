@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { MeshBuilder, type Parts, tube } from "../geometry.ts";
 import type { Random } from "../random.ts";
 import { huskMaterial } from "./leaf.ts";

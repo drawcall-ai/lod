@@ -1,122 +1,101 @@
-import * as THREE from "three";
-import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import * as THREE from "three/webgpu";
+import { pass } from "three/tsl";
 
 /**
  * The renderer and its frame: the scene is drawn into a multisampled half-float target
  * with a float depth buffer and reversed depth (near 1, far 0), which keeps depth
  * precise from half a millimetre to forty kilometres in one view: a ladybird's legs on
  * a leaf and a house at the horizon, no z-fighting at either end. Tone mapping and sRGB
- * come after, in an output pass to the canvas.
+ * come after, in the output pass to the canvas.
  */
 export class Pipeline {
-  readonly renderer: THREE.WebGLRenderer;
-  /** What the last frame drew (the scene pass alone, shadows included). */
+  /**
+   * What the last frame drew: the scene pass, its shadow maps and the output pass. three
+   * counts an indirect draw (every level of an InstancedLod) at all the instances it has
+   * room for, not those the GPU selected.
+   */
   readonly drawn = { calls: 0, triangles: 0 };
-  private target = new THREE.WebGLRenderTarget(1, 1);
-  private readonly output = new OutputPass();
-  private readonly timer: GpuTimer | null;
+  /** GPU time (ms) of the last measured frame, or null where the browser offers no timer. */
+  gpuMs: number | null = null;
+  private reading: Promise<number | null> | null = null;
+  private readonly output: THREE.RenderPipeline;
+  private readonly scene: THREE.PassNode;
+  private readonly timed: boolean;
 
-  constructor(options: { preserveDrawingBuffer: boolean; pixelRatio: number }) {
-    // Our own context without alpha: impostors leave fractional alpha (alpha to coverage)
-    // in the frame, which three's always-alpha canvas would let the page show through.
-    const canvas = document.createElement("canvas");
-    const context = canvas.getContext("webgl2", {
+  private constructor(
+    readonly renderer: THREE.WebGPURenderer,
+    scene: THREE.Scene,
+    camera: THREE.Camera,
+  ) {
+    // 4 samples: WebGPU offers 1 or 4. They keep thin twigs and grass blades whole in
+    // motion (without, they break into crawling dashes).
+    this.scene = pass(scene, camera, { samples: 4 });
+    this.output = new THREE.RenderPipeline(renderer, this.scene);
+    this.timed = renderer.hasFeature("timestamp-query");
+    // counted over the whole frame: three counts each render call on its own otherwise
+    renderer.info.autoReset = false;
+  }
+
+  /** A renderer drawing `scene` from `camera`, initialised. */
+  static async create(scene: THREE.Scene, camera: THREE.Camera, pixelRatio: number): Promise<Pipeline> {
+    const renderer = new THREE.WebGPURenderer({
+      // Impostors leave fractional alpha (alpha to coverage) in the frame, which an alpha
+      // canvas would let the page show through.
       alpha: false,
-      antialias: false,
-      stencil: false,
+      reversedDepthBuffer: true,
       powerPreference: "high-performance",
-      preserveDrawingBuffer: options.preserveDrawingBuffer,
+      trackTimestamp: true,
     });
-    if (!context) throw new Error("WebGL 2 is needed");
-    this.renderer = new THREE.WebGLRenderer({ canvas, context, reversedDepthBuffer: true });
-    if (!this.renderer.capabilities.reversedDepthBuffer)
-      throw new Error("this browser has no EXT_clip_control: reversed depth is needed to draw kilometres and millimetres in one view");
-    this.renderer.setPixelRatio(options.pixelRatio);
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    await renderer.init();
+    renderer.setPixelRatio(pixelRatio);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
     // Neutral (Khronos PBR Neutral) keeps hues closest to a photograph here; see viewer.ts
-    this.renderer.toneMapping = THREE.NeutralToneMapping;
-    this.renderer.toneMappingExposure = 0.8;
-    this.output.renderToScreen = true;
-    this.timer = GpuTimer.create(context);
+    renderer.toneMapping = THREE.NeutralToneMapping;
+    renderer.toneMappingExposure = 0.8;
+    return new Pipeline(renderer, scene, camera);
   }
 
   get canvas(): HTMLCanvasElement {
     return this.renderer.domElement;
   }
 
-  /** GPU time of the last measured frame (ms), or null where the browser offers no timer. */
-  get gpuMs(): number | null {
-    return this.timer?.ms ?? null;
-  }
-
   setSize(width: number, height: number): void {
     this.renderer.setSize(width, height);
-    const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
-    // a new target rather than setSize, which leaves the depth texture at its old size
-    this.target.dispose();
-    // At a pixel ratio of 2, 4 samples cost a quarter of the frame; 2 keep thin twigs and
-    // grass blades whole in motion (without, they break into crawling dashes) for half that.
-    const samples = this.renderer.getPixelRatio() >= 2 ? 2 : 4;
-    this.target = new THREE.WebGLRenderTarget(size.x, size.y, { samples, type: THREE.HalfFloatType });
-    // reversed depth gains only with a float depth buffer
-    this.target.depthTexture = new THREE.DepthTexture(size.x, size.y, THREE.FloatType);
   }
 
-  render(scene: THREE.Scene, camera: THREE.Camera): void {
+  /** Compiles every material the scene draws for the scene pass. */
+  compile(): Promise<void> {
+    return this.scene.compileAsync(this.renderer);
+  }
+
+  render(): void {
     const { renderer } = this;
-    this.timer?.begin();
-    renderer.setRenderTarget(this.target);
-    renderer.render(scene, camera);
-    this.drawn.calls = renderer.info.render.calls;
+    renderer.info.reset();
+    this.output.render();
+    this.drawn.calls = renderer.info.render.drawCalls;
     this.drawn.triangles = renderer.info.render.triangles;
-    // to the canvas (renderToScreen): the write buffer goes unused
-    this.output.render(renderer, this.target, this.target, 0, false);
-    this.timer?.end();
-  }
-}
-
-/** GPU frame time from EXT_disjoint_timer_query_webgl2, read a few frames late (queries resolve asynchronously). */
-class GpuTimer {
-  ms: number | null = null;
-  private readonly pending: WebGLQuery[] = [];
-  private current: WebGLQuery | null = null;
-
-  private constructor(
-    private readonly gl: WebGL2RenderingContext,
-    private readonly ext: { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number },
-  ) {}
-
-  static create(gl: WebGL2RenderingContext): GpuTimer | null {
-    const ext: unknown = gl.getExtension("EXT_disjoint_timer_query_webgl2");
-    if (!ext || typeof ext !== "object" || !("TIME_ELAPSED_EXT" in ext) || !("GPU_DISJOINT_EXT" in ext)) return null;
-    const { TIME_ELAPSED_EXT, GPU_DISJOINT_EXT } = ext;
-    if (typeof TIME_ELAPSED_EXT !== "number" || typeof GPU_DISJOINT_EXT !== "number") return null;
-    return new GpuTimer(gl, { TIME_ELAPSED_EXT, GPU_DISJOINT_EXT });
   }
 
-  begin(): void {
-    this.collect();
-    if (this.pending.length > 4) return;
-    this.current = this.gl.createQuery();
-    this.gl.beginQuery(this.ext.TIME_ELAPSED_EXT, this.current);
-  }
-
-  end(): void {
-    if (!this.current) return;
-    this.gl.endQuery(this.ext.TIME_ELAPSED_EXT);
-    this.pending.push(this.current);
-    this.current = null;
-  }
-
-  private collect(): void {
-    const { gl } = this;
-    while (this.pending.length > 0) {
-      const query = this.pending[0];
-      if (!query || !gl.getQueryParameter(query, gl.QUERY_RESULT_AVAILABLE)) return;
-      this.pending.shift();
-      if (!gl.getParameter(this.ext.GPU_DISJOINT_EXT)) this.ms = gl.getQueryParameter(query, gl.QUERY_RESULT) / 1e6;
-      gl.deleteQuery(query);
-    }
+  /**
+   * The last drawn frame's GPU time. Live callers may share an outstanding read;
+   * measurements await it before drawing the next frame. Three returns its last value
+   * when no new queries exist, so a frame without compute must contribute zero there.
+   */
+  timing(): Promise<number | null> {
+    if (!this.timed) return Promise.resolve(null);
+    if (this.reading) return this.reading;
+    const { renderer } = this;
+    const computed = renderer.info.compute.frameCalls > 0;
+    this.reading = Promise.all([
+      renderer.resolveTimestampsAsync(THREE.TimestampQuery.RENDER),
+      // Drain any queries from live frames drawn during the previous pending read too.
+      renderer.resolveTimestampsAsync(THREE.TimestampQuery.COMPUTE),
+    ])
+      .then(([render, compute]) => (this.gpuMs = (render ?? 0) + (computed ? (compute ?? 0) : 0)))
+      .finally(() => {
+        this.reading = null;
+      });
+    return this.reading;
   }
 }

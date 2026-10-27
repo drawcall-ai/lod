@@ -1,9 +1,9 @@
-import * as THREE from "three";
-import { once, surface } from "../materials.ts";
+import * as THREE from "three/webgpu";
+import { once, type Surface, surface } from "../materials.ts";
 import type { HouseParams } from "./params.ts";
 
 /** Painted joinery: flat colour over a fine wood-grain relief. */
-export function paint(color: string): THREE.MeshStandardMaterial {
+export function paint(color: string): Surface {
   return surface("wood_table_001", { albedo: false, color, normalScale: 0.25, roughness: 1.6, weather: 0.35 });
 }
 
@@ -35,31 +35,31 @@ export const glass = once(
 
 export const brass = once(() => new THREE.MeshStandardMaterial({ name: "brass", color: "#b8954f", metalness: 1, roughness: 0.32 }));
 
-export function zinc(): THREE.MeshStandardMaterial {
+export function zinc(): Surface {
   return surface("metal_plate_02", { albedo: false, color: "#aeb3b4", metalness: 1, normalScale: 0.15, roughness: 0.75, weather: 0.5 });
 }
 
 /** Cast stone for sills, steps and the ridge bed. */
-export function concrete(): THREE.MeshStandardMaterial {
+export function concrete(): Surface {
   return surface("white_stucco", { color: "#b9b4ab", normalScale: 1.5, weather: 0.8 });
 }
 
 /** Rendered base course, darker than the wall above it. */
-export function plinth(): THREE.MeshStandardMaterial {
+export function plinth(): Surface {
   return surface("white_stucco", { color: "#8f8b84", normalScale: 1.5, weather: 1 });
 }
 
-export function wall(p: HouseParams): THREE.MeshStandardMaterial {
+export function wall(p: HouseParams): Surface {
   if (p.wall.kind === "brick") return surface("red_brick", { weather: 0.5 });
   if (p.wall.kind === "whitewash") return surface("whitewashed_brick", { weather: 0.6 });
   return surface("white_stucco", { color: p.wall.color, weather: 0.7 });
 }
 
 /** Clay or slate: per-tile colour lives in vertex colours, the stucco set adds mottling and grain. */
-export function tiles(): THREE.MeshStandardMaterial {
+export function tiles(): Surface {
   return surface("white_stucco", { vertexColors: true, normalScale: 0.9, weather: 0.6 });
 }
 
-export function brick(): THREE.MeshStandardMaterial {
+export function brick(): Surface {
   return surface("red_brick", { weather: 0.8 });
 }

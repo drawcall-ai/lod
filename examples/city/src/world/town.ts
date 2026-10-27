@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import type { HouseParams } from "../content/house/index.ts";
 import type { Random } from "../content/random.ts";
 import { footing, inRect, PAVEMENT, spot, type Rect, type Road, type Spot } from "./plan.ts";

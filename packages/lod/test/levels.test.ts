@@ -1,4 +1,4 @@
-import { BoxGeometry, Mesh, MeshStandardMaterial, PerspectiveCamera, SphereGeometry } from "three";
+import { BoxGeometry, Mesh, MeshStandardMaterial, PerspectiveCamera, SphereGeometry } from "three/webgpu";
 import { describe, expect, it } from "vitest";
 import type { Impostor } from "../src/impostor/impostor.js";
 import { ImpostorMesh } from "../src/impostor/mesh/index.js";

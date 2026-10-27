@@ -1,4 +1,4 @@
-import type * as THREE from "three";
+import type * as THREE from "three/webgpu";
 import type { InstancedLod } from "@drawcall/lod";
 import { picketFence } from "../content/fence.ts";
 import { streetSign } from "../content/sign.ts";

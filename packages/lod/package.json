@@ -2,7 +2,7 @@
   "name": "@drawcall/lod",
   "version": "0.1.0",
   "type": "module",
-  "description": "Level of detail for three.js: octahedral impostors, simplified and baked meshes, with dithered switching by on-screen size. WebGLRenderer only.",
+  "description": "Level of detail for three.js: octahedral impostors, simplified and baked meshes, with dithered switching by on-screen size. WebGPURenderer only.",
   "keywords": [
     "three",
     "threejs",
@@ -46,10 +46,12 @@
   "devDependencies": {
     "@types/node": "^24.13.6",
     "@types/three": "^0.185.0",
+    "@vitest/browser-playwright": "4.1.11",
+    "@webgpu/types": "^0.1.74",
+    "playwright": "1.63.0",
     "three": "^0.185.1",
     "typescript": "^5.9.3",
     "vitest": "^4.0.17",
-    "webgl-node": "1.6.1",
     "xatlas-wasm": "0.1.3"
   },
   "license": "MIT",

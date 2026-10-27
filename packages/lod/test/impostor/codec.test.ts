@@ -4,7 +4,8 @@ import { decodeImpostor, encodeImpostor, fromBase64 } from "../../src/impostor/c
 import type { Impostor, ImpostorMap } from "../../src/impostor/impostor.js";
 import { must } from "../must.js";
 
-const toBase64 = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64");
+const toBase64 = (bytes: Uint8Array) => btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(""));
+const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((byte, i) => byte === b[i]);
 
 function random(length: number, seed = 1): Uint8Array {
   const out = new Uint8Array(length);
@@ -59,7 +60,7 @@ describe("codec", () => {
       const source = make(maps);
       const back = decodeImpostor(encodeImpostor(source));
       expect(back.layers.length).toBe(maps.length);
-      back.layers.forEach((layer, i) => layer.forEach((level, m) => expect(Buffer.compare(level, must(source.layers[i]?.[m]))).toBe(0)));
+      back.layers.forEach((layer, i) => layer.forEach((level, m) => expect(sameBytes(level, must(source.layers[i]?.[m]))).toBe(true)));
       const { layers: _a, ...meta } = back;
       const { layers: _b, ...expected } = source;
       expect(meta).toEqual(expected);
@@ -90,19 +91,19 @@ describe("codec", () => {
     const padded = new Uint8Array(file.length + 16);
     padded.set(file, 16);
     const views = [file.slice().buffer, padded.subarray(16), toBase64(file)];
-    for (const input of views) expect(Buffer.compare(must(decodeImpostor(input).layers[1]?.[2]), must(source.layers[1]?.[2]))).toBe(0);
+    for (const input of views) expect(sameBytes(must(decodeImpostor(input).layers[1]?.[2]), must(source.layers[1]?.[2]))).toBe(true);
   });
 
-  it("decodes base64 like Node, natively and through the fallback", () => {
+  it("decodes base64 natively and through the fallback", () => {
     const native: unknown = Reflect.get(Uint8Array, "fromBase64");
     for (const n of [0, 1, 2, 3, 4, 5, 36863, 36864, 36865]) {
       const bytes = random(n, n + 1);
       const expected = toBase64(bytes);
-      expect(Buffer.compare(fromBase64(expected), bytes)).toBe(0);
+      expect(sameBytes(fromBase64(expected), bytes)).toBe(true);
       // An undefined property hides the native method, as on runtimes without it.
       Object.defineProperty(Uint8Array, "fromBase64", { value: undefined, configurable: true, writable: true });
       try {
-        expect(Buffer.compare(fromBase64(expected), bytes)).toBe(0);
+        expect(sameBytes(fromBase64(expected), bytes)).toBe(true);
       } finally {
         Object.defineProperty(Uint8Array, "fromBase64", { value: native, configurable: true, writable: true });
       }

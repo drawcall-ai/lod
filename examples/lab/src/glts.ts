@@ -19,9 +19,7 @@ scene.add(mesh);
 
 onMatrixUpdateAt((index, matrix) => {
   mesh.setMatrixAt(index, matrix);
-  mesh.instanceMatrix.needsUpdate = true;
-  // InstancedMesh caches its bounds on first cull; drop them so moved instances are not culled.
-  mesh.boundingBox = null;
+  // The mesh is culled by bounds of its instances, made on the next cull when cleared.
   mesh.boundingSphere = null;
 });
 

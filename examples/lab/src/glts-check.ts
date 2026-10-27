@@ -1,20 +1,18 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { GLTSLoader } from "@drawcall/glts";
 import { ImpostorMesh, bakeImpostor, decodeImpostor, encodeImpostor } from "@drawcall/lod";
 import { boundingRadius, boxCentre } from "../../../packages/lod/src/impostor/impostor.js";
+import { readBytes } from "../../../packages/lod/src/renderer.js";
 import { writeImpostorGlts } from "./glts.js";
 import { at } from "./must.js";
-import { context2d, gpuName } from "./page.js";
+import { context2d, gpuName, gpuRenderer } from "./page.js";
 
 // Standalone page (glts.html): a `.glts` written by writeImpostorGlts must load through
 // the real GLTSLoader and render the same pixels as an ImpostorMesh built directly from
 // the decoded data, single and instanced, and free what it uploaded on dispose. Driven by
 // scripts/glts-e2e.ts through window.gltsCheck.run().
 
-const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
-renderer.setPixelRatio(1);
-renderer.setSize(64, 64);
-document.body.appendChild(renderer.domElement);
+const renderer = await gpuRenderer(64, { antialias: false });
 
 const errors: string[] = [];
 window.addEventListener("error", (e) => errors.push(`error: ${e.message}`));
@@ -66,15 +64,14 @@ interface Shot {
 }
 
 /** Renders `scene` with only `show` of the candidates visible. */
-function shoot(show: THREE.Object3D, hide: THREE.Object3D[], camera: THREE.Camera, width: number, height: number): Shot {
+async function shoot(show: THREE.Object3D, hide: THREE.Object3D[], camera: THREE.Camera, width: number, height: number): Promise<Shot> {
   show.visible = true;
   for (const o of hide) o.visible = false;
-  const target = new THREE.WebGLRenderTarget(width, height, { samples: 4, colorSpace: THREE.SRGBColorSpace });
+  const target = new THREE.RenderTarget(width, height, { samples: 4, colorSpace: THREE.SRGBColorSpace });
   renderer.setRenderTarget(target);
   renderer.render(scene, camera);
-  const pixels = new Uint8Array(width * height * 4);
-  renderer.readRenderTargetPixels(target, 0, 0, width, height, pixels);
   renderer.setRenderTarget(null);
+  const pixels = await readBytes(renderer, target, 0);
   target.dispose();
   return { width, height, pixels };
 }
@@ -126,11 +123,13 @@ function sideBySide(a: Shot, b: Shot): string {
   return canvas.toDataURL("image/png");
 }
 
-function find(root: THREE.Object3D): THREE.InstancedMesh | undefined {
-  let found: THREE.InstancedMesh | undefined;
+type Instanced = THREE.Mesh & { count: number };
+
+function find(root: THREE.Object3D): Instanced | undefined {
+  let found: Instanced | undefined;
   root.traverse((o) => {
     // A flag, not instanceof: the script draws with its own copy of the package.
-    if (o instanceof THREE.InstancedMesh && "isImpostorMesh" in o) found ??= o;
+    if (o instanceof THREE.Mesh && "isImpostorMesh" in o && "count" in o && typeof o.count === "number") found ??= o;
   });
   return found;
 }
@@ -155,14 +154,16 @@ async function run() {
   const images: Record<string, string> = {};
 
   const object = subject();
-  const impostor = await bakeImpostor(object, { renderer, resolution: 64 });
+  // Baked on the package's own renderer: three r185 draws into a target's whole area
+  // when its viewport equals the canvas's size, which a 64 px frame on this page would.
+  const impostor = await bakeImpostor(object, { resolution: 64 });
   const encoded = encodeImpostor(impostor);
   const source = writeImpostorGlts(impostor);
   const url = URL.createObjectURL(new Blob([source], { type: "text/plain" }));
   const sphere = boundingRadius(impostor.box);
   const centre = new THREE.Vector3(...boxCentre(impostor.box));
   const result: Record<string, unknown> = {
-    renderer: gpuName(renderer.getContext()),
+    renderer: await gpuName(),
     impostor: { frames: impostor.frames, size: impostor.size, layout: impostor.layout, maps: impostor.maps, halfSize: impostor.halfSize, sphere },
     encodedBytes: encoded.length,
     gltsSourceChars: source.length,
@@ -193,8 +194,8 @@ async function run() {
   const target = centre.clone().applyMatrix4(directRoot.matrix.compose(directRoot.position, directRoot.quaternion, directRoot.scale));
   camera.position.copy(target).add(new THREE.Vector3(1, 0.6, 1.4).normalize().multiplyScalar(sphere * 4.2));
   camera.lookAt(target);
-  const a = shoot(single, [directRoot], camera, 256, 256);
-  const b = shoot(directRoot, [single], camera, 256, 256);
+  const a = await shoot(single, [directRoot], camera, 256, 256);
+  const b = await shoot(directRoot, [single], camera, 256, 256);
   const singleDiff = compare(a, b);
   result.single = singleDiff;
   images.single = sideBySide(a, b);
@@ -229,8 +230,8 @@ async function run() {
   const roundTrip = instances.getMatrixAt(37, new THREE.Matrix4());
   checks.getMatrixAt = roundTrip.equals(grid(37, spacing, new THREE.Vector3()));
   scene.add(instances, directMany);
-  const c = shoot(instances, [directMany], gridCamera, 512, 384);
-  const d = shoot(directMany, [instances], gridCamera, 512, 384);
+  const c = await shoot(instances, [directMany], gridCamera, 512, 384);
+  const d = await shoot(directMany, [instances], gridCamera, 512, 384);
   const gridDiff = compare(c, d);
   result.instances = gridDiff;
   images.instances = sideBySide(c, d);
@@ -242,8 +243,8 @@ async function run() {
   const far = new THREE.Vector3(spacing * 60, 0, -spacing * 40);
   place(far);
   aim(far);
-  const e = shoot(instances, [directMany], gridCamera, 512, 384);
-  const f = shoot(directMany, [instances], gridCamera, 512, 384);
+  const e = await shoot(instances, [directMany], gridCamera, 512, 384);
+  const f = await shoot(directMany, [instances], gridCamera, 512, 384);
   const movedDiff = compare(e, f);
   result.instancesMoved = movedDiff;
   images.instancesMoved = sideBySide(e, f);

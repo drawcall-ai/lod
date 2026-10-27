@@ -4,8 +4,8 @@ Level of detail for three.js. Load a model, get cheaper levels built for it — 
 octahedral impostor, a simplified mesh, a baked low-poly mesh — and switch between them
 by on-screen size, with a dithered fade so the switch does not pop.
 
-**WebGLRenderer only.** The shaders patch three's WebGL material chunks; WebGPURenderer
-is not supported.
+**WebGPURenderer only** (`three/webgpu`): levels draw with three's node materials, and an
+`InstancedLod` selects its instances' levels on the GPU.
 
 ```sh
 npm install @drawcall/lod three
@@ -73,8 +73,8 @@ Bring your own levels with `new Lod([source, ...levels])` or
 ### Building blocks
 
 The pieces behind the loader are exported too: `simplify` (meshoptimizer), `bakeMesh`
-(the baked level), `bakeImpostor` and `ImpostorMesh` (an `InstancedMesh` drawing
-thousands of impostors in one call), and `encodeImpostor`/`decodeImpostor` to save
+(the baked level), `bakeImpostor` and `ImpostorMesh` (one draw for thousands of
+impostors, placed like an `InstancedMesh`'s instances), and `encodeImpostor`/`decodeImpostor` to save
 impostors as KTX2.
 
 The package ships a skill for coding agents with the details of when to use which part.

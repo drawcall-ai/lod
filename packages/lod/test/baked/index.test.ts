@@ -1,4 +1,3 @@
-// Bakes on the CPU; renders on a real WebGL2 context in Node.
 import {
   AmbientLight,
   BoxGeometry,
@@ -17,10 +16,9 @@ import {
   SRGBColorSpace,
   Scene,
   SphereGeometry,
-  WebGLRenderTarget,
   type BufferGeometry,
   type Object3D,
-} from "three";
+} from "three/webgpu";
 import { describe, expect, it } from "vitest";
 import { bakeMesh } from "../../src/baked/index.js";
 import type { Impostor } from "../../src/impostor/impostor.js";
@@ -28,7 +26,8 @@ import { ImpostorMesh } from "../../src/impostor/mesh/index.js";
 import { InstancedLod } from "../../src/instanced/index.js";
 import { Lod } from "../../src/lod.js";
 import { must } from "../must.js";
-import { GPU_TIMEOUT, renderer } from "../webgl.js";
+import { isStandardNode } from "../../src/three.js";
+import { GPU_TIMEOUT, render as draw } from "../gpu.js";
 
 /** A pattern of 8×8 colour blocks. */
 function blocks(): DataTexture {
@@ -44,24 +43,14 @@ function blocks(): DataTexture {
 const textured = (geometry: BufferGeometry) => new Mesh(geometry, new MeshStandardMaterial({ map: blocks(), roughness: 0.7 }));
 
 /** `object` lit from one side, seen from `eye`, as RGBA pixels on a transparent background. */
-function render(object: Object3D, eye: [number, number, number]): Uint8Array {
+function render(object: Object3D, eye: [number, number, number]): Promise<Uint8Array> {
   const sun = new DirectionalLight(0xffffff, 2);
   sun.position.set(1, 2, 3);
   const scene = new Scene().add(object, sun, new AmbientLight(0xffffff, 0.5));
   const camera = new PerspectiveCamera(40, 1, 0.1, 100);
   camera.position.set(...eye);
   camera.lookAt(0, 0, 0);
-  const target = new WebGLRenderTarget(64, 64);
-  renderer.setRenderTarget(target);
-  renderer.setClearColor(0x000000, 0);
-  renderer.clear();
-  renderer.render(scene, camera);
-  const pixels = new Uint8Array(64 * 64 * 4);
-  renderer.readRenderTargetPixels(target, 0, 0, 64, 64, pixels);
-  renderer.setRenderTarget(null);
-  target.dispose();
-  scene.remove(object);
-  return pixels;
+  return draw(scene, camera).finally(() => scene.remove(object));
 }
 
 /** Mean difference of the colour channels, in 8-bit steps, over the pixels `real` covers. */
@@ -79,7 +68,7 @@ function difference(real: Uint8Array, fake: Uint8Array): number {
 /** The baked base colour pixels of `mesh`. */
 function colors(mesh: Mesh): Uint8Array {
   const { material } = mesh;
-  if (!(material instanceof MeshStandardMaterial) || !(material.map instanceof DataTexture)) throw new Error("expected a baked material");
+  if (Array.isArray(material) || !isStandardNode(material) || !(material.map instanceof DataTexture)) throw new Error("expected a baked material");
   const { data } = material.map.image;
   if (!(data instanceof Uint8Array)) throw new Error("expected 8-bit pixels");
   return data;
@@ -97,9 +86,9 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
     const baked = await bakeMesh(source, { textureSize: 256 });
     expect(baked.geometry.index?.count).toBeLessThan((source.geometry.index?.count ?? 0) / 4);
     for (const eye of EYES) {
-      const real = render(source, eye);
+      const real = await render(source, eye);
       // A plain grey box is off by 7 to 23 here.
-      expect(difference(real, render(baked, eye))).toBeLessThan(5);
+      expect(difference(real, await render(baked, eye))).toBeLessThan(5);
     }
     expect(new Lod([source, baked]).levels[1]?.maxPixels).not.toBe(512);
   });
@@ -111,7 +100,7 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
     corner.position.set(0.6, 0.6, 0.6);
     const source = new Group().add(textured(new BoxGeometry(1, 1, 1, 6, 6, 6)), corner);
     const baked = await bakeMesh(source, { textureSize: 256 });
-    for (const eye of EYES) expect(difference(render(source, eye), render(baked, eye))).toBeLessThan(6);
+    for (const eye of EYES) expect(difference(await render(source, eye), await render(baked, eye))).toBeLessThan(6);
   });
 
   it("keeps a low mesh's own UVs when they are usable, and unwraps it again when they overlap", async () => {
@@ -171,7 +160,7 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
     instanced.forceLevel = 1;
     instanced.setMatrixAt(0, turn);
     const eye: [number, number, number] = [2, 1.5, 2.5];
-    expect(difference(render(lod, eye), render(instanced, eye))).toBeLessThan(1);
+    expect(difference(await render(lod, eye), await render(instanced, eye))).toBeLessThan(1);
   });
 
   it("keeps a cut-out's coverage in the distance", async () => {
@@ -186,8 +175,8 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
     const baked = await bakeMesh(source, { low: new Mesh(plane), textureSize: 64 });
     const covered = (pixels: Uint8Array) => pixels.filter((_, i) => i % 4 === 3 && pixels[i] !== 0).length;
     // About 8 px across: the baked map is read from its 8×8 mip.
-    const far = covered(render(baked, [0, 0, 11]));
-    const reference = covered(render(source, [0, 0, 11]));
+    const far = covered(await render(baked, [0, 0, 11]));
+    const reference = covered(await render(source, [0, 0, 11]));
     expect(reference).toBeGreaterThan(10);
     expect(Math.abs(far - reference) / reference).toBeLessThan(0.35);
   });

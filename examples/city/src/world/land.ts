@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { EXTENT } from "./terrain.ts";
 
 /** What covers the ground at a point, as far as ground cover (grass, flowers) cares. */

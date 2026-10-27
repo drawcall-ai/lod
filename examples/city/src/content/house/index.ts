@@ -1,4 +1,4 @@
-import type * as THREE from "three";
+import type * as THREE from "three/webgpu";
 import { detail } from "./detail.ts";
 import { low } from "./low.ts";
 import type { HouseParams } from "./params.ts";

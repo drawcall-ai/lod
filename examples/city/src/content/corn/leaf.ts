@@ -1,5 +1,5 @@
-import * as THREE from "three";
-import { type FoliageOptions, foliage } from "../foliage.ts";
+import * as THREE from "three/webgpu";
+import { Foliage, type FoliageOptions, foliage } from "../foliage.ts";
 import { MeshBuilder } from "../geometry.ts";
 import { once } from "../materials.ts";
 import { Random } from "../random.ts";
@@ -26,9 +26,9 @@ export const dryLeafMaterial = once(() => bladeMaterial("corn-leaf-dry", dry, { 
 /** Ear husks: paler and more yellow than the blades, with the same parallel fibres. */
 export const huskMaterial = once(() => bladeMaterial("corn-husk", husk, { translucency: 0.6 }));
 
-function bladeMaterial(name: string, palette: Palette, shading: FoliageOptions): THREE.MeshPhysicalMaterial {
+function bladeMaterial(name: string, palette: Palette, shading: FoliageOptions): Foliage {
   const { color, normal } = bladeTextures(palette);
-  const m = new THREE.MeshPhysicalMaterial({
+  const m = new Foliage({
     name,
     map: color,
     normalMap: normal,
@@ -41,8 +41,7 @@ function bladeMaterial(name: string, palette: Palette, shading: FoliageOptions):
     sheenColor: new THREE.Color("#b9d98a"),
     side: THREE.DoubleSide,
   });
-  foliage(m, shading);
-  return m;
+  return foliage(m, shading);
 }
 
 const size = 2048;

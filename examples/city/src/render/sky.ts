@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { HDRLoader } from "three/addons/loaders/HDRLoader.js";
 import { assetUrl, manifest } from "../content/materials.ts";
 
@@ -19,7 +19,7 @@ export interface Sky {
 }
 
 /** Loads the manifest's HDRI and turns it so the sun stands at `azimuth` (radians, atan2(z, x) of the direction toward it). */
-export async function loadSky(renderer: THREE.WebGLRenderer, azimuth: number): Promise<Sky> {
+export async function loadSky(renderer: THREE.Renderer, azimuth: number): Promise<Sky> {
   const hdr = await new HDRLoader().setDataType(THREE.FloatType).loadAsync(assetUrl(manifest().hdri.file));
   hdr.mapping = THREE.EquirectangularReflectionMapping;
   const { sky, direction, irradiance, horizon } = removeSun(hdr);

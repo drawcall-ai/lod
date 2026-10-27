@@ -1,4 +1,4 @@
-import { ClampToEdgeWrapping, MirroredRepeatWrapping, RGBAFormat, SRGBColorSpace, UnsignedByteType, type Texture, type Wrapping } from "three";
+import { ClampToEdgeWrapping, MirroredRepeatWrapping, RGBAFormat, SRGBColorSpace, UnsignedByteType, type Texture, type Wrapping } from "three/webgpu";
 
 /** One mip of an RGBA8 image, row 0 first. */
 export interface Mip {

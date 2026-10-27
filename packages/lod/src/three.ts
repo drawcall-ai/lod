@@ -1,4 +1,28 @@
-import type { BatchedMesh, Color, InstancedMesh, Material, Mesh, MeshPhysicalMaterial, MeshStandardMaterial, Object3D, SkinnedMesh, Texture } from "three";
+import {
+  MeshBasicNodeMaterial,
+  MeshLambertNodeMaterial,
+  MeshMatcapNodeMaterial,
+  MeshNormalNodeMaterial,
+  MeshPhongNodeMaterial,
+  MeshPhysicalNodeMaterial,
+  MeshStandardNodeMaterial,
+  MeshToonNodeMaterial,
+  type BatchedMesh,
+  type BufferAttribute,
+  type Color,
+  type InstancedMesh,
+  type Material,
+  type Mesh,
+  type MeshPhysicalMaterial,
+  type MeshStandardMaterial,
+  type NodeMaterial,
+  type Object3D,
+  type Renderer,
+  type Scene,
+  type SkinnedMesh,
+  type StorageInstancedBufferAttribute,
+  type Texture,
+} from "three/webgpu";
 import type { InstancedLod } from "./instanced/index.js";
 import type { ImpostorMesh } from "./impostor/mesh/index.js";
 
@@ -12,6 +36,7 @@ export const isSkinnedMesh = (node: Object3D): node is SkinnedMesh => flag(node,
 export const isInstancedMesh = (node: Object3D): node is InstancedMesh => flag(node, "isInstancedMesh");
 export const isBatchedMesh = (node: Object3D): node is BatchedMesh => flag(node, "isBatchedMesh");
 export const isLight = (node: Object3D): boolean => flag(node, "isLight");
+export const isScene = (node: Object3D): node is Scene => flag(node, "isScene");
 export const isImpostorMesh = (node: Object3D): node is ImpostorMesh => flag(node, "isImpostorMesh");
 export const isInstancedLod = (node: Object3D): node is InstancedLod => flag(node, "isInstancedLod");
 /** three's LOD and this package's Lod and InstancedLod. */
@@ -19,8 +44,71 @@ export const isLOD = (node: Object3D): node is Object3D & { isLOD: true; autoUpd
   flag(node, "isLOD");
 export const isStandard = (material: Material): material is MeshStandardMaterial => flag(material, "isMeshStandardMaterial");
 export const isPhysical = (material: Material): material is MeshPhysicalMaterial => flag(material, "isMeshPhysicalMaterial");
+export const isNodeMaterial = (material: Material): material is NodeMaterial => flag(material, "isNodeMaterial");
+export const isStandardNode = (material: Material): material is MeshStandardNodeMaterial => flag(material, "isMeshStandardNodeMaterial");
+export const isStorageInstanced = (attribute: BufferAttribute): attribute is StorageInstancedBufferAttribute => flag(attribute, "isStorageInstancedBufferAttribute");
+
+/** The node material each built-in mesh material draws as with WebGPU. */
+const NODE_MATERIALS: Record<string, new () => NodeMaterial> = {
+  MeshBasicMaterial: MeshBasicNodeMaterial,
+  MeshLambertMaterial: MeshLambertNodeMaterial,
+  MeshPhongMaterial: MeshPhongNodeMaterial,
+  MeshStandardMaterial: MeshStandardNodeMaterial,
+  MeshPhysicalMaterial: MeshPhysicalNodeMaterial,
+  MeshToonMaterial: MeshToonNodeMaterial,
+  MeshMatcapMaterial: MeshMatcapNodeMaterial,
+  MeshNormalMaterial: MeshNormalNodeMaterial,
+};
+
+/**
+ * A node material that renders like `material`: a clone when it is one, else the node
+ * material of its type with its values, as three converts it for WebGPU itself.
+ */
+export function toNodeMaterial(material: Material): NodeMaterial {
+  if (isNodeMaterial(material)) {
+    const copy = material.clone();
+    // three's NodeMaterial.copy skips accessors of Material itself, alphaTest among them.
+    copy.alphaTest = material.alphaTest;
+    return copy;
+  }
+  const Type = NODE_MATERIALS[material.type];
+  if (!Type) throw new Error(`@drawcall/lod: ${material.type} has no node material to draw with WebGPU`);
+  // Every own value but the source's identity and its event listeners.
+  const values = Object.fromEntries(Object.entries(material).filter(([key]) => key !== "uuid" && key !== "_listeners"));
+  return Object.assign(new Type(), values);
+}
 export const isTexture = (value: unknown): value is Texture => flag(value, "isTexture");
 export const isColor = (value: unknown): value is Color => flag(value, "isColor");
+
+/**
+ * `renderer` as the WebGPU renderer it is: three's typings give render callbacks a
+ * WebGLRenderer, which this package does not draw with.
+ */
+export function gpuRenderer(renderer: unknown): Renderer {
+  if (!isRenderer(renderer)) throw new Error("@drawcall/lod: draws with three's WebGPURenderer only");
+  return renderer;
+}
+const isRenderer = (value: unknown): value is Renderer => flag(value, "isRenderer");
+
+/**
+ * Whether the scene `node` is in is being drawn into a shadow map: three's shadow pass
+ * draws it with its own override material, and calls `update` on every LOD with the
+ * light's camera, which must not switch the levels the view chose.
+ */
+export function inShadowPass(node: Object3D): boolean {
+  let root = node;
+  while (root.parent) root = root.parent;
+  return "overrideMaterial" in root && isShadowPass(root.overrideMaterial);
+}
+
+/** Whether `material` is the one three draws shadow maps with (a node material building for a shadow pass has it). */
+export const isShadowPass = (material: unknown): boolean => flag(material, "isShadowPassMaterial");
+
+/** The instance matrices of `object` when it keeps them in a storage buffer (an ImpostorMesh, or such an InstancedMesh); else null. */
+export function storageMatrices(object: Object3D): StorageInstancedBufferAttribute | null {
+  if (isImpostorMesh(object)) return object.instanceMatrix;
+  return isInstancedMesh(object) && isStorageInstanced(object.instanceMatrix) ? object.instanceMatrix : null;
+}
 
 /** Whether `value` is of exactly `like`'s class: a guard for clone() overrides. */
 export const sameClass = <T extends object>(like: T, value: object): value is T => Object.getPrototypeOf(value) === Object.getPrototypeOf(like);

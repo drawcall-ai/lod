@@ -1,7 +1,7 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import type { Lod } from "@drawcall/lod";
 import { boundingSphere } from "../../../packages/lod/src/bounds.js";
-import { subtense } from "../../../packages/lod/src/fade.js";
+import { subtense } from "../../../packages/lod/src/view.js";
 import { at } from "./must.js";
 
 /** The height `lod` measures itself at (before Lod.quality) for `camera` on a `height` px screen. */

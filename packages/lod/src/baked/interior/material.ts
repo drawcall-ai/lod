@@ -1,6 +1,43 @@
-import { Matrix4, type Box3, type DataTexture, type Material, type MeshStandardMaterial, type WebGLProgramParametersWithUniforms } from "three";
-import { originalOf } from "../../fade.js";
-import { applyEdits, type Edit } from "../../patch.js";
+import { InterpolationSamplingType, Matrix4, MeshStandardNodeMaterial, PhysicalLightingModel, StorageBufferAttribute, type Box3, type DataTexture, type Node, type NodeBuilder, type Object3D, type Texture, type Vector3 } from "three/webgpu";
+import {
+  If,
+  cameraPosition,
+  cameraProjectionMatrix,
+  cameraWorldMatrix,
+  clamp,
+  cross,
+  dFdx,
+  dFdy,
+  dot,
+  float,
+  int,
+  ivec2,
+  length,
+  log2,
+  mat4,
+  materialEnvIntensity,
+  max,
+  min,
+  modelWorldMatrix,
+  normalize,
+  pmremTexture,
+  positionGeometry,
+  positionWorld,
+  select,
+  sign,
+  step,
+  texture,
+  textureLoad,
+  uniform,
+  uv,
+  varying,
+  vec2,
+  vec3,
+  vec4,
+} from "three/tsl";
+import { instanceMatrixOf } from "../../fade.js";
+import { isScene } from "../../three.js";
+import { affine, column, contextNode, isNodeOf, isOrthographic, vectors } from "../../tsl.js";
 import { FACES, type Faces } from "./faces.js";
 
 // Interior mapping (Andrew Willmott's interior cubemaps): a window texel looks into the
@@ -18,150 +55,163 @@ export interface Rooms extends Faces {
   windows: DataTexture;
 }
 
-const vec3 = ({ x, y, z }: { x: number; y: number; z: number }) => `vec3(${x.toFixed(1)}, ${y.toFixed(1)}, ${z.toFixed(1)})`;
+/** Per mesh: where its geometry's space sits in the source's, when an InstancedLod moved the geometry (see `placeInterior`). */
+const spaces = new WeakMap<Object3D, Matrix4>();
+const identity = new Matrix4();
+const space = uniform(new Matrix4()).onObjectUpdate(({ object }) => (object && spaces.get(object)) ?? identity);
 
-const VERTEX_PARS = /* glsl */ `
-uniform mat4 interiorSpace;
-varying vec3 vInteriorPosition;
-varying vec3 vInteriorRay;
-varying mat3 vInteriorToWorld;
-`;
-
-// The ray in the source's space: interiorSpace maps the mesh's space there, which differs
-// only where an InstancedLod moved the geometry (see `placeInterior`).
-const VERTEX = /* glsl */ `
-  {
-    mat4 interiorModel = modelMatrix;
-    #ifdef USE_INSTANCING
-      interiorModel = modelMatrix * instanceMatrix;
-    #endif
-    vec3 interiorView = isOrthographic ? (vec4(0.0, 0.0, -1.0, 0.0) * viewMatrix).xyz : (interiorModel * vec4(transformed, 1.0)).xyz - cameraPosition;
-    vInteriorPosition = (interiorSpace * vec4(transformed, 1.0)).xyz;
-    vInteriorRay = mat3(interiorSpace) * (mat3(inverse(interiorModel)) * interiorView);
-    vInteriorToWorld = mat3(interiorModel) * mat3(inverse(interiorSpace));
-  }
-`;
-
-const FRAGMENT_PARS = /* glsl */ `
-uniform sampler2D interiorWindows;
-uniform highp sampler2DArray interiorResponse;
-#ifdef INTERIOR_GLOW
-  uniform highp sampler2DArray interiorGlow;
-#endif
-uniform vec3 interiorMin[INTERIOR_ROOMS];
-uniform vec3 interiorMax[INTERIOR_ROOMS];
-uniform float interiorFaceSize;
-uniform float interiorSpan;
-varying vec3 vInteriorPosition;
-varying vec3 vInteriorRay;
-varying mat3 vInteriorToWorld;
-const vec3 INTERIOR_FORWARD[6] = vec3[6](${FACES.map(([forward]) => vec3(forward)).join(", ")});
-const vec3 INTERIOR_UP[6] = vec3[6](${FACES.map(([, up]) => vec3(up)).join(", ")});
-`;
-
-// The room is lit by indirect light only: the sun's direct light, which walls and roof
-// would block, is left out. Ambient light, light probes and hemisphere lights are taken
-// at the window; the environment, as three lights the real room's walls, at the wall the
-// view ray meets (its normal turned to world space by the model's linear part: exact for
-// rotation and uniform scale). Its glow adds on top.
-//
-// Glass shows the room by its share, under its own reflection: three's specular term
-// carries the Fresnel. The source's blended glass (opacity) instead mixes its whole lit
-// colour, reflection included, over the room; this is the physically right one.
-//
-// The box is intersected for every texel, so the derivatives that pick the cube's mip
-// level are defined across window edges.
-const FRAGMENT = /* glsl */ `
-  {
-    float interiorShare = texture(interiorWindows, vMapUv).g;
-    ivec2 interiorSize = textureSize(interiorWindows, 0);
-    ivec2 interiorTexel = clamp(ivec2(vMapUv * vec2(interiorSize)), ivec2(0), interiorSize - 1);
-    int interiorRoom = int(texelFetch(interiorWindows, interiorTexel, 0).r * 255.0 + 0.5) - 1;
-    int interiorBox = clamp(interiorRoom, 0, INTERIOR_ROOMS - 1);
-    vec3 interiorLow = interiorMin[interiorBox];
-    vec3 interiorHigh = interiorMax[interiorBox];
-    vec3 interiorDir = normalize(vInteriorRay);
-    interiorDir += vec3(equal(interiorDir, vec3(0.0))) * 1e-6;
-    vec3 interiorFar = max((interiorLow - vInteriorPosition) / interiorDir, (interiorHigh - vInteriorPosition) / interiorDir);
-    vec3 interiorExit = vInteriorPosition + interiorDir * max(min(interiorFar.x, min(interiorFar.y, interiorFar.z)), 0.0);
-    float interiorFootprint = max(length(dFdx(interiorExit)), length(dFdy(interiorExit)));
-    if (interiorRoom >= 0 && interiorShare > 0.0) {
-      vec3 wall = interiorExit - 0.5 * (interiorLow + interiorHigh);
-      vec3 a = abs(wall);
-      int face = a.x >= a.y && a.x >= a.z ? (wall.x >= 0.0 ? 0 : 1) : a.y >= a.z ? (wall.y >= 0.0 ? 2 : 3) : (wall.z >= 0.0 ? 4 : 5);
-      vec3 forward = INTERIOR_FORWARD[face];
-      vec3 up = INTERIOR_UP[face];
-      float depth = max(dot(wall, forward), 1e-6) * interiorSpan;
-      vec3 at = vec3(0.5 + 0.5 * vec2(dot(wall, cross(forward, up)), dot(wall, up)) / depth, float(interiorRoom * 6 + face));
-      float level = log2(max(interiorFootprint * 0.5 * interiorFaceSize / depth, 1e-6));
-      #if defined( USE_ENVMAP ) && defined( ENVMAP_TYPE_CUBE_UV )
-        vec3 inward = interiorFar.x <= min(interiorFar.y, interiorFar.z) ? vec3(-sign(interiorDir.x), 0.0, 0.0)
-          : interiorFar.y <= interiorFar.z ? vec3(0.0, -sign(interiorDir.y), 0.0) : vec3(0.0, 0.0, -sign(interiorDir.z));
-        vec3 light = irradiance + getIBLIrradiance(normalize((viewMatrix * vec4(vInteriorToWorld * inward, 0.0)).xyz));
-      #else
-        vec3 light = irradiance + iblIrradiance;
-      #endif
-      vec3 room = textureLod(interiorResponse, at, level).rgb * light * RECIPROCAL_PI;
-      #ifdef INTERIOR_GLOW
-        room += textureLod(interiorGlow, at, level).rgb;
-      #endif
-      outgoingLight = mix(totalDiffuse, room, interiorShare) + totalSpecular + totalEmissiveRadiance;
-    }
-  }
-`;
-
-const EDITS: Edit[] = [
-  ["vertex", "#include <common>", `#include <common>\n${VERTEX_PARS}`],
-  ["vertex", "#include <project_vertex>", `#include <project_vertex>\n${VERTEX}`],
-  ["fragment", "#include <common>", `#include <common>\n${FRAGMENT_PARS}`],
-  ["fragment", "#include <opaque_fragment>", `${FRAGMENT}\n#include <opaque_fragment>`],
-];
-
-/** Materials `furnish` patched. */
-const interiors = new WeakSet<Material>();
-
-/** Per material (a faded copy included): where its mesh's space sits in the source's, see `placeInterior`. */
-const spaces = new WeakMap<Material, { value: Matrix4 }>();
-
-function spaceOf(material: Material): { value: Matrix4 } {
-  let space = spaces.get(material);
-  if (!space) spaces.set(material, (space = { value: new Matrix4() }));
-  return space;
+/**
+ * Tell `mesh`, if it shows rooms, that its geometry was moved by `placement` out of the
+ * source's space: InstancedLod draws copies of its templates' geometry placed in the
+ * instance's space.
+ */
+export function placeInterior(mesh: Object3D, placement: Matrix4): void {
+  spaces.set(mesh, placement.clone().invert());
 }
 
-/** Let `material`, a baked level's, show `rooms` through its windows. Its textures go with it. */
-export function furnish(material: MeshStandardMaterial, rooms: Rooms): void {
-  const uniforms = {
-    interiorWindows: { value: rooms.windows },
-    interiorResponse: { value: rooms.response },
-    interiorGlow: { value: rooms.glow },
-    interiorMin: { value: rooms.boxes.map((box) => box.min.clone()) },
-    interiorMax: { value: rooms.boxes.map((box) => box.max.clone()) },
-    interiorFaceSize: { value: rooms.response.image.width },
-    interiorSpan: { value: rooms.span },
-  };
-  const count = rooms.boxes.length;
-  const glows = rooms.glow !== null;
-  // `this` is the material compiling: a faded copy calls this with itself.
-  material.onBeforeCompile = function (this: Material, shader: WebGLProgramParametersWithUniforms) {
-    Object.assign(shader.uniforms, uniforms, { interiorSpace: spaceOf(this) });
-    shader.defines = { ...shader.defines, INTERIOR_ROOMS: count, ...(glows ? { INTERIOR_GLOW: "" } : {}) };
-    applyEdits(shader, EDITS);
-  };
-  material.customProgramCacheKey = () => `lod-interior|${count}|${glows}`;
-  material.addEventListener("dispose", () => {
-    rooms.response.dispose();
-    rooms.glow?.dispose();
-    rooms.windows.dispose();
-  });
-  interiors.add(material);
+function flat<T>(node: Node<T>): Node<T> {
+  return varying(node).setInterpolation(InterpolationSamplingType.FLAT);
+}
+
+/** `vectors[index]`, for an index known only in the shader. */
+function pick(vectors: readonly Vector3[], index: Node<"int">): Node<"vec3"> {
+  return vectors.reduceRight<Node<"vec3">>((rest, v, i) => select(index.equal(i), vec3(v.x, v.y, v.z), rest), vec3(0, 0, 0));
 }
 
 /**
- * Tell `material` (or a faded copy of it), if it shows rooms, that its mesh's geometry
- * was moved by `placement` out of the source's space: InstancedLod draws copies of its
- * templates' geometry placed in the instance's space.
+ * A baked level's material that shows `rooms` through its windows. The rooms' textures
+ * go with it.
  */
-export function placeInterior(material: Material, placement: Matrix4): void {
-  if (interiors.has(originalOf(material))) spaceOf(material).value.copy(placement).invert();
+export class InteriorMaterial extends MeshStandardNodeMaterial {
+  readonly isInteriorMaterial = true;
+  rooms: Rooms | null = null;
+  /** Each room's box: its min, then its max. */
+  private bounds: StorageBufferAttribute | null = null;
+
+  /** Show `rooms` through the windows. */
+  furnish(rooms: Rooms): this {
+    const bounds = new StorageBufferAttribute(Float32Array.from(rooms.boxes.flatMap((box) => [...box.min.toArray(), 0, ...box.max.toArray(), 0])), 4);
+    this.rooms = rooms;
+    this.bounds = bounds;
+    this.addEventListener("dispose", () => {
+      rooms.response.dispose();
+      rooms.glow?.dispose();
+      rooms.windows.dispose();
+      bounds.dispose();
+    });
+    return this;
+  }
+
+  override setupLightingModel(): PhysicalLightingModel {
+    return this.rooms && this.bounds ? new InteriorLighting(this.rooms, this.bounds) : super.setupLightingModel();
+  }
+
+  override copy(source: InteriorMaterial): this {
+    super.copy(source);
+    this.rooms = source.rooms;
+    this.bounds = source.bounds;
+    return this;
+  }
+}
+
+/**
+ * The room is lit by indirect light only: the sun's direct light, which walls and roof
+ * would block, is left out. Ambient light, light probes and hemisphere lights are taken at
+ * the window; the environment, as three lights the real room's walls, at the wall the
+ * view ray meets. Its glow adds on top. Glass shows the room by its share, under its own
+ * reflection: three's specular term carries the Fresnel.
+ */
+class InteriorLighting extends PhysicalLightingModel {
+  constructor(
+    private readonly rooms: Rooms,
+    /** see `InteriorMaterial.bounds` */
+    private readonly bounds: StorageBufferAttribute,
+  ) {
+    super();
+  }
+
+  // After three's lights and before it sums them: by `finish` the sum is made.
+  override start(builder: NodeBuilder): void {
+    super.start(builder);
+    const { rooms } = this;
+    const irradiance = contextNode(builder, "irradiance");
+    const directDiffuse = contextNode(builder, "reflectedLight", "directDiffuse");
+    const indirectDiffuse = contextNode(builder, "reflectedLight", "indirectDiffuse");
+    if (!isNodeOf(irradiance, "vec3", builder) || !isNodeOf(directDiffuse, "vec3", builder) || !isNodeOf(indirectDiffuse, "vec3", builder))
+      throw new Error("bakeMesh: three's lighting is not made of vec3s");
+    const count = rooms.boxes.length;
+    const boxes = vectors(this.bounds);
+    const faceSize = rooms.response.image.width;
+    const [width, height] = [rooms.windows.image.width, rooms.windows.image.height];
+
+    // The view ray in the source's space, and the source's space to world.
+    const instance = instanceMatrixOf(builder.object);
+    const toWorld = affine((instance ? modelWorldMatrix.mul(instance) : modelWorldMatrix).mul(affineInverse(space)));
+    const back = column(cameraWorldMatrix, 2).xyz;
+    const worldRay = select(isOrthographic(cameraProjectionMatrix), back.negate(), positionWorld.sub(cameraPosition));
+    const point = varying(space.mul(vec4(positionGeometry, 1)).xyz);
+    const ray = varying(toWorld.solve(worldRay));
+    const [x, y, z] = toWorld.normalColumns.map(flat);
+    if (!x || !y || !z) throw new Error("bakeMesh: a normal matrix has three columns");
+
+    const share = texture(rooms.windows, uv()).g;
+    const texel = ivec2(clamp(uv().mul(vec2(width, height)), vec2(0, 0), vec2(width - 1, height - 1)));
+    // The room's number, 0 for none, as a float: the box's index is clamped to a room.
+    const room = float(textureLoad(rooms.windows, texel).r.mul(255).add(0.5).floor()).toVar();
+    const box = int(clamp(room.sub(1), 0, count - 1)).toVar();
+    const low = boxes.element(box.mul(2)).xyz;
+    const high = boxes.element(box.mul(2).add(1)).xyz;
+    const unit = normalize(ray);
+    // Nudged off zero, so each axis has a crossing.
+    const direction = unit.add(vec3(1, 1, 1).sub(step(vec3(1e-30, 1e-30, 1e-30), unit.abs())).mul(1e-6)).toVar();
+    const far = low.sub(point).div(direction).max(high.sub(point).div(direction)).toVar();
+    // The box is intersected for every texel, so the derivatives that pick the cube's mip
+    // level are defined across window edges.
+    const exit = point.add(direction.mul(max(min(far.x, min(far.y, far.z)), 0))).toVar();
+    const footprint = max(length(dFdx(exit)), length(dFdy(exit)));
+
+    If(room.greaterThan(0).and(share.greaterThan(0)), () => {
+      const wall = exit.sub(low.add(high).mul(0.5));
+      const a = wall.abs();
+      const face = select(
+        a.x.greaterThanEqual(a.y).and(a.x.greaterThanEqual(a.z)),
+        select(wall.x.greaterThanEqual(0), int(0), int(1)),
+        select(a.y.greaterThanEqual(a.z), select(wall.y.greaterThanEqual(0), int(2), int(3)), select(wall.z.greaterThanEqual(0), int(4), int(5))),
+      ).toVar();
+      const forward = pick(FACES.map(([f]) => f), face);
+      const up = pick(FACES.map(([, u]) => u), face);
+      const depth = max(dot(wall, forward), 1e-6).mul(rooms.span);
+      const at = vec2(dot(wall, cross(forward, up)), dot(wall, up)).div(depth).mul(0.5).add(0.5);
+      const layer = box.mul(6).add(face);
+      const level = log2(max(footprint.mul(0.5 * faceSize).div(depth), 1e-6));
+      const inward = select(
+        far.x.lessThanEqual(min(far.y, far.z)),
+        vec3(sign(direction.x).negate(), 0, 0),
+        select(far.y.lessThanEqual(far.z), vec3(0, sign(direction.y).negate(), 0), vec3(0, 0, sign(direction.z).negate())),
+      );
+      const wallNormal = normalize(x.mul(inward.x).add(y.mul(inward.y)).add(z.mul(inward.z)));
+      const environment = environmentOf(builder.object);
+      const ibl = environment ? pmremTexture(environment, wallNormal, float(1)).rgb.mul(Math.PI).mul(materialEnvIntensity) : vec3(0, 0, 0);
+      const light = irradiance.add(ibl);
+      let shown = texture(rooms.response, at).depth(layer).level(level).rgb.mul(light).div(Math.PI);
+      if (rooms.glow) shown = shown.add(texture(rooms.glow, at).depth(layer).level(level).rgb);
+      const keep = share.oneMinus();
+      directDiffuse.assign(directDiffuse.mul(keep));
+      indirectDiffuse.assign(indirectDiffuse.mul(keep).add(shown.mul(share)));
+    });
+  }
+}
+
+/** The environment of the scene `object` is in, if any. */
+function environmentOf(object: Object3D): Texture | null {
+  let root = object;
+  while (root.parent) root = root.parent;
+  return isScene(root) ? root.environment : null;
+}
+
+/** The inverse of an affine `m`, as a matrix: the linear part's inverse and the translation undone. */
+function affineInverse(m: Node<"mat4">): Node<"mat4"> {
+  const inverse = affine(m);
+  const solve = (v: Node<"vec3">) => vec4(inverse.solve(v), 0);
+  return mat4(solve(vec3(1, 0, 0)), solve(vec3(0, 1, 0)), solve(vec3(0, 0, 1)), vec4(inverse.unproject(vec3(0, 0, 0)), 1));
 }

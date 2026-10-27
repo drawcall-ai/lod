@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { Random } from "../../content/random.ts";
 import type { Tiles } from "../patches.ts";
 import { axes, type Field, type Plan } from "../plan.ts";

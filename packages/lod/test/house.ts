@@ -1,4 +1,4 @@
-import { BackSide, BoxGeometry, Group, Mesh, MeshBasicMaterial, MeshStandardMaterial, PlaneGeometry, type Material } from "three";
+import { BackSide, BoxGeometry, Group, Mesh, MeshBasicMaterial, MeshStandardMaterial, PlaneGeometry, type Material } from "three/webgpu";
 
 // A house with one room behind one window, for the interior tests.
 

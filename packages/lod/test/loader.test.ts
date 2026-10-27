@@ -1,20 +1,10 @@
-import { BoxGeometry, Group, Loader, LoadingManager, Mesh, MeshStandardMaterial, SphereGeometry } from "three";
+import { BoxGeometry, Group, Loader, LoadingManager, Mesh, MeshStandardMaterial, SphereGeometry } from "three/webgpu";
 import { describe, expect, it, vi } from "vitest";
 import { InstancedLod } from "../src/instanced/index.js";
 import { LodLoader } from "../src/loader.js";
 import { isImpostorMesh } from "../src/three.js";
 import { house, interior, low } from "./house.js";
-import { GPU_TIMEOUT, renderer } from "./webgl.js";
-
-// The loader's impostors and rooms bake on the test's WebGL context.
-vi.mock(import("../src/impostor/bake/index.js"), async (original) => {
-  const module = await original();
-  return { ...module, bakeImpostor: (object, options) => module.bakeImpostor(object, { ...options, renderer }) };
-});
-vi.mock(import("../src/baked/index.js"), async (original) => {
-  const module = await original();
-  return { ...module, bakeMesh: (object, options) => module.bakeMesh(object, { ...options, renderer }) };
-});
+import { GPU_TIMEOUT } from "./gpu.js";
 
 const tree = () => new Group().add(new Mesh(new SphereGeometry(1, 32, 16), new MeshStandardMaterial()));
 

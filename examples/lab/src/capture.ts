@@ -1,21 +1,33 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
+import type { Node } from "three/webgpu";
+import { Fn, dot, float, ivec2, max, min, mix, pow, screenCoordinate, select, step, textureLoad, uniform, vec3, vec4 } from "three/tsl";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
-import { FullScreenQuad } from "three/addons/postprocessing/Pass.js";
+import { readBytes } from "../../../packages/lod/src/renderer.js";
+import { biasedTextures } from "../../../packages/lod/src/tsl.js";
+import { isImpostorMesh } from "../../../packages/lod/src/three.js";
+import { gpuRenderer } from "./page.js";
 
 // The bench's renders (see capture): one object alone from `camera` under a fixed sun
 // and environment, supersampled k× and resolved to straight sRGB colour and coverage,
 // tone mapped (Neutral) per supersample, textures read at the displayed size (see
-// shadeAtDisplayScale).
+// `textureBias`).
 
 /** Supersampling of measured renders: k × k samples per pixel, box-filtered. */
 export const K = 4;
 /** Largest side of one supersampled render; larger images render in tiles. */
 const TILE = 2048;
 
-export const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
-renderer.setPixelRatio(1);
-renderer.setSize(64, 64);
-document.body.append(renderer.domElement);
+export const renderer = await gpuRenderer(64, { antialias: false, timed: true });
+
+/**
+ * A supersampled render would also sample every texture k× finer than an app does at
+ * that height, and textures do not look the same at every scale (alpha-tested leaves
+ * whose mip levels mix in the dark texels around them darken with distance). Every
+ * texture read is therefore biased by log2(k): geometry supersampled, textures read at
+ * the displayed size, as with MSAA. Impostors take it through their mip bias.
+ */
+const textureBias = uniform(0);
+renderer.contextNode = biasedTextures(textureBias);
 
 export const scene = new THREE.Scene();
 const pmrem = new THREE.PMREMGenerator(renderer);
@@ -27,110 +39,97 @@ sun.position.setFromSphericalCoords(100, THREE.MathUtils.degToRad(90 - 40), THRE
 scene.add(sun, new THREE.HemisphereLight(0xbfd4ff, 0x4a3d2e, 0.6));
 export const camera = new THREE.PerspectiveCamera(30, 1, 0.01, 1e5);
 
-const msaa = new Map<string, [THREE.WebGLRenderTarget, THREE.WebGLRenderTarget]>();
-function msaaPair(w: number, h: number): [THREE.WebGLRenderTarget, THREE.WebGLRenderTarget] {
-  const key = `${w}x${h}`;
+/** Khronos PBR Neutral tone mapping, as three's NeutralToneMapping. */
+function neutral(color: Node<"vec3">): Node<"vec3"> {
+  const start = 0.8 - 0.04;
+  const low = min(color.x, min(color.y, color.z));
+  const shifted = color.sub(select(low.lessThan(0.08), low.sub(low.mul(low).mul(6.25)), float(0.04))).toVar();
+  const peak = max(shifted.x, max(shifted.y, shifted.z));
+  const d = 1 - start;
+  const top = float(1).sub(float(d * d).div(peak.add(d - start)));
+  const scaled = shifted.mul(top.div(peak));
+  const g = float(1).sub(float(1).div(peak.sub(top).mul(0.15).add(1)));
+  return select(peak.lessThan(start), shifted, mix(scaled, vec3(top, top, top), g));
+}
+
+/** Linear to sRGB, per channel. */
+function encode(c: Node<"vec3">): Node<"vec3"> {
+  const high = step(vec3(0.0031308, 0.0031308, 0.0031308), c);
+  return c.mul(12.92).mul(high.oneMinus()).add(pow(c, vec3(1 / 2.4, 1 / 2.4, 1 / 2.4)).mul(1.055).sub(0.055).mul(high));
+}
+
+/**
+ * Per k × k block of `black` and `white` (the same view over a black and a white
+ * clear): coverage is 1 - (white - black); colour is black / coverage, tone mapped,
+ * averaged weighted by coverage in linear light, then encoded as sRGB. Out: straight
+ * sRGB colour, coverage in alpha.
+ */
+function resolver(black: THREE.Texture, white: THREE.Texture, k: number): THREE.NodeMaterial {
+  const material = new THREE.NodeMaterial();
+  material.fragmentNode = Fn(() => {
+    const base = ivec2(screenCoordinate.xy).mul(k);
+    const sum = vec3(0, 0, 0).toVar();
+    const cover = float(0).toVar();
+    for (let y = 0; y < k; y++)
+      for (let x = 0; x < k; x++) {
+        const at = base.add(ivec2(x, y));
+        const b = textureLoad(black, at).rgb;
+        const w = textureLoad(white, at).rgb;
+        const a = float(1).sub(dot(w.sub(b), vec3(1 / 3, 1 / 3, 1 / 3))).clamp(0, 1).toVar();
+        sum.addAssign(select(a.greaterThan(1e-3), neutral(b.div(max(a, 1e-3))).mul(a), vec3(0, 0, 0)));
+        cover.addAssign(a);
+      }
+    const colour = select(cover.greaterThan(0), encode(sum.div(max(cover, 1e-6)).clamp(0, 1)), vec3(0, 0, 0));
+    return vec4(colour, cover.div(k * k));
+  })();
+  return material;
+}
+
+/** Per size and supersampling, the multisampled targets over black and white and their resolve. */
+const msaa = new Map<string, { black: THREE.RenderTarget; white: THREE.RenderTarget; material: THREE.NodeMaterial; resolve: THREE.QuadMesh }>();
+function msaaPair(w: number, h: number, k: number) {
+  const key = `${w}x${h}x${k}`;
   let pair = msaa.get(key);
   if (!pair) {
     // Linear half float: coverage is recovered from the black and white renders before tone mapping.
-    const make = () => new THREE.WebGLRenderTarget(w, h, { samples: 4, type: THREE.HalfFloatType });
-    pair = [make(), make()];
+    const make = () => new THREE.RenderTarget(w, h, { samples: 4, type: THREE.HalfFloatType });
+    const black = make();
+    const white = make();
+    const material = resolver(black.texture, white.texture, k);
+    pair = { black, white, material, resolve: new THREE.QuadMesh(material) };
     msaa.set(key, pair);
   }
   return pair;
 }
 export function freeTargets(): void {
-  for (const pair of msaa.values()) for (const t of pair) t.dispose();
+  for (const { black, white, material } of msaa.values()) {
+    black.dispose();
+    white.dispose();
+    material.dispose();
+  }
   msaa.clear();
 }
 
-/**
- * Per k × k block: coverage is 1 - (white - black); colour is black / coverage, tone
- * mapped, averaged weighted by coverage in linear light, then encoded as sRGB. Out:
- * straight sRGB colour, coverage in alpha.
- */
-const resolveInputs: Record<"black" | "white", THREE.IUniform<THREE.Texture | null>> & { k: THREE.IUniform<number> } = {
-  black: { value: null },
-  white: { value: null },
-  k: { value: K },
-};
-const resolve = new FullScreenQuad(
-  new THREE.ShaderMaterial({
-    uniforms: { ...resolveInputs, toneMappingExposure: { value: 1 } },
-    vertexShader: /* glsl */ `void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }`,
-    fragmentShader: /* glsl */ `
-      precision highp float;
-      uniform sampler2D black;
-      uniform sampler2D white;
-      uniform int k;
-      ${THREE.ShaderChunk.tonemapping_pars_fragment}
-      vec3 encode(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
-      void main() {
-        ivec2 base = ivec2(gl_FragCoord.xy) * k;
-        vec3 sum = vec3(0.0);
-        float cover = 0.0;
-        for (int y = 0; y < k; y++)
-          for (int x = 0; x < k; x++) {
-            vec3 b = texelFetch(black, base + ivec2(x, y), 0).rgb;
-            vec3 w = texelFetch(white, base + ivec2(x, y), 0).rgb;
-            float a = clamp(1.0 - dot(w - b, vec3(1.0 / 3.0)), 0.0, 1.0);
-            if (a > 1e-3) sum += NeutralToneMapping(b / a) * a;
-            cover += a;
-          }
-        gl_FragColor = vec4(cover > 0.0 ? encode(clamp(sum / cover, 0.0, 1.0)) : vec3(0.0), cover / float(k * k));
-      }`,
-  }),
-);
-
-/**
- * A supersampled render would also sample every texture k× finer than an app does at
- * that height, and textures do not look the same at every scale (alpha-tested leaves
- * whose mip levels mix in the dark texels around them darken with distance). Each
- * capture therefore biases texture reads by log2(k): geometry supersampled, textures
- * read at the displayed size, as with MSAA. Impostors take it through their mip bias.
- */
-const textureBias = { value: 0 };
-/** Each impostor material's own mip bias (the package's IMPOSTOR_MIP_BIAS define). */
+/** Each impostor's own mip bias, before a capture adds log2(k) to it. */
 const impostorBias = new WeakMap<THREE.Material, number>();
-const patched = new WeakSet<THREE.Material>();
 
 function shadeAtDisplayScale(object: THREE.Object3D, k: number): void {
   textureBias.value = Math.log2(k);
   object.traverse((node) => {
-    if (!(node instanceof THREE.Mesh)) return;
-    const materials: THREE.Material[] = [node.material].flat();
-    for (const material of materials) {
-      const defines = material.defines;
-      if ("isImpostorMesh" in node && defines) {
-        const own = impostorBias.get(material) ?? Number(defines.IMPOSTOR_MIP_BIAS);
-        impostorBias.set(material, own);
-        const value = (own + Math.log2(k)).toFixed(3);
-        if (defines.IMPOSTOR_MIP_BIAS === value) continue;
-        defines.IMPOSTOR_MIP_BIAS = value;
-        material.needsUpdate = true;
-        continue;
-      }
-      if (patched.has(material)) continue;
-      patched.add(material);
-      const compile = material.onBeforeCompile;
-      const key = material.customProgramCacheKey();
-      material.onBeforeCompile = (shader, r) => {
-        compile.call(material, shader, r);
-        shader.uniforms.benchTextureBias = textureBias;
-        shader.fragmentShader = `uniform float benchTextureBias;\n#undef texture2D\n#define texture2D(map, uv) texture(map, uv, benchTextureBias)\n${shader.fragmentShader}`;
-      };
-      material.customProgramCacheKey = () => `bench-bias|${key}`;
-      material.needsUpdate = true;
-    }
+    if (!isImpostorMesh(node)) return;
+    const { mipBias } = node.material;
+    const own = impostorBias.get(node.material) ?? mipBias.value;
+    impostorBias.set(node.material, own);
+    mipBias.value = own + Math.log2(k);
   });
 }
 
-const outputs = new Map<string, THREE.WebGLRenderTarget>();
-function output(w: number, h: number): THREE.WebGLRenderTarget {
+const outputs = new Map<string, THREE.RenderTarget>();
+function output(w: number, h: number): THREE.RenderTarget {
   const key = `${w}x${h}`;
   let target = outputs.get(key);
   if (!target) {
-    target = new THREE.WebGLRenderTarget(w, h);
+    target = new THREE.RenderTarget(w, h);
     outputs.set(key, target);
   }
   return target;
@@ -141,18 +140,17 @@ function output(w: number, h: number): THREE.WebGLRenderTarget {
  * resolved (see `resolve`): RGBA8 rows bottom-up. `jitter` shifts the image by that
  * many supersamples.
  */
-export function capture(object: THREE.Object3D, size: number, k = K, jitter = 0): Uint8Array {
-  const n = size * k;
+export async function capture(object: THREE.Object3D, size: number, kk = K, jitter = 0): Promise<Uint8Array> {
+  const n = size * kk;
   const pixels = new Uint8Array(size * size * 4);
   scene.add(object);
-  shadeAtDisplayScale(object, k);
-  resolveInputs.k.value = k;
+  shadeAtDisplayScale(object, kk);
   for (let top = 0; top < n; top += TILE)
     for (let left = 0; left < n; left += TILE) {
       const w = Math.min(TILE, n - left);
       const h = Math.min(TILE, n - top);
       camera.setViewOffset(n, n, left + jitter, top + jitter, w, h);
-      const [black, white] = msaaPair(w, h);
+      const { black, white, resolve } = msaaPair(w, h, kk);
       for (const [target, clear] of [
         [black, 0x000000],
         [white, 0xffffff],
@@ -162,16 +160,13 @@ export function capture(object: THREE.Object3D, size: number, k = K, jitter = 0)
         renderer.clear();
         renderer.render(scene, camera);
       }
-      const out = output(w / k, h / k);
-      resolveInputs.black.value = black.texture;
-      resolveInputs.white.value = white.texture;
+      const out = output(w / kk, h / kk);
       renderer.setRenderTarget(out);
       resolve.render(renderer);
-      const tile = new Uint8Array((w / k) * (h / k) * 4);
-      renderer.readRenderTargetPixels(out, 0, 0, w / k, h / k, tile);
-      // The view offset counts rows from the top; GL rows run bottom-up.
-      const row0 = (n - top - h) / k;
-      for (let y = 0; y < h / k; y++) pixels.set(tile.subarray(y * (w / k) * 4, (y + 1) * (w / k) * 4), ((row0 + y) * size + left / k) * 4);
+      const tile = await readBytes(renderer, out, 0);
+      // The view offset counts rows from the top; the tile's rows run bottom-up.
+      const row0 = (n - top - h) / kk;
+      for (let y = 0; y < h / kk; y++) pixels.set(tile.subarray(y * (w / kk) * 4, (y + 1) * (w / kk) * 4), ((row0 + y) * size + left / kk) * 4);
     }
   camera.clearViewOffset();
   renderer.setRenderTarget(null);

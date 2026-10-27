@@ -1,4 +1,4 @@
-import { Color, DoubleSide, ObjectSpaceNormalMap, Vector2, Vector3, type Material, type Texture } from "three";
+import { Color, DoubleSide, ObjectSpaceNormalMap, Vector2, Vector3, type Material, type Texture } from "three/webgpu";
 import { isColor, isStandard, isTexture } from "../three.js";
 import { tangentFrame } from "./frame.js";
 import type { Source } from "./source.js";

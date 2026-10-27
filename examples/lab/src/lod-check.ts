@@ -1,9 +1,11 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
+import { texture } from "three/tsl";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { bakeMesh, simplify, type BakeMeshOptions } from "@drawcall/lod";
 import { errorOf } from "../../../packages/lod/src/levels.js";
+import { readBytes } from "../../../packages/lod/src/renderer.js";
 import { at } from "./must.js";
-import { context2d, gpuName, png } from "./page.js";
+import { context2d, gpuName, gpuRenderer, png } from "./page.js";
 import { subject } from "./subjects.js";
 
 // Standalone page (lod.html): simplified and baked levels next to their source, with
@@ -19,10 +21,9 @@ const views: Array<{ azimuth: number; elevation: number; zoom?: number }> = [
 ];
 const TILE = 300;
 
-const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
-renderer.setPixelRatio(1);
+// The sheets draw one tile at a time on the canvas, tone mapped as an app's frame is.
+const renderer = await gpuRenderer(TILE);
 renderer.toneMapping = THREE.NeutralToneMapping;
-document.body.append(renderer.domElement);
 const pmrem = new THREE.PMREMGenerator(renderer);
 const environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
@@ -79,31 +80,27 @@ function sceneFor(object: THREE.Object3D) {
 
 export type Mode = "lit" | "albedo" | "normal";
 
+/** Sources load with MeshStandardMaterials; baked levels draw with node materials. */
+type Standard = THREE.MeshStandardMaterial | THREE.MeshStandardNodeMaterial;
+const isStandard = (material: THREE.Material): material is Standard =>
+  material instanceof THREE.MeshStandardMaterial || material instanceof THREE.MeshStandardNodeMaterial;
+
 /** `material` drawing unlit base colour or view-space normals, for checking a bake. */
 function inMode(material: THREE.Material, mode: Exclude<Mode, "lit">): THREE.Material {
-  if (!(material instanceof THREE.MeshStandardMaterial)) throw new Error(`lod-check: ${mode} view of a ${material.type}`);
+  if (!isStandard(material)) throw new Error(`lod-check: ${mode} view of a ${material.type}`);
   const { side, alphaTest, map } = material;
   if (mode === "albedo") return new THREE.MeshBasicMaterial({ side, alphaTest, map, color: material.color, vertexColors: material.vertexColors });
-  const normals = new THREE.MeshNormalMaterial({
+  const normals = new THREE.MeshNormalNodeMaterial({
     side,
     normalMap: material.normalMap,
     normalMapType: material.normalMapType,
     normalScale: material.normalScale,
   });
   if (!map || alphaTest <= 0) return normals;
-  // The cut-out still needs the colour map's alpha: discard by it in onBeforeCompile.
-  const uvTransform = `mat3(${map.matrix.elements.join(", ")})`;
-  normals.onBeforeCompile = (shader) => {
-    shader.uniforms.alphaSource = { value: map };
-    shader.vertexShader = shader.vertexShader.replace(
-      "void main() {",
-      `varying vec2 vAlphaUv;\nvoid main() {\nvAlphaUv = (${uvTransform} * vec3(uv, 1.0)).xy;`,
-    );
-    shader.fragmentShader = shader.fragmentShader.replace(
-      "void main() {",
-      `uniform sampler2D alphaSource;\nvarying vec2 vAlphaUv;\nvoid main() {\nif (texture2D(alphaSource, vAlphaUv).a < ${alphaTest.toFixed(3)}) discard;`,
-    );
-  };
+  // The cut-out still needs the colour map's alpha, read through the map's transform.
+  const alpha = texture(map);
+  alpha.updateMatrix = true;
+  normals.maskNode = alpha.a.greaterThanEqual(alphaTest);
   return normals;
 }
 
@@ -131,8 +128,12 @@ const cameraPosition = (view: (typeof views)[number], sphere: THREE.Sphere, dist
 async function sheet(name: string, columns: Array<{ label: string; object: THREE.Object3D }>, sphere: THREE.Sphere) {
   const w = columns.length * TILE;
   const h = views.length * TILE;
-  renderer.setSize(w, h, false);
-  renderer.setScissorTest(true);
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h + 22;
+  const ctx = context2d(canvas);
+  ctx.fillStyle = "#111";
+  ctx.fillRect(0, 0, w, 22);
   const camera = new THREE.PerspectiveCamera(30, 1, sphere.radius * 0.05, sphere.radius * 20);
   const distance = (sphere.radius / Math.sin(THREE.MathUtils.degToRad(15))) * 1.02;
   columns.forEach((column, c) => {
@@ -140,22 +141,12 @@ async function sheet(name: string, columns: Array<{ label: string; object: THREE
     views.forEach((view, r) => {
       cameraPosition(view, sphere, distance, camera.position);
       camera.lookAt(sphere.center);
-      // WebGL viewport y is bottom-up.
-      const y = h - (r + 1) * TILE;
-      renderer.setViewport(c * TILE, y, TILE, TILE);
-      renderer.setScissor(c * TILE, y, TILE, TILE);
       renderer.render(scene, camera);
+      // Copied in the same task: the canvas holds the frame until it is presented.
+      ctx.drawImage(renderer.domElement, c * TILE, 22 + r * TILE);
     });
     scene.remove(column.object);
   });
-  renderer.setScissorTest(false);
-  const canvas = document.createElement("canvas");
-  canvas.width = w;
-  canvas.height = h + 22;
-  const ctx = context2d(canvas);
-  ctx.fillStyle = "#111";
-  ctx.fillRect(0, 0, w, 22);
-  ctx.drawImage(renderer.domElement, 0, 22);
   ctx.fillStyle = "#eee";
   ctx.font = "14px system-ui, sans-serif";
   columns.forEach((column, c) => ctx.fillText(`${name} ${column.label}`, c * TILE + 6, 16));
@@ -196,7 +187,7 @@ async function run(only = SUBJECTS, ratios = RATIOS, modes: Mode[] = ["lit"]) {
       const t0 = performance.now();
       const level = await build();
       const ms = Math.round(performance.now() - t0);
-      levels.push({ label, triangles: triangles(level), ms, textureBytes: textureBytes(level), error: errorOf(level), ...renderError(source, level, sphere) });
+      levels.push({ label, triangles: triangles(level), ms, textureBytes: textureBytes(level), error: errorOf(level), ...(await renderError(source, level, sphere)) });
       columns.push({ label: `${label} ${triangles(level)}`, object: level });
       return level;
     };
@@ -206,7 +197,7 @@ async function run(only = SUBJECTS, ratios = RATIOS, modes: Mode[] = ["lit"]) {
     for (const [i, variant] of variants.entries()) {
       const baked = await measure(`baked ${variant.label}`, () => bakeMesh(source, variant.options));
       if (i !== 1 && variant.label !== "low") continue;
-      if (!(baked instanceof THREE.Mesh) || !(baked.material instanceof THREE.MeshStandardMaterial))
+      if (!(baked instanceof THREE.Mesh) || !(baked.material instanceof THREE.MeshStandardNodeMaterial))
         throw new Error("lod-check: a baked level is not one standard mesh");
       const { map, normalMap, roughnessMap } = baked.material;
       const prefix = `${name}-baked-${variant.label}`;
@@ -222,24 +213,23 @@ async function run(only = SUBJECTS, ratios = RATIOS, modes: Mode[] = ["lit"]) {
       );
     results.push({ name, triangles: triangles(source), textureBytes: textureBytes(source), levels });
   }
-  return { renderer: gpuName(renderer.getContext()), results, images };
+  return { renderer: await gpuName(), results, images };
 }
 
 const ERROR_SIZE = 256;
-const errorTarget = new THREE.WebGLRenderTarget(ERROR_SIZE, ERROR_SIZE, { samples: 4 });
+const errorTarget = new THREE.RenderTarget(ERROR_SIZE, ERROR_SIZE, { samples: 4 });
 
 /** `object` alone from `camera` on a transparent background, as pixels. */
-function errorPixels(object: THREE.Object3D, camera: THREE.Camera): Uint8Array {
+async function errorPixels(object: THREE.Object3D, camera: THREE.Camera): Promise<Uint8Array> {
   const scene = sceneFor(object);
   scene.background = null;
   renderer.setRenderTarget(errorTarget);
   renderer.setClearColor(0x000000, 0);
   renderer.clear();
   renderer.render(scene, camera);
+  renderer.setRenderTarget(null);
   scene.remove(object);
-  const pixels = new Uint8Array(ERROR_SIZE * ERROR_SIZE * 4);
-  renderer.readRenderTargetPixels(errorTarget, 0, 0, ERROR_SIZE, ERROR_SIZE, pixels);
-  return pixels;
+  return readBytes(renderer, errorTarget, 0);
 }
 
 /**
@@ -248,7 +238,7 @@ function errorPixels(object: THREE.Object3D, camera: THREE.Camera): Uint8Array {
  * (`colorError`), and the share of the pixels either covers that only one does
  * (`coverageError`).
  */
-function renderError(source: THREE.Object3D, level: THREE.Object3D, sphere: THREE.Sphere) {
+async function renderError(source: THREE.Object3D, level: THREE.Object3D, sphere: THREE.Sphere) {
   const camera = new THREE.PerspectiveCamera(30, 1, sphere.radius * 0.05, sphere.radius * 20);
   const distance = (sphere.radius / Math.sin(THREE.MathUtils.degToRad(15))) * 1.02;
   let colour = 0;
@@ -258,8 +248,8 @@ function renderError(source: THREE.Object3D, level: THREE.Object3D, sphere: THRE
   for (const view of views.filter((view) => view.zoom === undefined)) {
     cameraPosition(view, sphere, distance, camera.position);
     camera.lookAt(sphere.center);
-    const a = errorPixels(source, camera);
-    const b = errorPixels(level, camera);
+    const a = await errorPixels(source, camera);
+    const b = await errorPixels(level, camera);
     for (let i = 0; i < a.length; i += 4) {
       const inA = at(a, i + 3) > 127;
       const inB = at(b, i + 3) > 127;
@@ -273,7 +263,6 @@ function renderError(source: THREE.Object3D, level: THREE.Object3D, sphere: THRE
       for (let c = 0; c < 3; c++) colour += Math.abs(at(a, i + c) - at(b, i + c)) / 3;
     }
   }
-  renderer.setRenderTarget(null);
   return { colorError: Math.round((colour / both) * 100) / 100, coverageError: Math.round((mismatched / covered) * 1000) / 1000 };
 }
 

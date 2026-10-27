@@ -1,9 +1,9 @@
-import { Box3, Ray, Vector3, type Matrix4, type Object3D } from "three";
+import { Box3, Ray, Vector3, type Matrix4, type Object3D } from "three/webgpu";
 import { forEachVertex } from "../../bounds.js";
 import { isLight } from "../../three.js";
 
-/** Most rooms an interior may have: their boxes are uniform arrays of the baked material. */
-const MAX_ROOMS = 32;
+/** Most rooms an interior may have: six faces each in texture arrays of at most 256 layers. */
+const MAX_ROOMS = 42;
 
 /** Share of the smaller box two rooms may overlap by: walls that meet, not rooms inside rooms. */
 const OVERLAP = 0.02;

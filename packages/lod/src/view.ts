@@ -1,5 +1,16 @@
-import { Vector3, Vector4, type Camera, type Matrix4, type Mesh, type Sphere } from "three";
-import { subtense } from "./fade.js";
+import { Vector2, Vector3, Vector4, type Camera, type Matrix4, type Mesh, type Sphere } from "three/webgpu";
+import { gpuRenderer, inShadowPass } from "./three.js";
+
+const scratch = new Vector3();
+
+/**
+ * The angle `sphere` (in the space `root` maps to world) subtends from `eye`, small-angle:
+ * its diameter, scaled by the largest axis scale of `root`, over its distance.
+ */
+export function subtense(root: Matrix4, sphere: Sphere, eye: Vector3): number {
+  const centre = scratch.copy(sphere.center).applyMatrix4(root);
+  return (2 * sphere.radius * root.getMaxScaleOnAxis()) / Math.max(eye.distanceTo(centre), 1e-6);
+}
 
 /** How a camera measures objects on screen: from where, and pixels per unit of subtense (or of size, orthographic). */
 export class View {
@@ -27,27 +38,35 @@ export class View {
 }
 
 const viewport = new Vector4();
+const canvas = new Vector2();
 
 /**
- * The viewport height each camera draws at, as the meshes of one Lod see it, in CSS
- * pixels: the renderer's pixels over its pixel ratio. A high-density screen then picks
- * the levels a standard one does, and pays for its extra pixels only in fill, not in
- * finer levels its viewer can barely tell apart.
+ * The viewport height each camera draws at, as the level meshes drawn with it see it: CSS
+ * pixels on the canvas, so that a high-density screen picks the levels a standard one
+ * does and pays for its extra pixels only in fill; pixels in a render target, except one
+ * the canvas's size, which stands in for it (a post-processing pass). Every level
+ * mesh that draws tells it for all: a Lod or InstancedLod with nothing drawn learns it
+ * from the others.
  */
-export class Viewports {
-  private readonly heights = new WeakMap<Camera, number>();
+const heights = new WeakMap<Camera, number>();
 
-  /** The height `camera` last drew at; 1080 before its first frame. */
-  heightOf(camera: Camera): number {
-    return this.heights.get(camera) ?? 1080;
-  }
+/** The height `camera` last drew at, or null before any level mesh drew with it. */
+export const viewportHeight = (camera: Camera): number | null => heights.get(camera) ?? null;
 
-  /** Learn the height whenever `mesh` draws. */
-  watch(mesh: Mesh): void {
-    const previous = mesh.onBeforeRender;
-    mesh.onBeforeRender = (renderer, scene, camera, geometry, material, group) => {
-      previous.call(mesh, renderer, scene, camera, geometry, material, group);
-      this.heights.set(camera, renderer.getCurrentViewport(viewport).w / renderer.getPixelRatio());
-    };
-  }
+/** Learn the height whenever `mesh` draws. */
+export function watchViewport(mesh: Mesh): void {
+  const previous = mesh.onBeforeRender;
+  mesh.onBeforeRender = (renderer, scene, camera, geometry, material, group) => {
+    previous.call(mesh, renderer, scene, camera, geometry, material, group);
+    // Shadow maps are drawn for the viewing camera's choice, not measured.
+    if (inShadowPass(scene)) return;
+    const gpu = gpuRenderer(renderer);
+    const target = gpu.getRenderTarget();
+    if (!target) return void heights.set(camera, gpu.getViewport(viewport).w);
+    const ratio = target.height === gpu.getDrawingBufferSize(canvas).y ? gpu.getPixelRatio() : 1;
+    heights.set(camera, target.viewport.w / ratio);
+  };
 }
+
+/** A typical screen's height, for a camera no level mesh drew with yet. */
+export const TYPICAL_HEIGHT = 1080;

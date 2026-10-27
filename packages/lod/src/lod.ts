@@ -1,41 +1,38 @@
-import { Object3D, Sphere, type Camera, type Intersection, type Matrix4, type Raycaster } from "three";
+import { Object3D, Sphere, type Camera, type Intersection, type Raycaster } from "three/webgpu";
 import { measureLevels } from "./bounds.js";
 import { disposeTree } from "./dispose.js";
-import { fadeMesh, writeFades } from "./fade.js";
-import { FADE, Level, cloneLevels, copyThresholds, estimate, fadingWith, levelAt, validate, type LodLevel } from "./levels.js";
-import { skipTinyShadows } from "./shadow.js";
-import { isImpostorMesh, isLOD, isMesh, rejectSkinned } from "./three.js";
-import { View, Viewports } from "./view.js";
+import { setDraw, type Draw } from "./fade.js";
+import { levelMaterial } from "./material.js";
+import { FADE, Level, cloneLevels, copyThresholds, estimate, fadeProgress, levelAt, tintLevels, validate, type LodLevel } from "./levels.js";
+import { inShadowPass, isImpostorMesh, isLOD, isMesh, rejectSkinned } from "./three.js";
+import { TYPICAL_HEIGHT, View, viewportHeight, watchViewport } from "./view.js";
 import { WIND_BOUNDS } from "./wind/hooks.js";
 import { copyWind } from "./wind/index.js";
 
 const view = new View();
+
+type ObjectDraw = Extract<Draw, { kind: "object" }>;
 
 /**
  * Levels of detail of one object, switched by its height on screen. Level 0 is the
  * source; each further level is used while the object is at most its `maxPixels` tall
  * (see `LodLevel.maxPixels` for the defaults). Near a switch both neighbours draw and
  * split the pixels with a dither, so nothing pops; elsewhere exactly one level is visible
- * and the others are hidden, which also keeps them out of shadow maps: shadows follow the
- * camera's choice. Nothing of it is drawn into a directional light's shadow map whose
- * texels are wider than the whole object: it could cover a texel only by chance.
+ * and the others are hidden. Shadows follow the camera's choice and fade with it; nothing
+ * of the object is drawn into a directional light's shadow map whose texels are wider
+ * than the whole object: it could cover a texel only by chance.
  *
- * three's WebGLRenderer calls `update(camera)` while it lists the scene (as for its own
- * LOD), before shadow maps render. The height uses the viewport the camera last drew one
- * of the levels' meshes in, in CSS pixels (1080 before that), so several views each get
- * their own.
- *
- * Fades are measured from the viewing camera in every pass. In shadow passes, which are
- * often orthographic, the finer level casts alone while a fade lasts: a mesh's shadow is
- * whole, and an impostor fading in casts once the finer level is gone (fading out, its
- * shadow dithers with it). An orthographic viewing camera has no distance to dither by:
- * levels switch by on-screen size there too, but at once.
+ * three's renderer calls `update(camera)` while it lists the scene (as for its own LOD),
+ * before shadow maps render; the calls its shadow passes make are ignored. The height
+ * uses the viewport the camera last drew one of the levels' meshes in, in CSS pixels
+ * (1080 before that), so several views each get their own. An orthographic camera has
+ * no distance to dither by: levels switch by on-screen size there too, but at once.
  *
  * Levels are children of the Lod in its space, any Object3D: meshes, an ImpostorMesh, a
- * group, another Lod. Each mesh draws with its own faded copy of its material; the
- * copies of one material share a compiled program. Lines, points and sprites are drawn
- * but neither fade nor tell the Lod the viewport height. A nested Lod hands over to its
- * neighbours here at once. Raycasts hit the source only.
+ * group, another Lod. Each mesh draws with a faded copy of its material, which every Lod
+ * drawing that material shares. Lines, points and sprites are drawn but neither fade nor
+ * tell the Lod the viewport height. A nested Lod hands over to its neighbours at once.
+ * Raycasts hit the source only.
  *
  * Levels are read when the Lod is built: meshes added to a level later, or moved within
  * it, are neither faded nor measured right. Build a new Lod instead.
@@ -59,10 +56,11 @@ export class Lod extends Object3D {
   readonly levels: readonly LodLevel[];
 
   private readonly entries: Level[] = [];
+  /** Per level, how its meshes draw. */
+  private readonly draws: ObjectDraw[] = [];
   /** Bounding sphere of the source (see the constructor) in the Lod's own space. */
   private sphere = new Sphere();
   private casterRadius = 0;
-  private readonly viewports = new Viewports();
 
   /**
    * `levels[0]` is the source. Empty only as the target of `copy`. A source that draws
@@ -83,30 +81,29 @@ export class Lod extends Object3D {
     this.sphere = placed;
     this.casterRadius = placed.radius;
     this.add(...objects);
-    this.updateWorldMatrix(true, true);
-    const inverse = this.matrixWorld.clone().invert();
     objects.forEach((object, i) => {
       const level = new Level(object, i, isLOD(object), this.entries);
+      const draw: ObjectDraw = { kind: "object", fade: 0, diameter: 0, tint: level.tint };
       this.entries.push(level);
-      this.hook(object, level, level.nested, inverse);
+      this.draws.push(draw);
+      this.hook(object, draw, level.nested, object);
     });
     estimate(this.entries, 2 * own.radius);
     validate(this.entries);
   }
 
-  /**
-   * Fade the meshes under `node` by `level` and keep them out of shadow maps too coarse
-   * for the whole object, and learn the viewport height from all of them. An inner Lod
-   * and an ImpostorMesh (which measures its instances) do their own shadow check.
-   */
-  private hook(node: Object3D, level: Level, nested: boolean, inverse: Matrix4): void {
-    const inner = nested || (node !== level.object && isLOD(node));
+  /** Fade the meshes under `node` by `draw` and learn the viewport height from them; an inner Lod fades its own. */
+  private hook(node: Object3D, draw: ObjectDraw, nested: boolean, level: Object3D): void {
+    const inner = nested || (node !== level && isLOD(node));
     if (isMesh(node)) {
-      if (!inner) fadeMesh(node, level, this.sphere, inverse.clone().multiply(node.matrixWorld));
-      if (!inner && !isImpostorMesh(node)) skipTinyShadows(node, () => 2 * this.casterRadius * this.matrixWorld.getMaxScaleOnAxis());
-      this.viewports.watch(node);
+      if (!inner) {
+        setDraw(node, draw);
+        // An ImpostorMesh reads its draw itself.
+        if (!isImpostorMesh(node)) node.material = Array.isArray(node.material) ? node.material.map((m) => levelMaterial(m)) : levelMaterial(node.material);
+      }
+      watchViewport(node);
     }
-    for (const child of node.children) this.hook(child, level, inner, inverse);
+    for (const child of node.children) this.hook(child, draw, inner, level);
   }
 
   [WIND_BOUNDS](padding: number): void {
@@ -115,15 +112,23 @@ export class Lod extends Object3D {
 
   /** Pick and fade levels for `camera`; three's renderer calls this itself while `autoUpdate`. */
   update(camera: Camera): void {
-    const { entries } = this;
-    if (entries.length === 0) return;
+    const { entries, draws } = this;
+    if (entries.length === 0 || inShadowPass(this)) return;
     validate(entries);
-    view.begin(camera, this.viewports.heightOf(camera), this.forceLevel);
-    writeFades(entries, view, Lod.quality, Lod.debug);
+    view.begin(camera, viewportHeight(camera) ?? TYPICAL_HEIGHT, this.forceLevel);
+    tintLevels(entries, Lod.debug);
     const height = view.pixels(this.matrixWorld, this.sphere) * Lod.quality;
     const level = levelAt(entries, height, this.forceLevel);
-    const finer = fadingWith(entries, level, height, view.fades);
-    for (const each of entries) each.object.visible = each === level || each === finer;
+    const t = view.fades ? fadeProgress(entries, level, height) : 0;
+    const finer = t > 0 ? entries[level.index - 1] : undefined;
+    const diameter = 2 * this.casterRadius * this.matrixWorld.getMaxScaleOnAxis();
+    entries.forEach((each, i) => {
+      const draw = draws[i];
+      if (!draw) throw new Error("Lod: a level has no draw");
+      draw.fade = each === level ? t : each === finer ? -t : 0;
+      draw.diameter = diameter;
+      each.object.visible = each === level || each === finer;
+    });
   }
 
   override raycast(raycaster: Raycaster, intersects: Intersection[]): boolean {
@@ -135,8 +140,8 @@ export class Lod extends Object3D {
 
   /**
    * Copies `source`'s levels into this empty Lod (it throws otherwise). The copies share
-   * geometry and textures with `source`, as three's clone does, and get their own faded
-   * materials; the Lod settings and each level's `maxPixels` come along.
+   * geometry, materials and textures with `source`, as three's clone does; the Lod
+   * settings and each level's `maxPixels` come along.
    */
   override copy(source: Lod): this {
     if (this.entries.length > 0) throw new Error("Lod.copy: copy into an empty Lod");
@@ -151,7 +156,7 @@ export class Lod extends Object3D {
 
   /**
    * Frees every level, the source included: geometries, materials and their textures.
-   * Clones share geometry and textures, so dispose a Lod only once no clone draws any more.
+   * Clones share them, so dispose a Lod only once no clone draws any more.
    */
   dispose(): void {
     for (const { object } of this.entries) disposeTree(object);

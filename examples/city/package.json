@@ -13,7 +13,6 @@
   },
   "dependencies": {
     "@drawcall/lod": "workspace:*",
-    "n8ao": "^2.0.1",
     "three": "^0.185.1"
   },
   "devDependencies": {

@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 
 /** A rectangular hole in a wall, in the wall's local frame (x along the wall, y up). */
 export interface Opening {

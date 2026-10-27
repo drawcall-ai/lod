@@ -1,6 +1,6 @@
-import { Matrix4, Sphere, Vector3, type InstancedMesh, type Mesh } from "three";
+import { Matrix4, Sphere, Vector3, type Mesh } from "three/webgpu";
+import { drawOf } from "../fade.js";
 import { isImpostorMesh, isInstancedMesh } from "../three.js";
-import { impostorCasterRadius } from "../impostor/mesh/index.js";
 
 /** Bound maximum sway on the mesh itself, leaving shared geometry in its rest pose. */
 export function windBounds(mesh: Mesh, placement: Matrix4, amplitude: number, baseY: number, height: number): void {
@@ -14,8 +14,11 @@ export function windBounds(mesh: Mesh, placement: Matrix4, amplitude: number, ba
   const root = box.clone().applyMatrix4(placement);
   const reach = Math.max(Math.abs(root.min.y - baseY), Math.abs(root.max.y - baseY)) / height;
   rest.radius += amplitude * reach * horizontalScale(placement.clone().invert());
-  if (isImpostorMesh(mesh)) impostorCasterRadius(mesh, rest.radius);
-  if (!isInstancedMesh(mesh)) {
+  // An ImpostorMesh of its own measures its shadow casters by this radius too.
+  const draw = drawOf(mesh);
+  if (draw?.kind === "instances") draw.radius = rest.radius;
+  const instances = isInstancedMesh(mesh) || isImpostorMesh(mesh) ? mesh : null;
+  if (!instances) {
     // Frustum.intersectsObject prefers an object's sphere over its geometry's.
     Object.assign(mesh, { boundingSphere: rest });
     return;
@@ -23,17 +26,13 @@ export function windBounds(mesh: Mesh, placement: Matrix4, amplitude: number, ba
 
   // As for InstancedMesh normally, callers recompute after changing instance transforms.
   // Start from the geometry's rest box every time wind is attached, including on clones.
-  mesh.computeBoundingSphere = function (this: InstancedMesh): void {
-    this.boundingSphere ??= new Sphere();
-    this.boundingSphere.makeEmpty();
+  instances.computeBoundingSphere = () => {
+    const bounds = (instances.boundingSphere ??= new Sphere()).makeEmpty();
     const matrix = new Matrix4();
     const sphere = new Sphere();
-    for (let i = 0; i < this.count; i++) {
-      this.getMatrixAt(i, matrix);
-      this.boundingSphere.union(sphere.copy(rest).applyMatrix4(matrix));
-    }
+    for (let i = 0; i < instances.count; i++) bounds.union(sphere.copy(rest).applyMatrix4(instances.getMatrixAt(i, matrix)));
   };
-  mesh.computeBoundingSphere();
+  instances.computeBoundingSphere();
 }
 
 /** Largest stretch of a horizontal unit vector, including sheared placements. */

@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { chimneySize, chimneyZ, heights, type HouseParams } from "./params.ts";
 
 type Face = { points: THREE.Vector3[]; group: number };

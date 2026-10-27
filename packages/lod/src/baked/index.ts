@@ -7,7 +7,7 @@ import {
   LinearFilter,
   LinearMipmapLinearFilter,
   Mesh,
-  MeshStandardMaterial,
+  MeshStandardNodeMaterial,
   Matrix4,
   NoColorSpace,
   RGFormat,
@@ -18,8 +18,7 @@ import {
   type Box3,
   type ColorSpace,
   type Object3D,
-  type WebGLRenderer,
-} from "three";
+} from "three/webgpu";
 import { boundingBox, forEachMesh } from "../bounds.js";
 import { recordError } from "../levels.js";
 import { sharedRenderer } from "../renderer.js";
@@ -28,7 +27,7 @@ import { area } from "../source/surface.js";
 import { mipmaps, type Mip } from "../source/texels.js";
 import { isImpostorMesh, placeLike } from "../three.js";
 import { renderFaces } from "./interior/faces.js";
-import { furnish } from "./interior/material.js";
+import { InteriorMaterial } from "./interior/material.js";
 import { readBoxes } from "./interior/rooms.js";
 import { layOut, simplified } from "./low.js";
 import { transfer } from "./transfer.js";
@@ -47,8 +46,6 @@ export type BakeMeshOptions = {
    * light reaching each window.
    */
   interior?: Object3D;
-  /** render the interior's rooms with this renderer (only used with `interior`); default: one this package creates once and reuses */
-  renderer?: WebGLRenderer;
 } & (
   | {
       /**
@@ -70,7 +67,7 @@ export type BakeMeshOptions = {
 /**
  * Bake `source` (in its own space, ignoring its own transform) onto one low-poly mesh with
  * its own textures: base colour (alpha: cut out or not), tangent-space normal and
- * occlusion/roughness/metalness, drawn with a MeshStandardMaterial. The mesh is placed
+ * occlusion/roughness/metalness, drawn with a MeshStandardNodeMaterial. The mesh is placed
  * like `source`. Materials are read on the CPU as MeshStandardMaterials (color, map,
  * alphaTest, roughness, metalness, normal and ao maps); emissive, clearcoat, transmission
  * and the like are not baked, and blended transparency bakes opaque: glass in its own
@@ -138,7 +135,7 @@ async function bake(source: Object3D, options: BakeMeshOptions, interior: Interi
   geometry.computeBoundingSphere();
   const orm = bakedTexture({ data: maps.orm, width: size, height: size }, NoColorSpace);
   const color = { data: maps.color, width: size, height: size };
-  const material = new MeshStandardMaterial({
+  const material = new (interior ? InteriorMaterial : MeshStandardNodeMaterial)({
     // Cut-outs get mips that keep their coverage; else the GPU's are as good.
     map: bakedTexture(color, SRGBColorSpace, input.cutout ? keepCoverage(mipmaps(color, true)) : undefined),
     normalMap: bakedTexture({ data: maps.normal, width: size, height: size }, NoColorSpace),
@@ -150,12 +147,12 @@ async function bake(source: Object3D, options: BakeMeshOptions, interior: Interi
     alphaTest: input.cutout ? 0.5 : 0,
     side: input.inputs.some((inputs) => inputs.doubleSided) ? DoubleSide : FrontSide,
   });
-  if (interior) {
+  if (interior && material instanceof InteriorMaterial) {
     const { windows } = maps;
     if (!windows.some((value, i) => i % 2 === 0 && value > 0)) throw new Error("bakeMesh: no glass of the source looks into a room of the interior");
     const { boxes } = interior;
-    const faces = await renderFaces(interior.object, interior.placement, boxes, faceSize(size, boxes.length), options.renderer ?? sharedRenderer());
-    furnish(material, { ...faces, boxes, windows: windowTexture(windows, size) });
+    const faces = await renderFaces(interior.object, interior.placement, boxes, faceSize(size, boxes.length), await sharedRenderer());
+    material.furnish({ ...faces, boxes, windows: windowTexture(windows, size) });
   }
   const mesh = new Mesh(geometry, material);
   mesh.name = `${source.name || "object"} baked`;

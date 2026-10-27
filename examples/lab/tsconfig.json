@@ -8,7 +8,7 @@
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": ["vite/client", "node"],
+    "types": ["vite/client", "node", "@webgpu/types"],
     "resolveJsonModule": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,

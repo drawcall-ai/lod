@@ -1,4 +1,4 @@
-import { Box3, Matrix3, Vector3 } from "three";
+import { Box3, Matrix3, Vector3 } from "three/webgpu";
 import { pause } from "../pause.js";
 import { tangentFrame } from "../source/frame.js";
 import { Shading } from "../source/shading.js";

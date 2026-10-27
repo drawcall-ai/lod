@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 
 /**
  * The scene's shadow casters by size, so a cascade draws only those whose shadow is at

@@ -1,4 +1,4 @@
-import { BufferAttribute, BufferGeometry, Vector3 } from "three";
+import { BufferAttribute, BufferGeometry, Vector3 } from "three/webgpu";
 import { MeshBVH } from "three-mesh-bvh";
 import { Shading } from "./shading.js";
 import type { Source } from "./source.js";

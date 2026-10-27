@@ -1,6 +1,9 @@
 node_modules/
 dist/
 coverage/
+# Vitest browser mode: screenshots and attachments of failed tests.
+__screenshots__/
+.vitest-attachments/
 .artifacts/
 .claude/worktrees/
 *.tsbuildinfo

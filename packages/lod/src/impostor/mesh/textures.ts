@@ -1,4 +1,4 @@
-import { DataTexture, LinearFilter, LinearMipmapLinearFilter, NoColorSpace, RGBAFormat, SRGBColorSpace, UnsignedByteType } from "three";
+import { DataTexture, LinearFilter, LinearMipmapLinearFilter, NoColorSpace, RGBAFormat, SRGBColorSpace, UnsignedByteType } from "three/webgpu";
 import type { Impostor } from "../impostor.js";
 
 /** One set of GPU textures per impostor, shared by every mesh drawing it. */
@@ -14,8 +14,7 @@ export function acquireTextures(impostor: Impostor): DataTexture[] {
       const texture = new DataTexture(first.data, impostor.size, impostor.size, RGBAFormat, UnsignedByteType);
       const map = impostor.maps[i];
       texture.colorSpace = map === "base" || map === "emissive" ? SRGBColorSpace : NoColorSpace;
-      // The baked levels; the chain ends at one texel per frame, and an immutable
-      // texture with fewer levels than a full chain is complete without the rest.
+      // The baked levels; the chain ends at one texel per frame.
       texture.mipmaps = mipmaps;
       texture.generateMipmaps = false;
       texture.minFilter = LinearMipmapLinearFilter;

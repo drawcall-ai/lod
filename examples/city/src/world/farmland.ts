@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { Random } from "../content/random.ts";
 import { Crop, type Land, Use } from "./land.ts";
 import { type Forest, inForest, type Road, type Spot, spot } from "./plan.ts";

@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { GLTSLoader } from "@drawcall/glts";
 import type { BakeImpostorOptions } from "@drawcall/lod";
 import { bricks, house, houseShell, tiled } from "./house.js";

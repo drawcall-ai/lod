@@ -1,9 +1,9 @@
-import { Color, Vector4, type Object3D } from "three";
+import { Color, type Object3D } from "three/webgpu";
 import { texelPixels } from "./impostor/impostor.js";
 import { isImpostorMesh } from "./three.js";
 
-// The levels Lod and InstancedLod share: their thresholds, the defaults of those, and
-// which level a height picks.
+// The levels Lod and InstancedLod share: their thresholds, the defaults of those, which
+// level a height picks and how far it has faded in (see fade.ts).
 
 /**
  * A fade dithers over the top of a level's range: from maxPixels × (1 - FADE) to
@@ -31,17 +31,9 @@ export interface LodLevel {
   maxPixels: number;
 }
 
-/** One entry of `InstancedLod.levels`. */
-export interface InstancedLodLevel extends LodLevel {
-  /** Instances that drew this level in the last update; an instance in a fade counts in both levels. */
-  readonly count: number;
-}
-
-export class Level implements InstancedLodLevel {
-  /** See fade.ts; shared by every faded material of the level. */
-  readonly fade = new Vector4(0, 0, 0, 0);
+export class Level implements LodLevel {
+  /** Debug tint (see `Lod.debug`), white when off; shared by every draw of the level. */
   readonly tint = new Color(1, 1, 1);
-  count = 0;
   /** maxPixels as set, or null for the default */
   explicit: number | null = null;
   /** The default before raising for the fades: see `resolve`. */
@@ -148,9 +140,23 @@ function lastFitting(levels: readonly Level[], height: number): number {
   return 0;
 }
 
-/** The finer neighbour that also draws while `level` fades in at `height`, if any. */
-export function fadingWith(levels: readonly Level[], level: Level, height: number, fades: boolean): Level | null {
+/**
+ * How far `level` has faded in over its finer neighbour at `height`, in [0, 1): 0 when
+ * no fade is under way (the finer level is gone). See fade.ts for how both draw it.
+ */
+export function fadeProgress(levels: readonly Level[], level: Level, height: number): number {
   const finer = levels[level.index - 1];
-  if (!fades || !finer || level.nested || finer.nested || height <= level.maxPixels * (1 - FADE)) return null;
-  return finer;
+  if (!finer || level.nested || finer.nested) return 0;
+  const top = level.maxPixels;
+  const t = Math.min(Math.max((height - top * (1 - FADE)) / (top * FADE), 0), 1);
+  // smoothstep, as the GPU's selection computes it
+  return t * t * (3 - 2 * t);
+}
+
+/** Debug tints by level index, see `Lod.debug`. */
+const TINTS = [0xff6060, 0x60ff60, 0x6080ff, 0xffd040, 0xff60ff, 0x60ffff].map((hex) => new Color(hex));
+
+/** Give each level its debug tint, or white. */
+export function tintLevels(levels: readonly Level[], debug: boolean): void {
+  for (const level of levels) level.tint.set(debug ? (TINTS[level.index % TINTS.length] ?? 0xffffff) : 0xffffff);
 }

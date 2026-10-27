@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { houseParams, type HouseParams } from "../content/house/index.ts";
 import { Random } from "../content/random.ts";
 import { forestClearings, forestEdge, type Zones } from "../content/terrain.ts";

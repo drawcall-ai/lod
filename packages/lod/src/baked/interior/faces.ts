@@ -8,16 +8,16 @@ import {
   PerspectiveCamera,
   SRGBColorSpace,
   Scene,
+  RenderTarget,
   UnsignedByteType,
   Vector3,
-  WebGLRenderTarget,
   type Matrix4,
   type Object3D,
-  type WebGLRenderer,
-} from "three";
+  type Renderer,
+} from "three/webgpu";
 import { showDetail } from "../../bounds.js";
 import { pause } from "../../pause.js";
-import { borrow } from "../../renderer.js";
+import { borrow, readBytes } from "../../renderer.js";
 import { linearToSrgb, srgbToLinear } from "../../source/texels.js";
 
 /**
@@ -53,7 +53,7 @@ export interface Faces {
  * along the face's right, up and forward. Each view reaches a texel past its edges, so
  * filtering at a face's border reads the neighbouring face's content.
  */
-export async function renderFaces(interior: Object3D, placement: Matrix4, boxes: readonly Box3[], size: number, renderer: WebGLRenderer): Promise<Faces> {
+export async function renderFaces(interior: Object3D, placement: Matrix4, boxes: readonly Box3[], size: number, renderer: Renderer): Promise<Faces> {
   const copy = interior.clone();
   copy.matrixAutoUpdate = false;
   copy.matrix.copy(placement);
@@ -67,7 +67,7 @@ export async function renderFaces(interior: Object3D, placement: Matrix4, boxes:
   const camera = new PerspectiveCamera(MathUtils.radToDeg(2 * Math.atan(span)), 1);
   camera.matrixAutoUpdate = false;
   camera.layers.enableAll();
-  const target = new WebGLRenderTarget(size, size, { type: UnsignedByteType, colorSpace: SRGBColorSpace, depthBuffer: true });
+  const target = new RenderTarget(size, size, { type: UnsignedByteType, colorSpace: SRGBColorSpace, depthBuffer: true });
   const face = size * size * 4;
   const lit = new Uint8Array(face * 6 * boxes.length);
   const glow = new Uint8Array(face * 6 * boxes.length);
@@ -75,15 +75,15 @@ export async function renderFaces(interior: Object3D, placement: Matrix4, boxes:
   const back = new Vector3();
   const centre = new Vector3();
   const extent = new Vector3();
-  const shoot = (into: Uint8Array) => {
+  const shoot = async (into: Uint8Array) => {
     const restore = borrow(renderer, target);
     try {
       renderer.clear(true, true, true);
       renderer.render(scene, camera);
-      renderer.readRenderTargetPixels(target, 0, 0, size, size, into);
     } finally {
       restore();
     }
+    into.set(await readBytes(renderer, target, 0));
   };
   // Far enough to see through doorways into any other room.
   const reach =
@@ -102,9 +102,9 @@ export async function renderFaces(interior: Object3D, placement: Matrix4, boxes:
         camera.updateMatrixWorld(true);
         const at = (i * 6 + f) * face;
         ambient.visible = true;
-        shoot(lit.subarray(at, at + face));
+        await shoot(lit.subarray(at, at + face));
         ambient.visible = false;
-        shoot(glow.subarray(at, at + face));
+        await shoot(glow.subarray(at, at + face));
       }
       await pause();
     }

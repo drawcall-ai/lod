@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 
 /**
  * Load-time progress: downloads go through three's default manager (every loader here

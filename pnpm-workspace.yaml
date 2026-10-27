@@ -1,7 +1,3 @@
 packages:
   - packages/*
   - examples/*
-
-# Native addon the package tests need: native-gles (WebGL2 for webgl-node).
-onlyBuiltDependencies:
-  - native-gles

@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { Random } from "../content/random.ts";
 
 /** Half the edge of the detailed square of ground; the world's content lies within it. */

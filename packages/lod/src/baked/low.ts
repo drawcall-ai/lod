@@ -1,4 +1,4 @@
-import { BufferAttribute, BufferGeometry, Mesh, type Object3D } from "three";
+import { BufferAttribute, BufferGeometry, Mesh, type Object3D } from "three/webgpu";
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
 import { decimate } from "../simplify.js";
 import { measureError } from "../source/error.js";

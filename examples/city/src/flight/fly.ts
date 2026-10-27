@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 
 /**
  * Free flight: drag to look, WASD to move, Q/E down and up, Shift to hurry, the wheel to

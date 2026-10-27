@@ -11,22 +11,22 @@ import {
   Mesh,
   MeshBasicMaterial,
   MeshPhysicalMaterial,
-  MeshStandardMaterial,
   PerspectiveCamera,
   PlaneGeometry,
   PointLight,
   Scene,
-  WebGLRenderTarget,
   Vector3,
   type Object3D,
-} from "three";
+} from "three/webgpu";
 import { describe, expect, it } from "vitest";
 import { bakeMesh } from "../../src/baked/index.js";
 import { readBoxes } from "../../src/baked/interior/rooms.js";
 import { InstancedLod } from "../../src/instanced/index.js";
 import { Lod } from "../../src/lod.js";
 import { house, interior, low } from "../house.js";
-import { GPU_TIMEOUT, compile, renderer } from "../webgl.js";
+import { InteriorMaterial } from "../../src/baked/interior/material.js";
+import { isStandardNode } from "../../src/three.js";
+import { GPU_TIMEOUT, render as draw } from "../gpu.js";
 
 const SIZE = 96;
 
@@ -35,23 +35,13 @@ const SIZE = 96;
  * `ambient`, and with a sun shining from `sun` if given (which would light the source's
  * room through its walls: no shadows here).
  */
-function render(object: Object3D, eye: Vector3, at = new Vector3(0, 0, 1), ambient = 0.6, sun?: Vector3): Uint8Array {
+function render(object: Object3D, eye: Vector3, at = new Vector3(0, 0, 1), ambient = 0.6, sun?: Vector3): Promise<Uint8Array> {
   const scene = new Scene().add(object, new AmbientLight(0xffffff, ambient));
   if (sun) scene.add(new DirectionalLight(0xffffff, 3).translateX(sun.x).translateY(sun.y).translateZ(sun.z));
   const camera = new PerspectiveCamera(30, 1, 0.1, 100);
   camera.position.copy(eye);
   camera.lookAt(at);
-  const target = new WebGLRenderTarget(SIZE, SIZE);
-  renderer.setRenderTarget(target);
-  renderer.setClearColor(0x000000, 0);
-  renderer.clear();
-  renderer.render(scene, camera);
-  const pixels = new Uint8Array(SIZE * SIZE * 4);
-  renderer.readRenderTargetPixels(target, 0, 0, SIZE, SIZE, pixels);
-  renderer.setRenderTarget(null);
-  target.dispose();
-  scene.remove(object);
-  return pixels;
+  return draw(scene, camera, SIZE).finally(() => scene.remove(object));
 }
 
 /** Mean colour of the pixels within `radius` of the image centre, where the window is. */
@@ -70,16 +60,17 @@ const distance = (a: number[], b: number[]) => Math.max(...a.map((v, i) => Math.
 
 /** The windows texture of a baked mesh: per texel, room + 1 and the glass's coverage. */
 function windows(mesh: Mesh): Uint8Array {
-  if (!(mesh.material instanceof MeshStandardMaterial)) throw new Error("expected a baked material");
-  const texture: unknown = compile(mesh.material).uniforms.interiorWindows?.value;
-  if (!(texture instanceof DataTexture) || !(texture.image.data instanceof Uint8Array)) throw new Error("expected a windows texture");
-  return texture.image.data;
+  const { material } = mesh;
+  if (!(material instanceof InteriorMaterial) || !material.rooms) throw new Error("expected a baked material with rooms");
+  const { data } = material.rooms.windows.image;
+  if (!(data instanceof Uint8Array)) throw new Error("expected 8-bit windows");
+  return data;
 }
 
 /** The baked base colour pixels of `mesh`. */
 function colors(mesh: Mesh): Uint8Array {
   const { material } = mesh;
-  if (!(material instanceof MeshStandardMaterial) || !(material.map instanceof DataTexture)) throw new Error("expected a baked material");
+  if (Array.isArray(material) || !isStandardNode(material) || !(material.map instanceof DataTexture)) throw new Error("expected a baked material");
   const { data } = material.map.image;
   if (!(data instanceof Uint8Array)) throw new Error("expected 8-bit pixels");
   return data;
@@ -103,7 +94,7 @@ describe("interiors", { timeout: GPU_TIMEOUT }, () => {
     const source = house();
     const rooms = interior();
     source.add(rooms);
-    const baked = await bakeMesh(source, { low: low(), textureSize: 64, interior: rooms, renderer });
+    const baked = await bakeMesh(source, { low: low(), textureSize: 64, interior: rooms });
     expect(rooms.visible).toBe(true);
     expect(colors(baked)).toEqual(colors(plain));
     const data = windows(baked);
@@ -119,16 +110,16 @@ describe("interiors", { timeout: GPU_TIMEOUT }, () => {
   it("shows the room through the window, its far wall head-on and a side wall from aside", async () => {
     const rooms = interior();
     const source = house().add(rooms);
-    const baked = await bakeMesh(source, { low: low(), textureSize: 128, interior: rooms, renderer });
+    const baked = await bakeMesh(source, { low: low(), textureSize: 128, interior: rooms });
     const front = new Vector3(0, 0, 5);
     const aside = new Vector3(3.5, 0, 3.6);
     // Head-on, the far wall: lit by the light reaching the window, at any intensity.
     for (const ambient of [0.6, 2.5]) {
-      const [real, fake] = [render(source, front, undefined, ambient), render(baked, front, undefined, ambient)];
+      const [real, fake] = [await render(source, front, undefined, ambient), await render(baked, front, undefined, ambient)];
       expect(distance(windowColor(real), windowColor(fake))).toBeLessThan(6);
     }
-    const fake = render(baked, front);
-    const [realAside, fakeAside] = [render(source, aside), render(baked, aside)];
+    const fake = await render(baked, front);
+    const [realAside, fakeAside] = [await render(source, aside), await render(baked, aside)];
     expect(distance(windowColor(realAside), windowColor(fakeAside))).toBeLessThan(6);
     // Parallax: from aside the window shows another wall.
     expect(distance(windowColor(fake), windowColor(fakeAside))).toBeGreaterThan(40);
@@ -138,7 +129,7 @@ describe("interiors", { timeout: GPU_TIMEOUT }, () => {
     const rooms = interior();
     const source = house().add(rooms);
     source.position.set(0.3, 0, 0);
-    const baked = await bakeMesh(source, { low: low(), textureSize: 128, interior: rooms, renderer });
+    const baked = await bakeMesh(source, { low: low(), textureSize: 128, interior: rooms });
     const turn = new Matrix4().makeRotationY(0.4);
     const lod = new Lod([source.clone(), baked.clone()]);
     lod.quaternion.setFromRotationMatrix(turn);
@@ -149,11 +140,11 @@ describe("interiors", { timeout: GPU_TIMEOUT }, () => {
     for (const offset of [new Vector3(0, 0, 4), new Vector3(2.5, 0.5, 3)]) {
       const eye = window.clone().add(offset);
       lod.forceLevel = 0;
-      const real = windowColor(render(lod, eye, window));
+      const real = windowColor(await render(lod, eye, window));
       lod.forceLevel = 1;
-      const fake = windowColor(render(lod, eye, window));
+      const fake = windowColor(await render(lod, eye, window));
       expect(distance(real, fake)).toBeLessThan(12);
-      expect(distance(fake, windowColor(render(instanced, eye, window)))).toBeLessThan(2);
+      expect(distance(fake, windowColor(await render(instanced, eye, window)))).toBeLessThan(2);
     }
   });
 
@@ -176,9 +167,9 @@ describe("interiors", { timeout: GPU_TIMEOUT }, () => {
     const back = new Mesh(new BoxGeometry(1.8, 1.8, 0.9), new MeshBasicMaterial({ color: 0x2040d0, side: BackSide })).translateZ(-0.45);
     const rooms = new Group().add(front, back);
     const source = house().add(rooms);
-    const baked = await bakeMesh(source, { low: low(), textureSize: 128, interior: rooms, renderer });
+    const baked = await bakeMesh(source, { low: low(), textureSize: 128, interior: rooms });
     const eye = new Vector3(0, 0, 5);
-    const [real, fake] = [windowColor(render(source, eye)), windowColor(render(baked, eye))];
+    const [real, fake] = [windowColor(await render(source, eye)), windowColor(await render(baked, eye))];
     expect(fake[2]).toBeGreaterThan(fake[0] + 60);
     expect(distance(real, fake)).toBeLessThan(6);
   });
@@ -186,18 +177,18 @@ describe("interiors", { timeout: GPU_TIMEOUT }, () => {
   it("keeps the reflection of fully transmissive glass over the room", async () => {
     const rooms = interior();
     const source = house(new MeshPhysicalMaterial({ roughness: 0.3, transmission: 1 })).add(rooms);
-    const baked = await bakeMesh(source, { low: low(), textureSize: 64, interior: rooms, renderer });
+    const baked = await bakeMesh(source, { low: low(), textureSize: 64, interior: rooms });
     const eye = new Vector3(0, 0, 5);
     // A sun behind the eye: its highlight sits on the glass, the room is not lit by it.
-    const dull = windowColor(render(baked, eye, undefined, 0.6));
-    const sunny = windowColor(render(baked, eye, undefined, 0.6, eye));
+    const dull = windowColor(await render(baked, eye, undefined, 0.6));
+    const sunny = windowColor(await render(baked, eye, undefined, 0.6, eye));
     expect(Math.min(...sunny.map((v, i) => v - (dull[i] ?? 0)))).toBeGreaterThan(10);
   });
 
   it("refuses lights in the interior, and fails when no glass looks into a room", async () => {
     const lit = interior().add(new PointLight());
-    await expect(bakeMesh(house().add(lit), { low: low(), textureSize: 32, interior: lit, renderer })).rejects.toThrow(/light/);
+    await expect(bakeMesh(house().add(lit), { low: low(), textureSize: 32, interior: lit })).rejects.toThrow(/light/);
     const rooms = new Group().add(new Mesh(new BoxGeometry(0.5, 0.5, 0.5), new MeshBasicMaterial()).translateX(5));
-    await expect(bakeMesh(house(), { low: low(), textureSize: 32, interior: rooms, renderer })).rejects.toThrow(/no glass/);
+    await expect(bakeMesh(house(), { low: low(), textureSize: 32, interior: rooms })).rejects.toThrow(/no glass/);
   });
 });

@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { box, type Parts } from "../geometry.ts";
 import type { Random } from "../random.ts";
 import { brass, glass } from "./materials.ts";

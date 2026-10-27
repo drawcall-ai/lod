@@ -1,7 +1,10 @@
-import * as THREE from "three";
-import { foliage } from "./foliage.ts";
+import * as THREE from "three/webgpu";
+import { Fn, attribute, cameraPosition, distance, dot, fract, mix, modelWorldMatrix, sin, smoothstep, step, vec2, vec3, vec4 } from "three/tsl";
+import { instanceMatrixOf } from "../../../../packages/lod/src/fade.ts";
+import { Foliage, foliage } from "./foliage.ts";
+import { baseColor } from "./materials.ts";
 import { Random } from "./random.ts";
-import type { groundShading } from "./terrain.ts";
+import type { Ground } from "./terrain.ts";
 
 export interface ClumpShape {
   /** Edge of the square patch the blades grow in (m). */
@@ -68,43 +71,26 @@ export function grassClump(seed: number, s: ClumpShape): THREE.BufferGeometry {
 }
 
 /**
- * Blades coloured by the ground they grow from (`cityGround` at their root, see
+ * Blades coloured by the ground they grow from (`ground` at their root, see
  * `groundShading`): darker at the base, a little lighter and drier at the tips, each
  * blade a touch different. Two-sided, translucent in the sun.
  */
-export function grassMaterial(ground: ReturnType<typeof groundShading>): THREE.MeshStandardMaterial {
-  const m = new THREE.MeshStandardMaterial({ name: "grass", roughness: 0.75, side: THREE.DoubleSide });
-  foliage(m, { translucency: 0.5 });
-  const leaf = m.onBeforeCompile;
-  m.onBeforeCompile = (shader, renderer) => {
-    leaf.call(m, shader, renderer);
-    Object.assign(shader.uniforms, ground.uniforms);
-    shader.vertexShader = `attribute vec3 blade;\nvarying vec2 vRoot;\nvarying float vAlong;\nvarying float vBlade;\n${shader.vertexShader}`.replace(
-      "#include <worldpos_vertex>",
-      /* glsl */ `#include <worldpos_vertex>
-      {
-        mat4 model = modelMatrix;
-        #ifdef USE_INSTANCING
-          model = modelMatrix * instanceMatrix;
-        #endif
-        vRoot = (model * vec4(blade.x, 0.0, blade.y, 1.0)).xz;
-        vAlong = blade.z;
-        vBlade = fract(sin(dot(blade.xy, vec2(127.1, 311.7))) * 43758.5453);
-      }`,
-    );
-    shader.fragmentShader = `varying vec2 vRoot;\nvarying float vAlong;\nvarying float vBlade;\n${ground.glsl}\n${shader.fragmentShader}`.replace(
-      "#include <map_fragment>",
-      /* glsl */ `{
-        vec3 base = cityGround(vRoot, distance(cameraPosition, vec3(vRoot.x, cameraPosition.y, vRoot.y)));
-        float lift = mix(0.5, 1.25, smoothstep(0.0, 1.0, vAlong));
-        // one blade in six is dry: straw at the tip
-        float dry = step(0.83, vBlade) * smoothstep(0.3, 1.0, vAlong);
-        vec3 tip = mix(base, base * vec3(1.15, 1.08, 0.8), smoothstep(0.6, 1.0, vAlong) * vBlade);
-        tip = mix(tip, vec3(dot(base, vec3(0.3, 0.59, 0.11))) * vec3(1.6, 1.35, 0.8), dry * 0.7);
-        diffuseColor.rgb *= tip * lift * (0.8 + 0.4 * fract(vBlade * 7.13));
-      }`,
-    );
-  };
-  m.customProgramCacheKey = () => `grass-${ground.key}`;
+export function grassMaterial(ground: Ground): Foliage {
+  const m = foliage(new Foliage({ name: "grass", roughness: 0.75, side: THREE.DoubleSide }), { translucency: 0.5 });
+  const blade = attribute<"vec3">("blade", "vec3");
+  // the blade's root in the world, worked out per vertex: only there is the instance's matrix
+  const root = Fn((builder) => {
+    const instance = instanceMatrixOf(builder.object);
+    return (instance ? modelWorldMatrix.mul(instance) : modelWorldMatrix).mul(vec4(blade.x, 0, blade.y, 1)).xz;
+  })().toVarying("vRoot");
+  const along = blade.z;
+  const seed = fract(sin(dot(blade.xy, vec2(127.1, 311.7))).mul(43758.5453));
+  const base = ground(root, distance(cameraPosition.xz, root)).toVar();
+  const lift = mix(0.5, 1.25, smoothstep(0, 1, along));
+  // one blade in six is dry: straw at the tip
+  const dry = step(0.83, seed).mul(smoothstep(0.3, 1, along));
+  const tip = mix(base, base.mul(vec3(1.15, 1.08, 0.8)), smoothstep(0.6, 1, along).mul(seed));
+  const straw = mix(tip, vec3(dot(base, vec3(0.3, 0.59, 0.11))).mul(vec3(1.6, 1.35, 0.8)), dry.mul(0.7));
+  m.colorNode = baseColor.mul(vec4(straw.mul(lift).mul(fract(seed.mul(7.13)).mul(0.4).add(0.8)), 1));
   return m;
 }

@@ -1,5 +1,6 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import type { InstancedLod } from "@drawcall/lod";
+import { inShadowPass } from "../../../../packages/lod/src/three.ts";
 
 /** Where patches come from: tiles of ground, each holding instances of the InstancedLods. */
 export interface Tiles {
@@ -21,7 +22,8 @@ const eye = new THREE.Vector3();
  * are parked at scale 0, which every level list sorts into its cheapest, empty level.
  *
  * Like a Lod, it is updated by three's renderer while it lists the scene (`isLOD`), so
- * its InstancedLods, its children, sort the new instances in the same frame.
+ * its InstancedLods, its children, sort the new instances in the same frame. Shadow passes
+ * update it too, with the light's camera: those calls change nothing.
  */
 export class Patches extends THREE.Object3D {
   /** View height in CSS pixels that reaches are measured on, as the package measures levels; the app sets it. */
@@ -58,6 +60,7 @@ export class Patches extends THREE.Object3D {
 
   /** Called by three's renderer, before its children sort: the nearest tiles within reach hold the chunks. */
   update(camera: THREE.Camera): void {
+    if (inShadowPass(this)) return;
     eye.setFromMatrixPosition(camera.matrixWorld);
     const wanted = this.candidates;
     wanted.length = 0;

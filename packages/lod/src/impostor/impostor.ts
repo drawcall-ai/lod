@@ -21,7 +21,7 @@ export type ImpostorMap = (typeof MAPS)[number];
  * The atlas is `frames x frames` cells of `size / frames` pixels each. Cell (col, row)
  * holds the view from `frameDirection(layout, frames, col, row)` and starts at pixel
  * `(col * cell, row * cell)`; row 0 is the first row in memory, which is the bottom row
- * of the texture (WebGL convention).
+ * of the texture (three's DataTexture convention).
  *
  * Depth is `0.5 + 0.5 * dot(p - centre, viewDirection) / boundingRadius(box)`, so 1 is
  * toward the camera that baked the frame and 0 is away from it.

@@ -1,9 +1,10 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { Lod, bakeMesh } from "@drawcall/lod";
+import { readBytes } from "../../../packages/lod/src/renderer.js";
 import { house, houseInterior, houseShell } from "./house.js";
 import { at } from "./must.js";
-import { context2d, glCanvas } from "./page.js";
+import { context2d, glCanvas, gpuRenderer, nextFrame } from "./page.js";
 import { pixelsOf } from "./pixels.js";
 
 // Standalone page (interior.html): the house with its rooms behind real glass (source)
@@ -28,17 +29,14 @@ const VIEWS = [
 ] as const;
 const WINDOWS = { front: new THREE.Vector3(0, 2.75, 4), side: new THREE.Vector3(5, 2.75, 0) };
 
-const renderers = {
-  default: new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true }),
-  log: new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, logarithmicDepthBuffer: true }),
-};
+const log = new THREE.WebGPURenderer({ antialias: true, logarithmicDepthBuffer: true });
+log.setSize(TILE, TILE, false);
+await log.init();
+const renderers = { default: await gpuRenderer(TILE), log };
 for (const renderer of Object.values(renderers)) {
-  renderer.setPixelRatio(1);
-  renderer.setSize(TILE, TILE, false);
   renderer.toneMapping = THREE.NeutralToneMapping;
   renderer.shadowMap.enabled = true;
 }
-document.body.append(renderers.default.domElement);
 const environment = new THREE.PMREMGenerator(renderers.default).fromScene(new RoomEnvironment(), 0.04).texture;
 const environmentLog = new THREE.PMREMGenerator(renderers.log).fromScene(new RoomEnvironment(), 0.04).texture;
 
@@ -62,7 +60,7 @@ function sceneFor(object: THREE.Object3D, light: Light, log: boolean): THREE.Sce
   return scene.add(object);
 }
 
-const target = new THREE.WebGLRenderTarget(TILE, TILE, { samples: 4 });
+const target = new THREE.RenderTarget(TILE, TILE, { samples: 4 });
 
 /** One camera per view: a Lod measures each camera at the height it last drew at. */
 const cameras = new Map<(typeof VIEWS)[number], THREE.PerspectiveCamera>();
@@ -80,16 +78,16 @@ function cameraFor(v: (typeof VIEWS)[number]): THREE.PerspectiveCamera {
 }
 
 /** `object` seen from view `v` under `light`, as pixels (rows bottom-up). */
-function shoot(object: THREE.Object3D, v: (typeof VIEWS)[number], light: Light, log = false): Uint8Array {
+async function shoot(object: THREE.Object3D, v: (typeof VIEWS)[number], light: Light, log = false): Promise<Uint8Array> {
   const renderer = log ? renderers.log : renderers.default;
   const camera = cameraFor(v);
   const scene = sceneFor(object, light, log);
-  const shot = log ? new THREE.WebGLRenderTarget(TILE, TILE, { samples: 4 }) : target;
+  const shot = log ? new THREE.RenderTarget(TILE, TILE, { samples: 4 }) : target;
+  await nextFrame(renderer);
   renderer.setRenderTarget(shot);
   renderer.render(scene, camera);
-  const pixels = new Uint8Array(TILE * TILE * 4);
-  renderer.readRenderTargetPixels(shot, 0, 0, TILE, TILE, pixels);
   renderer.setRenderTarget(null);
+  const pixels = await readBytes(renderer, shot, 0);
   if (log) shot.dispose();
   scene.remove(object);
   return pixels;
@@ -137,12 +135,12 @@ const amplified = (a: Uint8Array, b: Uint8Array) => a.map((v, i) => (i % 4 === 3
  * A Lod of copies of `source` and `baked`, its switch set so that view `v` is in the
  * middle of the fade between them, seen from `v`: the two dither, rooms and all.
  */
-function fading(source: THREE.Object3D, baked: THREE.Object3D, v: (typeof VIEWS)[number]): Uint8Array {
+async function fading(source: THREE.Object3D, baked: THREE.Object3D, v: (typeof VIEWS)[number]): Promise<Uint8Array> {
   const lod = new Lod([source.clone(), baked.clone()]);
   at(lod.levels, 1).maxPixels = pixelsOf(lod, cameraFor(v), TILE) / 0.95;
   // The first frame teaches the Lod the target's height.
-  shoot(lod, v, "flat");
-  const pixels = shoot(lod, v, "flat");
+  await shoot(lod, v, "flat");
+  const pixels = await shoot(lod, v, "flat");
   const visible = lod.levels.filter((l) => l.object.visible).length;
   if (visible !== 2) throw new Error(`interior: expected both levels in the fade, ${visible} drew`);
   return pixels;
@@ -165,14 +163,14 @@ async function run() {
   for (const light of ["flat", "env", "lit"] as const) {
     const sheet: Uint8Array[][] = [];
     for (const v of VIEWS) {
-      const real = shoot(source, v, light);
+      const real = await shoot(source, v, light);
       rooms.visible = false;
-      const empty = shoot(source, v, light);
+      const empty = await shoot(source, v, light);
       rooms.visible = true;
-      const fake = shoot(baked, v, light);
+      const fake = await shoot(baked, v, light);
       const mask = windowMask(real, empty);
-      const log = light === "flat" ? error(fake, shoot(baked, v, light, true), mask).error : null;
-      const fade = light === "flat" ? error(real, fading(source, baked, v), mask).error : null;
+      const log = light === "flat" ? error(fake, await shoot(baked, v, light, true), mask).error : null;
+      const fade = light === "flat" ? error(real, await fading(source, baked, v), mask).error : null;
       rows.push({ light, view: v.name, ...error(real, fake, mask), all: error(real, fake, null).error, logVsDefault: log, fade });
       sheet.push([real, fake, amplified(real, fake)]);
     }

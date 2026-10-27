@@ -1,5 +1,6 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { ImpostorMesh, type InstancedLod, Lod } from "@drawcall/lod";
+import { inShadowPass } from "../../../../../packages/lod/src/three.ts";
 import { cornPlant } from "../../content/corn/index.ts";
 import { LEAF_FOLIAGE } from "../../content/corn/leaf.ts";
 import { foliageLevels } from "../../content/foliage.ts";
@@ -8,7 +9,7 @@ import { heroPlant } from "../hero.ts";
 import { culled, diameter, impostor, instanced } from "../levels.ts";
 import { Patches } from "../patches.ts";
 import type { Plan } from "../plan.ts";
-import { bakeCovers, type Cover, type Skirt, TOP } from "./covers.ts";
+import { bakeCovers, type Cover, type Skirt, skirt as skirtUniform, TOP } from "./covers.ts";
 import { BLOCK, cut, FieldTiles, heroSpot, layout, VARIANTS } from "./field.ts";
 
 const DESIGNS = 4;
@@ -101,7 +102,7 @@ export class Corn extends THREE.Object3D {
     const designs = Array.from({ length: DESIGNS }, (_, d) => layout(d + 11));
     const tiles = cut(plan, DESIGNS, TOP);
     const hero = heroSpot(tiles, designs);
-    const skirt = { value: new THREE.Vector2() };
+    const skirt = skirtUniform();
     const bare = seeds.map((seed) => cornPlant(seed, { leafSegments: FIELD_LEAVES, detail: "field", tassel: false }));
     const covers = await step("corn blocks", () => bakeCovers(designs, { tasselled: sources, bare }, tiles, skirt));
     const perTile = seeds.map((_, v) => Math.max(...designs.map((plants) => plants.filter((p) => p.variant === v).length)));
@@ -126,9 +127,11 @@ export class Corn extends THREE.Object3D {
    * sort. Plants dither out at one height on screen; covers rise out of the soil in
    * front of that, are drawn wherever a part of them may have risen, and swap to their
    * ridged level once no part of them is rising. When more blocks are in reach than there
-   * are plant slots, the plants dither out nearer, and back out as slots free up.
+   * are plant slots, the plants dither out nearer, and back out as slots free up. Shadow
+   * passes call it with the light's camera, which changes nothing.
    */
   update(camera: THREE.Camera): void {
+    if (inShadowPass(this)) return;
     const scale = ((camera.projectionMatrix.elements[5] ?? 1) * Patches.height * Lod.quality) / 2;
     const gone = Math.min(PLANT_GONE * this.squeeze, PLANT_PIXELS * 0.85);
     this.fadeFrom = (this.plantSize * scale) / gone;

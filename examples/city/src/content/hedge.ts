@@ -1,5 +1,5 @@
-import * as THREE from "three";
-import { surface } from "./materials.ts";
+import * as THREE from "three/webgpu";
+import { type Surface, surface } from "./materials.ts";
 import { Random } from "./random.ts";
 
 /**
@@ -42,6 +42,6 @@ export function hedge(length: number, seed: number, detail: "fine" | "box" = "fi
   return mesh;
 }
 
-function hedgeMaterial(): THREE.MeshStandardMaterial {
+function hedgeMaterial(): Surface {
   return surface("leafy_grass", { color: "#7f9a6a", vertexColors: true, normalScale: 2.5, roughness: 1.1 });
 }

@@ -9,6 +9,8 @@ export default defineConfig({
     alias: { "@drawcall/lod": entry },
     dedupe: ["three"],
   },
+  // Both entry points up front: found one by one, Vite re-bundles mid-load and a page ends up with two copies of three.
+  optimizeDeps: { include: ["three", "three/webgpu", "three/tsl"] },
   build: {
     target: "es2022",
     rollupOptions: { input: { city: "index.html", viewer: "viewer.html" } },

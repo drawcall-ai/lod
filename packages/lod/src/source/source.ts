@@ -1,4 +1,4 @@
-import { BufferAttribute, BufferGeometry, type Object3D, type Texture } from "three";
+import { BufferAttribute, BufferGeometry, type Object3D, type Texture } from "three/webgpu";
 import { MeshBVH } from "three-mesh-bvh";
 import { readMaterial, type MaterialInputs } from "./shading.js";
 import { merge, type Merged } from "./surface.js";

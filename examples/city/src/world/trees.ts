@@ -1,5 +1,5 @@
 import { type InstancedLod, simplify } from "@drawcall/lod";
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { Random } from "../content/random.ts";
 import { step } from "../loading.ts";
 import { foliageLevels } from "../content/foliage.ts";

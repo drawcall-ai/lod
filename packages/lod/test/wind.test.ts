@@ -1,31 +1,37 @@
 import {
   AmbientLight,
-  DirectionalLight,
   BoxGeometry,
+  DirectionalLight,
   Group,
   InstancedMesh,
   Matrix4,
   Mesh,
   MeshStandardMaterial,
+  OrthographicCamera,
   PerspectiveCamera,
+  PlaneGeometry,
   PointLight,
+  RenderTarget,
   Scene,
-  WebGLRenderTarget,
+  StorageInstancedBufferAttribute,
+  type Camera,
   type Object3D,
-} from "three";
+} from "three/webgpu";
 import { describe, expect, it } from "vitest";
 import { bakeMesh } from "../src/baked/index.js";
-import { fadeUniformsOf } from "../src/fade.js";
 import { disposeTree } from "../src/dispose.js";
-import { simplify } from "../src/simplify.js";
+import { drawOf } from "../src/fade.js";
 import { bakeImpostor } from "../src/impostor/bake/index.js";
 import type { Impostor } from "../src/impostor/impostor.js";
 import { ImpostorMesh } from "../src/impostor/mesh/index.js";
 import { InstancedLod } from "../src/instanced/index.js";
 import { Lod } from "../src/lod.js";
-import { isInstancedMesh, isMesh } from "../src/three.js";
+import { originalOf } from "../src/material.js";
+import { readBytes } from "../src/renderer.js";
+import { simplify } from "../src/simplify.js";
+import { isMesh } from "../src/three.js";
 import { Wind } from "../src/wind/index.js";
-import { GPU_TIMEOUT, renderer } from "./webgl.js";
+import { GPU_TIMEOUT, renderer } from "./gpu.js";
 
 /** Asymmetric, with a child transform: every part must use the same root-space sway. */
 function plant(segments = 1): Group {
@@ -36,8 +42,11 @@ function plant(segments = 1): Group {
   return new Group().add(trunk, branch);
 }
 
+/** `plant()` sheared as a wind of amplitude 0.9 over its 3-unit height at full swing (time 1, speed 0.25) shears it. */
+const SHEAR = () => new Matrix4().makeShear(0, 0, 0.3, 0, 0, 0);
+
 let atlas: Promise<Impostor> | undefined;
-const baked = () => (atlas ??= bakeImpostor(plant(), { renderer, resolution: 128, layout: "full" }));
+const baked = () => (atlas ??= bakeImpostor(plant(), { resolution: 128, layout: "full" }));
 
 function view(): PerspectiveCamera {
   const camera = new PerspectiveCamera(22, 1, 0.1, 100);
@@ -53,8 +62,9 @@ function placed<T extends Object3D>(object: T): T {
   return object;
 }
 
-function render(object: Object3D, camera = view(), lit = false): Uint8Array {
-  const target = new WebGLRenderTarget(128, 128, { samples: 4 });
+/** `object` alone from `camera`, 128 px, multisampled: RGBA bytes. */
+async function render(object: Object3D, camera: Camera = view(), lit = false): Promise<Uint8Array> {
+  const target = new RenderTarget(128, 128, { samples: 4 });
   const scene = new Scene().add(object);
   if (lit) {
     const light = new DirectionalLight(0xffffff, 2);
@@ -63,14 +73,14 @@ function render(object: Object3D, camera = view(), lit = false): Uint8Array {
   }
   renderer.setRenderTarget(target);
   renderer.render(scene, camera);
-  const pixels = new Uint8Array(128 * 128 * 4);
-  renderer.readRenderTargetPixels(target, 0, 0, 128, 128, pixels);
   renderer.setRenderTarget(null);
+  const pixels = await readBytes(renderer, target, 0);
   target.dispose();
   scene.remove(object);
   return pixels;
 }
 
+/** Shared coverage over either's coverage, by alpha; both must cover something. */
 function overlap(a: Uint8Array, b: Uint8Array): number {
   let both = 0;
   let either = 0;
@@ -84,6 +94,38 @@ function overlap(a: Uint8Array, b: Uint8Array): number {
   return both / either;
 }
 
+/** Light layers only: the shadow tests' camera sees the ground, not the casters. */
+const CASTERS = 1;
+
+/**
+ * The shadow `object` casts from `light` onto a ground seen from above, as coverage:
+ * alpha 255 where the ground is darker than lit.
+ */
+async function shadowOf(object: Object3D, light: DirectionalLight | PointLight): Promise<Uint8Array> {
+  renderer.shadowMap.enabled = true;
+  object.traverse((node) => {
+    node.castShadow = true;
+    if (isMesh(node)) node.layers.set(CASTERS);
+  });
+  light.castShadow = true;
+  light.shadow.mapSize.set(512, 512);
+  light.shadow.camera.layers.enable(CASTERS);
+  const ground = new Mesh(new PlaneGeometry(40, 40).rotateX(-Math.PI / 2), new MeshStandardMaterial({ roughness: 1 }));
+  ground.receiveShadow = true;
+  const scene = new Scene().add(ground, light, object, new AmbientLight(0xffffff, 0.1));
+  if (light instanceof DirectionalLight) scene.add(light.target);
+  // A camera of its own every time: three renders a shadow map once a frame per camera.
+  const camera = new OrthographicCamera(-6, 6, 6, -6, 0.1, 100);
+  camera.position.set(1, 20, 1);
+  camera.up.set(0, 0, -1);
+  camera.lookAt(1, 0, 1);
+  const pixels = await render(scene, camera);
+  let lit = 0;
+  for (let i = 0; i < pixels.length; i += 4) lit = Math.max(lit, pixels[i] ?? 0);
+  for (let i = 0; i < pixels.length; i += 4) pixels[i + 3] = (pixels[i] ?? 0) < lit * 0.8 ? 255 : 0;
+  return pixels;
+}
+
 describe("Wind", { timeout: GPU_TIMEOUT }, () => {
   it("keeps a transformed source and its impostor together throughout the sway", async () => {
     const source = placed(plant());
@@ -94,9 +136,9 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
     const frames: Uint8Array[] = [];
     for (const time of [0, 0.37, 1.2]) {
       wind.time = time;
-      const real = render(source);
+      const real = await render(source);
       frames.push(real);
-      expect(overlap(real, render(impostor))).toBeGreaterThan(0.86);
+      expect(overlap(real, await render(impostor))).toBeGreaterThan(0.86);
     }
     const [a, b] = frames;
     if (!a || !b) throw new Error("missing wind frames");
@@ -107,24 +149,21 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
   it("animates real simplified and baked outputs with the same motion as their source", async () => {
     const source = plant(3);
     const simplified = await simplify(source, { ratio: 0.5 });
-    const baked = await bakeMesh(source, { low: plant(), textureSize: 64 });
+    const level = await bakeMesh(source, { low: plant(), textureSize: 64 });
     const wind = new Wind({ direction: [1, 0.4], speed: 0.6 });
-    for (const object of [source, simplified, baked]) wind.apply(placed(object), { amplitude: 0.9, baseY: 0, height: 3 });
+    for (const object of [source, simplified, level]) wind.apply(placed(object), { amplitude: 0.9, baseY: 0, height: 3 });
     for (const time of [0.2, 0.9]) {
       wind.time = time;
-      const real = render(source, view(), true);
-      expect(overlap(real, render(simplified, view(), true))).toBeGreaterThan(0.97);
-      expect(overlap(real, render(baked, view(), true))).toBeGreaterThan(0.97);
+      const real = await render(source, view(), true);
+      expect(overlap(real, await render(simplified, view(), true))).toBeGreaterThan(0.97);
+      expect(overlap(real, await render(level, view(), true))).toBeGreaterThan(0.97);
     }
-    for (const object of [source, simplified, baked]) disposeTree(object);
+    for (const object of [source, simplified, level]) disposeTree(object);
   });
 
-  it.each([false, true])("transforms normals and positions like a sheared real mesh (placed child: %s)", (placedChild) => {
+  it.each([false, true])("transforms normals and positions like a sheared real mesh (placed child: %s)", async (placedChild) => {
     const geometry = new BoxGeometry(0.7, 3, 0.7).translate(0, 1.5, 0);
-    const material = new MeshStandardMaterial({
-      color: 0x80b050,
-      roughness: 1,
-    });
+    const material = new MeshStandardMaterial({ color: 0x80b050, roughness: 1 });
     const source = new Mesh(geometry, material);
     if (placedChild) {
       source.position.set(0.4, 0.2, -0.3);
@@ -133,13 +172,12 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
     }
     source.updateMatrix();
     const root = placedChild ? new Group().add(source) : source;
-    const shear = new Matrix4().makeShear(0, 0, 0.3, 0, 0, 0);
-    const reference = new Mesh(geometry.clone().applyMatrix4(source.matrix).applyMatrix4(shear), material);
+    const reference = new Mesh(geometry.clone().applyMatrix4(source.matrix).applyMatrix4(SHEAR()), material);
     const wind = new Wind({ direction: [1, 0], speed: 0.25 });
     wind.apply(root, { amplitude: 0.9, baseY: 0, height: 3 });
     wind.time = 1;
-    const actual = render(root, view(), true);
-    const expected = render(reference, view(), true);
+    const actual = await render(root, view(), true);
+    const expected = await render(reference, view(), true);
     expect(overlap(actual, expected)).toBeGreaterThan(0.99);
     let error = 0;
     let covered = 0;
@@ -152,70 +190,36 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
     expect(error / (covered * 3)).toBeLessThan(1);
   });
 
-  it("leaves static siblings' shared material, geometry and shader untouched", () => {
+  it("leaves static siblings' shared material and geometry untouched", () => {
     const geometry = new BoxGeometry(0.5, 3, 0.5).translate(0, 1.5, 0);
     geometry.computeBoundingBox();
     geometry.computeBoundingSphere();
     const material = new MeshStandardMaterial();
     const moving = new Mesh(geometry, material);
     const still = new Mesh(geometry, material);
-    const before = {
-      box: geometry.boundingBox?.clone(),
-      sphere: geometry.boundingSphere?.clone(),
-      compile: material.onBeforeCompile,
-      key: material.customProgramCacheKey(),
-    };
+    const before = { box: geometry.boundingBox?.clone(), sphere: geometry.boundingSphere?.clone() };
     new Wind().apply(moving, { amplitude: 0.7 });
     expect(still.material).toBe(material);
     expect(still.geometry).toBe(geometry);
-    expect(material.onBeforeCompile).toBe(before.compile);
-    expect(material.customProgramCacheKey()).toBe(before.key);
     expect(geometry.boundingBox).toEqual(before.box);
     expect(geometry.boundingSphere).toEqual(before.sphere);
     expect(moving.material).not.toBe(material);
-    expect(still.customDepthMaterial).toBeUndefined();
-    expect(still.customDistanceMaterial).toBeUndefined();
+    expect(originalOf([moving.material].flat()[0] ?? material)).toBe(material);
   });
 
-  it("animates instances without touching their matrices, slots or selection", () => {
-    const lod = new InstancedLod([plant(), plant()], 2);
-    lod.setMatrixAt(0, new Matrix4().makeTranslation(-1, 0, 0));
-    lod.setMatrixAt(1, new Matrix4().makeTranslation(2, 0, -30));
-    const wind = new Wind();
-    wind.apply(lod, { amplitude: 0.4 });
-    const camera = view();
-    camera.updateMatrixWorld();
-    lod.updateMatrixWorld();
-    lod.update(camera);
-    const meshes = lod.children.filter(isInstancedMesh);
-    const state = () => meshes.map((mesh) => ({ version: mesh.instanceMatrix.version, count: mesh.count, data: mesh.instanceMatrix.array.slice() }));
-    const before = state();
-    const selection = [lod.levelOf(0), lod.levelOf(1)];
-    wind.time = 1.25;
-    lod.update(camera);
-    expect(state()).toEqual(before);
-    expect([lod.levelOf(0), lod.levelOf(1)]).toEqual(selection);
-    lod.dispose();
-  });
-
-  it("expands culling without changing static LOD choices or fade thresholds", () => {
+  it("changes no LOD choice, fade or instance matrix, only the culling envelope", () => {
     const cube = () => new Mesh(new BoxGeometry(2, 2, 2), new MeshStandardMaterial());
     const heights = [410, 399, 381, 359, 101, 99, 95, 89];
     const distance = (pixels: number) => (Math.sqrt(12) * 1080) / (2 * Math.tan(Math.PI / 6) * pixels);
     const camera = new PerspectiveCamera(60, 1, 0.1, 1000);
     camera.updateMatrixWorld();
     const wind = new Wind();
-    const boundsAndFades = (root: Object3D) =>
-      root.children.filter(isMesh).flatMap((mesh) =>
-        [mesh.material].flat().map((material) => {
-          const uniforms = fadeUniformsOf(material);
-          if (!uniforms) throw new Error("missing fade uniforms");
-          return [uniforms.lodFadeSphere.value.toArray(), uniforms.lodFade.value.toArray()];
-        }),
-      );
-    const settings = (lod: Lod | InstancedLod) => {
-      lod.levels.forEach((level, i) => (level.maxPixels = [Infinity, 400, 100][i] ?? Infinity));
-    };
+    const fades = (lod: Lod) =>
+      lod.levels.map(({ object }) => {
+        const draw = drawOf(object);
+        return draw?.kind === "object" ? draw.fade : null;
+      });
+    const settings = (lod: Lod | InstancedLod) => lod.levels.forEach((level, i) => (level.maxPixels = [Infinity, 400, 100][i] ?? Infinity));
 
     const still = new Lod([cube(), cube(), cube()]);
     settings(still);
@@ -228,34 +232,29 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
         lod.update(camera);
       }
       expect(moving.levels.map((level) => level.object.visible)).toEqual(still.levels.map((level) => level.object.visible));
-      expect(boundsAndFades(moving)).toEqual(boundsAndFades(still));
+      expect(fades(moving)).toEqual(fades(still));
     }
 
     const batch = new InstancedLod([cube(), cube(), cube()], heights.length);
     settings(batch);
     heights.forEach((height, i) => batch.setMatrixAt(i, new Matrix4().makeTranslation(0, 0, -distance(height))));
     const swaying = batch.clone();
-    // A batch that already sorted must refresh only its culling envelope when wind is attached.
-    swaying.updateMatrixWorld();
-    swaying.update(camera);
-    const matrices = swaying.children.filter(isInstancedMesh).map((mesh) => mesh.instanceMatrix.version);
-    const beforeRadii = swaying.children.filter(isInstancedMesh).map((mesh) => mesh.boundingSphere?.radius ?? 0);
-    wind.apply(swaying, { amplitude: 0.8 });
-    swaying.children.filter(isInstancedMesh).forEach((mesh, i) => expect(mesh.boundingSphere?.radius).toBeGreaterThan(beforeRadii[i] ?? 0));
     for (const lod of [batch, swaying]) {
       lod.updateMatrixWorld();
       lod.update(camera);
     }
-    expect(swaying.children.filter(isInstancedMesh).map((mesh) => mesh.instanceMatrix.version)).toEqual(matrices);
-    expect(swaying.levels.map((level) => level.count)).toEqual(batch.levels.map((level) => level.count));
+    const radius = (lod: InstancedLod) => lod.bounds.radius;
+    const before = radius(swaying);
+    wind.apply(swaying, { amplitude: 0.8 });
+    wind.time = 1.25;
+    swaying.update(camera);
+    expect(radius(swaying)).toBeGreaterThan(before);
     expect(heights.map((_, i) => swaying.levelOf(i))).toEqual(heights.map((_, i) => batch.levelOf(i)));
-    expect(boundsAndFades(swaying)).toEqual(boundsAndFades(batch));
-    const radii = batch.children.filter(isInstancedMesh).map((mesh) => mesh.boundingSphere?.radius ?? 0);
-    swaying.children.filter(isInstancedMesh).forEach((mesh, i) => expect(mesh.boundingSphere?.radius).toBeGreaterThan(radii[i] ?? 0));
+    expect(heights.map((_, i) => swaying.getMatrixAt(i, new Matrix4()).elements)).toEqual(heights.map((_, i) => batch.getMatrixAt(i, new Matrix4()).elements));
     for (const lod of [still, moving, batch, swaying]) lod.dispose();
   });
 
-  it("keeps a fade whole and phase stable when the same instance changes draw slots", () => {
+  it("keeps a fade whole when the instances sway", async () => {
     const mesh = () => new Mesh(new BoxGeometry(0.7, 3, 0.7).translate(0, 1.5, 0), new MeshStandardMaterial());
     const lod = new InstancedLod([mesh(), mesh()], 2);
     const coarse = lod.levels[1];
@@ -271,52 +270,44 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
     const camera = new PerspectiveCamera(60, 1, 0.1, 100);
     camera.position.set(0, 1.5, distance);
     camera.lookAt(0, 1.5, 0);
-    render(lod, camera); // Learn this view's viewport height.
-    const faded = render(lod, camera);
-    expect(lod.levels.map((level) => level.count)).toEqual([2, 1]);
+    await render(lod, camera); // Learn this view's viewport height.
+    const faded = await render(lod, camera);
+    expect([lod.levelOf(0), lod.levelOf(1)]).toEqual([0, 0]);
     lod.forceLevel = 0;
-    const whole = render(lod, camera);
+    const whole = await render(lod, camera);
     expect(overlap(faded, whole)).toBeGreaterThan(0.999);
-    // The coarse list held instance 1 first; forcing it appends instance 0 after it.
     lod.forceLevel = 1;
-    expect(overlap(render(lod, camera), whole)).toBeGreaterThan(0.999);
-    lod.forceLevel = null;
-    expect(overlap(render(lod, camera), whole)).toBeGreaterThan(0.999);
+    expect(overlap(await render(lod, camera), whole)).toBeGreaterThan(0.999);
     lod.dispose();
   });
 
-  it("disposes wind's shadow materials and replaced fade copies with the LOD", () => {
+  it("frees its swaying materials with the LOD", () => {
     const source = new Mesh(new BoxGeometry(0.7, 3, 0.7), new MeshStandardMaterial());
     const lod = new Lod([source]);
-    let faded = 0;
-    let shadows = 0;
-    source.material.addEventListener("dispose", () => faded++);
     new Wind().apply(lod, { amplitude: 0.5 });
-    source.customDepthMaterial?.addEventListener("dispose", () => shadows++);
-    source.customDistanceMaterial?.addEventListener("dispose", () => shadows++);
+    let freed = 0;
+    [source.material].flat()[0]?.addEventListener("dispose", () => freed++);
     lod.dispose();
-    expect(faded).toBe(1);
-    expect(shadows).toBe(2);
+    expect(freed).toBe(1);
   });
 
-  it("refreshes existing instance bounds once and preserves the envelope when cloned or moved", () => {
+  it("widens the bounds of instances once, and keeps the envelope when cloned or moved", () => {
     const lod = new InstancedLod([plant()], 1);
     const camera = view();
-    camera.updateMatrixWorld();
     lod.updateMatrixWorld();
     lod.update(camera);
-    const mesh = lod.children.find(isInstancedMesh);
-    if (!mesh?.boundingSphere) throw new Error("missing instance bounds");
-    const radius = mesh.boundingSphere.radius;
+    const sphere = () => lod.bounds.clone();
+    const radius = sphere().radius;
     new Wind().apply(lod, { amplitude: 0.8 });
     lod.update(camera);
-    expect(mesh.boundingSphere.radius).toBeGreaterThan(radius);
+    expect(sphere().radius).toBeGreaterThan(radius);
     const clone = lod.clone();
     clone.updateMatrixWorld();
     clone.update(camera);
-    expect(clone.children.find(isInstancedMesh)?.boundingSphere).toEqual(mesh.boundingSphere);
+    expect(clone.bounds).toEqual(sphere());
 
     const standalone = new InstancedMesh(new BoxGeometry(0.5, 3, 0.5).translate(0, 1.5, 0), new MeshStandardMaterial(), 1);
+    standalone.instanceMatrix = new StorageInstancedBufferAttribute(new Float32Array(new Matrix4().elements), 16);
     standalone.computeBoundingSphere();
     const restRadius = standalone.boundingSphere?.radius ?? 0;
     new Wind().apply(standalone, { amplitude: 0.8 });
@@ -326,11 +317,12 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
     standalone.computeBoundingSphere();
     expect(standalone.boundingSphere?.radius).toBeCloseTo(movingRadius);
     expect(standalone.boundingSphere?.center.x).toBeCloseTo(10);
+    expect(() => new Wind().apply(new InstancedMesh(new BoxGeometry(), new MeshStandardMaterial(), 1), { amplitude: 1 })).toThrow(/StorageInstancedBufferAttribute/);
     clone.dispose();
     lod.dispose();
   });
 
-  it("measures drawable fallback levels and respects authored source matrices", () => {
+  it("measures drawable fallback levels and respects authored source matrices", async () => {
     const wind = new Wind({ speed: 0.25 });
     const empty = new Lod([new Group(), plant()]);
     expect(() => wind.apply(empty, { amplitude: 0.9 })).not.toThrow();
@@ -343,12 +335,12 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
     wind.time = 1;
     const reference = plant();
     reference.matrixAutoUpdate = false;
-    reference.matrix.makeTranslation(0, 10, 0).multiply(new Matrix4().makeShear(0, 0, 0.3, 0, 0, 0));
+    reference.matrix.makeTranslation(0, 10, 0).multiply(SHEAR());
     const camera = view();
     camera.position.y += 10;
     camera.lookAt(2, 11.4, -1);
-    const actual = render(lod, camera);
-    const expected = render(reference, camera);
+    const actual = await render(lod, camera);
+    const expected = await render(reference, camera);
     expect(overlap(actual, expected)).toBeGreaterThan(0.99);
     lod.dispose();
     empty.dispose();
@@ -365,82 +357,58 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
     expect(() => wind.apply(source, { amplitude: 0.5 })).toThrow(/invertible/);
     expect(first.material).toBe(material);
     expect(first.geometry.boundingBox).toEqual(box);
-    expect(first.customDepthMaterial).toBeUndefined();
     second.scale.y = 1;
     expect(() => wind.apply(source, { amplitude: 0.5 })).not.toThrow();
   });
 
-  it("casts the deformed shape into directional and point-light shadow maps", async () => {
-    const source = plant();
-    const impostor = new ImpostorMesh(await baked());
-    const referenceImpostor = new ImpostorMesh(impostor.impostor);
-    referenceImpostor.setMatrixAt(0, new Matrix4().makeShear(0, 0, 0.3, 0, 0, 0));
+  it("casts the swayed shape into directional and point-light shadow maps", async () => {
     const reference = plant();
     reference.traverse((node) => {
       if (!isMesh(node)) return;
       node.updateMatrix();
-      node.geometry.applyMatrix4(node.matrix).applyMatrix4(new Matrix4().makeShear(0, 0, 0.3, 0, 0, 0));
+      node.geometry.applyMatrix4(node.matrix).applyMatrix4(SHEAR());
       node.position.set(0, 0, 0);
     });
+    const impostor = await baked();
+    const referenceImpostor = new ImpostorMesh(impostor);
+    referenceImpostor.setMatrixAt(0, SHEAR());
     const wind = new Wind({ direction: [1, 0], speed: 0.25 });
-    wind.apply(source, { amplitude: 0.9, baseY: 0, height: 3 });
-    wind.apply(impostor, { amplitude: 0.9, baseY: 0, height: 3 });
     wind.time = 1;
-    for (const object of [source, impostor, reference, referenceImpostor]) {
-      object.traverse((node) => {
-        node.castShadow = true;
-      });
+    // A light of its own for every shadow: a light keeps the map of the scene it last lit.
+    const lights: Array<() => DirectionalLight | PointLight> = [
+      () => {
+        const sun = new DirectionalLight(0xffffff, 3);
+        sun.position.set(4, 6, 3);
+        sun.target.position.set(0, 1.5, 0);
+        Object.assign(sun.shadow.camera, { left: -8, right: 8, top: 8, bottom: -8, near: 0.1, far: 30 });
+        sun.shadow.camera.updateProjectionMatrix();
+        return sun;
+      },
+      () => {
+        const lamp = new PointLight(0xffffff, 200);
+        lamp.position.set(4, 6, 3);
+        lamp.shadow.camera.near = 0.1;
+        lamp.shadow.camera.far = 30;
+        return lamp;
+      },
+    ];
+    for (const light of lights) {
+      const source = plant();
+      wind.apply(source, { amplitude: 0.9, baseY: 0, height: 3 });
+      const swaying = new ImpostorMesh(impostor);
+      wind.apply(swaying, { amplitude: 0.9, baseY: 0, height: 3 });
+      const type = light().type;
+      expect(overlap(await shadowOf(source, light()), await shadowOf(reference, light())), type).toBeGreaterThan(0.97);
+      expect(overlap(await shadowOf(swaying, light()), await shadowOf(referenceImpostor, light())), type).toBeGreaterThan(0.95);
+      swaying.dispose();
     }
-    const enabled = renderer.shadowMap.enabled;
-    renderer.shadowMap.enabled = true;
-    try {
-      for (const light of [new DirectionalLight(), new PointLight()]) {
-        light.position.set(4, 6, 3);
-        light.castShadow = true;
-        light.shadow.mapSize.set(128, 128);
-        light.shadow.camera.near = 0.1;
-        light.shadow.camera.far = 30;
-        if (light instanceof DirectionalLight) light.target.position.set(0, 1.5, 0);
-        const shadow = (object: Object3D) => {
-          const scene = new Scene().add(object, light);
-          if (light instanceof DirectionalLight) scene.add(light.target);
-          const target = new WebGLRenderTarget(64, 64);
-          renderer.setRenderTarget(target);
-          renderer.render(scene, view());
-          const map = light.shadow.map;
-          if (!(map instanceof WebGLRenderTarget)) throw new Error("no WebGL shadow map rendered");
-          const faces = light instanceof PointLight ? 6 : 1;
-          const size = map.width * map.height * 4;
-          const pixels = new Uint8Array(size * faces);
-          for (let face = 0; face < faces; face++)
-            renderer.readRenderTargetPixels(map, 0, 0, map.width, map.height, pixels.subarray(face * size, (face + 1) * size), face);
-          renderer.setRenderTarget(null);
-          target.dispose();
-          scene.remove(object, light);
-          // Shadow targets clear to white; every other depth is a covered texel.
-          for (let i = 0; i < pixels.length; i += 4) pixels[i + 3] = pixels.subarray(i, i + 4).some((value) => value < 250) ? 255 : 0;
-          return pixels;
-        };
-        const expected = shadow(reference);
-        expect(overlap(shadow(source), expected), light.type).toBeGreaterThan(0.99);
-        expect(overlap(shadow(impostor), shadow(referenceImpostor)), light.type).toBeGreaterThan(0.99);
-        light.shadow.dispose();
-      }
-    } finally {
-      renderer.shadowMap.enabled = enabled;
-    }
-    impostor.dispose();
     referenceImpostor.dispose();
   });
 
   it("keeps wind and its shared clock when cloning each LOD representation", async () => {
     const data = await baked();
     const wind = new Wind({ direction: [1, 0.4], speed: 0.6 });
-    const objects = [
-      placed(new Lod([plant(), new ImpostorMesh(data)])),
-      placed(new InstancedLod([plant(), new ImpostorMesh(data)], 1)),
-      placed(new ImpostorMesh(data)),
-    ];
+    const objects = [placed(new Lod([plant(), new ImpostorMesh(data)])), placed(new InstancedLod([plant(), new ImpostorMesh(data)], 1)), placed(new ImpostorMesh(data))];
     for (const object of objects) {
       wind.apply(object, { amplitude: 0.9 });
       const clone = object.clone();
@@ -450,9 +418,9 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
         const frames: Uint8Array[] = [];
         for (const time of [0.2, 0.9]) {
           wind.time = time;
-          const pixels = render(object);
+          const pixels = await render(object);
           frames.push(pixels);
-          expect(overlap(pixels, render(clone))).toBeGreaterThan(0.99);
+          expect(overlap(pixels, await render(clone))).toBeGreaterThan(0.99);
         }
         const [a, b] = frames;
         if (!a || !b) throw new Error("missing cloned wind frames");

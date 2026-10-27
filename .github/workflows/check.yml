@@ -19,6 +19,8 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # The package's tests run in a browser, on WebGPU.
+      - run: pnpm --filter @drawcall/lod exec playwright install --with-deps chromium
       - run: pnpm check
       - name: Verify package artifacts
         run: pnpm --filter "./packages/*" -r pack --pack-destination "$RUNNER_TEMP/packages"

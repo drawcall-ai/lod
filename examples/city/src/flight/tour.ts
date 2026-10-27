@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { MonotoneCurve } from "./curve.ts";
 
 /** A pose of the tour: looking at `target` from `distance` metres, from the direction `heading` (radians about y) and `pitch` above the horizon. */

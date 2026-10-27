@@ -1,4 +1,5 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
+import { Fn, cameraPosition, distance, mix, modelWorldMatrix, positionLocal, smoothstep, uniform, vec3, vec4 } from "three/tsl";
 import { InstancedLod } from "@drawcall/lod";
 import { baked, diameter, instanced } from "../levels.ts";
 import { BLOCK, type Plant, plantTurn, ROWS, type Tile, vigour } from "./field.ts";
@@ -22,7 +23,8 @@ const TASSELLED = 0.35;
 const YELLOWER = new THREE.Color(1.05, 1, 0.85);
 
 /** Distances (m) from the camera over which the covers rise out of the soil, shared by their shaders. */
-export type Skirt = { value: THREE.Vector2 };
+export const skirt = () => uniform(new THREE.Vector2());
+export type Skirt = ReturnType<typeof skirt>;
 
 /** Baked levels over the tiles: a block's canopy (rising out of the soil near, ridged, flat far away) or a field's outer wall. */
 export interface Cover {
@@ -130,9 +132,9 @@ function ridge(z: number): number {
 }
 
 /** `source` baked onto `low`. */
-async function bakeCover(source: THREE.Object3D, low: THREE.BufferGeometry): Promise<THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>> {
+async function bakeCover(source: THREE.Object3D, low: THREE.BufferGeometry): Promise<THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardNodeMaterial>> {
   const { object } = await baked(source, new THREE.Mesh(low), 256);
-  if (!(object instanceof THREE.Mesh) || !(object.material instanceof THREE.MeshStandardMaterial))
+  if (!(object instanceof THREE.Mesh) || !(object.material instanceof THREE.MeshStandardNodeMaterial))
     throw new Error("a baked cover is one mesh with a standard material");
   const material = object.material;
   // the rows repeat every 0.75 m: filter them anisotropically, and keep their relief low,
@@ -153,20 +155,14 @@ async function bakeCover(source: THREE.Object3D, low: THREE.BufferGeometry): Pro
  * the plants hide it; the ramp it forms closes the canopy, so that past the plants no
  * view reaches under it.
  */
-function rising(material: THREE.MeshStandardMaterial, skirt: Skirt): THREE.MeshStandardMaterial {
+function rising(material: THREE.MeshStandardNodeMaterial, skirt: Skirt): THREE.MeshStandardNodeMaterial {
   const copy = material.clone();
-  copy.onBeforeCompile = (shader) => {
-    shader.uniforms.cornSkirt = skirt;
-    shader.vertexShader = shader.vertexShader.replace("#include <common>", "#include <common>\nuniform vec2 cornSkirt;").replace(
-      "#include <begin_vertex>",
-      /* glsl */ `#include <begin_vertex>
-      {
-        vec4 world = modelMatrix * instanceMatrix * vec4(transformed, 1.0);
-        transformed.y = mix(${(-SINK).toFixed(2)}, transformed.y, smoothstep(cornSkirt.x, cornSkirt.y, distance(world.xyz, cameraPosition)));
-      }`,
-    );
-  };
-  copy.customProgramCacheKey = () => "corn-rising";
+  // after the instance matrix: the vertex in the cover's space, placed in the field
+  copy.positionNode = Fn(() => {
+    const world = modelWorldMatrix.mul(vec4(positionLocal, 1)).xyz;
+    const up = smoothstep(skirt.x, skirt.y, distance(world, cameraPosition));
+    return vec3(positionLocal.x, mix(-SINK, positionLocal.y, up), positionLocal.z);
+  })();
   return copy;
 }
 

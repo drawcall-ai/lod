@@ -5,7 +5,7 @@
 // mesh out (everything still stands where the ground would be; roads and the creek stay).
 // ?wind=0 builds vegetation without wind, for a static performance baseline.
 // window.city exposes the tour and frame measurements to scripts/tour.ts.
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { type InstancedLod, Lod, Wind } from "@drawcall/lod";
 import { loadManifest } from "./content/materials.ts";
 import { terrainMaterial } from "./content/terrain.ts";
@@ -13,7 +13,7 @@ import { Fly } from "./flight/fly.ts";
 import { route } from "./flight/route.ts";
 import { Tour } from "./flight/tour.ts";
 import { building } from "./loading.ts";
-import { installHaze } from "./render/haze.ts";
+import { haze } from "./render/haze.ts";
 import { Pipeline } from "./render/pipeline.ts";
 import { Sun } from "./render/sun/index.ts";
 import { loadSky } from "./render/sky.ts";
@@ -43,12 +43,12 @@ THREE.DefaultLoadingManager.onProgress = (url, loaded, total) => ui.progress(`Do
 building.onProgress = (name, loaded, total) => ui.progress(`Building ${name}…`, 0.25 + (0.75 * loaded) / Math.max(total, 14));
 
 await loadManifest();
-const pipeline = new Pipeline({ preserveDrawingBuffer: shot, pixelRatio: Math.min(devicePixelRatio, 2) });
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.5, 60000);
+const scene = new THREE.Scene();
+const pipeline = await Pipeline.create(scene, camera, Math.min(devicePixelRatio, 2));
 // hidden until the world is built: an empty canvas would sit over the page meanwhile
 pipeline.canvas.style.visibility = "hidden";
 document.body.prepend(pipeline.canvas);
-const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.5, 60000);
-const scene = new THREE.Scene();
 
 // late afternoon: the sun low in the south-west, raking across the town
 const sky = await loadSky(pipeline.renderer, 2.4);
@@ -62,9 +62,12 @@ const sun = new Sun(sunward);
 sun.light.color.set("#ffe0bc");
 sun.light.intensity = sky.irradiance * 1.15;
 scene.add(...sun.objects);
-const haze = sky.horizon.clone().multiply(new THREE.Color(0.86, 0.92, 1.0));
-installHaze(sunward, new THREE.Color(1, 0.86, 0.66).multiplyScalar(sky.horizon.r + sky.horizon.g + sky.horizon.b));
-scene.fog = new THREE.FogExp2(haze, 1.7e-4);
+scene.fogNode = haze(
+  sky.horizon.clone().multiply(new THREE.Color(0.86, 0.92, 1.0)),
+  1.7e-4,
+  sunward,
+  new THREE.Color(1, 0.86, 0.66).multiplyScalar(sky.horizon.r + sky.horizon.g + sky.horizon.b),
+);
 
 const world = plan(Number(params.get("seed") ?? 7));
 const zones = { fields: world.fields, forests: world.forests, parcels: { texture: world.land.texture(), extent: EXTENT }, town: TOWN };
@@ -163,10 +166,10 @@ function frame(dt: number): void {
   // nothing stands much more than 40 m above the ground or rises far above where the camera is over it
   const clear = camera.position.y - world.terrain.height(camera.position.x, camera.position.z) - 80;
   sun.update(camera, focus, clear);
-  pipeline.render(scene, camera);
+  pipeline.render();
 }
 
-await pipeline.renderer.compileAsync(scene, camera);
+await pipeline.compile();
 const loadMs = performance.now() - started;
 ui.ready();
 pipeline.canvas.style.visibility = "visible";
@@ -174,17 +177,47 @@ pipeline.canvas.style.visibility = "visible";
 let last = performance.now();
 let shown = 0;
 let frameMs = 16;
-pipeline.renderer.setAnimationLoop(() => {
+/** The live loop: tour or free flight, and the overlay. */
+function live(): void {
   const now = performance.now();
   const dt = Math.min((now - last) / 1000, 0.1);
   frameMs += (now - last - frameMs) * 0.1;
   last = now;
   frame(dt);
+  void pipeline.timing();
   ui.showTime(time, playing);
   if (now - shown < 250) return;
   shown = now;
   ui.showStats({ ms: frameMs, gpu: pipeline.gpuMs, ...pipeline.drawn }, counts());
-});
+}
+pipeline.renderer.setAnimationLoop(live);
+
+/**
+ * Draws `count` frames at the current pose, `before(i)` setting up frame i, each in a tick
+ * of the renderer's animation loop: three starts a frame, and redraws shadow maps, only
+ * there. Each frame's timer resolves before the next draws. The live loop stays stopped after, so that
+ * no frame of its own lands in a measurement: `resume` starts it again.
+ */
+async function draw(count: number, before: (i: number) => void): Promise<Array<{ cpu: number; gpu: number | null }>> {
+  pipeline.renderer.setAnimationLoop(null);
+  await pipeline.timing();
+  const frames: Array<{ cpu: number; gpu: number | null }> = [];
+  for (let i = 0; i < count; i++) {
+    const cpu = await new Promise<number>((resolve) =>
+      pipeline.renderer.setAnimationLoop(() => {
+        pipeline.renderer.setAnimationLoop(null);
+        before(i);
+        const t = performance.now();
+        frame(0);
+        resolve(performance.now() - t);
+      }),
+    );
+    frames.push({ cpu, gpu: await pipeline.timing() });
+  }
+  return frames;
+}
+
+const resume = () => pipeline.renderer.setAnimationLoop(live);
 
 function counts() {
   return kinds.map(({ name, roots }) => ({ name, levels: levelCounts(roots) }));
@@ -196,44 +229,44 @@ const api = {
   wind,
   keys: tour.keys.map((k) => ({ name: k.name, time: k.time })),
   /** Stop the tour at `t` seconds and draw a few frames so every patch fills and every fade settles. */
-  seek(t: number): void {
+  async seek(t: number): Promise<void> {
     fly.release();
     playing = false;
     time = t;
-    for (let i = 0; i < 4; i++) frame(0);
+    await draw(4, () => {});
+    resume();
   },
   /**
-   * Times frames at the current pose: `runs` times, `frames` frames back to back with one
-   * wait for the GPU after the last, so CPU and GPU overlap as in the live loop. `ms` is
-   * the median run's time per frame, `cpu` the median time of one frame's CPU work. With
-   * `move`, each frame of a run moves on that many seconds of tour from the pose, which
-   * comes back after. Wind advances at 60 Hz in both cases. What was drawn is the pose's own frame.
+   * Times frames at the current pose: `runs` times, `frames` frames, one per tick of the
+   * animation loop. `ms` is the median run's GPU time per frame (by the GPU's timer: the
+   * loop waits for the display between frames), `cpu` the median time of one frame's
+   * CPU work. With `move`, each frame of a run moves on that many seconds of tour from
+   * the pose, which comes back after. Wind advances at 60 Hz in both cases. What was
+   * drawn is the pose's own frame.
    */
-  measure(frames: number, runs: number, move = 0) {
-    const gl = pipeline.renderer.getContext();
-    const pixel = new Uint8Array(4);
-    const wait = () => gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+  async measure(frames: number, runs: number, move = 0) {
+    if (!pipeline.renderer.hasFeature("timestamp-query")) throw new Error("measure needs the GPU's timer (timestamp-query), which this browser does not offer");
     const start = time;
     const breeze = wind?.time ?? 0;
     const perFrame: number[] = [];
     const cpu: number[] = [];
-    wait();
     for (let r = 0; r < runs; r++) {
-      const t0 = performance.now();
-      for (let i = 0; i < frames; i++) {
+      const each = await draw(frames, (i) => {
         time = start + i * move;
         if (wind) wind.time = breeze + i / 60;
-        const t1 = performance.now();
-        frame(0);
-        cpu.push(performance.now() - t1);
+      });
+      let gpu = 0;
+      for (const frame of each) {
+        if (frame.gpu === null) throw new Error("measure: a frame has no GPU timing");
+        gpu += frame.gpu;
+        cpu.push(frame.cpu);
       }
-      wait();
-      perFrame.push((performance.now() - t0) / frames);
+      perFrame.push(gpu / frames);
     }
     time = start;
     if (wind) wind.time = breeze;
-    frame(0);
-    wait();
+    await draw(1, () => {});
+    resume();
     const median = (list: number[]) => list.sort((a, b) => a - b)[Math.floor(list.length / 2)] ?? 0;
     return {
       ms: median(perFrame),

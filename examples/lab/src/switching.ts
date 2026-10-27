@@ -1,9 +1,10 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { Lod, LodLoader } from "@drawcall/lod";
 import { boundingSphere } from "../../../packages/lod/src/bounds.js";
 import { FADE } from "../../../packages/lod/src/levels.js";
+import { readBytes } from "../../../packages/lod/src/renderer.js";
 import { at, must } from "./must.js";
-import { gltfLoader, gpuName } from "./page.js";
+import { gltfLoader, gpuName, gpuRenderer, nextFrame } from "./page.js";
 import { pixelsOf } from "./pixels.js";
 
 // Standalone page (switching.html): a Lod of a real model, loaded through LodLoader,
@@ -20,13 +21,10 @@ import { pixelsOf } from "./pixels.js";
 const SIZE = 512;
 const MAX_PIXELS = [Infinity, 300, 120];
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(1);
-renderer.setSize(SIZE, SIZE);
+const renderer = await gpuRenderer(SIZE);
 renderer.shadowMap.enabled = true;
-document.body.append(renderer.domElement);
 // Read back from a multisampled target: the canvas would keep alpha-to-coverage alpha.
-const target = new THREE.WebGLRenderTarget(SIZE, SIZE, { samples: 4 });
+const target = new THREE.RenderTarget(SIZE, SIZE, { samples: 4 });
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x8fa3b8);
@@ -41,13 +39,12 @@ scene.add(ground);
 const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 5000);
 const tan = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
 
-function frame(): Uint8Array {
+async function frame(): Promise<Uint8Array> {
+  await nextFrame(renderer);
   renderer.setRenderTarget(target);
   renderer.render(scene, camera);
-  const pixels = new Uint8Array(SIZE * SIZE * 4);
-  renderer.readRenderTargetPixels(target, 0, 0, SIZE, SIZE, pixels);
   renderer.setRenderTarget(null);
-  return pixels;
+  return readBytes(renderer, target, 0);
 }
 
 /** Mean absolute RGB difference, 0..255. */
@@ -95,17 +92,17 @@ async function run(model: string) {
   sun.shadow.camera.updateProjectionMatrix();
 
   /** Place the camera where the model is `pixels` tall and render it (twice: the first frame tells the Lod the target height). */
-  const view = (pixels: number) => {
+  const view = async (pixels: number) => {
     camera.position.copy(sphere.center).addScaledVector(direction, (diameter * SIZE) / (2 * tan * pixels));
     camera.lookAt(sphere.center);
-    frame();
+    await frame();
     return frame();
   };
 
   // Levels per on-screen height, either side of and inside both fades.
   const levels: Array<{ pixels: number; measured: number; visible: number[]; expected: number[] }> = [];
   for (const pixels of [480, 320, 290, 250, 230, 200, 140, 118, 100, 92, 80, 40]) {
-    view(pixels);
+    await view(pixels);
     const measured = pixelsOf(lod, camera, SIZE);
     levels.push({ pixels, measured, visible: visible(lod), expected: expected(measured * Lod.quality, MAX_PIXELS) });
   }
@@ -119,24 +116,24 @@ async function run(model: string) {
   for (const material of materials) Object.assign(material, { colorWrite: false, depthWrite: false });
   Lod.quality = 0.2;
   const shadowAt = 400;
-  const auto = view(shadowAt);
+  const auto = await view(shadowAt);
   const chosen = visible(lod);
   lod.forceLevel = at(chosen, 0);
-  const forced = view(shadowAt);
+  const forced = await view(shadowAt);
   lod.forceLevel = 0;
-  const sourceShadow = view(shadowAt);
+  const sourceShadow = await view(shadowAt);
   lod.forceLevel = null;
   Lod.quality = 1;
   for (const material of materials) Object.assign(material, { colorWrite: true, depthWrite: true });
   const shadows = { chosen, autoVsForced: difference(auto, forced), autoVsSource: difference(auto, sourceShadow) };
 
   // Pop: consecutive 0.5% steps from 400 px down to 70 px, faded and swapped at once.
-  const sweep = (hard: boolean) => {
+  const sweep = async (hard: boolean) => {
     const steps: Array<{ pixels: number; change: number }> = [];
     let previous: Uint8Array | null = null;
     for (let pixels = 400; pixels > 70; pixels *= 0.995) {
       lod.forceLevel = hard ? must(expected(pixels, MAX_PIXELS).at(-1), "expected level") : null;
-      const image = view(pixels);
+      const image = await view(pixels);
       if (previous) steps.push({ pixels, change: difference(previous, image) });
       previous = image;
     }
@@ -154,11 +151,11 @@ async function run(model: string) {
     const worst = spikes.reduce((a, b) => (b.ratio > a.ratio ? b : a));
     return { steps: steps.length, worst };
   };
-  const faded = sweep(false);
-  const hard = sweep(true);
+  const faded = await sweep(false);
+  const hard = await sweep(true);
 
-  // First draw of 1000 new Lods at once: each mesh brings its own faded material copies,
-  // which three sets up on their first draw (the programs exist already).
+  // First draw of 1000 new Lods at once: their meshes share the faded material copies,
+  // and so the shaders, of the first Lod.
   scene.remove(lod);
   const crowd = new THREE.Group();
   for (let i = 0; i < 1000; i++) {
@@ -169,19 +166,20 @@ async function run(model: string) {
   scene.add(crowd);
   camera.position.set(0, diameter * 8, diameter * 12);
   camera.lookAt(0, 0, -diameter * 18);
-  const timed = () => {
+  const timed = async () => {
+    await nextFrame(renderer);
     const start = performance.now();
     renderer.setRenderTarget(target);
     renderer.render(scene, camera);
     renderer.setRenderTarget(null);
-    renderer.getContext().finish();
+    await readBytes(renderer, target, 0);
     return performance.now() - start;
   };
-  const firstDraw = { firstMs: timed(), nextMs: timed() };
+  const firstDraw = { firstMs: await timed(), nextMs: await timed() };
   scene.remove(crowd);
 
   lod.dispose();
-  return { renderer: gpuName(renderer.getContext()), levels, shadows, pop: { faded, hard }, firstDraw };
+  return { renderer: await gpuName(), levels, shadows, pop: { faded, hard }, firstDraw };
 }
 
 declare global {

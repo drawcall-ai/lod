@@ -1,4 +1,4 @@
-import { BufferAttribute, BufferGeometry, type InterleavedBufferAttribute, type Object3D } from "three";
+import { BufferAttribute, BufferGeometry, type InterleavedBufferAttribute, type Object3D } from "three/webgpu";
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
 import { MeshoptSimplifier } from "meshoptimizer";
 import { detailed } from "./bounds.js";

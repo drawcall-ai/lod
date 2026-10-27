@@ -1,9 +1,10 @@
-import { Box3, Matrix4, ObjectSpaceNormalMap, Vector2, type Mesh, type Object3D } from "three";
+import { Box3, Matrix4, ObjectSpaceNormalMap, Vector2, type Mesh, type Object3D } from "three/webgpu";
 import { boundingBox } from "../bounds.js";
-import { isBatchedMesh, isImpostorMesh, isInstancedLod, isInstancedMesh, isLOD, isMesh, isSkinnedMesh } from "../three.js";
+import { levelMaterial } from "../material.js";
+import { isBatchedMesh, isImpostorMesh, isInstancedLod, isInstancedMesh, isLOD, isMesh, isSkinnedMesh, isStorageInstanced } from "../three.js";
 import { WIND_BOUNDS, type WindBounds } from "./hooks.js";
-import { windMaterials } from "./material.js";
 import { windBounds } from "./bounds.js";
+import { setSway, swayMatrix, type Breeze } from "./sway.js";
 
 export interface WindOptions {
   /** Horizontal world-space X/Z direction; normalized on assignment. Default [1, 0]. */
@@ -38,19 +39,15 @@ const identity = new Matrix4();
  * Bounds cover strength 0..1. Geometry, instance matrices and LOD lists are not updated
  * by the clock. CPU raycasts still hit the rest pose. Mesh placements within a root
  * must stay fixed after applying; move/rotate/scale the root or its instances instead.
- * Nested LODs and nested instance batches must be applied individually.
+ * Nested LODs and nested instance batches must be applied individually; an
+ * InstancedMesh sways only with its matrices in a storage buffer (an ImpostorMesh's are).
  * Lod, InstancedLod and ImpostorMesh clones retain the shared breeze. For ordinary
- * Mesh/Group clones, apply to each clone too: three shares their material but does not
- * copy the custom shadow materials or mesh-level culling bounds.
- * Tangent-space normal maps are supported; object-space normal maps are not.
+ * Mesh/Group clones, apply to each clone too: the material is shared but the sway is
+ * the mesh's. Tangent-space normal maps are supported (tangents do not sway);
+ * object-space normal maps are not.
  */
 export class Wind {
-  private readonly uniforms = {
-    windTime: { value: 0 },
-    windSpeed: { value: 0.25 },
-    windStrength: { value: 1 },
-    windDirection: { value: new Vector2(1, 0) },
-  };
+  private readonly breeze: Breeze = { time: 0, speed: 0.25, strength: 1, direction: new Vector2(1, 0) };
 
   constructor({ direction = [1, 0], speed = 0.25 }: WindOptions = {}) {
     this.direction = direction;
@@ -59,41 +56,41 @@ export class Wind {
 
   /** Shared animation time in seconds; update once per frame, before any render pass. */
   get time(): number {
-    return this.uniforms.windTime.value;
+    return this.breeze.time;
   }
   set time(value: number) {
     finite(value, "time");
-    this.uniforms.windTime.value = value;
+    this.breeze.time = value;
   }
 
   /** Oscillations per second; zero freezes the time-dependent part of the phase. */
   get speed(): number {
-    return this.uniforms.windSpeed.value;
+    return this.breeze.speed;
   }
   set speed(value: number) {
     nonnegative(value, "speed");
-    this.uniforms.windSpeed.value = value;
+    this.breeze.speed = value;
   }
 
   /** Global amplitude multiplier in [0, 1]. Zero keeps the wind shader but draws the rest pose. */
   get strength(): number {
-    return this.uniforms.windStrength.value;
+    return this.breeze.strength;
   }
   set strength(value: number) {
     nonnegative(value, "strength");
     if (value > 1) throw new Error("Wind: strength must be in [0, 1]");
-    this.uniforms.windStrength.value = value;
+    this.breeze.strength = value;
   }
 
   get direction(): readonly [number, number] {
-    const { x, y } = this.uniforms.windDirection.value;
+    const { x, y } = this.breeze.direction;
     return [x, y];
   }
   set direction([x, z]: readonly [number, number]) {
     finite(x, "direction.x");
     finite(z, "direction.z");
     if (Math.hypot(x, z) === 0) throw new Error("Wind: direction must be nonzero");
-    this.uniforms.windDirection.value.set(x, z).normalize();
+    this.breeze.direction.set(x, z).normalize();
   }
 
   /** Attach once, after constructing all levels. Objects without this call keep their original shaders. */
@@ -113,10 +110,10 @@ export class Wind {
       if (!isMesh(node)) return;
       if (attached.has(node)) throw new Error("Wind: a mesh already belongs to a wind root");
       if (isSkinnedMesh(node) || isBatchedMesh(node)) throw new Error("Wind: skinned and batched meshes are not supported");
-      if (node !== root && isInstancedMesh(node) && !isInstancedLod(root) && !(isImpostorMesh(node) && node.count === 1))
+      if (node !== root && !isInstancedLod(root) && (isInstancedMesh(node) || (isImpostorMesh(node) && node.count > 1)))
         throw new Error("Wind: apply to nested instance batches individually");
-      if ([node.material].flat().some((material) => material.type === "ShaderMaterial" || material.type === "RawShaderMaterial"))
-        throw new Error("Wind: requires three's built-in mesh materials");
+      if (isInstancedMesh(node) && !isStorageInstanced(node.instanceMatrix))
+        throw new Error(`Wind: InstancedMesh "${node.name}" needs its instance matrices in a StorageInstancedBufferAttribute`);
       if (
         [node.material]
           .flat()
@@ -136,21 +133,16 @@ export class Wind {
       invertible(placement);
       return { mesh, placement };
     });
-    const shape = { value: new Vector2(amplitude / size, base) };
+    const shape = new Vector2(amplitude / size, base);
     const padding = (amplitude * Math.max(Math.abs(box.min.y - base), Math.abs(box.max.y - base))) / size;
     if (hasBounds(root)) root[WIND_BOUNDS](padding);
     for (const { mesh, placement } of placed) {
       if (!isInstancedLod(root)) windBounds(mesh, placement, amplitude, base, size);
-      windMaterials(
-        mesh,
-        {
-          ...this.uniforms,
-          windShape: shape,
-          windPlacement: { value: placement },
-          windFromRoot: { value: placement.clone().invert() },
-        },
-        !placement.equals(identity),
-      );
+      setSway(mesh, { breeze: this.breeze, shape, placement, fromRoot: placement.clone().invert() });
+      if (isImpostorMesh(mesh)) {
+        mesh.material.deformNode = swayMatrix();
+        mesh.material.needsUpdate = true;
+      } else mesh.material = Array.isArray(mesh.material) ? mesh.material.map((m) => levelMaterial(m, true)) : levelMaterial(mesh.material, true);
       attached.add(mesh);
     }
     bindings.set(root, { wind: this, options: { amplitude, baseY: base, height: size } });

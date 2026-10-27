@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { once, surface } from "../materials.ts";
 
 // Materials of the rooms. Rooms are lit by the sun through the windows and by the sky's

@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { bakeImpostor, decodeImpostor, encodeImpostor, type Impostor } from "@drawcall/lod";
 
 /**
@@ -9,7 +9,7 @@ import { bakeImpostor, decodeImpostor, encodeImpostor, type Impostor } from "@dr
  * changes with it; nothing is ever read back stale. The key does not see the baker:
  * when the package bakes differently, name a new store (older ones are deleted).
  */
-const STORE = "city-impostors-v4";
+const STORE = "city-impostors-v6";
 
 export async function cachedImpostor(source: THREE.Object3D, options: { resolution?: number; frames?: number; maxPixels?: number }): Promise<Impostor> {
   const key = `/${fingerprint(source)}-${options.resolution ?? "d"}-${options.frames ?? "d"}-${options.maxPixels ?? "d"}.ktx2`;

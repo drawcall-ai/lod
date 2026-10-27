@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { once } from "../materials.ts";
 
 /** Plant tissue coloured by vertex colours: stalk, sheaths, tassel, silk, roots. */

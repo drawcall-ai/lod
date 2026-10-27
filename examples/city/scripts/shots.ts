@@ -28,7 +28,9 @@ const server = await createServer({ root, logLevel: "error", server: { port: 519
 await server.listen();
 const url = server.resolvedUrls?.local[0];
 if (!url) throw new Error("vite did not report a local URL");
-const browser = await chromium.launch({ headless: true, args: ["--use-angle=metal", "--enable-gpu", "--ignore-gpu-blocklist"] });
+// new headless: the old headless shell loses every WebGPU device once a page asks for a
+// second adapter, as the package's bakes do
+const browser = await chromium.launch({ channel: "chromium", headless: true, args: ["--enable-unsafe-webgpu", "--enable-webgpu-developer-features", "--enable-gpu", "--ignore-gpu-blocklist"] });
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 page.on("pageerror", (e) => console.error("[page]", e.message));
 page.on("console", (m) => (m.type() === "error" || m.type() === "warning") && console.error(`[page ${m.type()}]`, m.text()));

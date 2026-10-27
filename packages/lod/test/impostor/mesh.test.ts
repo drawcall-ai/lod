@@ -1,25 +1,25 @@
 import {
+  AmbientLight,
   BoxGeometry,
+  Color,
+  DirectionalLight,
   Matrix4,
   Mesh,
-  ShaderChunk,
   MeshStandardMaterial,
+  OrthographicCamera,
   PerspectiveCamera,
   Raycaster,
   Scene,
   TorusKnotGeometry,
   Vector3,
-  WebGLRenderTarget,
   type Object3D,
-  type Texture,
-} from "three";
+} from "three/webgpu";
 import { describe, expect, it } from "vitest";
-import { fadeUniformsOf } from "../../src/fade.js";
 import { bakeImpostor } from "../../src/impostor/bake/index.js";
 import type { Impostor } from "../../src/impostor/impostor.js";
 import { ImpostorMesh } from "../../src/impostor/mesh/index.js";
-import { isTexture } from "../../src/three.js";
-import { GPU_TIMEOUT, compile, renderer } from "../webgl.js";
+import { acquireTextures, releaseTextures } from "../../src/impostor/mesh/textures.js";
+import { GPU_TIMEOUT, render, renderer } from "../gpu.js";
 
 const make = (): Impostor => ({
   version: 3,
@@ -32,43 +32,14 @@ const make = (): Impostor => ({
   layers: [0, 1, 2].map(() => [16, 8, 4].map((size) => new Uint8Array(size * size * 4))),
 });
 
-const baseTexture = (mesh: ImpostorMesh): Texture => {
-  const value: unknown = compile(mesh.material).uniforms.impostorBase?.value;
-  if (!isTexture(value)) throw new Error("no base texture uniform");
-  return value;
-};
+/** The textures `impostor`'s meshes share, without holding them. */
+function texturesOf(impostor: Impostor) {
+  const textures = acquireTextures(impostor);
+  releaseTextures(impostor);
+  return textures;
+}
 
 describe("ImpostorMesh", { timeout: GPU_TIMEOUT }, () => {
-  it("patches three's standard shader in every pass", () => {
-    const mesh = new ImpostorMesh(make());
-    const lit = compile(mesh.material);
-    expect(lit.vertexShader).toContain("impostorEncode(impostorView)");
-    expect(lit.fragmentShader).toContain("impostorShadowS");
-    expect(lit.fragmentShader).toContain("impostorCosine( geometryNormal, directLight.direction )");
-    expect(lit.fragmentShader).not.toContain("#include <map_fragment>");
-  });
-
-  it("casts nothing while it fades in, where the finer level casts whole", () => {
-    const mesh = new ImpostorMesh(make());
-    const shadows = [mesh.customDepthMaterial, mesh.customDistanceMaterial];
-    for (const material of shadows) expect(material?.defines?.IMPOSTOR_SHADOW).toBe("");
-    expect(mesh.material.defines?.IMPOSTOR_SHADOW).toBeUndefined();
-    expect(compile(mesh.material).fragmentShader).toContain("#ifdef IMPOSTOR_SHADOW");
-  });
-
-  it("lights with three's chunks as they are when it compiles, at the resolved surface", () => {
-    const original = ShaderChunk.lights_fragment_begin;
-    ShaderChunk.lights_fragment_begin = `${original}\n// patched after the package loaded`;
-    try {
-      // Options no other test uses, so three compiles a program of its own.
-      const lit = compile(new ImpostorMesh(make(), 1, { tolerance: 0.0123 }).material);
-      expect(lit.fragmentShader).toContain("// patched after the package loaded");
-      expect(lit.fragmentShader).toContain("vec3 geometryPosition = vImpostorViewPoint");
-    } finally {
-      ShaderChunk.lights_fragment_begin = original;
-    }
-  });
-
   it.each([
     ["alphaTest", { alphaTest: 0 }],
     ["alphaTest", { alphaTest: 1 }],
@@ -79,34 +50,92 @@ describe("ImpostorMesh", { timeout: GPU_TIMEOUT }, () => {
     expect(() => new ImpostorMesh(make(), 1, options)).toThrow();
   });
 
-  it("keeps tiny option values exact in the shader", () => {
-    const { defines } = new ImpostorMesh(make(), 1, { tolerance: 0.00001 }).material;
-    expect(Number(defines?.IMPOSTOR_TOLERANCE)).toBe(0.00001);
-  });
-
   it("shares textures between meshes of one impostor until the last is disposed", () => {
     const impostor = make();
     const a = new ImpostorMesh(impostor);
+    const clone = a.clone();
     const b = new ImpostorMesh(impostor);
-    const texture = baseTexture(a);
-    expect(baseTexture(b)).toBe(texture);
+    const [texture] = texturesOf(impostor);
     let disposed = 0;
-    texture.addEventListener("dispose", () => disposed++);
+    texture?.addEventListener("dispose", () => disposed++);
     a.dispose();
     a.dispose();
+    clone.dispose();
     expect(disposed).toBe(0);
     b.dispose();
     expect(disposed).toBe(1);
   });
 
-  it("clones with its own material and fade uniforms", () => {
+  it("clones sharing its material, so that clones draw with one shader", () => {
     const mesh = new ImpostorMesh(make(), 2);
+    mesh.setColorAt(1, new Color(1, 0, 0));
     const clone = mesh.clone();
     expect(clone).toBeInstanceOf(ImpostorMesh);
-    expect(clone.material).not.toBe(mesh.material);
-    expect(fadeUniformsOf(clone.material)).not.toBe(fadeUniformsOf(mesh.material));
-    expect(fadeUniformsOf(clone.customDepthMaterial ?? clone.material)).toBe(fadeUniformsOf(clone.material));
+    expect(clone.material).toBe(mesh.material);
+    expect(clone.getColorAt(1, new Color()).getHex()).toBe(0xff0000);
+    expect(clone.instanceColor).not.toBe(mesh.instanceColor);
     expect(() => new ImpostorMesh(make()).copy(mesh)).toThrow(/different impostor/);
+  });
+
+  it("replaces a reused copy's instances and releases its old material when its last clone is gone", () => {
+    const impostor = make();
+    const source = new ImpostorMesh(impostor, 2, { mipBias: 1 });
+    source.setMatrixAt(1, new Matrix4().makeTranslation(10, 0, 0));
+    const target = new ImpostorMesh(impostor);
+    target.setColorAt(0, new Color(1, 0, 0));
+    const oldClone = target.clone();
+    const matrix = target.instanceMatrix;
+    let oldMaterialFreed = 0;
+    let oldColorFreed = 0;
+    target.material.addEventListener("dispose", () => oldMaterialFreed++);
+    target.instanceColor?.addEventListener("dispose", () => oldColorFreed++);
+    const [texture] = texturesOf(impostor);
+    let texturesFreed = 0;
+    texture?.addEventListener("dispose", () => texturesFreed++);
+    target.copy(source);
+    expect(target.count).toBe(2);
+    expect(target.getMatrixAt(1, new Matrix4()).elements[12]).toBe(10);
+    expect(target.instanceMatrix !== matrix || target.instanceMatrix.version > matrix.version).toBe(true);
+    expect(target.getColorAt(0, new Color()).getHex()).toBe(0xffffff);
+    expect(target.options).toEqual(source.options);
+    expect(oldColorFreed).toBe(1);
+    expect(oldMaterialFreed).toBe(0);
+    oldClone.dispose();
+    expect(oldMaterialFreed).toBe(1);
+    source.dispose();
+    expect(texturesFreed).toBe(0);
+    target.dispose();
+    expect(texturesFreed).toBe(1);
+  });
+
+  it("draws instance colours, white where none is set, in direct light too", async () => {
+    const impostor = await bakeImpostor(new Mesh(new BoxGeometry(2, 2, 2), new MeshStandardMaterial()), { frames: 4, resolution: 16 });
+    // Clones of one instance share a shader, whichever builds it: one without colours, one with.
+    const white = new ImpostorMesh(impostor);
+    const red = white.clone();
+    red.setColorAt(0, new Color(1, 0, 0));
+    white.position.set(-2, -2, 0);
+    red.position.set(2, -2, 0);
+    // Two instances build a shader of their own, with colours.
+    const pair = new ImpostorMesh(impostor, 2);
+    pair.setMatrixAt(0, new Matrix4().makeTranslation(-2, 2, 0));
+    pair.setMatrixAt(1, new Matrix4().makeTranslation(2, 2, 0));
+    pair.setColorAt(0, new Color(1, 1, 1));
+    pair.setColorAt(1, new Color(1, 0, 0));
+    pair.computeBoundingSphere();
+    const camera = new OrthographicCamera(-4, 4, 4, -4, 0.1, 20);
+    camera.position.set(0, 0, 10);
+    const pixels = await render(new Scene().add(white, red, pair, new AmbientLight(0xffffff, 1), new DirectionalLight(0xffffff, 3)), camera);
+    // Rows bottom-up: a quarter in from either side, a quarter from the bottom or top.
+    const at = (x: number, y: number) => Array.from(pixels.subarray((y * 64 + x) * 4, (y * 64 + x) * 4 + 3));
+    for (const y of [16, 48]) {
+      const [left, right] = [at(16, y), at(48, y)];
+      expect(left[1]).toBeGreaterThan(60);
+      expect(right[0]).toBeGreaterThan(60);
+      expect(right[1]).toBeLessThan(10);
+    }
+    pair.dispose();
+    white.dispose();
   });
 
   it("raycasts against each instance's box", () => {
@@ -124,32 +153,22 @@ describe("ImpostorMesh", { timeout: GPU_TIMEOUT }, () => {
     // this box, must still not cut its outline.
     ["a tall thin box from the side", new BoxGeometry(0.3, 3, 0.3).rotateY(0.5), new Vector3(0, 1, 40), 6],
   ])("looks like the real object: %s", async (_, geometry, eye, fov) => {
-    const knot = new Mesh(geometry, new MeshStandardMaterial({ color: 0xd06030, roughness: 0.6 }));
-    const mesh = new ImpostorMesh(await bakeImpostor(knot, { renderer, resolution: 128 }));
+    const source = new Mesh(geometry, new MeshStandardMaterial({ color: 0xd06030, roughness: 0.6 }));
+    const mesh = new ImpostorMesh(await bakeImpostor(source, { resolution: 128 }));
     const camera = new PerspectiveCamera(fov, 1, 0.1, 100);
     camera.position.copy(eye);
     camera.lookAt(0, 0, 0);
-    const render = (object: Object3D) => {
-      const target = new WebGLRenderTarget(96, 96, { samples: 4 });
-      renderer.setRenderTarget(target);
-      renderer.render(new Scene().add(object), camera);
-      const pixels = new Uint8Array(96 * 96 * 4);
-      renderer.readRenderTargetPixels(target, 0, 0, 96, 96, pixels);
-      renderer.setRenderTarget(null);
-      target.dispose();
-      return pixels;
+    // No lights: both draw black on white, so compare silhouettes.
+    renderer.setClearColor(0xffffff, 1);
+    const silhouette = async (object: Object3D) => {
+      const pixels = await render(new Scene().add(object), camera, 96);
+      return Array.from({ length: pixels.length / 4 }, (_, i) => (pixels[i * 4] ?? 0) < 128);
     };
-    const real = render(knot);
-    const fake = render(mesh);
-    let both = 0;
-    let either = 0;
-    for (let i = 3; i < real.length; i += 4) {
-      const a = (real[i] ?? 0) > 128;
-      const b = (fake[i] ?? 0) > 128;
-      if (a && b) both++;
-      if (a || b) either++;
-    }
-    // No lights, so both render black: compare silhouettes.
+    const real = await silhouette(source);
+    const fake = await silhouette(mesh);
+    renderer.setClearColor(0x000000, 0);
+    const both = real.filter((a, i) => a && fake[i]).length;
+    const either = real.filter((a, i) => a || fake[i]).length;
     expect(both / either).toBeGreaterThan(0.9);
     mesh.dispose();
   });

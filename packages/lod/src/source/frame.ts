@@ -1,4 +1,4 @@
-import type { Vector3 } from "three";
+import type { Vector3 } from "three/webgpu";
 
 /**
  * The tangent frame three derives for a normal map when a mesh has no tangents

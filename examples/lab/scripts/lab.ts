@@ -18,7 +18,9 @@ export async function open(path: string, api: string): Promise<{ page: Page; clo
     server: { port: 5200, strictPort: false, hmr: false, watch: null },
   });
   await server.listen();
-  const browser = await chromium.launch({ headless: true, args: ["--use-angle=metal", "--enable-gpu", "--ignore-gpu-blocklist"] });
+  // The new headless mode: the old headless shell loses every WebGPU device once a page
+  // asks for a second adapter after drawing to a canvas (the bakes' own renderer does).
+  const browser = await chromium.launch({ channel: "chromium", headless: true, args: ["--enable-unsafe-webgpu", "--enable-webgpu-developer-features", "--enable-gpu", "--ignore-gpu-blocklist"] });
   const close = async () => {
     await browser.close();
     await server.close();

@@ -1,6 +1,7 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { isManifest, type Manifest } from "../manifest.ts";
-import { noise } from "./glsl.ts";
+import { Fn, clamp, materialColor, max, mix, positionGeometry, smoothstep, vec3, vec4 } from "three/tsl";
+import { noise3 } from "./noise.ts";
 
 /**
  * Shared PBR materials for the generators. Generators write UVs in metres; each texture
@@ -65,11 +66,14 @@ export interface SurfaceOptions {
   weather?: number;
 }
 
+/** A material from the set's own maps, or one drawn with WebGPU's nodes once it is weathered. */
+export type Surface = THREE.MeshStandardMaterial | THREE.MeshStandardNodeMaterial;
+
 /** A standard material from a Poly Haven texture set; cached by set and options. */
-export function surface(id: string, options: SurfaceOptions = {}): THREE.MeshStandardMaterial {
+export function surface(id: string, options: SurfaceOptions = {}): Surface {
   const key = `${id}|${JSON.stringify(options)}`;
   const cached = materials.get(key);
-  if (cached instanceof THREE.MeshStandardMaterial) return cached;
+  if (cached instanceof THREE.MeshStandardMaterial || cached instanceof THREE.MeshStandardNodeMaterial) return cached;
   const { color = 0xffffff, albedo = true, normalScale = 1, roughness = 1, metalness, envMapIntensity = 1, vertexColors = false, side } = options;
   const arm = texture(id, "arm");
   const m = new THREE.MeshStandardMaterial({
@@ -88,38 +92,38 @@ export function surface(id: string, options: SurfaceOptions = {}): THREE.MeshSta
     vertexColors,
     side: side ?? THREE.FrontSide,
   });
-  if (options.weather) weather(m, options.weather);
-  materials.set(key, m);
-  return m;
+  const made = options.weather ? weathered(m, options.weather) : m;
+  materials.set(key, made);
+  return made;
 }
 
 /**
- * Procedural weathering in object space (origin on the ground): broad blotchy discolouring,
- * vertical rain streaks, and splash dirt along the bottom 60 cm. Tiling textures repeat
- * every metre or two; this breaks the repetition the way real grime does.
+ * `m` with procedural weathering in object space (origin on the ground): broad blotchy
+ * discolouring, vertical rain streaks, and splash dirt along the bottom 60 cm. Tiling
+ * textures repeat every metre or two; this breaks the repetition the way real grime does.
  */
-function weather(m: THREE.MeshStandardMaterial, strength: number) {
-  m.onBeforeCompile = (shader) => {
-    shader.uniforms.weather = { value: strength };
-    shader.vertexShader = `varying vec3 vCityPos;\n${shader.vertexShader}`.replace(
-      "#include <begin_vertex>",
-      "#include <begin_vertex>\nvCityPos = transformed;",
-    );
-    shader.fragmentShader = `varying vec3 vCityPos;\nuniform float weather;\n${noise}\n${shader.fragmentShader}`.replace(
-      "#include <map_fragment>",
-      /* glsl */ `#include <map_fragment>
-      {
-        vec3 p = vCityPos;
-        float blotch = cityNoise(p * 0.6) * 0.55 + cityNoise(p * 2.1) * 0.3 + cityNoise(p * 8.0) * 0.15;
-        float streak = cityNoise(vec3(p.x * 7.0 + p.z * 7.0, p.y * 0.4, 0.0)) * cityNoise(p * 1.3);
-        float splash = 1.0 - smoothstep(0.0, 0.7, p.y);
-        float dirt = (blotch - 0.45) * 0.7 + max(streak - 0.3, 0.0) * 1.6 + splash * (0.45 + 0.5 * cityNoise(p * 5.0));
-        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.5, 0.45, 0.37), clamp(dirt * weather, -0.25, 0.9));
-      }`,
-    );
-  };
-  m.customProgramCacheKey = () => `weather`;
+function weathered(m: THREE.MeshStandardMaterial, strength: number): THREE.MeshStandardNodeMaterial {
+  const p = positionGeometry;
+  const blotch = noise3(p.mul(0.6)).mul(0.55).add(noise3(p.mul(2.1)).mul(0.3)).add(noise3(p.mul(8)).mul(0.15));
+  const streak = noise3(vec3(p.x.mul(7).add(p.z.mul(7)), p.y.mul(0.4), 0)).mul(noise3(p.mul(1.3)));
+  const splash = smoothstep(0, 0.7, p.y).oneMinus();
+  const dirt = blotch.sub(0.45).mul(0.7).add(max(streak.sub(0.3), 0).mul(1.6)).add(splash.mul(noise3(p.mul(5)).mul(0.5).add(0.45)));
+  const grime = mix(vec3(1), vec3(0.5, 0.45, 0.37), clamp(dirt.mul(strength), -0.25, 0.9));
+  const node = new THREE.MeshStandardNodeMaterial().copy(m);
+  // the map's colour (and alpha) darkened: three multiplies vertex colours in after
+  node.colorNode = baseColor.mul(vec4(grime, 1));
+  return node;
 }
+
+/**
+ * A material's colour times its map, its alpha included: three's `materialColor`, which
+ * builds to a vec4 where the material has a map, and to a vec3 (typed so) where not.
+ */
+export const baseColor = Fn(() => {
+  const color = vec4(1).toVar();
+  color.assign(materialColor);
+  return color;
+})();
 
 /** Lazily creates a value on first call and returns the same one afterwards (shared materials, canvas textures). */
 export function once<T>(create: () => T): () => T {

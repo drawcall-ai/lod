@@ -22,16 +22,16 @@ import {
   SphereGeometry,
   TorusKnotGeometry,
   type Object3D,
-} from "three";
+} from "three/webgpu";
 import { describe, expect, it, vi } from "vitest";
 import { bakeImpostor } from "../../src/impostor/bake/index.js";
 import { texelPixels, type Impostor } from "../../src/impostor/impostor.js";
 import { frameDirection } from "../../src/impostor/octahedral.js";
 import { ImpostorMesh } from "../../src/impostor/mesh/index.js";
 import { InstancedLod } from "../../src/instanced/index.js";
-import { GPU_TIMEOUT, renderer } from "../webgl.js";
+import { GPU_TIMEOUT, renderer } from "../gpu.js";
 
-const bake = (object: Object3D, layout: Impostor["layout"] = "full") => bakeImpostor(object, { renderer, layout, resolution: 32 });
+const bake = (object: Object3D, layout: Impostor["layout"] = "full") => bakeImpostor(object, { layout, resolution: 32 });
 
 /** Mip level `m` of the base layer. */
 const base = (impostor: Impostor, m = 0) => {
@@ -153,7 +153,7 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
       .setAttribute("position", new Float32BufferAttribute(positions, 3))
       .setAttribute("normal", new Float32BufferAttribute(normals, 3));
     const strips = new Mesh(geometry, new MeshStandardMaterial({ side: DoubleSide }));
-    const seen = centres(await bakeImpostor(strips, { renderer, resolution: 32, supersample: 4 }), 0);
+    const seen = centres(await bakeImpostor(strips, { resolution: 32, supersample: 4 }), 0);
     const facing = seen.filter((c) => c.cover > 0 && Math.abs(c.direction[2]) > 0.5);
     expect(facing.length).toBeGreaterThan(4);
     // how much of the shading normal (+-z, toward the camera) is left, on average
@@ -174,7 +174,8 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
     const make = (blending?: typeof AdditiveBlending) =>
       new Mesh(new SphereGeometry(1, 16, 8), new MeshStandardMaterial({ color: 0x3080c0, ...(blending ? { blending } : {}) }));
     const [normal, additive] = await Promise.all([bake(make()), bake(make(AdditiveBlending))]);
-    normal.layers.forEach((layer, i) => layer.forEach((level, m) => expect(Buffer.compare(level, additive.layers[i]?.[m] ?? new Uint8Array())).toBe(0)));
+    const same = (a: Uint8Array, b: Uint8Array | undefined) => a.length === b?.length && a.every((byte, i) => byte === b[i]);
+    normal.layers.forEach((layer, i) => layer.forEach((level, m) => expect(same(level, additive.layers[i]?.[m])).toBe(true)));
   });
 
   it("renders every mip level at its own size, where the source may look different, and the top one at maxPixels", async () => {
@@ -196,7 +197,7 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
     expect(red(impostor, 0) - red(impostor, 3)).toBeGreaterThan(40);
     // Drawn up to 8 times its sharp height, the top level reads the texture 3 levels finer.
     const sharp = texelPixels(impostor);
-    const close = await bakeImpostor(plane, { renderer, layout: "hemi", resolution: 32, maxPixels: 8 * sharp });
+    const close = await bakeImpostor(plane, { layout: "hemi", resolution: 32, maxPixels: 8 * sharp });
     expect(red(close, 0) - red(impostor, 0)).toBeGreaterThan(40);
     expect(red(close, 3)).toBeCloseTo(red(impostor, 3), 0);
   });
@@ -234,12 +235,12 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
 
   it("rejects bad options and objects without extent", async () => {
     const knot = new Mesh(new TorusKnotGeometry(), new MeshStandardMaterial());
-    await expect(bakeImpostor(knot, { renderer, frames: 1 })).rejects.toThrow(/frames/);
-    await expect(bakeImpostor(knot, { renderer, resolution: 0 })).rejects.toThrow(/resolution/);
-    await expect(bakeImpostor(knot, { renderer, supersample: 1.5 })).rejects.toThrow(/supersample/);
-    await expect(bakeImpostor(knot, { renderer, maxPixels: 0 })).rejects.toThrow(/maxPixels/);
+    await expect(bakeImpostor(knot, { frames: 1 })).rejects.toThrow(/frames/);
+    await expect(bakeImpostor(knot, { resolution: 0 })).rejects.toThrow(/resolution/);
+    await expect(bakeImpostor(knot, { supersample: 1.5 })).rejects.toThrow(/supersample/);
+    await expect(bakeImpostor(knot, { maxPixels: 0 })).rejects.toThrow(/maxPixels/);
     const point = new BufferGeometry().setAttribute("position", new Float32BufferAttribute([1, 1, 1, 1, 1, 1, 1, 1, 1], 3));
-    await expect(bakeImpostor(new Mesh(point, new MeshStandardMaterial()), { renderer })).rejects.toThrow(/no extent/);
+    await expect(bakeImpostor(new Mesh(point, new MeshStandardMaterial()), {})).rejects.toThrow(/no extent/);
   });
 
   it("bakes an InstancedLod with every instance at full detail, as the same meshes placed by hand", async () => {

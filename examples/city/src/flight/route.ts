@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import type { Corn } from "../world/corn/index.ts";
 import type { Plan } from "../world/plan.ts";
 import type { Key } from "./tour.ts";

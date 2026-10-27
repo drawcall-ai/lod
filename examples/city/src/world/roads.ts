@@ -1,6 +1,7 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
+import { abs, attribute, fract, max, mix, step, vec3, vec4 } from "three/tsl";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
-import { surface } from "../content/materials.ts";
+import { baseColor, surface } from "../content/materials.ts";
 import { axes, PAVEMENT, type Plan } from "./plan.ts";
 import type { Terrain } from "./terrain.ts";
 
@@ -199,25 +200,13 @@ function plazaGeometry(plan: Plan): THREE.BufferGeometry {
 }
 
 /** Asphalt with a dashed centre line and solid edge lines where `lane.y` is within the road. */
-function markings(): THREE.MeshStandardMaterial {
-  const m = surface("asphalt_02", { normalScale: 0.8 }).clone();
-  m.onBeforeCompile = (shader) => {
-    shader.vertexShader = `attribute vec2 lane;\nvarying vec2 vLane;\n${shader.vertexShader}`.replace(
-      "#include <uv_vertex>",
-      "#include <uv_vertex>\nvLane = lane;",
-    );
-    shader.fragmentShader = `varying vec2 vLane;\n${shader.fragmentShader}`.replace(
-      "#include <map_fragment>",
-      /* glsl */ `#include <map_fragment>
-      {
-        float across = abs(vLane.y);
-        float centre = step(across, 0.07) * step(fract(vLane.x / 9.0), 0.36);
-        float edge = step(abs(across - 3.15), 0.07);
-        float paint = max(centre, edge) * step(across, 50.0);
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.75), paint * 0.85);
-      }`,
-    );
-  };
-  m.customProgramCacheKey = () => "road-markings";
+function markings(): THREE.MeshStandardNodeMaterial {
+  const m = new THREE.MeshStandardNodeMaterial().copy(surface("asphalt_02", { normalScale: 0.8 }));
+  const lane = attribute<"vec2">("lane", "vec2");
+  const across = abs(lane.y);
+  const centre = step(across, 0.07).mul(step(fract(lane.x.div(9)), 0.36));
+  const edge = step(abs(across.sub(3.15)), 0.07);
+  const paint = max(centre, edge).mul(step(across, 50));
+  m.colorNode = vec4(mix(baseColor.rgb, vec3(0.75), paint.mul(0.85)), baseColor.a);
   return m;
 }

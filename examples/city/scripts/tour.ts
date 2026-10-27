@@ -6,9 +6,10 @@
 //   pnpm --filter @drawcall/lod-example-city tour [--size=1512x982] [--dpr=2] [--no-terrain]
 //     [--query=debug] [--keys=1,5] [--out=tour] [--cold]
 //
-// Frame time is per frame of 12 drawn back to back with one wait for the GPU at the end,
+// Frame time is the GPU's time (by its timer) per frame of 12, one per animation frame,
 // the median of 5 runs: still at the key and moving on along the tour; cpu is one frame's
-// CPU work. --no-terrain leaves the ground mesh out, --query adds page URL parameters,
+// CPU work. Draw calls and triangles are three's counts, which take every indirect draw
+// (an InstancedLod's levels) at its full instance count. --no-terrain leaves the ground mesh out, --query adds page URL parameters,
 // --keys shoots only those keys, --cold empties the browser profile (and with it the
 // page's bake cache) first.
 import { mkdir, rm, writeFile } from "node:fs/promises";
@@ -28,8 +29,8 @@ interface Measure {
 interface City {
   loadMs: number;
   keys: { name: string; time: number }[];
-  seek(time: number): void;
-  measure(frames: number, runs: number, move?: number): Measure;
+  seek(time: number): Promise<void>;
+  measure(frames: number, runs: number, move?: number): Promise<Measure>;
 }
 declare const window: { city: City };
 
@@ -54,10 +55,13 @@ if (!url) throw new Error("vite did not report a local URL");
 const profile = fileURLToPath(new URL("../.artifacts/browser/", import.meta.url));
 if (args.includes("--cold")) await rm(profile, { recursive: true, force: true });
 const browser = await chromium.launchPersistentContext(profile, {
+  // new headless: the old headless shell loses every WebGPU device once a page asks for a
+  // second adapter, as the package's bakes do
+  channel: "chromium",
   headless: true,
   viewport: { width, height },
   deviceScaleFactor: dpr,
-  args: ["--use-angle=metal", "--enable-gpu", "--ignore-gpu-blocklist"],
+  args: ["--enable-unsafe-webgpu", "--enable-webgpu-developer-features", "--enable-gpu", "--ignore-gpu-blocklist"],
 });
 const page = await browser.newPage();
 page.on("console", (m) => console.error(`[page ${m.type()}]`, m.text()));

@@ -1,4 +1,4 @@
-import { Loader, LoaderUtils, type LoadingManager, type Object3D } from "three";
+import { Loader, LoaderUtils, type LoadingManager, type Object3D } from "three/webgpu";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { bakeMesh } from "./baked/index.js";
 import { disposeTree } from "./dispose.js";
@@ -36,7 +36,7 @@ export type LevelRequest =
         }
       | { low?: never; ratio?: number }
     ))
-  | ({ type: "impostor"; maxPixels?: number } & Omit<BakeImpostorOptions, "renderer">);
+  | ({ type: "impostor"; maxPixels?: number } & BakeImpostorOptions);
 
 /** A model URL (.glb, .gltf or .glts), with the levels to build after the source. */
 export type LodRequest = string | { url: string; levels?: readonly LevelRequest[] };
@@ -45,8 +45,8 @@ const DEFAULT_LEVELS: readonly LevelRequest[] = [{ type: "impostor" }];
 
 /**
  * Loads a model and builds a `Lod` of it: the model as level 0, then the requested
- * levels (default: an impostor). Building runs at load time; impostors bake on one WebGL
- * context this package keeps for that. Each level's maxPixels is its default (see
+ * levels (default: an impostor). Building runs at load time; impostors bake on a
+ * renderer this package keeps for that. Each level's maxPixels is its default (see
  * `LodLevel.maxPixels`) unless the request sets it; a failed load frees what it built.
  *
  * Models load through the manager's handler for the URL if one is registered: a
@@ -105,7 +105,7 @@ export class LodLoader extends Loader<Lod, LodRequest> {
     const interiors: Object3D[] = [];
     let lod: T | undefined;
     try {
-      // One at a time: bakes share one WebGL context.
+      // One at a time: bakes share one renderer.
       for (const request of requests) {
         const { level, interior } = await this.buildLevel(object, request, base);
         built.push(level);

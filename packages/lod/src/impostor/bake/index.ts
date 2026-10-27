@@ -1,13 +1,14 @@
-import { FloatType, Matrix4, NearestFilter, OrthographicCamera, Scene, Vector3, WebGLRenderTarget, type WebGLRenderer, type Object3D } from "three";
+import { HalfFloatType, Matrix4, NearestFilter, OrthographicCamera, RenderTarget, Scene, Vector3, type Object3D, type Renderer } from "three/webgpu";
+import { uniform } from "three/tsl";
 import { clone } from "three/addons/utils/SkeletonUtils.js";
 import { MAPS, boundingRadius, texelPixels, validateImpostor, type Impostor, type ImpostorLayout, type ImpostorMap } from "../impostor.js";
 import { frameBasis, frameDirection, type Vec3 } from "../octahedral.js";
 import { boundingBox, forEachMesh, forEachVertex, showDetail } from "../../bounds.js";
 import { pause } from "../../pause.js";
-import { borrow, sharedRenderer } from "../../renderer.js";
+import { borrow, readFloats, sharedRenderer } from "../../renderer.js";
 import { isImpostorMesh } from "../../three.js";
 import { Atlas } from "./atlas.js";
-import { swapMaterials, type BakeSettings } from "./materials.js";
+import { OUTPUTS, swapMaterials, type BakeSettings, type Output } from "./materials.js";
 
 export interface BakeImpostorOptions {
   /**
@@ -42,8 +43,6 @@ export interface BakeImpostorOptions {
    * the output pixel's size, as multisampling does.
    */
   supersample?: number;
-  /** render with this renderer; default: one this package creates once and reuses */
-  renderer?: WebGLRenderer;
 }
 
 /**
@@ -101,21 +100,16 @@ export async function bakeImpostor(object: Object3D, options: BakeImpostorOption
   // Textures are read at the size of an atlas texel; the top mip's at the size of a pixel at maxPixels.
   const sharp = texelPixels({ size: cell * frames, frames, box, halfSize });
   const textureBias = (m: number) => Math.log2(supersample) - (m === 0 ? Math.log2(Math.max(1, (options.maxPixels ?? sharp) / sharp)) : 0);
-  const settings: BakeSettings = {
-    uniforms: { impostorDistance: { value: distance }, impostorRadius: { value: radius }, impostorTextureBias: { value: 0 } },
-    emissive: false,
-    specular: false,
-  };
+  const settings: BakeSettings = { distance, radius, textureBias: uniform(0) };
   const swapped = swapMaterials(source, settings);
-  settings.emissive = options.emissive ?? swapped.emits;
-  settings.specular = swapped.specular;
-  const maps: ImpostorMap[] = settings.emissive ? [...MAPS] : ["base", "normalDepth", "orm"];
+  const emissive = options.emissive ?? swapped.emits;
+  const maps: ImpostorMap[] = emissive ? [...MAPS] : ["base", "normalDepth", "orm"];
 
   // Every mip level is rendered, not filtered from the one above: the source does not look
   // the same at every size (alpha-tested leaves whose texture mips mix in the dark texels
   // around them darken with distance), and filtering would freeze the look of the largest.
-  const atlases = Array.from({ length: Math.log2(cell) + 1 }, (_, m) => new Atlas(maps, frames, cell >> m, settings.specular));
-  const renderer = options.renderer ?? sharedRenderer();
+  const atlases = Array.from({ length: Math.log2(cell) + 1 }, (_, m) => new Atlas(maps, frames, cell >> m, swapped.specular));
+  const renderer = await sharedRenderer();
   const scene = new Scene();
   scene.add(source);
   const camera = new OrthographicCamera(-halfSize, halfSize, halfSize, -halfSize, 0, 4 * radius + 1e-3);
@@ -144,10 +138,8 @@ export async function bakeImpostor(object: Object3D, options: BakeImpostorOption
     );
   });
   try {
-    if (!renderer.extensions.has("EXT_color_buffer_float"))
-      throw new Error("bakeImpostor: this WebGL context cannot render to float targets (EXT_color_buffer_float)");
     for (const [m, atlas] of atlases.entries()) {
-      settings.uniforms.impostorTextureBias.value = textureBias(m);
+      settings.textureBias.value = textureBias(m);
       await bakeMip(atlas, supersample, renderer, scene, camera, views);
     }
   } finally {
@@ -168,7 +160,7 @@ export async function bakeImpostor(object: Object3D, options: BakeImpostorOption
   const impostor: Impostor = { version: 3, layout, frames, size: cell * frames, box, halfSize, maps, layers };
   const [top] = atlases;
   if (!top) throw new Error("bakeImpostor: no mip levels");
-  if (settings.specular) impostor.specular = top.meanSpecular();
+  if (swapped.specular) impostor.specular = top.meanSpecular();
   validateImpostor(impostor);
   return impostor;
 }
@@ -177,52 +169,54 @@ export async function bakeImpostor(object: Object3D, options: BakeImpostorOption
 const TILE = 1024;
 
 /**
+ * Colour attachments one pass renders: four half-float targets fill the 32 bytes per
+ * sample WebGPU guarantees.
+ */
+const PER_PASS = 4;
+
+/**
  * Render every frame (`views`: camera matrices, in atlas order) into `atlas`, at its cell
  * size × `supersample`. Frames render side by side into tiles of up to TILE square, so
- * that each map is read back once per tile: each read waits for the GPU.
+ * that each map is read back once per tile, in passes of up to PER_PASS outputs.
  */
-async function bakeMip(atlas: Atlas, supersample: number, renderer: WebGLRenderer, scene: Scene, camera: OrthographicCamera, views: Matrix4[]): Promise<void> {
+async function bakeMip(atlas: Atlas, supersample: number, renderer: Renderer, scene: Scene, camera: OrthographicCamera, views: Matrix4[]): Promise<void> {
   const { frames, maps } = atlas;
   const side = atlas.cell * supersample;
   const per = Math.max(1, Math.min(frames, Math.floor(TILE / side)));
   const width = per * side;
-  // one target per map, then the second way to store the normals (see Atlas), then the specular
-  const count = maps.length + (atlas.specular ? 2 : 1);
-  const target = new WebGLRenderTarget(width, width, {
-    count,
-    type: FloatType,
-    minFilter: NearestFilter,
-    magFilter: NearestFilter,
-    depthBuffer: true,
+  // one output per map, then the second way to store the normals (see Atlas), then the specular
+  const names: Output[] = OUTPUTS.filter((name) => (name === "emissive" ? maps.includes("emissive") : name !== "specular" || atlas.specular));
+  const passes = Array.from({ length: Math.ceil(names.length / PER_PASS) }, (_, p) => {
+    const outputs = names.slice(p * PER_PASS, (p + 1) * PER_PASS);
+    const target = new RenderTarget(width, width, { count: outputs.length, type: HalfFloatType, minFilter: NearestFilter, magFilter: NearestFilter, depthBuffer: true });
+    outputs.forEach((name, i) => {
+      const texture = target.textures[i];
+      if (!texture) throw new Error("bakeImpostor: a render target lacks a texture");
+      texture.name = name;
+    });
+    return target;
   });
-  const pixels = Array.from({ length: count }, () => new Float32Array(width * width * 4));
   try {
     for (let row0 = 0; row0 < frames; row0 += per)
       for (let col0 = 0; col0 < frames; col0 += per) {
         const tile: Array<{ col: number; row: number; x: number; y: number }> = [];
         for (let row = row0; row < Math.min(row0 + per, frames); row++)
           for (let col = col0; col < Math.min(col0 + per, frames); col++) tile.push({ col, row, x: (col - col0) * side, y: (row - row0) * side });
-        renderTile(
-          renderer,
-          target,
-          scene,
-          camera,
-          tile.map(({ col, row, x, y }) => ({ view: views[row * frames + col], x, y })),
-          side,
-        );
-        pixels.forEach((p, i) => renderer.readRenderTargetPixels(target, 0, 0, width, width, p, undefined, i));
+        const placed = tile.map(({ col, row, x, y }) => ({ view: views[row * frames + col], x, y }));
+        for (const target of passes) renderTile(renderer, target, scene, camera, placed, side);
+        const pixels = await Promise.all(passes.flatMap((target) => target.textures.map((_, i) => readFloats(renderer, target, i))));
         for (const { col, row, x, y } of tile) atlas.write(pixels, width, supersample, col, row, x, y);
         await pause();
       }
   } finally {
-    target.dispose();
+    for (const target of passes) target.dispose();
   }
 }
 
-/** Clear `target` and render each frame's view into its `side` square at (x, y). */
+/** Clear `target` and render each frame's view into its `side` square at (x, y), counted from the bottom left as the atlas is. */
 function renderTile(
-  renderer: WebGLRenderer,
-  target: WebGLRenderTarget,
+  renderer: Renderer,
+  target: RenderTarget,
   scene: Scene,
   camera: OrthographicCamera,
   frames: Array<{ view: Matrix4 | undefined; x: number; y: number }>,
@@ -234,10 +228,10 @@ function renderTile(
     target.scissorTest = true;
     for (const { view, x, y } of frames) {
       if (!view) throw new Error("bakeImpostor: a frame has no view");
-      target.viewport.set(x, y, side, side);
-      target.scissor.set(x, y, side, side);
-      // three reads a target's viewport when it is set.
-      renderer.setRenderTarget(target);
+      // WebGPU counts viewport rows from the top; `readFloats` turns the image over.
+      const top = target.height - y - side;
+      target.viewport.set(x, top, side, side);
+      target.scissor.set(x, top, side, side);
       camera.matrix.copy(view);
       camera.updateMatrixWorld(true);
       renderer.render(scene, camera);

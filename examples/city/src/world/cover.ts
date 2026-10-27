@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { Lod } from "@drawcall/lod";
 import { Random } from "../content/random.ts";
 import { step } from "../loading.ts";

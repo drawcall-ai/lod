@@ -1,34 +1,21 @@
 import {
   Box3,
-  DoubleSide,
-  InstancedMesh,
+  Color,
   Matrix4,
-  MeshDepthMaterial,
-  MeshDistanceMaterial,
-  MeshStandardMaterial,
+  Mesh,
   PlaneGeometry,
   Ray,
   Sphere,
+  StorageInstancedBufferAttribute,
   Vector3,
-  Vector4,
-  type Camera,
   type Intersection,
-  type Material,
-  type Object3D,
   type Raycaster,
-  type Scene,
-  type WebGLProgramParametersWithUniforms,
-  type WebGLRenderer,
-} from "three";
-import { fadeUniforms, registerFade } from "../../fade.js";
-import { TinyCaster } from "../../shadow.js";
-import { acquireTextures, releaseTextures } from "./textures.js";
+} from "three/webgpu";
+import { setDraw } from "../../fade.js";
 import { sameClass } from "../../three.js";
-import { boundingRadius, boxCentre, boxExtent, validateImpostor, type Impostor, type ImpostorMap } from "../impostor.js";
-import { applyEdits, type Edit } from "../../patch.js";
-import { FRAGMENT, fragmentLit } from "./fragment.js";
-import { VERTEX, vertexLit } from "./vertex.js";
 import { copyWind } from "../../wind/index.js";
+import { boundingRadius, validateImpostor, type Impostor } from "../impostor.js";
+import { ImpostorMaterial } from "./material.js";
 
 export interface ImpostorMeshOptions {
   /** coverage below which a pixel is empty, in (0, 1); default 0.5 */
@@ -45,195 +32,126 @@ export interface ImpostorMeshOptions {
    * dithered coverage absorbs the extra aliasing. Default -0.5.
    */
   mipBias?: number;
-  /**
-   * Write each pixel's baked surface depth instead of the card's in the main view, so
-   * impostors intersect the ground and each other where the real object would. It
-   * turns off early depth rejection, which makes large crowds of impostors several
-   * times slower to draw. Default false. Shadow passes always use the surface depth.
-   */
-  pixelDepth?: boolean;
 }
 
-// ------------------------------------------------------------------ material patches
-
-/** A GLSL float literal that keeps every digit, so a validated value stays valid. */
-const float = (x: number) => (Number.isInteger(x) ? x.toFixed(1) : String(x));
-
-/** The options with defaults, validated, and the shader defines every pass shares. */
-function settings(impostor: Impostor, options: ImpostorMeshOptions) {
+/** The options with defaults, validated. */
+function shadingOf(options: ImpostorMeshOptions) {
   const { alphaTest = 0.5, parallax = 2, tolerance = 0.03, mipBias = -0.5 } = options;
   if (!(alphaTest > 0 && alphaTest < 1)) throw new Error(`ImpostorMesh: alphaTest must be in (0, 1), got ${alphaTest}`);
   if (!Number.isInteger(parallax) || parallax < 0) throw new Error(`ImpostorMesh: parallax must be an integer >= 0, got ${parallax}`);
   if (!(tolerance > 0)) throw new Error(`ImpostorMesh: tolerance must be > 0, got ${tolerance}`);
   if (!Number.isFinite(mipBias)) throw new Error(`ImpostorMesh: mipBias must be a number, got ${mipBias}`);
-  const defines: Record<string, string> = {
-    IMPOSTOR_CUTOFF: float(alphaTest),
-    IMPOSTOR_TOLERANCE: float(tolerance),
-    IMPOSTOR_MIP_BIAS: float(mipBias),
-  };
-  if (impostor.layout === "full") defines.IMPOSTOR_FULL = "";
-  if (parallax > 0) defines.IMPOSTOR_PARALLAX = String(parallax);
-  if (options.pixelDepth) defines.IMPOSTOR_PIXEL_DEPTH = "";
-  if (impostor.maps.includes("emissive")) defines.IMPOSTOR_EMISSIVE = "";
-  if (impostor.specular) defines.IMPOSTOR_SPECULAR = "";
-  return { alphaTest, defines };
+  return { cutoff: alphaTest, parallax, tolerance, mipBias };
 }
 
-// three writes depth here and would overwrite the baked surface depth from <map_fragment>.
-// (The distance material of point-light shadows has no such chunk and writes none.)
-const PIXEL_DEPTH: Edit = ["fragment", "#include <logdepthbuf_fragment>", ""];
-
-/** Make `material` draw the impostor card: the `edits` made when it compiles, on top of its own shader. */
-function patch(material: Material, edits: () => Edit[], uniforms: object, defines: Record<string, string>): void {
-  material.defines = { ...material.defines, ...defines };
-  material.onBeforeCompile = (shader: WebGLProgramParametersWithUniforms) => {
-    Object.assign(shader.uniforms, uniforms);
-    applyEdits(shader, edits());
-  };
-  material.customProgramCacheKey = () => `impostor|${material.type}|${JSON.stringify(material.defines)}`;
-}
-
-// ------------------------------------------------------------------ mesh
+const scratch = new Matrix4();
+const box = new Box3();
+const sphere = new Sphere();
 
 /**
- * Draws an impostor once per instance: a standard InstancedMesh whose instance
+ * Draws an impostor once per instance, as an InstancedMesh draws a mesh: instance
  * matrices are ordinary model transforms of the source object (identity = where the
- * source was baked). Lighting, fog, shadows and instance colour all go through
- * three's MeshStandardMaterial; meshes of the same impostor share its textures.
+ * source was baked), set with `setMatrixAt`, and instance colours with `setColorAt`.
+ * Lighting, fog, shadows and colour go through three's MeshStandardNodeMaterial; meshes
+ * of the same impostor share its textures, and a clone shares its material: clones of
+ * one instance draw with one shader.
  *
- * Like a Lod's meshes, it draws nothing into a directional light's shadow map whose texels
- * are wider than its largest instance.
- *
- * It uses `onBeforeRender`, `onBeforeShadow` and `onAfterShadow` itself: assign your own
- * only if it calls the method it replaces (`ImpostorMesh.prototype.onBeforeRender.call(this, ...)`).
+ * It draws nothing of an instance into a directional light's shadow map whose texels are
+ * wider than the instance. Like an InstancedMesh, it is culled by `boundingSphere`,
+ * which `computeBoundingSphere` makes from the instances.
  */
-export class ImpostorMesh extends InstancedMesh<PlaneGeometry, MeshStandardMaterial> {
+export class ImpostorMesh extends Mesh<PlaneGeometry, ImpostorMaterial> {
   readonly isImpostorMesh = true;
   readonly impostor: Impostor;
-  /** Per-draw state the shaders read: multisampled target, viewing camera position. */
-  private readonly drawState: { multisample: { value: number }; viewer: { value: Vector3 } };
-  private readonly tiny = new TinyCaster();
-  /** The largest instance scale, as of the instance matrices' `version` and `count`. */
-  private readonly largest = { version: -1, count: -1, scale: 1 };
+  /** The options it draws with. */
+  options: ImpostorMeshOptions;
+  /** Instances drawn. */
+  count: number;
+  /** 16 floats per instance; drawn from a storage buffer when there is more than one. */
+  instanceMatrix: StorageInstancedBufferAttribute;
+  /** RGB (and a pad) per instance, once `setColorAt` was called. */
+  instanceColor: StorageInstancedBufferAttribute | null = null;
+  boundingSphere: Sphere | null = null;
   private disposed = false;
 
-  constructor(impostor: Impostor, count = 1, options: ImpostorMeshOptions = {}) {
+  constructor(impostor: Impostor, count = 1, options: ImpostorMeshOptions = {}, material?: ImpostorMaterial) {
     validateImpostor(impostor);
-    const { alphaTest, defines } = settings(impostor, options);
-    // Off unless a Lod drives it; every pass shares these.
-    const fading = fadeUniforms();
-    const textures = acquireTextures(impostor);
-    const layer = (map: ImpostorMap) => textures[impostor.maps.indexOf(map)] ?? null;
-    const drawState = { multisample: { value: 1 }, viewer: { value: new Vector3() } };
-    const uniforms = {
-      ...fading,
-      impostorCentre: { value: new Vector3(...boxCentre(impostor.box)) },
-      impostorRadius: { value: boundingRadius(impostor.box) },
-      impostorExtent: { value: new Vector3(...boxExtent(impostor.box)) },
-      impostorBase: { value: layer("base") },
-      impostorNormalDepth: { value: layer("normalDepth") },
-      impostorOrm: { value: layer("orm") },
-      impostorEmissive: { value: layer("emissive") },
-      impostorSpecular: { value: new Vector4(...(impostor.specular ?? [0, 0, 0, 0])) },
-      impostorFrames: { value: impostor.frames },
-      impostorSize: { value: impostor.size },
-      impostorHalfSize: { value: impostor.halfSize },
-      impostorMultisample: drawState.multisample,
-      impostorViewer: drawState.viewer,
-      impostorPlacement: { value: new Matrix4() },
-    };
-
-    const material = new MeshStandardMaterial({
-      roughness: 1,
-      metalness: 1,
-      emissive: layer("emissive") ? 0xffffff : 0x000000,
-      alphaTest,
-      alphaToCoverage: true,
-      side: DoubleSide, // the card may face either way after a mirrored instance matrix
-    });
-    material.name = "impostor";
-    const lit = () => [...VERTEX, ...vertexLit(), ...FRAGMENT, ...fragmentLit(), ...(options.pixelDepth ? [PIXEL_DEPTH] : [])];
-    patch(material, lit, uniforms, { ...defines, IMPOSTOR_LIT: "" });
-
+    if (material && material.impostor !== impostor) throw new Error("ImpostorMesh: the material draws another impostor");
     // The card is built in the shader; the geometry carries the source's bounds so
-    // culling, computeBoundingSphere and raycasting see the real object.
+    // culling and raycasting see the real object.
     const geometry = new PlaneGeometry(1, 1);
     geometry.boundingBox = new Box3().setFromArray(impostor.box);
     geometry.boundingSphere = geometry.boundingBox.getBoundingSphere(new Sphere());
-
-    super(geometry, material, count);
+    super(geometry, (material ?? new ImpostorMaterial(impostor, shadingOf(options))).acquire());
     this.impostor = impostor;
-    internals.set(this, { options, placement: uniforms.impostorPlacement.value, diameter: null, radius: uniforms.impostorRadius.value });
-    this.drawState = drawState;
-
-    // Shadow passes: the same card, baked surface depth and coverage, facing the light.
-    // No parallax walk there: shadow maps cover far more impostor pixels than the view,
-    // and shadows are too soft to show it. Shadow maps sample the depth texture, so the
-    // surface depth puts the resolved surface into them, not the card. They fade as
-    // FADE_SHADOW_DISCARD says. three sets these materials' side and alphaTest itself.
-    const { IMPOSTOR_PARALLAX: _, ...rest } = defines;
-    const shadowDefines = { ...rest, IMPOSTOR_PIXEL_DEPTH: "", IMPOSTOR_SHADOW: "" };
-    this.customDepthMaterial = new MeshDepthMaterial();
-    patch(this.customDepthMaterial, () => [...VERTEX, ...FRAGMENT, PIXEL_DEPTH], uniforms, shadowDefines);
-    this.customDistanceMaterial = new MeshDistanceMaterial();
-    patch(this.customDistanceMaterial, () => [...VERTEX, ...FRAGMENT], uniforms, shadowDefines);
-    for (const faded of [material, this.customDepthMaterial, this.customDistanceMaterial]) registerFade(faded, fading);
+    this.options = options;
+    this.count = count;
+    this.instanceMatrix = new StorageInstancedBufferAttribute(count, 16);
+    for (let i = 0; i < count; i++) scratch.identity().toArray(this.instanceMatrix.array, i * 16);
+    setDraw(this, { kind: "instances", fades: null, radius: boundingRadius(impostor.box), tint: new Color(1, 1, 1) });
   }
 
-  /**
-   * Alpha-to-coverage only works on multisampled targets; tell the shader which this
-   * is. three re-uploads material uniforms at the first draw after a material or
-   * target switch, which includes the first draw of every render() call.
-   */
-  override onBeforeRender(renderer: WebGLRenderer, _scene: Scene, camera: Camera): void {
-    const target = renderer.getRenderTarget();
-    const multisampled = target ? target.samples > 0 : (renderer.getContext().getContextAttributes()?.antialias ?? false);
-    this.drawState.multisample.value = Number(multisampled);
-    this.trackCamera(camera);
+  /** Where the card sits within an instance's space (InstancedLod places it). */
+  get placement(): Matrix4 {
+    return this.material.placement;
   }
 
-  /** Shadow passes fade by the viewing camera too (shadows render before the view). */
-  override onBeforeShadow(renderer: WebGLRenderer, _object: Object3D, camera: Camera, shadowCamera: Camera): void {
-    this.trackCamera(camera);
-    this.tiny.skip(this, renderer, shadowCamera, this.casterDiameter());
+  setMatrixAt(index: number, matrix: Matrix4): void {
+    matrix.toArray(this.instanceMatrix.array, index * 16);
+    this.instanceMatrix.needsUpdate = true;
   }
 
-  override onAfterShadow(): void {
-    this.tiny.restore(this);
+  getMatrixAt(index: number, matrix: Matrix4): Matrix4 {
+    return matrix.fromArray(this.instanceMatrix.array, index * 16);
   }
 
-  /** The largest instance's diameter in world units. */
-  private casterDiameter(): number {
-    const { diameter, radius } = internalsOf(this);
-    if (diameter) return diameter();
-    const { largest, instanceMatrix } = this;
-    if (largest.version !== instanceMatrix.version || largest.count !== this.count) {
-      largest.version = instanceMatrix.version;
-      largest.count = this.count;
-      largest.scale = 0;
-      for (let i = 0; i < this.count; i++) largest.scale = Math.max(largest.scale, this.getMatrixAt(i, matrix).getMaxScaleOnAxis());
+  setColorAt(index: number, color: Color): void {
+    if (!this.instanceColor) {
+      this.instanceColor = new StorageInstancedBufferAttribute(new Float32Array(this.count * 4).fill(1), 4);
+      // Instance colours change the shader.
+      this.material.needsUpdate = true;
     }
-    return 2 * radius * largest.scale * this.matrixWorld.getMaxScaleOnAxis();
+    color.toArray(this.instanceColor.array, index * 4);
+    this.instanceColor.needsUpdate = true;
   }
 
-  private trackCamera(camera: Camera): void {
-    this.drawState.viewer.value.setFromMatrixPosition(camera.matrixWorld);
+  getColorAt(index: number, color: Color): Color {
+    return this.instanceColor ? color.fromArray(this.instanceColor.array, index * 4) : color.setRGB(1, 1, 1);
+  }
+
+  /** Bound every instance's bounding box of the source object. */
+  computeBoundingSphere(): void {
+    this.boundingSphere ??= new Sphere();
+    this.boundingSphere.makeEmpty();
+    const own = box.setFromArray(this.impostor.box).getBoundingSphere(sphere);
+    for (let i = 0; i < this.count; i++) this.boundingSphere.union(own.clone().applyMatrix4(this.getMatrixAt(i, scratch)));
   }
 
   override copy(source: ImpostorMesh, recursive?: boolean): this {
     if (source.impostor !== this.impostor) throw new Error("ImpostorMesh.copy: the source draws a different impostor");
-    // InstancedMesh.copy would adopt the source's material and geometry; keep our own.
-    const { material, geometry } = this;
+    if (source === this) return this;
+    // Mesh.copy adopts the source's material and geometry; each card owns its geometry.
+    const { geometry, material } = this;
     super.copy(source, recursive);
-    this.material = material;
     this.geometry = geometry;
-    internalsOf(this).placement.copy(internalsOf(source).placement);
+    if (material !== this.material) {
+      material.release();
+      this.material.acquire();
+    }
+    this.count = source.count;
+    this.options = source.options;
+    this.instanceMatrix.dispose();
+    this.instanceColor?.dispose();
+    this.instanceMatrix = new StorageInstancedBufferAttribute(source.instanceMatrix.array.slice(), 16);
+    this.instanceColor = source.instanceColor ? new StorageInstancedBufferAttribute(source.instanceColor.array.slice(), 4) : null;
+    this.material.needsUpdate = true;
+    this.boundingSphere = source.boundingSphere?.clone() ?? null;
     copyWind(source, this);
     return this;
   }
 
   override clone(recursive?: boolean): this {
-    const clone = new ImpostorMesh(this.impostor, this.count, internalsOf(this).options).copy(this, recursive);
+    const clone = new ImpostorMesh(this.impostor, this.count, this.options, this.material).copy(this, recursive);
     // three's clone builds `new this.constructor()`; a subclass takes other arguments.
     if (!sameClass(this, clone)) throw new Error("ImpostorMesh.clone: a subclass must override clone");
     return clone;
@@ -242,9 +160,8 @@ export class ImpostorMesh extends InstancedMesh<PlaneGeometry, MeshStandardMater
   /** Hits each instance's bounding box of the source object. */
   override raycast(raycaster: Raycaster, intersects: Intersection[]): void {
     box.setFromArray(this.impostor.box);
-    const { placement } = internalsOf(this);
     for (let i = 0; i < this.count; i++) {
-      this.getMatrixAt(i, matrix).multiply(placement).premultiply(this.matrixWorld);
+      this.getMatrixAt(i, matrix).multiply(this.placement).premultiply(this.matrixWorld);
       inverse.copy(matrix).invert();
       ray.copy(raycaster.ray).applyMatrix4(inverse);
       if (!ray.intersectBox(box, point)) continue;
@@ -255,59 +172,34 @@ export class ImpostorMesh extends InstancedMesh<PlaneGeometry, MeshStandardMater
     }
   }
 
-  override dispose(): this {
+  /** Frees its geometry and instance buffers; the last mesh sharing its material frees that too. */
+  dispose(): this {
     if (this.disposed) return this;
     this.disposed = true;
-    super.dispose();
     this.geometry.dispose();
-    this.material.dispose();
-    this.customDepthMaterial?.dispose();
-    this.customDistanceMaterial?.dispose();
-    releaseTextures(this.impostor);
+    this.instanceMatrix.dispose();
+    this.instanceColor?.dispose();
+    this.material.release();
     return this;
   }
 }
 
 // Scratch for raycasts.
-const box = new Box3();
 const matrix = new Matrix4();
 const inverse = new Matrix4();
 const ray = new Ray();
 const point = new Vector3();
 
-/** What InstancedLod needs and the public class does not show. */
-interface Internals {
-  options: ImpostorMeshOptions;
-  placement: Matrix4;
-  /** Rest bounds, expanded by wind when attached; independent of atlas reconstruction. */
-  radius: number;
-  /** The largest instance's diameter in world units, when someone else measures it. */
-  diameter: (() => number) | null;
-}
-
-const internals = new WeakMap<ImpostorMesh, Internals>();
-
-function internalsOf(mesh: ImpostorMesh): Internals {
-  const found = internals.get(mesh);
-  if (!found) throw new Error("ImpostorMesh: not built by its constructor");
-  return found;
-}
-
-/** Keep tiny-shadow rejection consistent with an animated card's culling envelope. */
-export function impostorCasterRadius(mesh: ImpostorMesh, radius: number): void {
-  internalsOf(mesh).radius = radius;
-}
-
 /**
  * An ImpostorMesh like `template` for `count` instances, its card placed by `placement`
- * within each instance's space (instance matrix × placement), as InstancedLod draws it;
- * `diameter` measures its largest instance.
+ * within each instance's space (instance matrix × placement), as InstancedLod draws it.
+ * It has a material of its own: its placement is its own.
  */
-export function impostorInstances(template: ImpostorMesh, count: number, placement: Matrix4, diameter: () => number): ImpostorMesh {
-  const mesh = new ImpostorMesh(template.impostor, count, internalsOf(template).options);
-  internalsOf(mesh).placement.copy(placement);
-  internalsOf(mesh).diameter = diameter;
-  // A tint set on the template, as for a level drawn by a Lod.
+export function impostorInstances(template: ImpostorMesh, count: number, placement: Matrix4): ImpostorMesh {
+  const mesh = new ImpostorMesh(template.impostor, count, template.options);
+  mesh.placement.copy(placement);
+  // A tint and mip bias set on the template, as for a level drawn by a Lod.
   mesh.material.color.copy(template.material.color);
+  mesh.material.mipBias.value = template.material.mipBias.value;
   return mesh;
 }

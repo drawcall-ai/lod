@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { ImpostorMesh, Lod } from "@drawcall/lod";
 import { cornPlant, leafMaterial } from "../content/corn/index.ts";
 import { ladybird } from "../content/ladybird.ts";

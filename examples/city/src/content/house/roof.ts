@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { box, merge, MeshBuilder, type Parts, pose, roundedPath, tint } from "../geometry.ts";
 import { Random } from "../random.ts";
 import { brick, concrete, paint, tiles, zinc } from "./materials.ts";

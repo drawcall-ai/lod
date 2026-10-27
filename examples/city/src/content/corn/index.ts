@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { Parts, tube } from "../geometry.ts";
 import { Random } from "../random.ts";
 import { ear } from "./ear.ts";

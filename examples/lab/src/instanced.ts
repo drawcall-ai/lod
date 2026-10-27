@@ -1,30 +1,29 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { InstancedLod, Lod, LodLoader } from "@drawcall/lod";
+import { readBytes } from "../../../packages/lod/src/renderer.js";
 import { at } from "./must.js";
-import { gltfLoader, gpuName, png } from "./page.js";
+import { gltfLoader, gpuName, gpuRenderer, nextFrame, png } from "./page.js";
 
 // Standalone page (instanced.html): InstancedLod of a real tree, driven by
 // scripts/instanced.ts through window.instanced.
 //
-// - perf(count): `count` trees on a grid; per camera view the CPU time of a re-sort
-//   (update with a moved camera) and the GPU time of a frame (timer queries).
+// - perf(count): `count` trees on a grid; per camera view the CPU time of an update and
+//   of a frame's render call, and the GPU time of a frame (timestamp queries over every
+//   pass, the selection included).
 // - compare(): a small grid drawn as one InstancedLod and as one Lod per tree at the
 //   same placement, from a view where trees sit in every level and fade; the images
 //   must match.
 // - cascades(count): `count` trees and as many bushes, seen from the ground under a sun
 //   with two shadow maps like a cascade pair: a fine one around the camera and a coarse
-//   one far ahead, whose texels are wider than a bush. GPU time and triangles of a frame
-//   with both maps drawn every frame.
+//   one far ahead, whose texels are wider than a bush. GPU time of a frame with both maps
+//   drawn every frame.
 
 const SIZE = 1024;
 const SPACING = 12;
-const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
-renderer.setPixelRatio(1);
-renderer.setSize(SIZE, SIZE);
+const renderer = await gpuRenderer(SIZE, { timed: true });
 renderer.shadowMap.enabled = true;
-document.body.append(renderer.domElement);
-const target = new THREE.WebGLRenderTarget(SIZE, SIZE, { samples: 4 });
+const target = new THREE.RenderTarget(SIZE, SIZE, { samples: 4 });
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x9fb3c8);
@@ -79,38 +78,48 @@ function instanced(source: Lod, count: number, offset = 0): InstancedLod {
   return lod;
 }
 
-function frame(): Uint8Array {
+async function frame(): Promise<Uint8Array> {
+  await nextFrame(renderer);
   renderer.setRenderTarget(target);
   renderer.render(scene, camera);
-  const pixels = new Uint8Array(SIZE * SIZE * 4);
-  renderer.readRenderTargetPixels(target, 0, 0, SIZE, SIZE, pixels);
   renderer.setRenderTarget(null);
-  return pixels;
+  return readBytes(renderer, target, 0);
 }
 
-/** GPU time of one frame, median over `frames`, via timer queries. */
+/** GPU time of one frame (every pass and the selection), median over `frames`, from timestamp queries. */
 async function gpuTime(frames = 40): Promise<number> {
-  const gl = renderer.getContext();
-  if (!(gl instanceof WebGL2RenderingContext)) throw new Error("WebGL2 needed");
-  const timer = gl.getExtension("EXT_disjoint_timer_query_webgl2");
-  if (!timer) throw new Error("GPU timer queries unavailable");
-  const queries: WebGLQuery[] = [];
-  for (let i = 0; i < frames; i++) {
-    const query = gl.createQuery();
-    gl.beginQuery(timer.TIME_ELAPSED_EXT, query);
-    renderer.render(scene, camera);
-    gl.endQuery(timer.TIME_ELAPSED_EXT);
-    queries.push(query);
-    await new Promise(requestAnimationFrame);
-  }
+  if (!renderer.hasFeature("timestamp-query")) throw new Error("instanced GPU timing needs the GPU's timestamp-query feature");
   const times: number[] = [];
-  for (const query of queries) {
-    while (!gl.getQueryParameter(query, gl.QUERY_RESULT_AVAILABLE)) await new Promise(requestAnimationFrame);
-    if (!gl.getParameter(timer.GPU_DISJOINT_EXT)) times.push(gl.getQueryParameter(query, gl.QUERY_RESULT) / 1e6);
-    gl.deleteQuery(query);
+  await renderer.resolveTimestampsAsync("render");
+  await renderer.resolveTimestampsAsync("compute");
+  for (let i = 0; i < frames; i++) {
+    await nextFrame(renderer);
+    const computed = renderer.info.compute.calls;
+    renderer.setRenderTarget(target);
+    renderer.render(scene, camera);
+    renderer.setRenderTarget(null);
+    const [passes, selection] = await Promise.all([
+      renderer.resolveTimestampsAsync("render"),
+      renderer.info.compute.calls > computed ? renderer.resolveTimestampsAsync("compute") : Promise.resolve(0),
+    ]);
+    times.push((passes ?? 0) + (selection ?? 0));
   }
   times.sort((a, b) => a - b);
   return at(times, Math.floor(times.length / 2));
+}
+
+/** CPU time of a frame's render call, mean over `frames`: listing the scene, updating the LODs and encoding the draws, shadow maps included. */
+async function cpuTime(frames = 40): Promise<number> {
+  let total = 0;
+  for (let i = 0; i < frames; i++) {
+    await nextFrame(renderer);
+    renderer.setRenderTarget(target);
+    const start = performance.now();
+    renderer.render(scene, camera);
+    total += performance.now() - start;
+    renderer.setRenderTarget(null);
+  }
+  return total / frames;
 }
 
 const VIEWS: Record<string, { eye: [number, number, number]; look: [number, number, number] }> = {
@@ -123,40 +132,40 @@ async function perf(count: number) {
   const source = await tree();
   const lod = instanced(source, count);
   scene.add(lod);
-  const results: Record<string, { slowMs: number; fastMs: number; gpuMs: number; drawn: number[] }> = {};
+  const results: Record<string, { updateMs: number; renderMs: number; gpuMs: number; drawn: number[] }> = {};
   for (const [name, view] of Object.entries(VIEWS)) {
     camera.position.set(...view.eye);
     camera.lookAt(...view.look);
     camera.updateMatrixWorld();
-    frame();
-    frame();
-    // CPU of update while the camera moves `step` metres per frame (walking ~0.05, flying ~5).
-    const moving = (step: number) => {
-      const start = camera.position.clone();
-      // Timers are coarse (0.1 ms); the mean over many frames resolves finer.
-      const frames = 100;
-      const direction = new THREE.Vector3(1, 0, 1).normalize();
-      let total = 0;
-      for (let i = 0; i < frames; i++) {
-        camera.position.addScaledVector(direction, step);
-        camera.updateMatrixWorld();
-        const t = performance.now();
-        lod.update(camera);
-        total += performance.now() - t;
-      }
-      camera.position.copy(start);
+    await frame();
+    await frame();
+    // CPU of update while the camera moves 5 metres per frame; timers are coarse, the
+    // mean over many frames resolves finer.
+    const start = camera.position.clone();
+    const direction = new THREE.Vector3(1, 0, 1).normalize();
+    const updates = 100;
+    const t = performance.now();
+    for (let i = 0; i < updates; i++) {
+      camera.position.addScaledVector(direction, 5);
       camera.updateMatrixWorld();
       lod.update(camera);
-      return total / frames;
-    };
-    const slowMs = moving(0.05);
-    const fastMs = moving(5);
-    const drawn = lod.children.flatMap((child) => (child instanceof THREE.InstancedMesh ? [child.count] : []));
-    results[name] = { slowMs, fastMs, gpuMs: await gpuTime(), drawn };
+    }
+    const updateMs = (performance.now() - t) / updates;
+    camera.position.copy(start);
+    camera.updateMatrixWorld();
+    await frame();
+    results[name] = { updateMs, renderMs: await cpuTime(), gpuMs: await gpuTime(), drawn: lod.levels.map((_, l) => countAt(lod, l)) };
   }
   // Not disposed: its levels are the template's, which the next run uses again.
   scene.remove(lod);
-  return { renderer: rendererName(), count, results };
+  return { renderer: await gpuName(), count, results };
+}
+
+/** Instances at level `l` (the finest each draws) after the last update, counted on the CPU. */
+function countAt(lod: InstancedLod, l: number): number {
+  let n = 0;
+  for (let i = 0; i < lod.count; i++) if (lod.levelOf(i) === l) n++;
+  return n;
 }
 
 /** A shadow-casting sun light whose map covers `radius` m around `centre`, `size` texels a side. */
@@ -187,15 +196,14 @@ async function cascades(count: number) {
   // A fine map around the camera; a coarse one 4 km wide from 300 m ahead on (4 m texels).
   const lights = [cascade(new THREE.Vector3(30, 0, 30), 60, 2048), cascade(ahead.clone().multiplyScalar(2300), 2000, 1024)];
   scene.add(...lods, ...lights, ...lights.map((l) => l.target));
-  frame();
-  frame();
+  await frame();
+  await frame();
   const gpuMs = await gpuTime();
-  renderer.render(scene, camera);
-  const triangles = renderer.info.render.triangles;
-  const drawn = lods.map((lod) => lod.levels.map((level) => level.count));
+  const renderMs = await cpuTime();
+  const drawn = lods.map((lod) => lod.levels.map((_, l) => countAt(lod, l)));
   scene.remove(...lods, ...lights, ...lights.map((l) => l.target));
   for (const light of lights) light.dispose();
-  return { renderer: rendererName(), count, gpuMs, drawn, triangles };
+  return { renderer: await gpuName(), count, gpuMs, renderMs, drawn };
 }
 
 async function compare() {
@@ -214,15 +222,15 @@ async function compare() {
   camera.position.set(-80, 6, 0);
   camera.lookAt(60, 6, 0);
   camera.updateMatrixWorld();
-  const render = (object: THREE.Object3D) => {
+  const render = async (object: THREE.Object3D) => {
     scene.add(object);
-    frame();
-    const pixels = frame();
+    await frame();
+    const pixels = await frame();
     scene.remove(object);
     return pixels;
   };
-  const a = render(lod);
-  const b = render(single);
+  const a = await render(lod);
+  const b = await render(single);
   let differing = 0;
   let max = 0;
   for (let i = 0; i < a.length; i += 4) {
@@ -231,11 +239,9 @@ async function compare() {
     if (d > 8) differing++;
     max = Math.max(max, d);
   }
-  const drawn = lod.children.flatMap((child) => (child instanceof THREE.InstancedMesh ? [child.count] : []));
+  const drawn = lod.levels.map((_, l) => countAt(lod, l));
   return { drawn, differing: differing / (SIZE * SIZE), max, images: { instanced: png(a, SIZE, SIZE), single: png(b, SIZE, SIZE) } };
 }
-
-const rendererName = () => gpuName(renderer.getContext());
 
 declare global {
   interface Window {

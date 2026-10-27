@@ -1,4 +1,4 @@
-import { Box3, Matrix4, Sphere, Vector3, type Mesh, type Object3D } from "three";
+import { Box3, Matrix4, Sphere, Vector3, type Mesh, type Object3D } from "three/webgpu";
 import { isBatchedMesh, isImpostorMesh, isInstancedLod, isInstancedMesh, isLOD, isMesh } from "./three.js";
 
 // What an object is at full detail: its meshes, where they sit and the vertices they draw.
@@ -7,8 +7,8 @@ import { isBatchedMesh, isImpostorMesh, isInstancedLod, isInstancedMesh, isLOD, 
  * Call `visit` with every mesh of `root` drawn at full detail, and the matrix that places
  * it in `root`'s own space (`root`'s own transform not applied): `root` itself and its
  * visible descendants; of a nested LOD only its level 0, whatever it shows; and once per
- * instance, the meshes of an InstancedMesh (an ImpostorMesh included) and of an
- * InstancedLod's level 0. `placement` is only valid during the call. Local matrices are
+ * instance, the meshes of an InstancedMesh or ImpostorMesh and of an InstancedLod's
+ * level 0. `placement` is only valid during the call. Local matrices are
  * brought up to date on the way.
  */
 export function forEachMesh(root: Object3D, visit: (mesh: Mesh, placement: Matrix4) => void): void {
@@ -25,7 +25,7 @@ function walk(node: Object3D, placement: Matrix4, visit: (mesh: Mesh, placement:
     for (let i = 0; i < node.count; i++) walk(source, local(source).premultiply(node.getMatrixAt(i, instance)).premultiply(placement), visit);
     return;
   }
-  if (isInstancedMesh(node)) {
+  if (isInstancedMesh(node) || isImpostorMesh(node)) {
     const instance = new Matrix4();
     for (let i = 0; i < node.count; i++) visit(node, node.getMatrixAt(i, instance).premultiply(placement));
   } else if (isMesh(node)) visit(node, placement);

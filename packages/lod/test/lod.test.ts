@@ -8,18 +8,20 @@ import {
   OrthographicCamera,
   PerspectiveCamera,
   Raycaster,
+  RenderTarget,
   Scene,
   Vector3,
-  WebGLRenderTarget,
   type Camera,
   type Material,
   type Object3D,
-} from "three";
+} from "three/webgpu";
 import { afterEach, describe, expect, it } from "vitest";
-import { fadeUniformsOf, originalOf } from "../src/fade.js";
+import { drawOf } from "../src/fade.js";
 import { Lod } from "../src/lod.js";
+import { originalOf } from "../src/material.js";
+import { TYPICAL_HEIGHT, viewportHeight } from "../src/view.js";
 import { isMesh } from "../src/three.js";
-import { GPU_TIMEOUT, renderer } from "./webgl.js";
+import { GPU_TIMEOUT, render, renderer } from "./gpu.js";
 
 const box = (material = new MeshBasicMaterial()) => new Mesh(new BoxGeometry(2, 2, 2), material);
 /** Bounding diameter of `box()`: the box diagonal. */
@@ -48,9 +50,9 @@ function place(pixels: number, height = 1080, view: Camera = camera): void {
   view.updateMatrixWorld();
 }
 
-/** Update `target` seen where it is `pixels` tall on a 1080 px screen. */
+/** Update `target` seen where it is `pixels` tall on the screen `view` last drew to. */
 function viewAt(target: Lod, pixels: number, view: Camera = camera): Lod {
-  place(pixels, 1080, view);
+  place(pixels, viewportHeight(view) ?? TYPICAL_HEIGHT, view);
   target.updateMatrixWorld();
   target.update(view);
   return target;
@@ -62,18 +64,13 @@ const materialOf = (object: Object3D | undefined): Material => {
   if (!material) throw new Error("expected a mesh");
   return material;
 };
-
-/** Renders `scene` into a 64 px target; RGBA bytes. */
-function render(scene: Scene): Uint8Array {
-  const target = new WebGLRenderTarget(64, 64);
-  renderer.setRenderTarget(target);
-  renderer.render(scene, camera);
-  const pixels = new Uint8Array(64 * 64 * 4);
-  renderer.readRenderTargetPixels(target, 0, 0, 64, 64, pixels);
-  renderer.setRenderTarget(null);
-  target.dispose();
-  return pixels;
-}
+/** The signed fade level `i` of `target` draws with (see fade.ts). */
+const fadeOf = (target: Lod, i: number) => {
+  const object = target.levels[i]?.object;
+  const draw = object && drawOf(object);
+  if (draw?.kind !== "object") throw new Error(`level ${i} has no draw`);
+  return draw.fade;
+};
 
 afterEach(() => {
   camera.zoom = 1;
@@ -98,20 +95,26 @@ describe("Lod", { timeout: GPU_TIMEOUT }, () => {
     expect(visible(viewAt(target, 140))).toEqual([2]);
   });
 
-  it("shows one level outside a fade and both neighbours inside it", () => {
+  it("shows one level outside a fade and both neighbours inside it, splitting the pixels", () => {
     const target = lod();
     expect(visible(viewAt(target, 1000))).toEqual([0]);
     expect(visible(viewAt(target, 250))).toEqual([1]);
     expect(visible(viewAt(target, 50))).toEqual([2]);
-    // The top Lod.fade of level 1's range, just under its maxPixels.
+    // The top Lod.fade of level 1's range, just under its maxPixels: half way through.
     expect(visible(viewAt(target, 400 * (1 - Lod.fade / 2)))).toEqual([0, 1]);
+    expect(fadeOf(target, 1)).toBeCloseTo(0.5, 9);
+    expect(fadeOf(target, 0)).toBeCloseTo(-0.5, 9);
+    expect(fadeOf(target, 2)).toBe(0);
     expect(visible(viewAt(target, 100 * (1 - Lod.fade / 2)))).toEqual([1, 2]);
+    expect(visible(viewAt(target, 250))).toEqual([1]);
+    expect(fadeOf(target, 1)).toBe(0);
   });
 
   it("draws only forceLevel, without fades", () => {
     const target = lod();
     target.forceLevel = 2;
     expect(visible(viewAt(target, 400 * (1 - Lod.fade / 2)))).toEqual([2]);
+    expect(fadeOf(target, 2)).toBe(0);
     target.forceLevel = 5;
     expect(() => viewAt(target, 250)).toThrow(/forceLevel 5/);
   });
@@ -156,19 +159,15 @@ describe("Lod", { timeout: GPU_TIMEOUT }, () => {
     expect(new Raycaster(new Vector3(10.3, 0.2, 10), new Vector3(0, 0, -1)).intersectObject(target)).toEqual([]);
   });
 
-  it("is updated by the renderer, measures its viewport and gives neighbours one fade", () => {
+  it("is updated by the renderer and measures the target it renders into", async () => {
     const target = lod();
     const scene = new Scene().add(target);
     place(400 * (1 - Lod.fade / 2), 64);
-    // The first frame tells the Lod the screen height.
-    render(scene);
-    render(scene);
+    // The first frame tells the Lod the target's height.
+    await render(scene, camera);
+    await render(scene, camera);
     expect(visible(target)).toEqual([0, 1]);
-    const fade = (i: number) => fadeUniformsOf(materialOf(target.levels[i]?.object))?.lodFade.value;
-    const subtense = (pixels: number) => (pixels * 2 * tan) / 64;
-    expect(fade(1)?.x).toBeCloseTo(subtense(400 * (1 - Lod.fade)), 9);
-    expect(fade(1)?.y).toBeCloseTo(subtense(400), 9);
-    expect(fade(0)?.toArray()).toEqual([0, 0, fade(1)?.x, fade(1)?.y]);
+    expect(fadeOf(target, 1)).toBeCloseTo(0.5, 6);
   });
 
   it("measures each camera at the height it renders at", () => {
@@ -179,7 +178,7 @@ describe("Lod", { timeout: GPU_TIMEOUT }, () => {
     other.position.copy(camera.position);
     other.updateMatrixWorld();
     const draw = (view: Camera, size: number) => {
-      const into = new WebGLRenderTarget(size, size);
+      const into = new RenderTarget(size, size);
       renderer.setRenderTarget(into);
       renderer.render(scene, view);
       renderer.setRenderTarget(null);
@@ -194,22 +193,37 @@ describe("Lod", { timeout: GPU_TIMEOUT }, () => {
     expect(visible(target)).toEqual([2]);
   });
 
-  it("measures in CSS pixels: the renderer's over its pixel ratio", () => {
+  it("measures the canvas in CSS pixels: the renderer's over its pixel ratio", () => {
     const target = lod();
     const scene = new Scene().add(target);
     place(150, 64);
     renderer.setPixelRatio(2);
+    renderer.setSize(64, 64);
     try {
-      render(scene);
-      render(scene);
+      renderer.render(scene, camera);
+      renderer.render(scene, camera);
     } finally {
       renderer.setPixelRatio(1);
     }
-    // 150 px of a 64 px target is 75 CSS px at pixel ratio 2: level 2, not level 1.
-    expect(visible(target)).toEqual([2]);
+    // 150 px of a 64 px canvas is level 1 (150 > 100): the 128 device pixels do not count.
+    expect(visible(target)).toEqual([1]);
   });
 
-  it("splits the pixels between both sides of a fade, though they share a material and are instanced", () => {
+  it("measures a target the canvas's size in CSS pixels too: post-processing draws into one", async () => {
+    const scene = new Scene().add(lod());
+    const view = new PerspectiveCamera();
+    renderer.setPixelRatio(2);
+    try {
+      await render(scene, view, 128);
+      expect(viewportHeight(view)).toBe(64);
+      await render(scene, view, 96);
+      expect(viewportHeight(view)).toBe(96);
+    } finally {
+      renderer.setPixelRatio(1);
+    }
+  });
+
+  it("splits the pixels between both sides of a fade, though they share a material and are instanced", async () => {
     const material = new MeshBasicMaterial();
     const pair = () => {
       const mesh = new InstancedMesh(new BoxGeometry(2, 2, 2), material, 2);
@@ -224,8 +238,8 @@ describe("Lod", { timeout: GPU_TIMEOUT }, () => {
     camera.position.set(0, 0, (diameter * 64) / (2 * tan * 40 * (1 - Lod.fade / 2)));
     camera.updateMatrixWorld();
     Lod.debug = true;
-    render(scene);
-    const pixels = render(scene);
+    await render(scene, camera);
+    const pixels = await render(scene, camera);
     expect(visible(target)).toEqual([0, 1]);
     // Debug tints: level 0 red-ish, level 1 green-ish; every covered pixel is one of them.
     let red = 0;
@@ -243,20 +257,22 @@ describe("Lod", { timeout: GPU_TIMEOUT }, () => {
     expect(green).toBeGreaterThan((red + green) * 0.2);
     target.forceLevel = 0;
     Lod.debug = false;
-    const whole = render(scene).filter((v, i) => i % 4 === 0 && v > 0).length;
+    const whole = (await render(scene, camera)).filter((v, i) => i % 4 === 0 && v > 0).length;
     expect(red + green).toBe(whole);
     expect(material.color.equals(new Color(1, 1, 1))).toBe(true);
   });
 
-  it("clones after it rendered or while hidden, with its own faded copies", () => {
+  it("clones after it rendered or while hidden, sharing its faded materials", () => {
     const target = lod();
     viewAt(target, 50);
     target.visible = false;
     const clone = target.clone();
     expect(clone.levels.map((level) => level.maxPixels)).toEqual([Infinity, 400, 100]);
-    expect(materialOf(clone.levels[0]?.object)).not.toBe(materialOf(target.levels[0]?.object));
-    expect(originalOf(materialOf(clone.levels[0]?.object))).toBe(originalOf(materialOf(target.levels[0]?.object)));
+    // One faded copy of a material for every Lod: they share its shader.
+    expect(materialOf(clone.levels[0]?.object)).toBe(materialOf(target.levels[0]?.object));
+    expect(originalOf(materialOf(clone.levels[0]?.object))).not.toBe(materialOf(clone.levels[0]?.object));
     expect(visible(viewAt(clone, 1000))).toEqual([0]);
+    expect(visible(target)).toEqual([2]);
     expect(() => new Lod().copy(target).copy(target)).toThrow(/empty Lod/);
   });
 
@@ -266,7 +282,7 @@ describe("Lod", { timeout: GPU_TIMEOUT }, () => {
     let materials = 0;
     let inners = 0;
     target.levels[0]?.object.traverse((node) => {
-      if (isMesh(node)) [node.material].flat()[0]?.addEventListener("dispose", () => materials++);
+      if (isMesh(node)) originalOf([node.material].flat()[0] ?? new MeshBasicMaterial()).addEventListener("dispose", () => materials++);
     });
     const dispose = inner.dispose.bind(inner);
     inner.dispose = () => (inners++, dispose());

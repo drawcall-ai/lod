@@ -1,7 +1,7 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
+import { uniform } from "three/tsl";
 import { Casters } from "./casters.ts";
-// the sun's part of every material's lighting
-import "./shading.ts";
+import { SunShadow } from "./shading.ts";
 
 /** A cascade's map: its size in texels, and every how many frames (at which phase) it is redrawn. */
 interface Setting {
@@ -35,8 +35,8 @@ const ABOVE = 120;
 const BELOW = 60;
 
 /**
- * The sun as cascaded shadow maps: one DirectionalLight per cascade, all shining the same
- * way; only the first one lights (see shading.ts, which also blends the cascades). The
+ * The sun as cascaded shadow maps: one DirectionalLight lights the scene, its shadow
+ * looked up in the maps of the cascades (see shading.ts, which also blends them). The
  * view from the nearest possible surface out to `REACH` beyond it is cut into slices,
  * the first ending a little beyond what the camera looks at and the rest spaced
  * geometrically; each cascade's map covers the sphere around its slice, so turning the
@@ -46,6 +46,8 @@ const BELOW = 60;
  * slice. Each map draws only the casters at least `MIN_TEXELS` of its texels across.
  */
 export class Sun {
+  /** The light that lights the scene: colour and intensity go here. */
+  readonly light = new THREE.DirectionalLight("#ffffff", 0);
   readonly cascades: Cascade[];
   private casters: Casters | null = null;
   /** The sun's frame (looking along its light, y up) and its inverse. */
@@ -57,18 +59,14 @@ export class Sun {
     this.fromSun.lookAt(new THREE.Vector3(), direction.clone().negate(), new THREE.Vector3(0, 1, 0));
     this.toSun.copy(this.fromSun).invert();
     this.cascades = SETTINGS.map((setting) => new Cascade(setting, direction, (size) => this.casters?.castFrom(size) ?? 0));
+    this.light.position.copy(direction);
+    this.light.castShadow = true;
+    this.light.shadow.shadowNode = new SunShadow(this.light, this.cascades, direction);
   }
 
-  /** The light that lights the scene: colour and intensity go here. */
-  get light(): THREE.DirectionalLight {
-    const first = this.cascades[0];
-    if (!first) throw new Error("the sun has no cascades");
-    return first.light;
-  }
-
-  /** Every light with its target, to add to the scene. */
+  /** The light with its target, to add to the scene. */
   get objects(): THREE.Object3D[] {
-    return this.cascades.flatMap((c) => [c.light, c.light.target]);
+    return [this.light, this.light.target];
   }
 
   /** Sorts the casters under `root` by size; call once the scene is built. */
@@ -102,8 +100,14 @@ export class Sun {
 
 const centre = new THREE.Vector3();
 
-class Cascade {
+/**
+ * One map: drawn from a light of its own, outside the scene, which lights nothing; its
+ * matrices are kept up to date here.
+ */
+export class Cascade {
   readonly light = new THREE.DirectionalLight("#ffffff", 0);
+  /** How far shadows are looked up off a surface, toward the sun (m): see shading.ts. */
+  readonly offset = uniform(0);
   /** Texel size (m) and casters drawn when its map was last drawn. */
   readonly drawn = { texel: 0, casters: 0 };
   /** Where its map is, as last drawn: centre and radius in world space. */
@@ -162,7 +166,7 @@ class Cascade {
     this.light.updateMatrixWorld();
     this.light.target.updateMatrixWorld();
     // thin leaves under a low sun need a few texels of normal offset to stay free of acne
-    shadow.normalBias = texel * 1.5;
+    this.offset.value = texel * 1.5;
     // casters draw both sides (see Casters): a texel of depth keeps lit faces off themselves
     shadow.bias = texel / cam.far;
     shadow.needsUpdate = true;

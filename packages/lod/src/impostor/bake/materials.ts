@@ -1,28 +1,54 @@
-import { MeshStandardMaterial, NoBlending, type Material, type Object3D, type WebGLProgramParametersWithUniforms } from "three";
-import { applyEdits, type Edit } from "../../patch.js";
-import { isMesh, isPhysical, isStandard } from "../../three.js";
+import { DoubleSide, MeshStandardNodeMaterial, NoBlending, type Material, type Node, type NodeBuilder, type NodeMaterial, type Object3D } from "three/webgpu";
+import {
+  ambientOcclusion,
+  cameraViewMatrix,
+  Fn,
+  clamp,
+  diffuseColor,
+  emissive,
+  faceDirection,
+  float,
+  materialMetalness,
+  materialOpacity,
+  materialRoughness,
+  max,
+  mrt,
+  normalView,
+  normalize,
+  positionView,
+  specularColor,
+  specularF90,
+  step,
+  vec4,
+} from "three/tsl";
+import { isMesh, isNodeMaterial, isPhysical, isStandard, isStandardNode, toNodeMaterial } from "../../three.js";
+import { affine, biasedTextures, isNodeOf } from "../../tsl.js";
 
-/** What every bake material reads, shared by all of them and set per bake (the texture bias per mip level). */
+/** What every bake material reads, shared by all of them and set per bake. */
 export interface BakeSettings {
-  uniforms: {
-    impostorDistance: { value: number };
-    impostorRadius: { value: number };
-    /** mip bias of every texture read, per mip level: textures are read at the size of a texel (see `bakeImpostor`) */
-    impostorTextureBias: { value: number };
-  };
-  /** whether the atlas has an emissive layer, which every material then writes */
-  emissive: boolean;
-  /** whether every material also writes its dielectric specular, after the turned normals */
-  specular: boolean;
+  /** the cameras' distance from the bounding box centre, and the bounding radius: the depth encoding */
+  distance: number;
+  radius: number;
+  /** mip bias of every texture read, per mip level: textures are read at the size of a texel (see `bakeImpostor`) */
+  textureBias: Node<"float"> & { value: number };
 }
 
 /**
+ * The outputs a bake material writes, by name: one per atlas map, then the second way to
+ * store the normals (see Atlas) and the specular. A render target takes the ones it has
+ * textures of that name for, so every material writes them all and the bake decides,
+ * once it knows every material, which it keeps.
+ */
+export const OUTPUTS = ["base", "normalDepth", "orm", "emissive", "turned", "specular"] as const;
+export type Output = (typeof OUTPUTS)[number];
+
+/**
  * Replace the materials of every visible mesh under `root` with bake materials, which
- * render the surface values unlit into the atlas maps. Returns the bake materials (to
+ * write the surface values unlit into the atlas maps. Returns the bake materials (to
  * dispose), whether any of them emits light and whether any changes three's default specular.
  */
 export function swapMaterials(root: Object3D, settings: BakeSettings): { materials: Material[]; emits: boolean; specular: boolean } {
-  const baked = new Map<Material, { material: MeshStandardMaterial; emits: boolean; specular: boolean }>();
+  const baked = new Map<Material, { material: NodeMaterial; emits: boolean; specular: boolean }>();
   const plain = new Set<string>();
   root.traverseVisible((node) => {
     // Lines, points and sprites would write their colour into the data targets. Layers
@@ -34,7 +60,7 @@ export function swapMaterials(root: Object3D, settings: BakeSettings): { materia
       if (!entry) {
         entry = bakeMaterial(source, settings);
         baked.set(source, entry);
-        if (!isStandard(source) && !MAPPED.has(source.type)) plain.add(source.type);
+        if (!isStandard(source) && !isNodeMaterial(source) && !MAPPED.has(source.type)) plain.add(source.type);
       }
       return entry.material;
     };
@@ -44,74 +70,6 @@ export function swapMaterials(root: Object3D, settings: BakeSettings): { materia
   const entries = [...baked.values()];
   return { materials: entries.map((e) => e.material), emits: entries.some((e) => e.emits), specular: entries.some((e) => e.specular) };
 }
-
-/**
- * The fragment tail that replaces lighting: every MRT output is written straight from
- * the material's own surface values, after any user `onBeforeCompile` has run. Every
- * texture2D read (all of three's material maps) is mip-biased, see `impostorTextureBias`.
- */
-const BAKE_OUTPUTS = /* glsl */ `
-#undef texture2D
-#define texture2D(map, uv) texture(map, uv, impostorTextureBias)
-layout(location = 1) out highp vec4 impostorNormalDepth;
-layout(location = 2) out highp vec4 impostorOrm;
-#ifdef IMPOSTOR_EMISSIVE
-layout(location = 3) out highp vec4 impostorEmissive;
-#endif
-// after the maps: the other way to store the normals (see BAKE_WRITE)
-layout(location = IMPOSTOR_TURNED) out highp vec4 impostorTurned;
-#ifdef IMPOSTOR_SPECULAR
-layout(location = IMPOSTOR_SPECULAR) out highp vec4 impostorSpecular;
-#endif
-uniform float impostorDistance;
-uniform float impostorRadius;
-uniform float impostorTextureBias;
-`;
-
-const BAKE_WRITE = /* glsl */ `
-#ifdef USE_AOMAP
-  float impostorAo = ambientOcclusion;
-#else
-  float impostorAo = 1.0;
-#endif
-  // Two ways to store the normals three shades with, each a normal and the share of the
-  // surface that shades with it rather than its opposite; the bake keeps the one whose
-  // normals agree more once averaged (see Atlas):
-  // - the surface's own normal and the share whose front faced the camera (on two-sided
-  //   surfaces three turns the normal toward the camera; this undoes it). Painted canopy
-  //   normals of cut-out foliage agree this way, which three turns inward on every leaf
-  //   seen from behind.
-  // - the shading normal turned toward the camera and the share that faced it already.
-  //   Real leaf normals agree this way, which three turns toward the camera on every leaf.
-  // This camera is orthographic, looking along -z.
-  #if defined( DOUBLE_SIDED ) && !defined( FLAT_SHADED )
-    vec3 impostorOwn = normal * faceDirection;
-    float impostorFront = faceDirection * 0.5 + 0.5;
-  #else
-    vec3 impostorOwn = normal;
-    float impostorFront = 1.0;
-  #endif
-  float impostorFacing = step(0.0, normal.z);
-  vec3 impostorNormal = normalize((vec4(impostorOwn, 0.0) * viewMatrix).xyz);
-  vec3 impostorTurnedNormal = normalize((vec4(normal * (impostorFacing * 2.0 - 1.0), 0.0) * viewMatrix).xyz);
-  float impostorDepth = 0.5 + 0.5 * (impostorDistance - vViewPosition.z) / impostorRadius;
-  gl_FragColor = vec4(clamp(diffuseColor.rgb * IMPOSTOR_OPACITY, 0.0, 1.0), clamp(IMPOSTOR_COVERAGE, 0.0, 1.0));
-  impostorNormalDepth = vec4(impostorNormal * 0.5 + 0.5, clamp(impostorDepth, 0.0, 1.0));
-  impostorOrm = vec4(impostorAo, roughnessFactor, metalnessFactor, impostorFront);
-  impostorTurned = vec4(impostorTurnedNormal * 0.5 + 0.5, impostorFacing);
-#ifdef IMPOSTOR_EMISSIVE
-  impostorEmissive = vec4(clamp(totalEmissiveRadiance, 0.0, 1.0), 1.0);
-#endif
-#ifdef IMPOSTOR_SPECULAR
-  impostorSpecular = vec4(material.specularColor, material.specularF90);
-#endif
-`;
-
-/** Settings that carry a non-standard material's look over to MeshStandardMaterial. */
-const EDITS: Edit[] = [
-  ["fragment", "#include <common>", `#include <common>\n${BAKE_OUTPUTS}`],
-  ["fragment", "#include <dithering_fragment>", `#include <dithering_fragment>\n${BAKE_WRITE}`],
-];
 
 const STANDARD_KEYS = [
   "color",
@@ -144,63 +102,83 @@ const STANDARD_KEYS = [
 /** Built-in materials whose look the standard keys carry over; others only keep their color/map. */
 const MAPPED = new Set(["MeshBasicMaterial", "MeshLambertMaterial", "MeshPhongMaterial", "MeshToonMaterial", "MeshMatcapMaterial"]);
 
-function bakeMaterial(source: Material, settings: BakeSettings): { material: MeshStandardMaterial; emits: boolean; specular: boolean } {
-  // Read before any wrapping: three's default key is onBeforeCompile.toString(), the
-  // same for every wrapper below, so a later call would let materials share programs.
-  const key = source.customProgramCacheKey();
+/** A node material that renders like `source`: a copy of a node or standard one, else the standard keys carried over. */
+function toStandard(source: Material): NodeMaterial {
+  if (isNodeMaterial(source) || isStandard(source)) return toNodeMaterial(source);
+  // Unlit and Lambert/Phong materials bake as a fully rough dielectric. Their settings
+  // are read by name: they are whatever subclass the app used.
+  const values = Object.fromEntries(STANDARD_KEYS.flatMap((k) => (Reflect.get(source, k) === undefined ? [] : [[k, Reflect.get(source, k)]])));
+  return new MeshStandardNodeMaterial({ roughness: 1, metalness: 0, ...values });
+}
+
+/** A material's float slot (or its default), as the float it builds to. */
+const scalar = (node: Node, builder: NodeBuilder): Node<"float"> => {
+  if (!isNodeOf(node, "float", builder)) throw new Error(`bakeImpostor: a material's float slot builds to ${node.getNodeType(builder)}`);
+  return node;
+};
+
+function bakeMaterial(source: Material, settings: BakeSettings): { material: NodeMaterial; emits: boolean; specular: boolean } {
   const material = toStandard(source);
   // A material that draws no colour has no surface to bake.
   material.visible = source.visible && source.colorWrite;
-  const { emissive: e, emissiveIntensity, emissiveMap } = material;
-  const emits = material.visible && ((e.r + e.g + e.b) * emissiveIntensity > 0 || emissiveMap !== null);
-  const specular = material.visible && changesSpecular(material);
+  const emits = material.visible && emitsLight(material);
+  const specular = material.visible && changesSpecular(source);
   // Coverage is the material's alpha where it cuts the surface out: alpha-to-coverage (no
   // multisampling here, so it would cover the card), or a blended material's texture
   // alpha. A blended material's uniform opacity (glass) is no hole: it folds into the
   // colour, as if the pane were dark and opaque, which keeps its reflection.
   const blended = material.transparent;
-  const coverage = blended ? "diffuseColor.a / max(opacity, 1e-4)" : material.alphaToCoverage ? "diffuseColor.a" : "1.0";
-  const opacity = blended ? "opacity" : "1.0";
-  // Blending would mix MRT outputs with the cleared background; coverage carries alpha instead.
+  const coverage = blended ? diffuseColor.a.div(max(materialOpacity, 1e-4)) : material.alphaToCoverage ? diffuseColor.a : float(1);
+  const opacity = blended ? materialOpacity : float(1);
+  // Blending would mix the outputs with the cleared background; coverage carries alpha
+  // instead. Without normal blending three also keeps the alpha (not opaque).
   material.transparent = false;
   material.blending = NoBlending;
   material.depthWrite = true;
+  material.contextNode = biasedTextures(settings.textureBias);
 
-  const userCompile = material.onBeforeCompile;
-  material.onBeforeCompile = (shader: WebGLProgramParametersWithUniforms, renderer) => {
-    userCompile.call(material, shader, renderer);
-    Object.assign(shader.uniforms, settings.uniforms);
-    shader.defines = {
-      ...shader.defines,
-      IMPOSTOR_COVERAGE: coverage,
-      IMPOSTOR_OPACITY: opacity,
-      IMPOSTOR_TURNED: settings.emissive ? "4" : "3",
-      ...(settings.emissive ? { IMPOSTOR_EMISSIVE: "" } : {}),
-      ...(settings.specular ? { IMPOSTOR_SPECULAR: settings.emissive ? "5" : "4" } : {}),
-    };
-    applyEdits(shader, EDITS);
+  // Two ways to store the normals three shades with, each a normal and the share of the
+  // surface that shades with it rather than its opposite; the bake keeps the one whose
+  // normals agree more once averaged (see Atlas):
+  // - the surface's own normal and the share whose front faced the camera (on two-sided
+  //   surfaces three turns the normal toward the camera; this undoes it). Painted canopy
+  //   normals of cut-out foliage agree this way, which three turns inward on every leaf
+  //   seen from behind.
+  // - the shading normal turned toward the camera and the share that faced it already.
+  //   Real leaf normals agree this way, which three turns toward the camera on every leaf.
+  // The camera is orthographic, looking along -z; the object sits at the origin, so world
+  // space is its own.
+  const twoSided = material.side === DoubleSide && !(isStandardNode(material) && material.flatShading);
+  const own = twoSided ? normalView.mul(faceDirection) : normalView;
+  const front = twoSided ? faceDirection.mul(0.5).add(0.5) : float(1);
+  const facing = step(0, normalView.z);
+  const toObject = (n: Node<"vec3">) => normalize(affine(cameraViewMatrix).solve(n)).mul(0.5).add(0.5);
+  const depth = clamp(positionView.z.add(settings.distance).div(settings.radius).mul(0.5).add(0.5), 0, 1);
+  // Unlit values: the material's own roughness and metalness, not three's lighting ones.
+  const roughness = (isStandardNode(material) && material.roughnessNode) || materialRoughness;
+  const metalness = (isStandardNode(material) && material.metalnessNode) || materialMetalness;
+  const outputs: Record<Output, Node> = {
+    base: vec4(clamp(diffuseColor.rgb.mul(opacity), 0, 1), clamp(coverage, 0, 1)),
+    normalDepth: vec4(toObject(own), depth),
+    orm: Fn((builder) => vec4(ambientOcclusion, scalar(roughness, builder), scalar(metalness, builder), front))(),
+    emissive: vec4(clamp(emissive, 0, 1), 1),
+    turned: vec4(toObject(normalView.mul(facing.mul(2).sub(1))), facing),
+    specular: vec4(specularColor, specularF90),
   };
-  material.customProgramCacheKey = () => `impostor-bake|${coverage}|${opacity}|${settings.emissive}|${settings.specular}|${key}`;
+  material.mrtNode = mrt(outputs);
   return { material, emits, specular };
 }
 
+/** Whether `material` emits light: an emissive node, colour × intensity, or map. */
+function emitsLight(material: NodeMaterial): boolean {
+  if (!isStandardNode(material)) return false;
+  const { emissive: e, emissiveIntensity, emissiveMap, emissiveNode } = material;
+  return emissiveNode !== null || (e.r + e.g + e.b) * emissiveIntensity > 0 || emissiveMap !== null;
+}
+
 /** Whether `material` lights with other than three's dielectric F0 0.04 and F90 1 (KHR_materials_specular). */
-function changesSpecular(material: MeshStandardMaterial): boolean {
+function changesSpecular(material: Material): boolean {
   if (!isPhysical(material)) return false;
   const { ior, specularIntensity, specularColor: c, specularIntensityMap, specularColorMap } = material;
   return ior !== 1.5 || specularIntensity !== 1 || c.r !== 1 || c.g !== 1 || c.b !== 1 || specularIntensityMap !== null || specularColorMap !== null;
-}
-
-/** A standard material that renders like `source`: a clone, or the standard keys carried over. */
-function toStandard(source: Material): MeshStandardMaterial {
-  if (isStandard(source)) {
-    const material = source.clone();
-    // Material.copy drops this; keeping it keeps the user's colour grading and tweaks.
-    material.onBeforeCompile = source.onBeforeCompile;
-    return material;
-  }
-  // Unlit and Lambert/Phong materials bake as a fully rough dielectric. Their settings
-  // are read by name: they are whatever subclass the app used.
-  const values = Object.fromEntries(STANDARD_KEYS.flatMap((k) => (Reflect.get(source, k) === undefined ? [] : [[k, Reflect.get(source, k)]])));
-  return new MeshStandardMaterial({ roughness: 1, metalness: 0, ...values });
 }

@@ -1,11 +1,10 @@
 // Content viewer: pick a generator or fetched model, orbit around it under the HDRI sky.
 // ?item=<name> selects an item, ?view=close|medium a framing, ?seed=<n> the interior plan's
 // house, ?shot hides the panel. window.viewer exposes the same controls to scripts/shots.ts.
-import { N8AOPass } from "n8ao";
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
+import { mrt, normalView, output, packNormalToRGB, pass, pow, sample, unpackRGBToNormal, vec3, vec4 } from "three/tsl";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
-import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { ao } from "three/addons/tsl/display/GTAONode.js";
 import { triangles } from "../content/geometry.ts";
 import { loadManifest } from "../content/materials.ts";
 import { buildItem, type Item, itemNames } from "./items.ts";
@@ -22,7 +21,8 @@ THREE.DefaultLoadingManager.onStart = () => {
 const params = new URLSearchParams(location.search);
 if (params.has("shot")) document.body.classList.add("shot");
 
-const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+const renderer = new THREE.WebGPURenderer({ powerPreference: "high-performance" });
+await renderer.init();
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 // Khronos PBR Neutral keeps hues and saturation closest to a photograph up close; AgX
@@ -30,8 +30,6 @@ renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.NeutralToneMapping;
 renderer.toneMappingExposure = 0.8;
 renderer.shadowMap.enabled = true;
-// cutaways (the interior plan) clip their materials
-renderer.localClippingEnabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap;
 document.body.prepend(renderer.domElement);
 
@@ -43,13 +41,17 @@ await loadManifest();
 const stage = new Stage();
 await stage.loadSky(renderer);
 
-// ambient occlusion supplies the contact darkening that image-based light lacks
-const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerWidth, innerHeight, { samples: 4, type: THREE.HalfFloatType }));
-composer.setPixelRatio(renderer.getPixelRatio());
-const ao = new N8AOPass(stage.scene, camera, innerWidth, innerHeight);
-ao.configuration.gammaCorrection = false;
-composer.addPass(ao);
-composer.addPass(new OutputPass());
+// ambient occlusion (GTAO) supplies the contact darkening that image-based light lacks
+const scene = pass(stage.scene, camera, { samples: 4 });
+scene.setMRT(mrt({ output, normal: packNormalToRGB(normalView) }));
+const normals = scene.getTextureNode("normal");
+const occlusion = ao(
+  scene.getTextureNode("depth"),
+  sample((uv) => unpackRGBToNormal(normals.sample(uv))),
+  camera,
+);
+const intensity = 2.5;
+const post = new THREE.RenderPipeline(renderer, scene.getTextureNode("output").mul(vec4(vec3(pow(occlusion.getTextureNode().r, intensity)), 1)));
 
 function element<T extends Element>(selector: string, type: new () => T): T {
   const e = document.querySelector(selector);
@@ -97,29 +99,31 @@ function view(kind: View): void {
   // object, so a 7 mm beetle on a 40 cm leaf gets shadows without acne
   const around = new THREE.Box3().setFromCenterAndSize(sphere.center, new THREE.Vector3().setScalar(sphere.radius * 12));
   stage.fitShadow(around.intersect(whole.clone().expandByScalar(sphere.radius * 0.5)));
-  ao.configuration.aoRadius = sphere.radius * 0.1;
-  ao.configuration.distanceFalloff = 1;
-  ao.configuration.intensity = 2.5;
+  occlusion.radius.value = sphere.radius * 0.1;
+  occlusion.distanceFallOff.value = 1;
 }
 
 select.addEventListener("change", () => void show(select.value).then(() => view("medium")));
 for (const kind of ["close", "medium"] as const) document.querySelector(`#${kind}`)?.addEventListener("click", () => view(kind));
 addEventListener("resize", () => {
   renderer.setSize(innerWidth, innerHeight);
-  composer.setSize(innerWidth, innerHeight);
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
 });
 
-renderer.setAnimationLoop(() => {
+function draw(): void {
   controls.update();
-  composer.render();
-});
+  post.render();
+}
+renderer.setAnimationLoop(draw);
 
 /** Resolves once all textures have loaded and a few frames have drawn with them. */
 async function settle(): Promise<void> {
   await idle;
-  await renderer.compileAsync(stage.scene, camera);
+  // compiling points the renderer at the scene pass until it is done: no frames meanwhile
+  renderer.setAnimationLoop(null);
+  await scene.compileAsync(renderer);
+  renderer.setAnimationLoop(draw);
   for (let i = 0; i < 4; i++) await new Promise((r) => requestAnimationFrame(r));
 }
 

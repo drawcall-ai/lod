@@ -1,12 +1,13 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { ImpostorMesh, Lod, Wind, bakeImpostor, type BakeImpostorOptions, type Impostor, type ImpostorMeshOptions } from "@drawcall/lod";
 import { boundingRadius, boxCentre } from "../../../packages/lod/src/impostor/impostor.js";
 import { FADE } from "../../../packages/lod/src/levels.js";
+import { readBytes } from "../../../packages/lod/src/renderer.js";
 import type { View } from "./bench.js";
 import { at } from "./must.js";
-import { context2d, glCanvas } from "./page.js";
+import { context2d, glCanvas, gpuRenderer } from "./page.js";
 import { pixelsOf } from "./pixels.js";
 import { subject } from "./subjects.js";
 
@@ -15,9 +16,8 @@ import { subject } from "./subjects.js";
 // scripts/fade.ts through window.probe (with ?auto); opened by hand (?subject=<name>) it
 // shows the two side by side with orbit controls.
 
-const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, powerPreference: "high-performance" });
-renderer.setPixelRatio(1);
-document.body.appendChild(renderer.domElement);
+// Every comparison renders into its own target: the canvas size does not matter.
+const renderer = await gpuRenderer(256);
 
 const scene = new THREE.Scene();
 const pmrem = new THREE.PMREMGenerator(renderer);
@@ -61,7 +61,9 @@ async function prepare(name: string, bake: BakeImpostorOptions = {}, options: Im
   }
   const { object } = cache;
   const key = JSON.stringify(bake);
-  const impostor = cache.impostors.get(key) ?? (await bakeImpostor(object, { renderer, ...needs, ...bake }));
+  // Baked on the package's own renderer: three r185 draws into a target's whole area
+  // when its viewport equals the canvas's size, which this page's square canvas matches.
+  const impostor = cache.impostors.get(key) ?? (await bakeImpostor(object, { ...needs, ...bake }));
   cache.impostors.set(key, impostor);
   const mesh = new ImpostorMesh(impostor, 1, options);
   current = { object, impostor, mesh };
@@ -104,10 +106,10 @@ const LINEAR = Array.from({ length: 256 }, (_, v) => (v <= 10 ? v / 255 / 12.92 
  * straight RGBA8. The real object renders at TRUTH_SCALE and is box-filtered down, in
  * linear light, as the GPU's mips and MSAA resolve average.
  */
-function renderPixels(size: number, show: "real" | "impostor" | "none"): Uint8Array {
+async function renderPixels(size: number, show: "real" | "impostor" | "none"): Promise<Uint8Array> {
   const k = show === "real" ? TRUTH_SCALE : 1;
-  const black = renderRaw(size * k, show, 0x000000);
-  const white = renderRaw(size * k, show, 0xffffff);
+  const black = await renderRaw(size * k, show, 0x000000);
+  const white = await renderRaw(size * k, show, 0xffffff);
   const linear = (pixels: Uint8Array, i: number) => at(LINEAR, at(pixels, i));
   const srgb = (c: number) => Math.min(255, 255 * (c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055));
   const out = new Uint8Array(size * size * 4);
@@ -133,17 +135,17 @@ function renderPixels(size: number, show: "real" | "impostor" | "none"): Uint8Ar
   return out;
 }
 
-function renderRaw(size: number, show: "real" | "impostor" | "none", background: number): Uint8Array {
+async function renderRaw(size: number, show: "real" | "impostor" | "none", background: number): Promise<Uint8Array> {
   const c = shown();
   c.object.visible = show === "real";
   c.mesh.visible = show === "impostor";
-  const target = new THREE.WebGLRenderTarget(size, size, { samples: 4, colorSpace: THREE.SRGBColorSpace });
+  // An sRGB target: the GPU encodes the linear output, as WebGL's shaders did.
+  const target = new THREE.RenderTarget(size, size, { samples: 4, colorSpace: THREE.SRGBColorSpace });
   scene.background = new THREE.Color(background);
   renderer.setRenderTarget(target);
   renderer.render(scene, camera);
-  const pixels = new Uint8Array(size * size * 4);
-  renderer.readRenderTargetPixels(target, 0, 0, size, size, pixels);
   renderer.setRenderTarget(null);
+  const pixels = await readBytes(renderer, target, 0);
   target.dispose();
   scene.background = null;
   c.object.visible = true;
@@ -158,10 +160,10 @@ const overGrey = (pixels: Uint8Array, i: number, k: number) => {
 };
 
 /** Render real vs impostor and score them: silhouette IoU, colour error over the union, coverage and lighting bias. */
-function compare(view: Probe, image = true) {
+async function compare(view: Probe, image = true) {
   const size = place(view);
-  const real = renderPixels(size, "real");
-  const imp = renderPixels(size, "impostor");
+  const real = await renderPixels(size, "real");
+  const imp = await renderPixels(size, "impostor");
   let [inter, union, colour, both, total, realAlpha, impAlpha, bias] = [0, 0, 0, 0, 0, 0, 0, 0];
   const diff = new Uint8Array(size * size * 4);
   for (let o = 0; o < real.length; o += 4) {
@@ -203,7 +205,7 @@ function compare(view: Probe, image = true) {
  * per-pixel change between consecutive frames, for the impostor relative to the
  * ground truth. 1 means the impostor is as stable as the real object.
  */
-function stability(view: Probe, steps = 8) {
+async function stability(view: Probe, steps = 8) {
   const size = place(view);
   const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
   const pixel = (2 * camera.position.distanceTo(new THREE.Vector3(...boxCentre(shown().impostor.box))) * Math.tan(THREE.MathUtils.degToRad(FOV / 2))) / size;
@@ -214,7 +216,7 @@ function stability(view: Probe, steps = 8) {
     for (let i = 0; i < steps; i++) {
       camera.position.copy(start).addScaledVector(right, i * 0.25 * pixel);
       camera.updateMatrixWorld();
-      const frame = renderPixels(size, show);
+      const frame = await renderPixels(size, show);
       if (previous) {
         let sum = 0;
         for (let p = 0; p < frame.length; p += 4) for (let k = 0; k < 3; k++) sum += Math.abs(overGrey(frame, p, k) - overGrey(previous, p, k));
@@ -232,18 +234,18 @@ function stability(view: Probe, steps = 8) {
  * fade (0 = all impostor, 1 = all real), against the ground truth. Coverage must stay
  * ~1: no holes, no double-drawn pixels.
  */
-function fade(view: Probe, amount = 0.5) {
+async function fade(view: Probe, amount = 0.5) {
   const c = shown();
   const size = place(view);
-  const truth = renderPixels(size, "real");
+  const truth = await renderPixels(size, "real");
   const impostor = new ImpostorMesh(c.impostor);
   const lod = new Lod([c.object.clone(true), impostor]);
   scene.add(lod);
   // The first frame tells the Lod the viewport height; then put it `amount` of the way
   // through the fade.
-  renderRaw(size, "none", 0x000000);
+  await renderRaw(size, "none", 0x000000);
   at(lod.levels, 1).maxPixels = pixelsOf(lod, camera, size) / (1 - FADE * (1 - amount));
-  const both = renderPixels(size, "none");
+  const both = await renderPixels(size, "none");
   const drawn = lod.levels.flatMap(({ object }, i) => (object.visible ? [i] : []));
   scene.remove(lod);
   // The levels share the real object's resources; only the impostor mesh is the Lod's own.
@@ -263,7 +265,7 @@ function fade(view: Probe, amount = 0.5) {
   return { drawn, coverage: bothAlpha / Math.max(truthAlpha, 1e-6), error: n ? error / n : 0, image: composite(size, [truth, both]) };
 }
 
-/** `images` (GL rows, bottom-up) side by side over grey, as a PNG data URL. */
+/** `images` (rows bottom-up) side by side over grey, as a PNG data URL. */
 function composite(size: number, images: Uint8Array[]): string {
   const canvas = document.createElement("canvas");
   canvas.width = size * images.length;

@@ -1,3 +1,5 @@
+import type { Node } from "three/webgpu";
+import { abs, cross, float, max, normalize, select, step, vec2, vec3 } from "three/tsl";
 import type { ImpostorLayout } from "./impostor.js";
 
 export type Vec3 = [number, number, number];
@@ -5,7 +7,7 @@ export type Vec3 = [number, number, number];
 // The octahedral maps. Frame (col, row) of an N x N atlas sits at grid point
 // (col, row) / (N - 1), so the outer frames lie exactly on the edge of the map:
 // the horizon for "hemi", the nadir seam for "full". The bake and the shader both
-// derive every direction from these two functions; GLSL below mirrors them.
+// derive every direction from these two functions; the node versions below mirror them.
 
 /** Grid position in [0, 1]^2 to a unit direction. */
 export function octDecode(layout: ImpostorLayout, u: number, v: number): Vec3 {
@@ -57,36 +59,36 @@ export function frameBasis(n: Vec3): { tangent: Vec3; bitangent: Vec3 } {
   return { tangent, bitangent };
 }
 
-/** The same maths for the shaders. `IMPOSTOR_FULL` selects the full layout. */
-export const OCTAHEDRAL_GLSL = /* glsl */ `
-vec2 impostorSignOf(vec2 v) { return vec2(v.x >= 0.0 ? 1.0 : -1.0, v.y >= 0.0 ? 1.0 : -1.0); }
+/** A node's sign as the maps use it: 1 at zero. */
+const signOfNode = (v: Node<"vec2">) => step(vec2(0, 0), v).mul(2).sub(1);
 
-vec3 impostorDecode(vec2 uv) {
-  #ifdef IMPOSTOR_FULL
-    vec3 d = vec3(uv.x * 2.0 - 1.0, 0.0, uv.y * 2.0 - 1.0);
-    d.y = 1.0 - abs(d.x) - abs(d.z);
-    if (d.y < 0.0) d.xz = (1.0 - abs(d.zx)) * impostorSignOf(d.xz);
-  #else
-    vec3 d = vec3(uv.x - uv.y, 0.0, uv.x + uv.y - 1.0);
-    d.y = 1.0 - abs(d.x) - abs(d.z);
-  #endif
-  return normalize(d);
+/** `octDecode` in the shaders, for `layout`: grid position to unit direction. */
+export function decodeNode(layout: ImpostorLayout, uv: Node<"vec2">): Node<"vec3"> {
+  if (layout === "hemi") {
+    const x = uv.x.sub(uv.y);
+    const z = uv.x.add(uv.y).sub(1);
+    return normalize(vec3(x, float(1).sub(abs(x)).sub(abs(z)), z));
+  }
+  const xz = uv.mul(2).sub(1);
+  const y = float(1).sub(abs(xz.x)).sub(abs(xz.y));
+  const folded = select(y.lessThan(0), vec2(1).sub(abs(xz.yx)).mul(signOfNode(xz)), xz);
+  return normalize(vec3(folded.x, y, folded.y));
 }
 
-vec2 impostorEncode(vec3 d) {
-  #ifdef IMPOSTOR_FULL
-    d /= abs(d.x) + abs(d.y) + abs(d.z);
-    if (d.y < 0.0) d.xz = (1.0 - abs(d.zx)) * impostorSignOf(d.xz);
-    return d.xz * 0.5 + 0.5;
-  #else
-    d.y = max(d.y, 0.0);
-    d /= max(abs(d.x) + abs(d.y) + abs(d.z), 1e-6);
-    return vec2(1.0 + d.x + d.z, 1.0 + d.z - d.x) * 0.5;
-  #endif
+/** `octEncode` in the shaders, for `layout`: unit direction to grid position. */
+export function encodeNode(layout: ImpostorLayout, d: Node<"vec3">): Node<"vec2"> {
+  if (layout === "hemi") {
+    const up = vec3(d.x, max(d.y, 0), d.z);
+    const n = up.div(max(abs(up.x).add(abs(up.y)).add(abs(up.z)), 1e-6));
+    return vec2(n.x.add(n.z).add(1), n.z.sub(n.x).add(1)).mul(0.5);
+  }
+  const n = d.div(abs(d.x).add(abs(d.y)).add(abs(d.z)));
+  const folded = select(n.y.lessThan(0), vec2(1).sub(abs(n.zx)).mul(signOfNode(n.xz)), n.xz);
+  return folded.mul(0.5).add(0.5);
 }
 
-void impostorBasis(vec3 n, out vec3 tangent, out vec3 bitangent) {
-  tangent = abs(n.y) > 0.999 ? normalize(vec3(1.0, 0.0, 0.0) - n * n.x) : normalize(vec3(n.z, 0.0, -n.x));
-  bitangent = cross(n, tangent);
+/** `frameBasis` in the shaders: the image-plane axes of a view looking back along `n`. */
+export function basisNode(n: Node<"vec3">): { tangent: Node<"vec3">; bitangent: Node<"vec3"> } {
+  const tangent = select(abs(n.y).greaterThan(0.999), normalize(vec3(1, 0, 0).sub(n.mul(n.x))), normalize(vec3(n.z, 0, n.x.negate())));
+  return { tangent, bitangent: cross(n, tangent) };
 }
-`;

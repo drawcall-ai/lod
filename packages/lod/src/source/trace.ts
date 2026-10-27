@@ -1,4 +1,4 @@
-import type { Box3, Vector3 } from "three";
+import type { Box3, Vector3 } from "three/webgpu";
 import { INTERSECTED, NOT_INTERSECTED, type ShapecastIntersection } from "three-mesh-bvh";
 import type { Hit, Shading } from "./shading.js";
 import type { Source } from "./source.js";
