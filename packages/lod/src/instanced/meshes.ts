@@ -36,7 +36,7 @@ export function indirect(geometry: BufferGeometry, selection: Selection, offset:
   view.morphAttributes = geometry.morphAttributes;
   view.boundingBox = geometry.boundingBox;
   view.boundingSphere = geometry.boundingSphere;
-  view.setIndirect(selection.args, offset);
+  view.setIndirect(selection.args, selection.argsOffset + offset);
   return view;
 }
 

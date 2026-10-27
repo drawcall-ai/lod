@@ -2,5 +2,5 @@
 export const WIND_BOUNDS = Symbol("wind bounds");
 
 export interface WindBounds {
-  [WIND_BOUNDS](padding: number): void;
+  [WIND_BOUNDS](padding: number, slope: number, baseY: number): void;
 }

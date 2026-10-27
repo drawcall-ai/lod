@@ -15,9 +15,10 @@ import { Tour } from "./flight/tour.ts";
 import { building } from "./loading.ts";
 import { haze } from "./render/haze.ts";
 import { Pipeline } from "./render/pipeline.ts";
+import { prepare } from "./render/prepare.ts";
 import { Sun } from "./render/sun/index.ts";
 import { loadSky } from "./render/sky.ts";
-import { levelCounts } from "./stats.ts";
+import { Counts } from "./stats.ts";
 import { Ui } from "./ui.ts";
 import { Corn } from "./world/corn/index.ts";
 import { cover } from "./world/cover.ts";
@@ -40,7 +41,7 @@ const started = performance.now();
 
 const ui = new Ui();
 THREE.DefaultLoadingManager.onProgress = (url, loaded, total) => ui.progress(`Downloading ${url.split("/").pop()} (${loaded}/${total})`, loaded / total / 4);
-building.onProgress = (name, loaded, total) => ui.progress(`Building ${name}…`, 0.25 + (0.75 * loaded) / Math.max(total, 14));
+building.onProgress = (name, loaded, total) => ui.progress(`Building ${name}…`, 0.25 + (0.6 * loaded) / Math.max(total, 14));
 
 await loadManifest();
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.5, 60000);
@@ -106,6 +107,9 @@ function sway(wind: Wind, lods: InstancedLod[], fraction: number): void {
   }
 }
 sun.castBy(scene);
+// Scene transforms are fixed: patches change instance buffers and wind runs in the
+// shaders. The camera and the cascades' lights live outside this tree and update themselves.
+scene.matrixWorldAutoUpdate = false;
 /** The content by kind, each counted on its own. */
 const kinds = [
   { name: "houses", roots: houseLods },
@@ -115,7 +119,7 @@ const kinds = [
   { name: "corn plants", roots: [corn.plants, corn.hero] },
   { name: "ladybird", roots: [corn.ladybird] },
   { name: "ground cover", roots: groundCover },
-];
+].map(({ name, roots }) => ({ name, counts: new Counts(roots) }));
 
 const tour = new Tour(route(world, corn));
 let time = 0;
@@ -169,7 +173,26 @@ function frame(dt: number): void {
   pipeline.render();
 }
 
-await pipeline.compile();
+await prepare(
+  scene,
+  pipeline,
+  sun.cascades.map(({ light }) => light.shadow),
+  (done, total) => ui.progress("Preparing scene…", 0.85 + (0.15 * done) / total),
+);
+// The empty preparation draws leave empty shadow maps. Draw the real starting
+// view, with normal selection and streaming, before showing the canvas.
+await new Promise<void>((resolve, reject) =>
+  pipeline.renderer.setAnimationLoop(() => {
+    pipeline.renderer.setAnimationLoop(null);
+    try {
+      frame(0);
+      resolve();
+    } catch (error) {
+      reject(error);
+    }
+  }),
+);
+await pipeline.wait();
 const loadMs = performance.now() - started;
 ui.ready();
 pipeline.canvas.style.visibility = "visible";
@@ -220,7 +243,7 @@ async function draw(count: number, before: (i: number) => void): Promise<Array<{
 const resume = () => pipeline.renderer.setAnimationLoop(live);
 
 function counts() {
-  return kinds.map(({ name, roots }) => ({ name, levels: levelCounts(roots) }));
+  return kinds.map(({ name, counts }) => ({ name, levels: counts.read() }));
 }
 
 /** For scripts/tour.ts: jump along the tour and time frames there. */
@@ -238,9 +261,10 @@ const api = {
   },
   /**
    * Times frames at the current pose: `runs` times, `frames` frames, one per tick of the
-   * animation loop. `ms` is the median run's GPU time per frame (by the GPU's timer: the
+   * animation loop. `ms` is the median run's sum of GPU pass durations per frame (the
    * loop waits for the display between frames), `cpu` the median time of one frame's
-   * CPU work. With `move`, each frame of a run moves on that many seconds of tour from
+   * CPU work. GPU passes can overlap: their sum is not elapsed frame latency.
+   * With `move`, each frame of a run moves on that many seconds of tour from
    * the pose, which comes back after. Wind advances at 60 Hz in both cases. What was
    * drawn is the pose's own frame.
    */

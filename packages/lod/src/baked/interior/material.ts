@@ -1,4 +1,17 @@
-import { InterpolationSamplingType, Matrix4, MeshStandardNodeMaterial, PhysicalLightingModel, StorageBufferAttribute, type Box3, type DataTexture, type Node, type NodeBuilder, type Object3D, type Texture, type Vector3 } from "three/webgpu";
+import {
+  InterpolationSamplingType,
+  Matrix4,
+  MeshStandardNodeMaterial,
+  PhysicalLightingModel,
+  StorageBufferAttribute,
+  type Box3,
+  type DataTexture,
+  type Node,
+  type NodeBuilder,
+  type Object3D,
+  type Texture,
+  type Vector3,
+} from "three/webgpu";
 import {
   If,
   cameraPosition,
@@ -37,7 +50,7 @@ import {
 } from "three/tsl";
 import { instanceMatrixOf } from "../../fade.js";
 import { isScene } from "../../three.js";
-import { affine, column, contextNode, isNodeOf, isOrthographic, vectors } from "../../tsl.js";
+import { affine, column, contextNode, isNodeOf, isOrthographic, roomBounds } from "../../tsl.js";
 import { FACES, type Faces } from "./faces.js";
 
 // Interior mapping (Andrew Willmott's interior cubemaps): a window texel looks into the
@@ -140,7 +153,7 @@ class InteriorLighting extends PhysicalLightingModel {
     if (!isNodeOf(irradiance, "vec3", builder) || !isNodeOf(directDiffuse, "vec3", builder) || !isNodeOf(indirectDiffuse, "vec3", builder))
       throw new Error("bakeMesh: three's lighting is not made of vec3s");
     const count = rooms.boxes.length;
-    const boxes = vectors(this.bounds);
+    const boxes = roomBounds(this.bounds);
     const faceSize = rooms.response.image.width;
     const [width, height] = [rooms.windows.image.width, rooms.windows.image.height];
 
@@ -163,7 +176,13 @@ class InteriorLighting extends PhysicalLightingModel {
     const high = boxes.element(box.mul(2).add(1)).xyz;
     const unit = normalize(ray);
     // Nudged off zero, so each axis has a crossing.
-    const direction = unit.add(vec3(1, 1, 1).sub(step(vec3(1e-30, 1e-30, 1e-30), unit.abs())).mul(1e-6)).toVar();
+    const direction = unit
+      .add(
+        vec3(1, 1, 1)
+          .sub(step(vec3(1e-30, 1e-30, 1e-30), unit.abs()))
+          .mul(1e-6),
+      )
+      .toVar();
     const far = low.sub(point).div(direction).max(high.sub(point).div(direction)).toVar();
     // The box is intersected for every texel, so the derivatives that pick the cube's mip
     // level are defined across window edges.
@@ -178,10 +197,19 @@ class InteriorLighting extends PhysicalLightingModel {
         select(wall.x.greaterThanEqual(0), int(0), int(1)),
         select(a.y.greaterThanEqual(a.z), select(wall.y.greaterThanEqual(0), int(2), int(3)), select(wall.z.greaterThanEqual(0), int(4), int(5))),
       ).toVar();
-      const forward = pick(FACES.map(([f]) => f), face);
-      const up = pick(FACES.map(([, u]) => u), face);
+      const forward = pick(
+        FACES.map(([f]) => f),
+        face,
+      );
+      const up = pick(
+        FACES.map(([, u]) => u),
+        face,
+      );
       const depth = max(dot(wall, forward), 1e-6).mul(rooms.span);
-      const at = vec2(dot(wall, cross(forward, up)), dot(wall, up)).div(depth).mul(0.5).add(0.5);
+      const at = vec2(dot(wall, cross(forward, up)), dot(wall, up))
+        .div(depth)
+        .mul(0.5)
+        .add(0.5);
       const layer = box.mul(6).add(face);
       const level = log2(max(footprint.mul(0.5 * faceSize).div(depth), 1e-6));
       const inward = select(

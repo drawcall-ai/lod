@@ -1,7 +1,22 @@
 import { Color, Matrix4, type Node, type Object3D, type StorageBufferAttribute } from "three/webgpu";
-import { Fn, cameraProjectionMatrix, dot, float, fract, instanceIndex, modelWorldMatrix, screenCoordinate, screenSize, select, uniform, vec2, vec3 } from "three/tsl";
+import {
+  Fn,
+  cameraProjectionMatrix,
+  dot,
+  float,
+  fract,
+  instanceIndex,
+  modelWorldMatrix,
+  screenCoordinate,
+  screenSize,
+  select,
+  uniform,
+  varying,
+  vec2,
+  vec3,
+} from "three/tsl";
 import { isImpostorMesh, storageMatrices } from "./three.js";
-import { column, floats, isOrthographic, matrices, maxScale } from "./tsl.js";
+import { column, instanceFades, instanceMatrices, isOrthographic, maxScale } from "./tsl.js";
 
 // The dithered fade between neighbouring levels of one object.
 //
@@ -71,7 +86,9 @@ export const tint = uniform(new Color(1, 1, 1)).onObjectUpdate(({ object }) => o
 export const dither = (pixel: Node<"vec2">): Node<"float"> => fract(float(52.9829189).mul(fract(dot(pixel, vec2(0.06711056, 0.00583715)))));
 
 /** The matrix of an ImpostorMesh of one instance, read per object: such meshes share one shader. */
-const singleMatrix = uniform(new Matrix4()).onObjectUpdate(({ object }, self) => (object && isImpostorMesh(object) ? self.value.fromArray(object.instanceMatrix.array) : undefined));
+const singleMatrix = uniform(new Matrix4()).onObjectUpdate(({ object }, self) =>
+  object && isImpostorMesh(object) ? self.value.fromArray(object.instanceMatrix.array) : undefined,
+);
 
 /**
  * Whether `object` is an ImpostorMesh of one instance, which reads it per object: more,
@@ -83,14 +100,15 @@ export const isSingle = (object: Object3D): boolean => isImpostorMesh(object) &&
 export function instanceMatrixOf(object: Object3D): Node<"mat4"> | null {
   if (isSingle(object)) return singleMatrix;
   const attribute = storageMatrices(object);
-  return attribute && matrices(attribute).element(instanceIndex);
+  return attribute && instanceMatrices(attribute).element(instanceIndex);
 }
 
 /** This draw's signed fade. */
 export const fade = Fn((builder): Node<"float"> => {
   const draw = draws.get(builder.object);
   if (draw?.kind !== "instances" || !draw.fades) return objectFade;
-  return floats(draw.fades).element(instanceIndex);
+  // Constant across the primitive: keep compute-written slots out of fragment bindings.
+  return varying(instanceFades(draw.fades).element(instanceIndex)).setInterpolation("flat");
 });
 
 /** Whether this pixel is this draw's, by its fade: false on the other level's pixels. */

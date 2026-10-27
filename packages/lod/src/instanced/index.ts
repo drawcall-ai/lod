@@ -1,4 +1,5 @@
 import {
+  Box3,
   InstancedMesh,
   type BufferAttribute,
   type Color,
@@ -17,13 +18,15 @@ import { disposeTree } from "../dispose.js";
 import { drawOf, setDraw } from "../fade.js";
 import { placeInterior } from "../baked/interior/material.js";
 import { impostorInstances, type ImpostorMesh } from "../impostor/mesh/index.js";
-import { FADE, Level, cloneLevels, copyThresholds, estimate, fadeProgress, levelAt, tintLevels, validate, type LodLevel } from "../levels.js";
+import { Level, cloneLevels, copyThresholds, estimate, fadeProgress, levelAt, tintLevels, validate, type LodLevel } from "../levels.js";
 import { Lod } from "../lod.js";
 import { gpuRenderer, inShadowPass, isImpostorMesh, isInstancedMesh, isLOD, isMesh, rejectSkinned, sameClass } from "../three.js";
 import { TYPICAL_HEIGHT, View, viewportHeight, watchViewport } from "../view.js";
 import { WIND_BOUNDS } from "../wind/hooks.js";
 import { copyWind } from "../wind/index.js";
 import { groupMaterial, indirect, placed, ranges } from "./meshes.js";
+import { Bounds, stretch } from "./bounds.js";
+import { Dirty } from "./dirty.js";
 import { ARGS_BYTES, Selection, type IndirectDraw } from "./select.js";
 
 const IDENTITY = new Matrix4();
@@ -33,7 +36,7 @@ const ray = new Ray();
 const sphere = new Sphere();
 const instance = new Matrix4();
 const world = new Matrix4();
-const centre = new Vector3();
+const box = new Box3();
 const hits: Intersection[] = [];
 
 /**
@@ -106,19 +109,19 @@ export class InstancedLod extends Object3D {
   /** Each instance's bounding sphere, centre and radius, in the InstancedLod's space. */
   private readonly spheres: Float32Array;
   /** Bounding sphere of the source in an instance's space. */
-  private sphere = new Sphere();
-  /** Around every instance; finer levels may use tighter bounds (see `reach`). */
+  private readonly sphere = new Sphere();
+  /** Every placed level, kept separate from the source sphere used for LOD selection. */
+  private readonly envelope = new Box3();
+  private readonly rest = new Sphere();
+  /** Around every instance; each level may use tighter bounds. */
   readonly bounds = new Sphere();
   /** Per level, what its meshes are culled by: `bounds`, or less where its instances must be near the camera. */
   private readonly reaches: Sphere[] = [];
-  /** Culling padding for sway, as a share of each instance's radius. */
+  /** Source-radius padding for the shadow caster cutoff; culling pads every level separately. */
   private padding = 0;
-  /** Instances `low..high` changed since they were last measured and uploaded; none when low > high. */
-  private low = 0;
-  private high = -1;
-  /** The smallest and largest instance radius, of instances at a scale above 0. */
-  private smallest = 0;
-  private largest = 0;
+  private readonly matrixChanges: Dirty;
+  private readonly colorChanges: Dirty;
+  private blocks: Bounds;
   private readonly last: Selected = { selected: false, eye: new Vector3(), scale: 0, ortho: false, fades: false, forced: null };
 
   /** `levels[0]` is the source. Empty only as the target of `copy`. */
@@ -130,11 +133,14 @@ export class InstancedLod extends Object3D {
     this.matrices = new Float32Array(count * 16);
     this.spheres = new Float32Array(count * 4);
     for (let i = 0; i < count; i++) IDENTITY.toArray(this.matrices, i * 16);
-    this.high = count - 1;
-    if (levels.length > 0) this.build(levels);
+    this.matrixChanges = new Dirty(count);
+    this.colorChanges = new Dirty(count);
+    this.matrixChanges.all();
+    const draws = levels.length > 0 ? this.build(levels) : 0;
+    this.blocks = new Bounds(this.matrices, this.spheres, this.sphere, this.bounds, draws, this.rest);
   }
 
-  private build(objects: Object3D[]): void {
+  private build(objects: Object3D[]): number {
     const [source] = objects;
     if (!source) throw new Error("InstancedLod: needs at least the source level");
     for (const object of objects) {
@@ -145,7 +151,7 @@ export class InstancedLod extends Object3D {
       });
     }
     const { own, placed } = measureLevels(objects, "InstancedLod");
-    this.sphere = placed;
+    this.sphere.copy(placed);
     // Every template mesh, split per material group: an indirect draw has one range.
     const parts = objects.map((object, level) => {
       // A template's own transform places it in the instance's space, as a Lod's child.
@@ -175,8 +181,36 @@ export class InstancedLod extends Object3D {
       this.entries.push(level);
       this.meshes.push(found.map((part) => this.instance(level, part.template, part.placement, part.group, k++ * ARGS_BYTES, selection)));
     });
+    this.boundLevels();
     estimate(this.entries, 2 * own.radius);
     validate(this.entries);
+    return draws.length;
+  }
+
+  /** Bound what the level meshes draw, including template placement and impostor boxes. */
+  private boundLevels(): void {
+    for (const meshes of this.meshes) {
+      for (const mesh of meshes) {
+        if (!isImpostorMesh(mesh)) mesh.geometry.computeBoundingBox();
+        const bounds = mesh.geometry.boundingBox;
+        if (!bounds) throw new Error("InstancedLod: a level mesh has no geometry bounds");
+        box.copy(bounds);
+        if (isImpostorMesh(mesh)) box.applyMatrix4(mesh.placement);
+        this.envelope.union(box);
+      }
+    }
+    this.rest.copy(this.sphere);
+    if (this.envelope.isEmpty()) return;
+    const { center } = this.rest;
+    const { min, max } = this.envelope;
+    this.rest.radius = Math.max(
+      this.rest.radius,
+      Math.hypot(
+        Math.max(Math.abs(min.x - center.x), Math.abs(max.x - center.x)),
+        Math.max(Math.abs(min.y - center.y), Math.abs(max.y - center.y)),
+        Math.max(Math.abs(min.z - center.z), Math.abs(max.z - center.z)),
+      ),
+    );
   }
 
   /** Material group `group` of `template` drawn for every instance in `level`'s slots, from indirect draw arguments at byte `offset`. */
@@ -218,7 +252,7 @@ export class InstancedLod extends Object3D {
   setMatrixAt(index: number, matrix: Matrix4): void {
     this.check(index);
     matrix.toArray(this.matrices, index * 16);
-    this.touch(index);
+    this.matrixChanges.add(index);
   }
 
   getMatrixAt(index: number, matrix: Matrix4): Matrix4 {
@@ -234,7 +268,7 @@ export class InstancedLod extends Object3D {
       if (this.selection) this.useColors(this.selection, this.colors);
     }
     color.toArray(this.colors, index * 4);
-    this.touch(index);
+    this.colorChanges.add(index);
   }
 
   /** Instance `index`'s colour: white unless set. */
@@ -251,7 +285,7 @@ export class InstancedLod extends Object3D {
       // Instance colours change the shader.
       for (const material of [mesh.material].flat()) material.needsUpdate = true;
     }
-    this.touchAll();
+    this.colorChanges.all();
   }
 
   /**
@@ -263,10 +297,20 @@ export class InstancedLod extends Object3D {
     const { last } = this;
     if (!last.selected) return null;
     this.measure();
-    const r = at(this.spheres, index * 4 + 3);
+    const offset = index * 4;
+    const r = at(this.spheres, offset + 3);
     if (r === 0) return null;
-    const size = 2 * r * last.scale;
-    const height = last.ortho ? size : size / Math.max(centre.fromArray(this.spheres, index * 4).distanceTo(last.eye), 1e-6);
+    let height = 2 * r * last.scale;
+    if (!last.ortho) {
+      const x = this.spheres[offset];
+      const y = this.spheres[offset + 1];
+      const z = this.spheres[offset + 2];
+      if (x === undefined || y === undefined || z === undefined) throw new Error(`InstancedLod: missing sphere ${index}`);
+      const dx = x - last.eye.x;
+      const dy = y - last.eye.y;
+      const dz = z - last.eye.z;
+      height /= Math.max(Math.sqrt(dx * dx + dy * dy + dz * dz), 1e-6);
+    }
     const level = levelAt(this.entries, height, last.forced);
     return last.fades && fadeProgress(this.entries, level, height) > 0 ? level.index - 1 : level.index;
   }
@@ -275,83 +319,43 @@ export class InstancedLod extends Object3D {
     if (!Number.isInteger(index) || index < 0 || index >= this.count) throw new Error(`InstancedLod: index ${index} is not in 0..${this.count - 1}`);
   }
 
-  /** Instance `index` changed: mark it to measure and upload before the next selection. */
-  private touch(index: number): void {
-    this.low = Math.min(this.low, index);
-    this.high = Math.max(this.high, index);
-  }
-
-  private touchAll(): void {
-    this.low = 0;
-    this.high = this.count - 1;
-  }
-
-  /** An instance's radius as its level meshes draw it: the source's, padded for sway. */
+  /** Source radius padded for the level shaders' shadow caster cutoff. */
   private get drawRadius(): number {
     return this.sphere.radius * (1 + this.padding);
   }
 
-  [WIND_BOUNDS](padding: number): void {
+  [WIND_BOUNDS](padding: number, slope: number, baseY: number): void {
     this.padding = padding / this.sphere.radius;
     for (const mesh of this.meshes.flat()) {
       const draw = drawOf(mesh);
       if (draw?.kind === "instances") draw.radius = this.drawRadius;
     }
-    this.bound();
+    // The wind shape comes from the source, but taller/offset levels can sway farther.
+    const reach = slope * Math.max(Math.abs(this.envelope.min.y - baseY), Math.abs(this.envelope.max.y - baseY));
+    this.blocks.pad(this.rest.radius > 0 ? reach / this.rest.radius : 0);
+    this.blocks.refit();
   }
 
-  /** Measure the spheres of the instances changed, upload them, and bound every instance again. */
+  /** Measure only changed matrices; matrix and colour uploads have separate ranges. */
   private measure(): void {
-    const { low, high, selection } = this;
-    if (low > high) return;
-    this.low = Infinity;
-    this.high = -1;
-    const { center, radius } = this.sphere;
-    for (let i = low; i <= high; i++) {
-      instance.fromArray(this.matrices, i * 16);
-      centre
-        .copy(center)
-        .applyMatrix4(instance)
-        .toArray(this.spheres, i * 4);
-      this.spheres[i * 4 + 3] = radius * instance.getMaxScaleOnAxis();
-    }
-    if (selection) {
-      upload(selection.matrices, low, high);
-      if (selection.colors) upload(selection.colors, low, high);
-      selection.changed();
-    }
-    this.bound();
+    if (this.matrixChanges.empty && this.colorChanges.empty) return;
+    this.measureChanges();
   }
 
-  /** Bound every instance, padded for sway. */
-  private bound(): void {
-    // Plain numbers rather than Box3 calls: a crowd holds many instances.
-    let [x0, y0, z0, x1, y1, z1] = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
-    let largest = 0;
-    let smallest = Infinity;
-    for (let i = 0; i < this.count; i++) {
-      const r = at(this.spheres, i * 4 + 3);
-      if (r === 0) continue;
-      smallest = Math.min(smallest, r);
-      const x = at(this.spheres, i * 4);
-      const y = at(this.spheres, i * 4 + 1);
-      const z = at(this.spheres, i * 4 + 2);
-      x0 = Math.min(x0, x - r);
-      y0 = Math.min(y0, y - r);
-      z0 = Math.min(z0, z - r);
-      x1 = Math.max(x1, x + r);
-      y1 = Math.max(y1, y + r);
-      z1 = Math.max(z1, z + r);
-      largest = Math.max(largest, r);
-    }
-    this.largest = largest;
-    this.smallest = largest === 0 ? 0 : smallest;
-    if (largest === 0) {
-      this.bounds.makeEmpty();
-      return;
-    }
-    this.bounds.center.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
-    this.bounds.radius = Math.hypot(x1 - x0, y1 - y0, z1 - z0) / 2 + largest * this.padding;
+  // Keep the closure-bearing work out of the unchanged path: V8 can allocate a
+  // lexical context on entry even when a function returns before its callbacks.
+  private measureChanges(): void {
+    const { selection } = this;
+    const matricesChanged = !this.matrixChanges.empty;
+    this.matrixChanges.drain((start, end) => {
+      this.blocks.measure(start, end);
+      if (selection) upload(selection.matrices, start, end);
+    });
+    this.colorChanges.drain((start, end) => {
+      if (selection?.colors) upload(selection.colors, start, end);
+    });
+    selection?.changed();
+    if (matricesChanged) this.blocks.refit();
   }
 
   /** Sort the instances into levels for `camera`; three's renderer calls this itself while `autoUpdate`. */
@@ -369,57 +373,22 @@ export class InstancedLod extends Object3D {
     const { last } = this;
     last.eye.copy(view.eye).applyMatrix4(inverse.copy(this.matrixWorld).invert());
     Object.assign(last, { selected: true, scale, ortho: view.ortho, fades: view.fades, forced: this.forceLevel });
-    selection.aim(last.eye, scale, view.ortho, view.fades, this.forceLevel, entries);
+    const stable = this.blocks.select(entries, last, this.reaches, height !== null, this.matrixWorld);
+    selection.aim(last.eye, scale, view.ortho, view.fades, this.forceLevel, entries, stable);
     // Selected only when something may draw: an InstancedLod with every level hidden
     // keeps its last selection.
-    if (this.showLevels(height !== null)) pending.add(selection);
+    if (this.showLevels()) pending.add(selection);
   }
 
-  /**
-   * Show only the level meshes an instance may draw in for the last view, by the heights
-   * on screen the instances can have within the bounds: the others would be empty draws,
-   * in the view and in every shadow map. Whether any shows.
-   */
-  private showLevels(measured: boolean): boolean {
-    const { entries, last, bounds } = this;
-    // Before the camera's first frame, every level: its height is only a guess.
-    let finest = measured ? Infinity : 0;
-    let coarsest = measured ? -1 : entries.length - 1;
-    if (measured && !bounds.isEmpty()) {
-      const distance = last.eye.distanceTo(bounds.center);
-      const near = last.ortho ? 1 : Math.max(distance - bounds.radius, 1e-6);
-      const far = last.ortho ? 1 : distance + bounds.radius;
-      const highest = (2 * this.largest * last.scale) / near;
-      const top = levelAt(entries, highest, last.forced);
-      finest = last.fades && fadeProgress(entries, top, highest) > 0 ? top.index - 1 : top.index;
-      coarsest = levelAt(entries, (2 * this.smallest * last.scale) / far, last.forced).index;
-    }
-    this.reach(measured);
+  /** Only levels whose conservative bounds contain a possible selected instance. */
+  private showLevels(): boolean {
     let shown = false;
     this.meshes.forEach((meshes, level) => {
-      const visible = level >= finest && level <= coarsest;
+      const visible = !this.reaches[level]?.isEmpty();
       for (const mesh of meshes) mesh.visible = visible;
       shown ||= visible && meshes.length > 0;
     });
     return shown;
-  }
-
-  /**
-   * Bound each level by how far from the camera its instances can be: no smaller on
-   * screen than the next level's fade begins (the last level, any size). A fine level of
-   * a large crowd is then culled as a small object near the camera, in the view and in
-   * every shadow map.
-   */
-  private reach(measured: boolean): void {
-    const { entries, last, bounds } = this;
-    this.reaches.forEach((sphere, level) => {
-      sphere.copy(bounds);
-      const next = entries[level + 1];
-      if (!measured || last.ortho || last.forced !== null || !next || bounds.isEmpty()) return;
-      const smallest = next.maxPixels * (1 - FADE);
-      const radius = (2 * this.largest * last.scale) / smallest + this.largest * (1 + this.padding);
-      if (radius < bounds.radius) sphere.set(last.eye, radius);
-    });
   }
 
   /**
@@ -430,7 +399,9 @@ export class InstancedLod extends Object3D {
     ray.copy(raycaster.ray).applyMatrix4(inverse.copy(this.matrixWorld).invert());
     for (let i = 0; i < this.count; i++) {
       instance.fromArray(this.matrices, i * 16);
-      if (!ray.intersectsSphere(sphere.copy(this.sphere).applyMatrix4(instance))) continue;
+      sphere.center.copy(this.rest.center).applyMatrix4(instance);
+      sphere.radius = this.rest.radius * stretch(instance);
+      if (!ray.intersectsSphere(sphere)) continue;
       for (const { mesh, placement } of this.probes) {
         if (!mesh.layers.test(raycaster.layers)) continue;
         // The template's own raycast, as if it stood where this instance does.
@@ -454,8 +425,10 @@ export class InstancedLod extends Object3D {
     super.copy(source, false);
     this.matrices.set(source.matrices);
     this.colors = source.colors?.slice() ?? null;
-    this.touchAll();
-    if (source.entries.length > 0) this.build(cloneLevels(source.entries));
+    this.matrixChanges.all();
+    if (this.colors) this.colorChanges.all();
+    const draws = source.entries.length > 0 ? this.build(cloneLevels(source.entries)) : 0;
+    this.blocks = new Bounds(this.matrices, this.spheres, this.sphere, this.bounds, draws, this.rest);
     copyThresholds(source.entries, this.entries);
     this.forceLevel = source.forceLevel;
     this.autoUpdate = source.autoUpdate;
@@ -494,8 +467,36 @@ function at<T>(values: ArrayLike<T>, i: number): T {
   return value;
 }
 
-/** Upload items `low..high` of `attribute`, with any ranges not uploaded yet. */
-function upload(attribute: BufferAttribute, low: number, high: number): void {
-  attribute.addUpdateRange(low * attribute.itemSize, (high - low + 1) * attribute.itemSize);
+/** Union pending uploads, including repeated edits while a crowd is not drawn. */
+function upload(attribute: BufferAttribute, start: number, end: number): void {
+  start *= attribute.itemSize;
+  end *= attribute.itemSize;
+  const ranges = attribute.updateRanges;
+  let low = 0;
+  let high = ranges.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    const range = at(ranges, middle);
+    if (range.start + range.count < start) low = middle + 1;
+    else high = middle;
+  }
+  const first = ranges[low];
+  if (!first || first.start > end) {
+    const range = { start, count: end - start };
+    if (low === ranges.length) ranges.push(range);
+    else ranges.splice(low, 0, range);
+  } else {
+    end = Math.max(end, first.start + first.count);
+    first.start = Math.min(start, first.start);
+    let next = low + 1;
+    while (next < ranges.length) {
+      const range = at(ranges, next);
+      if (range.start > end) break;
+      end = Math.max(end, range.start + range.count);
+      next++;
+    }
+    first.count = end - first.start;
+    if (next > low + 1) ranges.splice(low + 1, next - low - 1);
+  }
   attribute.needsUpdate = true;
 }

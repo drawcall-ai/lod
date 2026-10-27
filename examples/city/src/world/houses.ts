@@ -100,14 +100,17 @@ function hedges(plan: Plan): InstancedLod[] {
 /**
  * The house as level 0 draws it: its exterior (shared geometry) and its rooms merged by
  * material. The bake needs the rooms one child each; drawn, a hundred room meshes per
- * house would be a hundred draws.
+ * house would be a hundred draws. Consumes the rooms' geometry after both bakes:
+ * their shared materials and textures stay alive in the merged meshes.
  */
 function drawn(detail: THREE.Object3D, rooms: THREE.Object3D): THREE.Group {
   const byMaterial = new Map<THREE.Material, THREE.BufferGeometry[]>();
+  const consumed = new Set<THREE.BufferGeometry>();
   rooms.updateMatrixWorld(true);
   rooms.traverse((o) => {
     if (!(o instanceof THREE.Mesh) || Array.isArray(o.material)) return;
     byMaterial.set(o.material, [...(byMaterial.get(o.material) ?? []), o.geometry.clone().applyMatrix4(o.matrixWorld)]);
+    consumed.add(o.geometry);
   });
   const group = new THREE.Group().add(detail.clone());
   for (const [material, parts] of byMaterial) {
@@ -117,6 +120,7 @@ function drawn(detail: THREE.Object3D, rooms: THREE.Object3D): THREE.Group {
     mesh.receiveShadow = true;
     group.add(mesh);
   }
+  for (const geometry of consumed) geometry.dispose();
   return group;
 }
 
@@ -127,7 +131,7 @@ async function churchLod(plan: Plan): Promise<Lod> {
     await downloaded();
     const source = new THREE.Group().add(detail, interior);
     const levels = [await baked(source, low, 1024, BAKED_PIXELS * 1.6, interior), await impostor(source, { maxPixels: IMPOSTOR_PIXELS * 1.6 })];
-    const lod = thresholds(new Lod([source, ...levels.map((l) => l.object)]), levels);
+    const lod = thresholds(new Lod([drawn(detail, interior), ...levels.map((l) => l.object)]), levels);
     lod.name = "church";
     lod.position.set(plan.church.x, plan.church.y, plan.church.z);
     lod.rotation.y = plan.church.angle;

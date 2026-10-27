@@ -10,13 +10,14 @@ import {
   specularColor,
   specularF90,
   uniform,
+  varying,
   varyingProperty,
   vec3,
   vec4,
 } from "three/tsl";
 import { castPosition, instanceMatrixOf, isSingle, tint } from "../../fade.js";
 import { isImpostorMesh, isShadowPass } from "../../three.js";
-import { buildKey, isNodeOf, vectors } from "../../tsl.js";
+import { buildKey, instanceColors, isNodeOf } from "../../tsl.js";
 import { boundingRadius, boxCentre, boxExtent, type Impostor } from "../impostor.js";
 import { buildCard, card, type CardInputs } from "./card.js";
 import { buildSurface, cosine, type Surface, type SurfaceInputs } from "./surface.js";
@@ -33,7 +34,7 @@ function instancesOf(object: Object3D): { matrix: Node<"mat4">; color: Node<"vec
   if (!matrix || !isImpostorMesh(object)) throw new Error(`ImpostorMesh: "${object.name}" is drawn with an impostor's material but is no ImpostorMesh`);
   if (isSingle(object)) return { matrix, color: singleColor };
   const { instanceColor } = object;
-  return { matrix, color: instanceColor && vectors(instanceColor).element(instanceIndex).xyz };
+  return { matrix, color: instanceColor && varying(instanceColors(instanceColor).element(instanceIndex).xyz).setInterpolation("flat") };
 }
 
 /** How an ImpostorMesh draws: see `ImpostorMeshOptions`. */

@@ -135,7 +135,7 @@ export class Wind {
     });
     const shape = new Vector2(amplitude / size, base);
     const padding = (amplitude * Math.max(Math.abs(box.min.y - base), Math.abs(box.max.y - base))) / size;
-    if (hasBounds(root)) root[WIND_BOUNDS](padding);
+    if (hasBounds(root)) root[WIND_BOUNDS](padding, amplitude / size, base);
     for (const { mesh, placement } of placed) {
       if (!isInstancedLod(root)) windBounds(mesh, placement, amplitude, base, size);
       setSway(mesh, { breeze: this.breeze, shape, placement, fromRoot: placement.clone().invert() });

@@ -48,6 +48,10 @@ export class SunShadow extends THREE.ShadowBaseNode {
     });
   }
 
+  override updateBefore(): undefined {
+    // Each child ShadowNode updates its own map. This node only combines their lookups.
+  }
+
   override setup(builder: THREE.NodeBuilder): THREE.Node<"float"> {
     return Fn(() => {
       this.setupShadowPosition(builder);

@@ -15,7 +15,7 @@ export class Pipeline {
    * room for, not those the GPU selected.
    */
   readonly drawn = { calls: 0, triangles: 0 };
-  /** GPU time (ms) of the last measured frame, or null where the browser offers no timer. */
+  /** Sum of GPU pass durations (ms), or null without timers. Passes can overlap, so this is not frame latency. */
   gpuMs: number | null = null;
   private reading: Promise<number | null> | null = null;
   private readonly output: THREE.RenderPipeline;
@@ -64,9 +64,9 @@ export class Pipeline {
     this.renderer.setSize(width, height);
   }
 
-  /** Compiles every material the scene draws for the scene pass. */
-  compile(): Promise<void> {
-    return this.scene.compileAsync(this.renderer);
+  /** Waits for the submitted frame without reading the whole HDR target. */
+  async wait(): Promise<void> {
+    await this.renderer.readRenderTargetPixelsAsync(this.scene.renderTarget, 0, 0, 1, 1);
   }
 
   render(): void {
@@ -78,7 +78,8 @@ export class Pipeline {
   }
 
   /**
-   * The last drawn frame's GPU time. Live callers may share an outstanding read;
+   * The last drawn frame's sum of GPU pass durations, not its elapsed GPU time.
+   * Live callers may share an outstanding read;
    * measurements await it before drawing the next frame. Three returns its last value
    * when no new queries exist, so a frame without compute must contribute zero there.
    */

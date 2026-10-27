@@ -37,7 +37,16 @@ export class Patches extends THREE.Object3D {
   private readonly free: number[];
   private readonly used: number[];
   private readonly candidates: { tile: number; distance: number }[] = [];
+  private readonly records: { tile: number; distance: number }[] = [];
   private readonly keep = new Set<number>();
+  private readonly collect = (tile: number, distance: number): void => {
+    const index = this.candidates.length;
+    const record = this.records[index] ?? { tile, distance };
+    record.tile = tile;
+    record.distance = distance;
+    this.records[index] = record;
+    this.candidates.push(record);
+  };
 
   constructor(
     readonly lods: InstancedLod[],
@@ -64,12 +73,17 @@ export class Patches extends THREE.Object3D {
     eye.setFromMatrixPosition(camera.matrixWorld);
     const wanted = this.candidates;
     wanted.length = 0;
-    this.tiles.near(eye, this.reach(camera), (tile, distance) => wanted.push({ tile, distance }));
-    wanted.sort((a, b) => a.distance - b.distance);
+    this.tiles.near(eye, this.reach(camera), this.collect);
+    // Integer comparison results avoid boxing a distance for every sort comparison.
+    wanted.sort((a, b) => (a.distance < b.distance ? -1 : a.distance > b.distance ? 1 : 0));
     this.wanted = wanted.length;
     const keep = this.keep;
     keep.clear();
-    for (const { tile } of wanted.slice(0, this.chunks)) keep.add(tile);
+    for (let i = 0; i < Math.min(wanted.length, this.chunks); i++) {
+      const candidate = wanted[i];
+      if (!candidate) throw new Error("Patches: missing candidate");
+      keep.add(candidate.tile);
+    }
     for (const [tile, chunk] of this.held) {
       if (keep.has(tile)) continue;
       this.release(chunk);

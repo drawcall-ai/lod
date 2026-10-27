@@ -75,20 +75,24 @@ export function isNodeOf<T extends "bool" | "float" | "vec3" | "vec4" | "color">
   return node.getNodeType(builder) === type;
 }
 
-/** One storage node per buffer, for buffers read as `type`: each node is a binding of its own, and a stage has few (8 storage buffers by default). */
-function storageCache<T extends "float" | "vec4" | "mat4">(type: T): (attribute: BufferAttribute) => StorageBufferNode<T> {
+/**
+ * One node per buffer and role: a stage has few storage bindings. Each library material
+ * reads one buffer per role. Stable, distinct names let equal shaders share programs;
+ * Three's default storage names contain global node IDs, even for otherwise equal code.
+ */
+function storageCache<T extends "float" | "vec4" | "mat4">(type: T, name: string): (attribute: BufferAttribute) => StorageBufferNode<T> {
   const nodes = new WeakMap<BufferAttribute, StorageBufferNode<T>>();
   return (attribute) => {
     let node = nodes.get(attribute);
-    if (!node) nodes.set(attribute, (node = storage(attribute, type, attribute.count)));
+    if (!node) nodes.set(attribute, (node = storage(attribute, type, attribute.count).setName(name)));
     return node;
   };
 }
 
-/** `attribute`'s storage node, read as floats, vec4s or mat4s. */
-export const floats = storageCache("float");
-export const vectors = storageCache("vec4");
-export const matrices = storageCache("mat4");
+export const instanceFades = storageCache("float", "lodInstanceFades");
+export const instanceColors = storageCache("vec4", "lodInstanceColors");
+export const instanceMatrices = storageCache("mat4", "lodInstanceMatrices");
+export const roomBounds = storageCache("vec4", "lodRoomBounds");
 
 /** The size in texels of a texture's image, or null when it has none to read. */
 function texelsOf(image: unknown): [number, number] | null {

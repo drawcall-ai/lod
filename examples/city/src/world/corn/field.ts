@@ -170,10 +170,16 @@ export class FieldTiles implements Tiles {
   ) {}
 
   near(eye: THREE.Vector3, reach: number, visit: (tile: number, distance: number) => void): void {
-    this.tiles.forEach((tile, t) => {
-      const distance = tile.centre.distanceTo(eye);
+    for (let t = 0; t < this.tiles.length; t++) {
+      const tile = this.tiles[t];
+      if (!tile) throw new Error(`no corn tile ${t}`);
+      const dx = tile.centre.x - eye.x;
+      const dy = tile.centre.y - eye.y;
+      const dz = tile.centre.z - eye.z;
+      // Keep the arithmetic in this loop to avoid boxing helper return values.
+      const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
       if (distance < reach) visit(t, distance);
-    });
+    }
   }
 
   fill(t: number, emit: (lod: number, matrix: THREE.Matrix4) => void): void {

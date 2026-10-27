@@ -42,7 +42,7 @@ Which levels to build, by asset:
 
 ```ts
 import * as THREE from "three/webgpu";
-import { Lod, LodLoader, bakeMesh } from "@drawcall/lod";
+import { Lod, LodLoader } from "@drawcall/lod";
 
 const manager = new THREE.LoadingManager();
 manager.addHandler(/\.glb$/i, new GLTFLoader(manager).setDRACOLoader(draco)); // LodLoader uses it
@@ -62,11 +62,6 @@ const forest = await loader.loadInstancesAsync("/tree.glb", spots.length);
 spots.forEach((spot, i) => forest.setMatrixAt(i, new THREE.Matrix4().setPosition(spot)));
 scene.add(forest);
 
-// A patch: its plants up close, one mesh baked from all of them further away.
-const plants = await loader.parseInstancesAsync(plant, places.length);
-places.forEach((place, i) => plants.setMatrixAt(i, place));
-scene.add(new Lod([plants, await bakeMesh(plants, { low: shell })]));
-
 Lod.debug = true; // tint levels to see where each draws
 ```
 
@@ -85,7 +80,8 @@ Lod.debug = true; // tint levels to see where each draws
   scales every measurement: below 1, cheaper levels take over sooner — the global
   performance knob (set it to the pixel ratio to switch by device pixels).
 - **Near a switch both levels draw** and split the pixels with a dither, so nothing pops.
-  Elsewhere only one level is visible: hidden levels cost nothing and cast no shadow.
+  Elsewhere only one level is visible: hidden levels submit no draws or shadows, but
+  their geometry and textures stay resident.
   Each level's switch size must stay far enough below the previous one's for one fade to
   end before the next begins; the `Lod` throws otherwise.
 - **Nested `Lod`s** switch their own levels; the parent hands over to and from them
@@ -94,7 +90,9 @@ Lod.debug = true; // tint levels to see where each draws
   shares geometry and textures. For hundreds of copies use `InstancedLod`, as a `Lod` per
   copy costs draws per copy.
 - **Split large crowds into regions:** use one `InstancedLod` per region so regions
-  outside the view or a shadow map can skip their draws. Check that your target devices
+  outside the view or a shadow map can skip their draws. Keep nearby instances together
+  in the batch; one scattered world-sized crowd is hard to cull, while many tiny crowds
+  spend the frame submitting draws. Check that your target devices
   offer the required WebGPU feature `indirect-first-instance`. Keep the batch's own
   transform uniformly scaled (instances may scale any way). Build its levels as
   templates without nested `Lod`s or InstancedMeshes; use `Lod` for hierarchies.
@@ -152,14 +150,37 @@ Lod.debug = true; // tint levels to see where each draws
   that impostor with the same `maxPixels`: above its default it shows its top mip
   magnified, which otherwise keeps the look of the source at the bake's size — foliage
   denser and darker than the leaves it replaces up close.
-- **Impostors cost fill.** Every pixel of a card runs the shader, and the depth-parallax
-  walk is most of it. Keep parallax for impostors seen large — without it they ghost
+- **Impostors cost fill.** Few triangles can still cover the screen many times: atlas
+  sampling, lighting and overlapping cards can dominate even with parallax off. Compare
+  dense individual plants with a patch's baked far level, not just triangle counts.
+  Keep parallax for impostors seen large — without it they ghost
   (doubled trunks) — and turn it off only for impostors that only ever show small or
   densely packed, such as a field's plants.
-- **On high-density screens** multisampling costs a large share of the frame. Two samples
-  keep most of the quality; none makes thin geometry (twigs, grass) crawl in motion,
-  while impostors fall back to a dithered edge that holds up. The canvas's `antialias`
-  takes the browser's sample count: to choose it, render into a target with `samples`.
+- **Count material groups as well as triangles.** Instancing combines copies of a
+  model, but its separate materials still require separate draws in each pass. A
+  simplified model with the same many materials can retain substantial CPU cost.
+  Merge compatible parts when authoring levels, then check their lighting and shadows.
+- **Keep the rendering conditions fixed when comparing performance:** viewport, pixel
+  ratio, multisampling, shadows, wind and switch sizes. Disabling an effect can identify
+  its cost, but is not an equivalent-looking optimization. Check moving transitions as
+  well as stationary images; multisampling matters especially for thin twigs and grass.
+- **Judge changes by completed frame time.** Fewer draws or triangles can still cost
+  more if culling, preparation or shading becomes heavier. Measure CPU work and GPU
+  completion separately; overlapping GPU pass durations do not add up to frame time.
+  Recheck the original setup after each experiment to catch background-load drift.
+  Compare images after the same movement history: streamed instance slots and cached
+  shadows can differ even when the final camera pose is identical.
+- **Stream into existing batches:** reuse nearby regions' slots and change only the
+  matrices or colours that actually changed. Rebuilding batches or rewriting the whole
+  crowd during flight adds preparation and upload work even when few instances draw.
+- **Check the first flight as well as a warmed repeat.** Preparing the starting view
+  does not prepare every later level and shadow variant. Measure first-use shader
+  preparation and streaming separately from steady-state throughput. Any startup
+  warmup needs its own loading-time and appearance checks, including simulation and
+  streaming state, the first visible frame and later transitions. Free flight can
+  still reveal new variants.
+  Measure rendering separately from an overlay that counts every instance; count
+  queries and temporary objects can cause periodic CPU and garbage-collection stalls.
 
 ## Shadows
 

@@ -8,39 +8,53 @@ export interface LevelCount {
 }
 
 /**
- * Counts what each level drew in its last update under `roots`: each InstancedLod's
+ * Counts what each level drew in its last update: each InstancedLod's
  * instances by the finest level they drew (`levelOf`: the GPU selects, the counts are
  * worked out again here; an instance fading also draws the next coarser level, not
  * counted), the visible levels of each Lod; triangles as instances times what one
- * instance of the level draws.
+ * instance of the level draws. The city's topology and source geometry stay fixed,
+ * so only selection and visibility need reading again for an overlay sample.
  */
-export function levelCounts(roots: THREE.Object3D[]): LevelCount[] {
-  const counts: LevelCount[] = [];
-  const at = (level: number) => (counts[level] ??= { instances: 0, triangles: 0 });
-  for (const root of roots)
-    root.traverse((node) => {
-      if (node instanceof InstancedLod) {
-        // every level listed, drawn or not
-        node.levels.forEach((_, i) => at(i));
-        const each = node.levels.map((level) => triangles(level.object));
-        for (let i = 0; i < node.count; i++) {
-          const level = node.levelOf(i);
-          // an empty level (copies too small to draw) draws nothing to count
-          if (level === null || !each[level]) continue;
-          const count = at(level);
+export class Counts {
+  private readonly entries: { lod: InstancedLod | Lod; triangles: number[] }[] = [];
+  private levels = 0;
+
+  constructor(roots: readonly THREE.Object3D[]) {
+    for (const root of roots)
+      root.traverse((node) => {
+        if (!(node instanceof InstancedLod || node instanceof Lod)) return;
+        this.entries.push({ lod: node, triangles: node.levels.map((level) => triangles(level.object)) });
+        this.levels = Math.max(this.levels, node.levels.length);
+      });
+  }
+
+  read(): LevelCount[] {
+    const counts = Array.from({ length: this.levels }, () => ({ instances: 0, triangles: 0 }));
+    for (const { lod, triangles } of this.entries) {
+      if (lod instanceof InstancedLod) {
+        for (let i = 0; i < lod.count; i++) {
+          const level = lod.levelOf(i);
+          if (level === null) continue;
+          const each = triangles[level];
+          if (!each) continue;
+          const count = counts[level];
+          if (!count) throw new Error(`${lod.name}: no count for level ${level}`);
           count.instances++;
-          count.triangles += each[level];
+          count.triangles += each;
         }
+        continue;
       }
-      if (node instanceof Lod)
-        node.levels.forEach((level, i) => {
-          const count = at(i);
-          if (!level.object.visible || triangles(level.object) === 0) return;
-          count.instances += 1;
-          count.triangles += triangles(level.object);
-        });
-    });
-  return counts;
+      lod.levels.forEach((level, i) => {
+        const each = triangles[i];
+        if (!level.object.visible || !each) return;
+        const count = counts[i];
+        if (!count) throw new Error(`${lod.name}: no count for level ${i}`);
+        count.instances++;
+        count.triangles += each;
+      });
+    }
+    return counts;
+  }
 }
 
 /** Triangles `object` draws once (an impostor is a card of two). */

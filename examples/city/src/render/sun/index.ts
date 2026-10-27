@@ -1,5 +1,5 @@
 import * as THREE from "three/webgpu";
-import { uniform } from "three/tsl";
+import { renderGroup, uniform } from "three/tsl";
 import { Casters } from "./casters.ts";
 import { SunShadow } from "./shading.ts";
 
@@ -11,10 +11,11 @@ interface Setting {
 }
 
 /**
- * Finest first. The near map follows the camera every frame; the others take turns, one
- * per frame, so no frame draws more than two maps (the farther ones cover hundreds of
- * metres to kilometres, where a frame's lag does not show). The farthest map's texels are
- * metres wide whatever its size, and a smaller map is cheaper to look up.
+ * Finest first. The near map follows the camera every frame; the others take turns
+ * while their cached coverage holds. A coverage miss redraws a map sooner, so a frame
+ * can draw all three. The farther maps cover hundreds of metres to kilometres, where a
+ * frame's lag does not show. The farthest map's texels are metres wide whatever its
+ * size, and a smaller map is cheaper to look up.
  */
 const SETTINGS: Setting[] = [
   { size: 2048, every: 1, phase: 0 },
@@ -107,7 +108,9 @@ const centre = new THREE.Vector3();
 export class Cascade {
   readonly light = new THREE.DirectionalLight("#ffffff", 0);
   /** How far shadows are looked up off a surface, toward the sun (m): see shading.ts. */
-  readonly offset = uniform(0);
+  // This changes with the view, even for stationary meshes whose material uniforms
+  // Three can otherwise reuse. Share and refresh it with the other shadow uniforms.
+  readonly offset = uniform(0).setGroup(renderGroup);
   /** Texel size (m) and casters drawn when its map was last drawn. */
   readonly drawn = { texel: 0, casters: 0 };
   /** Where its map is, as last drawn: centre and radius in world space. */
