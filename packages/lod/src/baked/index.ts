@@ -31,6 +31,7 @@ import { InteriorMaterial } from "./interior/material.js";
 import { readBoxes } from "./interior/rooms.js";
 import { layOut, simplified } from "./low.js";
 import { transfer } from "./transfer.js";
+import { keepCoverage } from "./coverage.js";
 
 export type BakeMeshOptions = {
   /** texels per side of each baked map; default 1024, or 512 when the source cuts out (foliage) */
@@ -203,33 +204,4 @@ function bakedTexture(base: Mip, colorSpace: ColorSpace, mips?: Mip[]): DataText
   } else texture.generateMipmaps = true;
   texture.needsUpdate = true;
   return texture;
-}
-
-/**
- * `mips` with each one's alpha scaled so that the share of texels passing an alpha test
- * at 0.5 stays the base mip's: plain averaging thins cut-outs (leaves, grass) into
- * nothing in the distance.
- */
-function keepCoverage(mips: Mip[]): Mip[] {
-  const [base] = mips;
-  if (!base) return mips;
-  const target = passing(base, 1);
-  for (const mip of mips.slice(1)) {
-    let low = 0;
-    let high = 8;
-    for (let i = 0; i < 16; i++) {
-      const scale = (low + high) / 2;
-      if (passing(mip, scale) < target) low = scale;
-      else high = scale;
-    }
-    for (let i = 3; i < mip.data.length; i += 4) mip.data[i] = (mip.data[i] ?? 0) * high;
-  }
-  return mips;
-}
-
-/** Share of `mip`'s texels whose alpha × `scale` passes 0.5. */
-function passing({ data }: Mip, scale: number): number {
-  let count = 0;
-  for (let i = 3; i < data.length; i += 4) if ((data[i] ?? 0) * scale >= 127.5) count++;
-  return count / (data.length / 4);
 }

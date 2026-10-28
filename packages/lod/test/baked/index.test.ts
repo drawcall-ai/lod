@@ -174,10 +174,19 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
     const source = new Mesh(plane, new MeshStandardMaterial({ map, alphaTest: 0.5 }));
     const baked = await bakeMesh(source, { low: new Mesh(plane), textureSize: 64 });
     const covered = (pixels: Uint8Array) => pixels.filter((_, i) => i % 4 === 3 && pixels[i] !== 0).length;
-    // About 8 px across: the baked map is read from its 8×8 mip.
-    const far = covered(await render(baked, [0, 0, 11]));
-    const reference = covered(await render(source, [0, 0, 11]));
-    expect(reference).toBeGreaterThan(10);
+    // About 8 px across. One nearest-filtered source view aliases badly: compare
+    // coverage over subpixel phases, while the baked map samples its 8×8 mip.
+    const pixel = (2 * Math.tan((20 * Math.PI) / 180) * 11) / 64;
+    let far = 0;
+    let reference = 0;
+    for (let y = 0; y < 4; y++)
+      for (let x = 0; x < 4; x++) {
+        source.position.set((x / 4) * pixel, (y / 4) * pixel, 0);
+        baked.position.copy(source.position);
+        far += covered(await render(baked, [0, 0, 11]));
+        reference += covered(await render(source, [0, 0, 11]));
+      }
+    expect(reference).toBeGreaterThan(160);
     expect(Math.abs(far - reference) / reference).toBeLessThan(0.35);
   });
 
