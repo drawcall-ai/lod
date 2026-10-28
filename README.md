@@ -8,7 +8,7 @@ Requires Three.js `WebGPURenderer` (`three/webgpu`).
 npm install @drawcall/lod three
 ```
 
-Load a model into an existing Three.js scene:
+Load a model into an existing Three.js scene. With a warm cache, the coarse level draws first and finer levels load as the camera approaches:
 
 ```ts
 import { LodLoader } from "@drawcall/lod";
@@ -17,6 +17,8 @@ const loader = new LodLoader();
 const tree = await loader.loadAsync("/models/tree.glb");
 scene.add(tree);
 ```
+
+Configure [vitecache](https://github.com/drawcall-ai/vitecache) in the host and ship its generated cache files. A cache miss builds the levels once; warm loads fetch and decode them. Procedural sources and named custom materials use the same loader.
 
 Choose generated or authored levels to suit your assets. The [LOD skill](https://github.com/drawcall-ai/lod/blob/main/packages/lod/skills/lod/SKILL.md) covers asset choices, caching, lazy loading, wind, and scene integration. It also ships with the package at `skills/lod/SKILL.md`.
 

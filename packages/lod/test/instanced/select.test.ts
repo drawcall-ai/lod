@@ -1,16 +1,17 @@
+/// <reference types="@webgpu/types" />
 import { Matrix4, Sphere, Vector3, WebGPURenderer, type Renderer } from "three/webgpu";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { ARGS_BYTES, Selection } from "../../src/instanced/select.js";
 import { GPU_TIMEOUT, renderer } from "../gpu.js";
 
 const levels = [{ maxPixels: Infinity }, { maxPixels: 10 }];
 
-function selection(count: number, indexed: boolean, start: number): Selection {
+function selection(count: number, indexed: boolean, start: number, sphere = new Sphere(new Vector3(), 1)): Selection {
   const matrices = new Float32Array(count * 16);
   for (let i = 0; i < count; i++) new Matrix4().makeTranslation(i + 1, 0, 0).toArray(matrices, i * 16);
   const selection = new Selection(
     matrices,
-    new Sphere(new Vector3(), 1),
+    sphere,
     [true, true],
     [
       { level: 0, count: 6, start: 0, indexed },
@@ -24,6 +25,27 @@ function selection(count: number, indexed: boolean, start: number): Selection {
 const read = (selection: Selection, gpu: Renderer = renderer) => gpu.getArrayBufferAsync(selection.args, null, selection.argsOffset, 2 * ARGS_BYTES);
 const words = (buffer: ArrayBuffer) => Array.from(new Uint32Array(buffer));
 
+it("shares native shader modules across crowd capacities, spheres and slot offsets", { timeout: GPU_TIMEOUT }, async () => {
+  const a = selection(2, true, 6, new Sphere(new Vector3(1, 2, 3), 1.25));
+  const b = selection(17, true, 6, new Sphere(new Vector3(-4, 5, -6), 3.5));
+  const shader = vi.spyOn(GPUDevice.prototype, "createShaderModule");
+  try {
+    renderer.compute(a.take(renderer));
+    expect(words(await read(a))).toEqual([6, 0, 0, 0, 0, 9, 2, 6, 0, 2]);
+    const compiled = shader.mock.calls.length;
+    expect(compiled).toBe(2);
+    renderer.compute(b.take(renderer));
+    expect(words(await read(b))).toEqual([6, 0, 0, 0, 0, 9, 17, 6, 0, 17]);
+    // Three caches native pipelines by ComputeNode.id, but shares identical WGSL modules.
+    expect(shader).toHaveBeenCalledTimes(compiled);
+    expect(new Float32Array(await renderer.getArrayBufferAsync(b.slots.matrices))[17 * 16 + 12]).toBeGreaterThan(0);
+  } finally {
+    shader.mockRestore();
+    a.dispose();
+    b.dispose();
+  }
+});
+
 it("installs lazy draws without replacing storage buffers already bound by render and shadow shaders", { timeout: GPU_TIMEOUT }, async () => {
   const draw = { level: 0, count: 6, start: 0, indexed: true };
   const a = new Selection(new Float32Array(new Matrix4().makeTranslation(3, 0, 0).elements), new Sphere(new Vector3(), 1), [true, true], [draw], [0, 0]);
@@ -33,13 +55,17 @@ it("installs lazy draws without replacing storage buffers already bound by rende
     fades = a.slots.fades;
   try {
     a.aim(new Vector3(), 1, true, false, 1, levels);
-    renderer.compute(a.take(renderer));
+    const kernels = a.take(renderer);
+    renderer.compute(kernels);
     expect(words(await renderer.getArrayBufferAsync(a.args, null, a.argsOffset, ARGS_BYTES))).toEqual([6, 1, 0, 0, 0]);
-    a.replace([draw, { ...draw, level: 1, count: 9 }], [0, 1]);
+    a.append([{ ...draw, level: 1, count: 9 }]);
+    a.route([0, 1]);
     expect(a.slots.matrices).toBe(matrices);
     expect(a.slots.colors).toBe(colors);
     expect(a.slots.fades).toBe(fades);
-    renderer.compute(a.take(renderer));
+    const installed = a.take(renderer);
+    expect(installed).toBe(kernels);
+    renderer.compute(installed);
     expect(words(await read(a))).toEqual([6, 0, 0, 0, 0, 9, 1, 0, 0, 1]);
     expect(new Float32Array(await renderer.getArrayBufferAsync(matrices))[16 + 12]).toBe(3);
     if (!colors) throw new Error("missing colors");
@@ -144,19 +170,40 @@ it("initializes each renderer and keeps a lagging renderer's matrices and late c
   }
 });
 
-it("reuses only a supplied stable selection proof and invalidates it for instance edits", () => {
-  const a = selection(1, true, 0);
-  const stable = {};
+it("hands over an arriving fade neighbour without a jump at either end of the height fade", { timeout: GPU_TIMEOUT }, async () => {
+  const draw = { level: 0, count: 6, start: 0, indexed: true };
+  const a = new Selection(new Float32Array(new Matrix4().elements), new Sphere(new Vector3(), 1), [true, true, true], [draw, { ...draw, level: 2 }], [0, 0, 2]);
+  const thresholds = [{ maxPixels: Infinity }, { maxPixels: 100 }, { maxPixels: 10 }];
   try {
-    a.aim(new Vector3(), 1, true, false, 1, levels, stable);
-    expect(a.take(renderer)).toHaveLength(2);
-    a.aim(new Vector3(1, 0, 0), 2, true, false, 1, levels, stable);
-    expect(a.take(renderer)).toHaveLength(0);
-    a.changed();
-    a.aim(new Vector3(2, 0, 0), 3, true, false, 1, levels, stable);
-    expect(a.take(renderer)).toHaveLength(2);
-    a.aim(new Vector3(3, 0, 0), 4, true, false, 1, levels);
-    expect(a.take(renderer)).toHaveLength(2);
+    a.aim(new Vector3(0, 0, 2), 9.5, false, true, null, thresholds);
+    const kernels = a.take(renderer);
+    renderer.compute(kernels);
+    a.append([{ ...draw, level: 1 }]);
+    a.route([0, 1, 2], true);
+    for (const [progress, expected] of [
+      [0, [-0.5, null, 0.5]],
+      [1 / 6, [-0.75, null, 0.75]],
+      [0.5, [-0.5, 0.5, null]],
+      [5 / 6, [null, -0.75, 0.75]],
+      [1, [null, -0.5, 0.5]],
+    ] satisfies Array<[number, Array<number | null>]>) {
+      a.progress.value = progress;
+      a.changed();
+      expect(a.take(renderer)).toBe(kernels);
+      renderer.compute(kernels);
+      const counts = new Uint32Array(await renderer.getArrayBufferAsync(a.args, null, a.argsOffset, 3 * ARGS_BYTES));
+      const fades = new Float32Array(await renderer.getArrayBufferAsync(a.slots.fades));
+      for (const [level, word] of [
+        [0, 1],
+        [1, 11],
+        [2, 6],
+      ]) {
+        if (level === undefined || word === undefined) throw new Error("Missing draw index");
+        const expectedFade = expected[level];
+        expect(counts[word]).toBe(expectedFade === null ? 0 : 1);
+        if (expectedFade !== null && expectedFade !== undefined) expect(fades[level]).toBeCloseTo(expectedFade);
+      }
+    }
   } finally {
     a.dispose();
   }

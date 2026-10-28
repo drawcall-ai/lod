@@ -1,6 +1,5 @@
 import * as THREE from "three/webgpu";
 import type { InstancedLod } from "@drawcall/lod";
-import { inShadowPass } from "../../../../packages/lod/src/three.ts";
 
 /** Where patches come from: tiles of ground, each holding instances of the InstancedLods. */
 export interface Tiles {
@@ -20,16 +19,16 @@ const eye = new THREE.Vector3();
  * `chunks` tiles' worth, and tiles within `reach` (re-measured each frame) borrow a
  * chunk, fill it and hand it back when the camera moves on. A chunk's unused instances
  * are parked at scale 0, which every level list sorts into its cheapest, empty level.
- *
- * Like a Lod, it is updated by three's renderer while it lists the scene (`isLOD`), so
- * its InstancedLods, its children, sort the new instances in the same frame. Shadow passes
- * update it too, with the light's camera: those calls change nothing.
  */
 export class Patches extends THREE.Object3D {
   /** View height in CSS pixels that reaches are measured on, as the package measures levels; the app sets it. */
   static height = 1080;
-  readonly isLOD = true;
-  autoUpdate = true;
+  private static remaining = 8;
+
+  /** Share eight tile changes across all patch systems in this rendered frame. */
+  static beginFrame(): void {
+    Patches.remaining = 8;
+  }
   /** Tiles that wanted a chunk in the last update, filled or not. */
   wanted = 0;
   /** Tiles filled now, and the chunk each holds. */
@@ -39,6 +38,16 @@ export class Patches extends THREE.Object3D {
   private readonly candidates: { tile: number; distance: number }[] = [];
   private readonly records: { tile: number; distance: number }[] = [];
   private readonly keep = new Set<number>();
+  private filling = 0;
+  private tile = 0;
+  private readonly emit = (l: number, matrix: THREE.Matrix4): void => {
+    const lod = this.lods[l];
+    const room = this.perTile[l] ?? 0;
+    const used = this.used[l] ?? 0;
+    if (!lod || used >= room) throw new Error(`Patches: tile ${this.tile} emits more than ${room} instances for InstancedLod ${l}`);
+    lod.setMatrixAt(this.filling * room + used, matrix);
+    this.used[l] = used + 1;
+  };
   private readonly collect = (tile: number, distance: number): void => {
     const index = this.candidates.length;
     const record = this.records[index] ?? { tile, distance };
@@ -47,6 +56,13 @@ export class Patches extends THREE.Object3D {
     this.records[index] = record;
     this.candidates.push(record);
   };
+
+  /** Diagnostics may wait for the current view without bypassing the tile budget. */
+  get settled(): boolean {
+    if (this.held.size !== this.keep.size) return false;
+    for (const tile of this.keep) if (!this.held.has(tile)) return false;
+    return true;
+  }
 
   constructor(
     readonly lods: InstancedLod[],
@@ -67,15 +83,14 @@ export class Patches extends THREE.Object3D {
     this.add(...lods);
   }
 
-  /** Called by three's renderer, before its children sort: the nearest tiles within reach hold the chunks. */
+  /** Call once before rendering, with the view camera. The nearest tiles hold the chunks. */
   update(camera: THREE.Camera): void {
-    if (inShadowPass(this)) return;
     eye.setFromMatrixPosition(camera.matrixWorld);
     const wanted = this.candidates;
     wanted.length = 0;
     this.tiles.near(eye, this.reach(camera), this.collect);
     // Integer comparison results avoid boxing a distance for every sort comparison.
-    wanted.sort((a, b) => (a.distance < b.distance ? -1 : a.distance > b.distance ? 1 : 0));
+    wanted.sort(nearest);
     this.wanted = wanted.length;
     const keep = this.keep;
     keep.clear();
@@ -84,44 +99,64 @@ export class Patches extends THREE.Object3D {
       if (!candidate) throw new Error("Patches: missing candidate");
       keep.add(candidate.tile);
     }
-    for (const [tile, chunk] of this.held) {
-      if (keep.has(tile)) continue;
-      this.release(chunk);
-      this.held.delete(tile);
-    }
+    if (Patches.remaining === 0) return;
+    if (this.change()) Patches.remaining--;
+  }
+
+  private change(): boolean {
+    let wanted: number | undefined;
+    const keep = this.keep;
     for (const tile of keep) {
       if (this.held.has(tile)) continue;
-      const chunk = this.free.pop();
-      if (chunk === undefined) throw new Error("Patches: no free chunk although tiles were released");
-      this.held.set(tile, chunk);
-      this.fill(tile, chunk);
+      wanted = tile;
+      break;
     }
+    let expired: number | undefined;
+    let reusable: number | undefined;
+    for (const [tile, chunk] of this.held) {
+      if (keep.has(tile)) continue;
+      expired = tile;
+      reusable = chunk;
+      break;
+    }
+    if (wanted !== undefined) {
+      const free = this.free.pop();
+      const chunk = free ?? reusable;
+      if (chunk === undefined) throw new Error("Patches: no chunk for a wanted tile");
+      if (free === undefined && expired !== undefined) this.held.delete(expired);
+      this.held.set(wanted, chunk);
+      this.fill(wanted, chunk);
+      return true;
+    }
+    if (expired === undefined || reusable === undefined) return false;
+    this.held.delete(expired);
+    this.release(reusable);
+    return true;
   }
 
   private fill(tile: number, chunk: number): void {
     this.used.fill(0);
-    this.tiles.fill(tile, (l, matrix) => {
-      const lod = this.lods[l];
-      const room = this.perTile[l] ?? 0;
-      const used = this.used[l] ?? 0;
-      if (!lod || used >= room) throw new Error(`Patches: tile ${tile} emits more than ${room} instances for InstancedLod ${l}`);
-      lod.setMatrixAt(chunk * room + used, matrix);
-      this.used[l] = used + 1;
-    });
+    this.tile = tile;
+    this.filling = chunk;
+    this.tiles.fill(tile, this.emit);
     // park what this tile leaves empty, in case a fuller tile had the chunk before
-    this.lods.forEach((lod, l) => {
+    for (const [l, lod] of this.lods.entries()) {
       const room = this.perTile[l] ?? 0;
       for (let i = this.used[l] ?? 0; i < room; i++) lod.setMatrixAt(chunk * room + i, PARKED);
-    });
+    }
   }
 
   private release(chunk: number): void {
-    this.lods.forEach((lod, l) => {
+    for (const [l, lod] of this.lods.entries()) {
       const room = this.perTile[l] ?? 0;
       for (let i = 0; i < room; i++) lod.setMatrixAt(chunk * room + i, PARKED);
-    });
+    }
     this.free.push(chunk);
   }
+}
+
+function nearest(a: { distance: number }, b: { distance: number }): number {
+  return a.distance < b.distance ? -1 : a.distance > b.distance ? 1 : 0;
 }
 
 /**

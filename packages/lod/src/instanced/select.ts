@@ -3,6 +3,7 @@ import {
   StorageBufferAttribute,
   StorageInstancedBufferAttribute,
   Vector3,
+  Vector4,
   type ComputeNode,
   type Node,
   type Renderer,
@@ -11,6 +12,7 @@ import {
 import {
   Fn,
   If,
+  Loop,
   Return,
   atomicAdd,
   atomicLoad,
@@ -47,7 +49,7 @@ const CURRENT: ComputeNode[] = [];
 // Instances at scale 0 draw in no level.
 
 /** The slots every level draws from, `count` per level that draws, from its `first`. */
-export interface Slots {
+interface Slots {
   readonly matrices: StorageInstancedBufferAttribute;
   readonly fades: StorageBufferAttribute;
   /** RGB and a pad per slot, once the instances have colours */
@@ -93,6 +95,17 @@ export class Selection {
 
   private readonly counts: StorageBufferAttribute;
   private slice: ArgsSlice;
+  private readonly routes: Array<{ value: number } & Node<"int">>;
+  private readonly previous: Array<{ value: number } & Node<"int">>;
+  // Crowd dimensions are data; equal ladders share shader modules regardless of capacity.
+  private readonly starts: Array<{ value: number } & Node<"uint">>;
+  private readonly bounds = uniform(new Vector4());
+  readonly progress = uniform(1);
+  private readonly drawCount = uniform(0, "uint");
+  private readonly records = storage(new StorageBufferAttribute(new Uint32Array(4), 4), "uvec4", 0)
+    .setName("lodDraws")
+    .toReadOnly();
+  private readonly arguments = storage(new StorageBufferAttribute(new Uint32Array(5), 1), "uint", 0).setName("lodDrawArgs");
   // Allocation location must not specialize the handover shader for every crowd.
   private readonly argsStart = uniform(0, "uint");
   private kernels: ComputeNode[] | null = null;
@@ -110,23 +123,28 @@ export class Selection {
     /** 16 floats per instance */
     matrices: Float32Array,
     /** One instance's bounding sphere, in its own space. */
-    private readonly sphere: Sphere,
+    sphere: Sphere,
     /** Per level, whether it draws anything. */
     drawing: readonly boolean[],
     private draws: readonly IndirectDraw[],
-    private fallback: readonly number[] = drawing.map((_, i) => i),
+    fallback: readonly number[] = drawing.map((_, i) => i),
   ) {
     const count = matrices.length / 16;
     this.count = count;
     this.matrices = new StorageBufferAttribute(matrices, 16);
     let next = 0;
     this.first = drawing.map((draws) => (draws ? next++ * count : null));
+    this.starts = this.first.map((first) => uniform(first ?? 0, "uint"));
+    this.bounds.value.set(sphere.center.x, sphere.center.y, sphere.center.z, sphere.radius);
     const slots = Math.max(next * count, 1);
     this.slots = { matrices: new StorageInstancedBufferAttribute(slots, 16), fades: new StorageBufferAttribute(slots, 1), colors: null };
     this.maxPixels = drawing.map(() => uniform(0));
     this.counts = new StorageBufferAttribute(new Uint32Array(drawing.length), 1);
     this.slice = this.allocate(draws);
     this.argsStart.value = this.argsOffset / 4;
+    this.routes = fallback.map((level) => uniform(level, "int"));
+    this.previous = fallback.map((level) => uniform(level, "int"));
+    this.writeDraws(draws);
   }
 
   private allocate(draws: readonly IndirectDraw[]): ArgsSlice {
@@ -144,17 +162,40 @@ export class Selection {
     return args.take(values);
   }
 
-  /** Lazy levels reserve slots up front, so installing draws keeps every shader binding valid. */
-  replace(draws: readonly IndirectDraw[], fallback: readonly number[]): void {
+  /** Slots and kernels survive arrivals; only the variable-size draw table is replaced. */
+  append(draws: readonly IndirectDraw[]): number {
+    const offset = this.draws.length * ARGS_BYTES;
     const previous = this.slice;
-    this.slice = this.allocate(draws);
-    this.draws = draws;
-    this.fallback = fallback;
+    this.draws = [...this.draws, ...draws];
+    this.slice = this.allocate(this.draws);
     this.argsStart.value = this.argsOffset / 4;
+    this.writeDraws(this.draws);
     previous.dispose();
-    for (const kernel of this.kernels ?? []) kernel.dispose();
-    this.kernels = null;
     this.changed();
+    return offset;
+  }
+
+  /** Residency is data, including the previous route for the arrival's dither fade. */
+  route(fallback: readonly number[], fade = false): void {
+    fallback.forEach((level, i) => {
+      const route = this.routes[i];
+      const previous = this.previous[i];
+      if (!route || !previous) throw new Error("InstancedLod: missing fallback route");
+      previous.value = fade ? route.value : level;
+      route.value = level;
+    });
+    this.progress.value = fade ? 0 : 1;
+    this.changed();
+  }
+
+  private writeDraws(draws: readonly IndirectDraw[]): void {
+    const values = new Uint32Array(Math.max(draws.length, 1) * 4);
+    draws.forEach((draw, i) => values.set([draw.level, draw.count, draw.start, Number(draw.indexed)], i * 4));
+    const previous = this.records.value;
+    this.records.value = new StorageBufferAttribute(values, 4);
+    this.arguments.value = this.args;
+    this.drawCount.value = draws.length;
+    previous.dispose();
   }
 
   /** Select for this view next; the uniforms are set and compared here. */
@@ -227,6 +268,7 @@ export class Selection {
     for (const kernel of this.kernels ?? []) kernel.dispose();
     this.kernels = null;
     this.slice.dispose();
+    this.records.value.dispose();
   }
 
   private passes(): ComputeNode[] {
@@ -236,20 +278,20 @@ export class Selection {
 
   /** The pass that fills the slots. */
   private selectPass(): ComputeNode {
-    const { count, sphere, colors, slots } = this;
-    const matrices = storage(this.matrices, "mat4", count).setName("lodSourceMatrices");
-    const sources = colors ? storage(colors, "vec4", count).setName("lodSourceColors") : null;
-    const counts = storage(this.counts, "uint", this.first.length).setName("lodCounts").toAtomic();
+    const { count, colors, slots } = this;
+    const matrices = storage(this.matrices, "mat4", 0).setName("lodSourceMatrices");
+    const sources = colors ? storage(colors, "vec4", 0).setName("lodSourceColors") : null;
+    const counts = storage(this.counts, "uint", 0).setName("lodCounts").toAtomic();
     const out = {
-      matrices: storage(slots.matrices, "mat4", slots.matrices.count).setName("lodSlotMatrices"),
-      fades: storage(slots.fades, "float", slots.fades.count).setName("lodSlotFades"),
-      colors: slots.colors && storage(slots.colors, "vec4", slots.colors.count).setName("lodSlotColors"),
+      matrices: storage(slots.matrices, "mat4", 0).setName("lodSlotMatrices"),
+      fades: storage(slots.fades, "float", 0).setName("lodSlotFades"),
+      colors: slots.colors && storage(slots.colors, "vec4", 0).setName("lodSlotColors"),
     };
     return Fn(() => {
       const m = matrices.element(instanceIndex).toVar();
-      const r = float(sphere.radius).mul(maxScale(m)).toVar();
+      const r = this.bounds.w.mul(maxScale(m)).toVar();
       If(r.equal(0), () => Return());
-      const centre = m.mul(vec4(sphere.center.x, sphere.center.y, sphere.center.z, 1)).xyz;
+      const centre = m.mul(vec4(this.bounds.xyz, 1)).xyz;
       const size = r.mul(2).mul(this.scale);
       const height = this.ortho
         .equal(uint(1))
@@ -268,19 +310,49 @@ export class Selection {
       If(this.forced.greaterThanEqual(0), () => void chosen.assign(this.forced));
       const t = float(0).toVar();
       If(this.fades.equal(uint(1)).and(chosen.greaterThan(0)), () => void t.assign(smoothstep(top.mul(1 - FADE), top, height)));
-      const deferred = this.fallback.some((target, level) => target !== level);
-      const selected = deferred ? chosen.toVar() : chosen;
+      const selected = chosen.toVar();
       const finer = chosen.sub(1).toVar();
-      if (deferred) {
-        this.fallback.forEach((target, level) => {
-          If(chosen.equal(level), () => {
-            selected.assign(target);
-            finer.assign(this.fallback[level - 1] ?? target);
-          });
+      const before = chosen.toVar();
+      const beforeFiner = chosen.sub(1).toVar();
+      this.routes.forEach((route, level) => {
+        If(chosen.equal(level), () => {
+          selected.assign(route);
+          finer.assign(this.routes[level - 1] ?? route);
+          before.assign(this.previous[level] ?? route);
+          beforeFiner.assign(this.previous[level - 1] ?? this.previous[level] ?? route);
         });
+      });
+      const afterFade = selected.equal(finer).select(float(0), t).toVar();
+      const beforeFade = before.equal(beforeFiner).select(float(0), t).toVar();
+      t.assign(afterFade);
+      // Mirrors residency.handover: only two slots per instance, including at a height boundary.
+      If(this.progress.lessThan(1).and(before.notEqual(selected).or(beforeFiner.notEqual(finer))), () => {
+        If(this.progress.lessThan(1 / 3), () => {
+          selected.assign(before);
+          finer.assign(beforeFiner);
+          t.assign(beforeFade.greaterThan(0).select(beforeFade.add(float(1).sub(beforeFade).mul(this.progress).mul(3)), float(0)));
+        })
+          .ElseIf(this.progress.lessThan(2 / 3), () => {
+            selected.assign(afterFade.greaterThan(0).select(finer, selected));
+            finer.assign(beforeFade.greaterThan(0).select(beforeFiner, before));
+            t.assign(float(1).sub(this.progress.sub(1 / 3).mul(3)));
+          })
+          .Else(() => {
+            t.assign(
+              afterFade.greaterThan(0).select(
+                float(1).sub(
+                  float(1)
+                    .sub(afterFade)
+                    .mul(this.progress.sub(2 / 3))
+                    .mul(3),
+                ),
+                float(0),
+              ),
+            );
+          });
         If(selected.equal(finer), () => void t.assign(0));
-      }
-      const emit = (level: number, first: number, fade: Node<"float">) => {
+      });
+      const emit = (level: number, first: Node<"uint">, fade: Node<"float">) => {
         const slot = atomicAdd(counts.element(level), uint(1)).add(first).toVar();
         out.matrices.element(slot).assign(m);
         out.fades.element(slot).assign(fade);
@@ -288,28 +360,28 @@ export class Selection {
       };
       this.first.forEach((first, level) => {
         if (first === null) return;
-        If(selected.equal(level), () => emit(level, first, t));
+        const start = this.starts[level];
+        if (!start) throw new Error("InstancedLod: missing level slot offset");
+        If(selected.equal(level), () => emit(level, start, t));
         // The finer neighbour fading out with it.
-        If(finer.equal(level).and(t.greaterThan(0)), () => emit(level, first, t.negate()));
+        If(finer.equal(level).and(t.greaterThan(0)), () => emit(level, start, t.negate()));
       });
     })().compute(count);
   }
 
   private handOverPass(): ComputeNode {
-    const counts = storage(this.counts, "uint", this.first.length).setName("lodCounts").toAtomic();
-    const args = storage(this.args, "uint", this.args.count).setName("lodDrawArgs");
+    const counts = storage(this.counts, "uint", 0).setName("lodCounts").toAtomic();
     return Fn(() => {
-      this.draws.forEach((draw, k) => {
-        const at = this.argsStart.add((k * ARGS_BYTES) / 4);
-        const first = this.first[draw.level];
-        if (first === null || first === undefined) throw new Error("InstancedLod: a draw of a level that draws nothing");
-        // A new/reused slice may already have a GPU page. Initialize its fixed fields
-        // here too; uploading the CPU page would erase other crowds' live counts.
-        args.element(at).assign(uint(draw.count));
-        args.element(at.add(1)).assign(atomicLoad(counts.element(draw.level)));
-        args.element(at.add(2)).assign(uint(draw.start));
-        args.element(at.add(3)).assign(uint(draw.indexed ? 0 : first));
-        args.element(at.add(4)).assign(uint(draw.indexed ? first : 0));
+      Loop({ start: uint(0), end: this.drawCount, type: "uint", condition: "<" }, ({ i }) => {
+        const draw = this.records.element(i).toVar();
+        const first = uint(0).toVar();
+        this.starts.forEach((value, level) => If(draw.x.equal(level), () => void first.assign(value)));
+        const at = this.argsStart.add(i.mul(ARGS_BYTES / 4));
+        this.arguments.element(at).assign(draw.y);
+        this.arguments.element(at.add(1)).assign(atomicLoad(counts.element(draw.x)));
+        this.arguments.element(at.add(2)).assign(draw.z);
+        this.arguments.element(at.add(3)).assign(draw.w.equal(1).select(uint(0), first));
+        this.arguments.element(at.add(4)).assign(draw.w.equal(1).select(first, uint(0)));
       });
       this.first.forEach((_, l) => atomicStore(counts.element(l), uint(0)));
     })().compute(1);

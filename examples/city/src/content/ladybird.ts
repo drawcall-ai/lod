@@ -103,6 +103,21 @@ export function ladybird(): THREE.Group {
   return group;
 }
 
+export function ladybirdMaterial(name: string, relief?: Uint8Array): THREE.Material | undefined {
+  switch (name) {
+    case "ladybird-black":
+      return blackMaterial();
+    case "ladybird-elytra":
+      return shellMaterial(relief);
+    case "ladybird-pronotum":
+      return pronotumMaterial();
+    case "ladybird-head":
+      return headMaterial();
+    default:
+      return undefined;
+  }
+}
+
 interface DomeShape {
   /** Half width and half length of the footprint (mm). */
   hw: number;
@@ -167,9 +182,11 @@ const blackMaterial = once(
 );
 
 /** Elytra: lacquer red with the spot pattern and a finely dimpled clear coat. */
-const shellMaterial = once(() => {
-  const relief = dimples(2048, 9000, 2.2, 0.0012);
-  return new THREE.MeshPhysicalMaterial({
+let shell: THREE.MeshPhysicalMaterial | undefined;
+function shellMaterial(pixels?: Uint8Array): THREE.MeshPhysicalMaterial {
+  if (shell) return shell;
+  const relief = pixels ? normalTexture(pixels, 2048) : dimples(2048, 9000, 2.2, 0.0012);
+  shell = new THREE.MeshPhysicalMaterial({
     name: "ladybird-elytra",
     map: paint(1024, (g, w) => {
       const base = g.createRadialGradient(w * 0.5, w * 0.45, w * 0.05, w * 0.5, w * 0.5, w * 0.55);
@@ -198,7 +215,8 @@ const shellMaterial = once(() => {
     clearcoat: 1,
     clearcoatRoughness: 0.15,
   });
-});
+  return shell;
+}
 
 /** Pronotum: black with the cream patches in its front corners. */
 const pronotumMaterial = once(
@@ -295,6 +313,11 @@ function dimples(size: number, count: number, radius: number, depth: number): TH
       data[i + 3] = 255;
     }
   }
+  return normalTexture(data, size);
+}
+
+function normalTexture(data: Uint8Array, size: number): THREE.DataTexture {
+  if (data.length !== size * size * 4) throw new Error("Invalid ladybird normal map");
   const t = new THREE.DataTexture(data, size, size, THREE.RGBAFormat, THREE.UnsignedByteType);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.generateMipmaps = true;

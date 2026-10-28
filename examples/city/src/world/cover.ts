@@ -1,15 +1,15 @@
 import * as THREE from "three/webgpu";
-import { Lod } from "@drawcall/lod";
-import { Stream } from "./stream.ts";
+import { float } from "three/tsl";
+import { InstancedLod, Lod, LodLoader, type Wind } from "@drawcall/lod";
+import { sourceBox } from "./bounds.ts";
 import { model } from "./cache.ts";
 import { Random } from "../content/random.ts";
 import { step } from "../loading.ts";
-import { foliageLevels } from "../content/foliage.ts";
+import { foliageLevels, foliageModel } from "../content/foliage.ts";
 import { MODEL_FOLIAGE, variants } from "../content/models.ts";
 import { type ClumpShape, grassClump, grassMaterial } from "../content/grass.ts";
 import { groundShading, type Zones } from "../content/terrain.ts";
 import { Use } from "./land.ts";
-import { culled, diameter, impostor, instanced } from "./levels.ts";
 import { Patches, reachFor, type Tiles } from "./patches.ts";
 import { type Plan, TOWN } from "./plan.ts";
 
@@ -75,76 +75,102 @@ const KINDS: Kind[] = [
   },
 ];
 
-export async function cover(plan: Plan, zones: Zones): Promise<Stream> {
-  const eye = new THREE.Vector3();
+export async function cover(plan: Plan, zones: Zones, wind?: Wind): Promise<THREE.Group> {
+  // Grass samples ground in the vertex stage, where pixel derivatives are unavailable.
+  const material = grassMaterial(groundShading(zones, float(0)));
+  const root = new THREE.Group();
+  root.name = "ground cover";
   const reference = new THREE.PerspectiveCamera(50);
-  // The original cull is size × referenceScale / reach. Size cancels when Patches
-  // converts it back to a reach for the current view; no plant geometry is needed.
-  const limits = KINDS.map((kind) => reachFor(reference, 1, kind.reach, 800, 1));
-  return new Stream(
-    "ground cover",
-    [],
-    () => buildCover(plan, zones),
-    (camera) => {
-      eye.setFromMatrixPosition(camera.matrixWorld);
-      const above = Math.max(0, eye.y - plan.terrain.height(eye.x, eye.z));
-      return limits.some((limit) => above <= reachFor(camera, 1, limit, Patches.height, Lod.quality) * (1 + 1e-7));
-    },
-    (root, wind) => {
-      for (const patches of root.children) {
-        if (!(patches instanceof Patches)) throw new Error("Ground cover contains a non-patch object");
-        for (const lod of patches.lods) {
-          const source = lod.levels[0];
-          if (!source) throw new Error("Ground cover has no source level");
-          const box = new THREE.Box3().setFromObject(source.object);
-          wind.apply(lod, { amplitude: (box.max.y - box.min.y) * 0.07 });
-        }
-      }
-    },
+  const loaded = await Promise.all(
+    KINDS.map(async (kind) => {
+      const models = await step(kind.name, () => ("grass" in kind ? grassModels(kind, material) : plantModels(kind)));
+      const boxes = models.map(sourceBox);
+      const size = Math.max(...boxes.map((box) => box.getSize(new THREE.Vector3()).length())) * kind.scale[1];
+      const cull = reachFor(reference, size, kind.reach, 800, 1);
+      const chunks = Math.ceil((Math.PI * (2 * kind.reach + TILE) ** 2) / (TILE * TILE));
+      const tiles = new GroundTiles(plan, kind.density, where(plan, kind.ground), kind.scale, models.length);
+      const lods = models.map((model, variant) => {
+        const middle = model.levels[1];
+        const empty = model.levels[2];
+        const box = boxes[variant];
+        if (!middle || !empty || !box) throw new Error(`${kind.name}: incomplete cover levels`);
+        middle.maxPixels = "grass" in kind ? cull * 4 : 64;
+        empty.maxPixels = cull;
+        const lod = new InstancedLod(model, chunks * tiles.perKind);
+        lod.name = `${kind.name} ${variant + 1}`;
+        wind?.apply(lod, { amplitude: (box.max.y - box.min.y) * 0.07 });
+        return lod;
+      });
+      const patches = new Patches(
+        lods,
+        lods.map(() => tiles.perKind),
+        chunks,
+        tiles,
+        (camera) => reachFor(camera, size, cull, Patches.height, Lod.quality),
+      );
+      patches.name = kind.name;
+      return patches;
+    }),
+  );
+  root.add(...loaded);
+  return root;
+}
+
+async function plantModels(kind: Kind & { id: string; groups: string[][] }): Promise<Lod[]> {
+  const loader = new LodLoader();
+  return Promise.all(
+    variants(kind.id, kind.groups).map((source, variant) =>
+      loader.loadAsync({
+        source,
+        reference: true,
+        key: model(kind.id, variant, kind.groups),
+        levels: [
+          { type: "impostor", layout: "hemi", resolution: 64, maxPixels: 64 },
+          { type: "empty", maxPixels: 1 },
+        ],
+        restore: (object) => {
+          foliageModel(object, MODEL_FOLIAGE);
+          foliageLevels(object, MODEL_FOLIAGE);
+          object.traverse((node) => {
+            node.castShadow = false;
+            node.receiveShadow = true;
+          });
+        },
+      }),
+    ),
   );
 }
 
-async function buildCover(plan: Plan, zones: Zones): Promise<Patches[]> {
-  const ground = groundShading(zones);
-  const material = grassMaterial(ground);
-  const all: Patches[] = [];
-  for (const kind of KINDS) {
-    const sources = "grass" in kind ? grassPatches(kind.grass, kind.designs, material) : await variants(kind.id, kind.groups);
-    const size = Math.max(...sources.map(diameter)) * kind.scale[1];
-    const view = new THREE.PerspectiveCamera(50);
-    // the measure is symmetric: given a distance, it returns the on-screen height there
-    const cull = reachFor(view, size, kind.reach, 800, 1);
-    // tiles that can be within reach on a 1600 px tall view
-    const chunks = Math.ceil((Math.PI * (2 * kind.reach + TILE) ** 2) / (TILE * TILE));
-    const tiles = new GroundTiles(plan, kind.density, where(plan, kind.ground), kind.scale, sources.length);
-    const perTile = tiles.perKind;
-    const lods = await step(kind.name, () =>
-      Promise.all(
-        sources.map(async (source, variant) => {
-          const levels =
-            "grass" in kind
-              ? [{ object: thinned(source), maxPixels: cull * 4 }, culled(cull)]
-              : [impostor(source, { dependencies: model(kind.id, variant, kind.groups), resolution: 64, maxPixels: 64 }), culled(cull)];
-          // a tuft's shadow is a dark speck on the ground that the terrain lacks further
-          // out, where the tufts are gone: they receive shadows but cast none
-          for (const level of [source, ...levels.map((l) => l.object)]) level.traverse((o) => (o.castShadow = false));
-          const lod = instanced(kind.name, source, levels, chunks * perTile);
-          foliageLevels(lod, MODEL_FOLIAGE);
-          return lod;
-        }),
-      ),
-    );
-    const patches = new Patches(
-      lods,
-      lods.map(() => perTile),
-      chunks,
-      tiles,
-      (camera) => reachFor(camera, size, cull, Patches.height, Lod.quality),
-    );
-    patches.name = kind.name;
-    all.push(patches);
-  }
-  return all;
+async function grassModels(kind: Kind & { grass: ClumpShape; designs: number }, material: THREE.Material): Promise<Lod[]> {
+  return Promise.all(
+    Array.from({ length: kind.designs }, async (_, variant) => {
+      const dependencies = {
+        generator: { path: "src/content/grass.ts" },
+        cover: { path: "src/world/cover.ts" },
+        random: { path: "src/content/random.ts" },
+        shape: { value: { ...kind.grass, variant } },
+      };
+      let source: THREE.Mesh | undefined;
+      const make = () => {
+        if (source) return source;
+        source = new THREE.Mesh(grassClump(variant + 1, kind.grass), material);
+        source.receiveShadow = true;
+        return source;
+      };
+      return new LodLoader().loadAsync({
+        source: async () => make(),
+        key: dependencies,
+        material: (name) => {
+          if (name !== "grass") throw new Error(`Unknown grass material ${name}`);
+          return material;
+        },
+        levels: [
+          { type: "mesh", source: async () => thinned(make()), maxPixels: 512 },
+          { type: "empty", maxPixels: 1 },
+        ],
+      });
+    }),
+  );
 }
 
 /** Which ground a kind grows on, as a test on x, z. */
@@ -153,15 +179,6 @@ function where(plan: Plan, ground: Ground): (x: number, z: number) => boolean {
   if (ground === "forest") return (x, z) => plan.land.at(x, z) === Use.Forest;
   if (ground === "garden") return (x, z) => plan.land.at(x, z) === Use.Lawn && inTown(x, z);
   return (x, z) => plan.land.at(x, z) === Use.Lawn && !inTown(x, z);
-}
-
-/** `designs` different patches of blades, each a mesh with the grass material. */
-function grassPatches(shape: ClumpShape, designs: number, material: THREE.Material): THREE.Object3D[] {
-  return Array.from({ length: designs }, (_, d) => {
-    const mesh = new THREE.Mesh(grassClump(d + 1, shape), material);
-    mesh.receiveShadow = true;
-    return mesh;
-  });
 }
 
 /** A patch's middle level: every third blade, spread wider so the patch keeps its cover. */

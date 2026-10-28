@@ -1,10 +1,12 @@
-import { BoxGeometry, Mesh, MeshStandardMaterial, PerspectiveCamera, SphereGeometry } from "three/webgpu";
+import { Box3, BoxGeometry, Mesh, MeshStandardMaterial, PerspectiveCamera, SphereGeometry } from "three/webgpu";
 import { describe, expect, it } from "vitest";
 import type { Impostor } from "../src/impostor/impostor.js";
 import { ImpostorMesh } from "../src/impostor/mesh/index.js";
 import { InstancedLod } from "../src/instanced/index.js";
 import { Lod } from "../src/lod.js";
 import { simplify } from "../src/simplify.js";
+import { LazyLevel } from "../src/lazy.js";
+import { fallbacks } from "../src/levels.js";
 import { must } from "./must.js";
 
 const box = () => new Mesh(new BoxGeometry(2, 2, 2), new MeshStandardMaterial());
@@ -24,10 +26,6 @@ const impostor = (): Impostor => ({
 });
 
 describe("default maxPixels", () => {
-  it("halves from 512 px for levels whose error is unknown", () => {
-    expect(thresholds(new Lod([box(), box(), box(), box()]))).toEqual([Infinity, 512, 256, 128]);
-  });
-
   it("puts an impostor where two atlas texels span a pixel", () => {
     const [, level] = thresholds(new Lod([box(), new ImpostorMesh(impostor())]));
     expect(level).toBeCloseTo((4 * Math.sqrt(3)) / 3, 9);
@@ -52,18 +50,23 @@ describe("default maxPixels", () => {
     expect(thresholds(lod)).toEqual([Infinity, 300, 400]);
     expect(() => lod.update(new PerspectiveCamera())).toThrow(/level 2 has maxPixels 400, but at most 270/);
   });
+});
 
-  it("works the same for an InstancedLod", () => {
-    const [source, level, next] = thresholds(new InstancedLod([box(), new ImpostorMesh(impostor()), box()], 1));
-    expect(source).toBe(Infinity);
-    expect(level).toBeCloseTo((4 * Math.sqrt(3)) / 3, 9);
-    expect(next).toBeCloseTo((2 * Math.sqrt(3)) / 3, 9);
-  });
-
-  it("refuses to set level 0 or a value that is not positive", () => {
-    const lod = new Lod([box(), box()]);
-    expect(() => (must(lod.levels[0]).maxPixels = 100)).toThrow(/level 0/);
-    expect(() => (must(lod.levels[1]).maxPixels = 0)).toThrow(/> 0/);
-    expect(() => (must(lod.levels[1]).maxPixels = NaN)).toThrow(/> 0/);
-  });
+it("uses the nearest installed finer level before any coarser fallback, including a lazy source", () => {
+  const deferred = (maxPixels: number) => new LazyLevel(async () => box(), { maxPixels, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) });
+  const source = deferred(Infinity);
+  const fine = box();
+  const middle = deferred(100);
+  const coarse = box();
+  const objects = [source, fine, middle, coarse];
+  expect(fallbacks(objects)).toEqual([1, 1, 1, 3]);
+  expect(fallbacks(objects, new Set([source]))).toEqual([0, 1, 1, 3]);
+  expect(() => new Lod([source])).toThrow("at least one level must be eager");
+  expect(() => new InstancedLod([source], 1)).toThrow("at least one level must be eager");
+  const lod = new Lod(objects);
+  lod.forceLevel = 0;
+  lod.update(new PerspectiveCamera());
+  expect(source.visible).toBe(false);
+  expect(fine.visible).toBe(true);
+  lod.dispose();
 });

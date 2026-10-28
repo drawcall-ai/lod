@@ -1,7 +1,6 @@
 import * as THREE from "three/webgpu";
 import { Foliage, type FoliageOptions, foliage } from "../foliage.ts";
 import { MeshBuilder } from "../geometry.ts";
-import { once } from "../materials.ts";
 import { Random } from "../random.ts";
 
 /** Base, body and tip colours (sRGB) of a blade, plus its midrib. */
@@ -20,14 +19,25 @@ const dry: Palette = { base: "#a0905a", body: "#b39a62", tip: "#8a6e44", rib: "#
 export const LEAF_FOLIAGE: FoliageOptions = { translucency: 0.75 };
 
 /** Living maize blades; per-leaf variation comes through vertex colours. */
-export const leafMaterial = once(() => bladeMaterial("corn-leaf", green, LEAF_FOLIAGE));
+export const leafMaterial = (pixels?: BladePixels) => bladeMaterial("corn-leaf", green, LEAF_FOLIAGE, pixels);
 /** Dead lower leaves: straw coloured, hardly translucent. */
-export const dryLeafMaterial = once(() => bladeMaterial("corn-leaf-dry", dry, { translucency: 0.25 }));
+export const dryLeafMaterial = (pixels?: BladePixels) => bladeMaterial("corn-leaf-dry", dry, { translucency: 0.25 }, pixels);
 /** Ear husks: paler and more yellow than the blades, with the same parallel fibres. */
-export const huskMaterial = once(() => bladeMaterial("corn-husk", husk, { translucency: 0.6 }));
+export const huskMaterial = (pixels?: BladePixels) => bladeMaterial("corn-husk", husk, { translucency: 0.6 }, pixels);
 
-function bladeMaterial(name: string, palette: Palette, shading: FoliageOptions): Foliage {
-  const { color, normal } = bladeTextures(palette);
+export interface BladePixels {
+  color: Uint8Array;
+  normal: Uint8Array;
+}
+
+const materials = new Map<string, Foliage>();
+
+function bladeMaterial(name: string, palette: Palette, shading: FoliageOptions, pixels?: BladePixels): Foliage {
+  const cached = materials.get(name);
+  if (cached) return cached;
+  const { color, normal } = pixels
+    ? { color: dataTexture(pixels.color, THREE.SRGBColorSpace), normal: dataTexture(pixels.normal, THREE.NoColorSpace) }
+    : bladeTextures(palette);
   const m = new Foliage({
     name,
     map: color,
@@ -41,10 +51,12 @@ function bladeMaterial(name: string, palette: Palette, shading: FoliageOptions):
     sheenColor: new THREE.Color("#b9d98a"),
     side: THREE.DoubleSide,
   });
+  materials.set(name, m);
   return foliage(m, shading);
 }
 
-const size = 2048;
+export const LEAF_SIZE = 2048;
+const size = LEAF_SIZE;
 
 /**
  * Colour and normal maps of a blade (u across, v from collar to tip), computed per texel so
@@ -120,6 +132,7 @@ function bladeTextures(palette: Palette): { color: THREE.DataTexture; normal: TH
 }
 
 function dataTexture(data: Uint8Array, colorSpace: THREE.ColorSpace): THREE.DataTexture {
+  if (data.length !== size * size * 4) throw new Error("Invalid corn leaf pixels");
   const t = new THREE.DataTexture(data, size, size, THREE.RGBAFormat, THREE.UnsignedByteType);
   t.colorSpace = colorSpace;
   t.wrapS = THREE.RepeatWrapping;
@@ -158,7 +171,7 @@ function hash(x: number, y: number): number {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 
-export interface LeafShape {
+interface LeafShape {
   length: number;
   width: number;
   /** Angle of the blade's base from vertical (radians). */

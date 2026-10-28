@@ -1,5 +1,5 @@
 import { Box3, Matrix4, Sphere, Vector3, type Mesh, type Object3D } from "three/webgpu";
-import { isBatchedMesh, isImpostorMesh, isInstancedLod, isInstancedMesh, isLOD, isMesh } from "./three.js";
+import { isBatchedMesh, isImpostorMesh, isInstancedLod, isInstancedMesh, isLOD, isMesh, isLazyLevel } from "./three.js";
 
 // What an object is at full detail: its meshes, where they sit and the vertices they draw.
 
@@ -87,11 +87,39 @@ export function forEachVertex(root: Object3D, visit: (p: Vector3) => void): void
   });
 }
 
-/** Bounds of every vertex that draws at full detail, in `root`'s own space. */
+/** Conservative full-detail bounds from cached geometry boxes and lazy metadata, in the root's space. */
 export function boundingBox(root: Object3D): Box3 {
   const box = new Box3();
-  forEachVertex(root, (p) => box.expandByPoint(p));
+  boxes(root, new Matrix4(), box);
   return box;
+}
+
+function boxes(node: Object3D, placement: Matrix4, box: Box3): void {
+  if (isLazyLevel(node)) {
+    box.union(node.box.clone().applyMatrix4(placement));
+    return;
+  }
+  if (isInstancedLod(node)) {
+    const source = node.levels[0]?.object;
+    if (!source) return;
+    const instance = new Matrix4();
+    for (let i = 0; i < node.count; i++) boxes(source, local(source).premultiply(node.getMatrixAt(i, instance)).premultiply(placement), box);
+    return;
+  }
+  if (isMesh(node) && [node.material].flat().some((material) => material.visible && material.colorWrite)) {
+    if (isBatchedMesh(node)) {
+      if (!node.boundingBox) node.computeBoundingBox();
+      if (node.boundingBox) box.union(node.boundingBox.clone().applyMatrix4(placement));
+    } else {
+      if (!node.geometry.boundingBox) node.geometry.computeBoundingBox();
+      const own = node.geometry.boundingBox;
+      if (own && (isInstancedMesh(node) || isImpostorMesh(node))) {
+        const instance = new Matrix4();
+        for (let i = 0; i < node.count; i++) box.union(own.clone().applyMatrix4(node.getMatrixAt(i, instance).premultiply(placement)));
+      } else if (own) box.union(own.clone().applyMatrix4(placement));
+    }
+  }
+  for (const child of detailed(node)) boxes(child, local(child).premultiply(placement), box);
 }
 
 /** The centre and half diagonal of `boundingBox(root)`: an impostor baked from `root` has the same box. */
@@ -116,4 +144,18 @@ export function measureLevels(levels: readonly Object3D[], who: string): { own: 
     return { own, placed: own.clone().applyMatrix4(level.matrix) };
   }
   throw new Error(`${who}: no level has visible geometry to measure`);
+}
+
+/** Fill absent mesh bounds conservatively from a lazy level's declared box, without reading vertices. */
+export function prepareBounds(root: Object3D, box: Box3): void {
+  const visit = (node: Object3D, placement: Matrix4): void => {
+    if (isMesh(node)) {
+      if (placement.determinant() === 0) throw new Error("LazyLevel: mesh placement must be invertible");
+      const geometry = node.geometry;
+      geometry.boundingBox ??= box.clone().applyMatrix4(placement.clone().invert());
+      geometry.boundingSphere ??= geometry.boundingBox.getBoundingSphere(new Sphere());
+    }
+    for (const child of node.children) visit(child, local(child).premultiply(placement));
+  };
+  visit(root, local(root));
 }

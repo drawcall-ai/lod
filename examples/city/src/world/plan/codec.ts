@@ -1,29 +1,43 @@
-import { Vector2 } from "three/webgpu";
+import { number, record } from "../data.ts";
+import { MeshBasicMaterial, Vector2 } from "three/webgpu";
+import { encode as encodeGeometry, decode as decodeGeometry } from "./geometry.ts";
+import { roadShapes, restoreRoadShapes } from "../roads.ts";
 import { Land } from "../land.ts";
 import { Terrain } from "../terrain.ts";
 import { houseVariants, type Plan, type Spot, type Rect, type Road } from "../plan.ts";
 
-type Files = Record<"layout" | "heights" | "cells" | "parcels", Uint8Array>;
+type Files = Record<string, Uint8Array>;
 
-export function encode(world: Plan): Files {
+export async function encode(world: Plan): Promise<Files> {
   const { terrain, land, variants: _, models, garden, signs, ...layout } = world;
-  return {
-    layout: new TextEncoder().encode(JSON.stringify({ ...layout, models: [...models], garden: [...garden], signs: [...signs] })),
-    heights: new Uint8Array(terrain.heights.buffer, terrain.heights.byteOffset, terrain.heights.byteLength),
-    cells: land.cells,
-    parcels: land.parcels,
-  };
+  const material = new MeshBasicMaterial();
+  const files: Files = {};
+  const geometries = { terrain: terrain.mesh(material).geometry, ...roadShapes(world) };
+  for (const [name, geometry] of Object.entries(geometries)) encodeGeometry(geometry, name, files);
+  material.dispose();
+  return transform(
+    {
+      ...files,
+      layout: new TextEncoder().encode(JSON.stringify({ ...layout, models: [...models], garden: [...garden], signs: [...signs] })),
+      heights: new Uint8Array(terrain.heights.buffer, terrain.heights.byteOffset, terrain.heights.byteLength),
+      cells: land.cells,
+      parcels: land.parcels,
+    },
+    () => new CompressionStream("gzip"),
+  );
 }
 
-export function decode(files: Files): Plan {
-  const value: unknown = JSON.parse(new TextDecoder().decode(files.layout));
+export async function decode(files: Files): Promise<Plan> {
+  files = await transform(files, () => new DecompressionStream("gzip"));
+  const value: unknown = JSON.parse(new TextDecoder().decode(required(files, "layout")));
   const data = record(value);
-  const heights = files.heights;
+  const heights = required(files, "heights");
   if (heights.byteLength % 4) throw new Error("Invalid terrain bytes");
+  const geometry = (name: string) => decodeGeometry(name, files);
   const variants = houseVariants();
-  return {
-    terrain: new Terrain(new Float32Array(heights.slice().buffer)),
-    land: new Land(files.cells, files.parcels),
+  const world: Plan = {
+    terrain: new Terrain(new Float32Array(heights.slice().buffer), geometry("terrain")),
+    land: new Land(required(files, "cells"), required(files, "parcels")),
     variants,
     roads: list(data.roads, road),
     plaza: rect(data.plaza),
@@ -45,16 +59,33 @@ export function decode(files: Files): Plan {
     signs: spots(data.signs),
     models: spots(data.models),
   };
+  restoreRoadShapes(world, {
+    asphalt: geometry("asphalt"),
+    tracks: geometry("tracks"),
+    pavements: geometry("pavements"),
+    beds: geometry("beds"),
+    plaza: geometry("plaza"),
+  });
+  return world;
 }
 
-function record(value: unknown): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("Invalid plan object");
-  return Object.fromEntries(Object.entries(value));
+async function transform(files: Files, stream: () => CompressionStream | DecompressionStream): Promise<Files> {
+  return Object.fromEntries(
+    await Promise.all(
+      Object.entries(files).map(async ([name, bytes]) => [
+        name,
+        new Uint8Array(await new Response(new Blob([bytes.slice()]).stream().pipeThrough(stream())).arrayBuffer()),
+      ]),
+    ),
+  );
 }
-function number(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) throw new Error("Invalid plan number");
-  return value;
+
+function required(files: Files, name: string): Uint8Array {
+  const bytes = files[name];
+  if (!bytes) throw new Error(`Missing cached plan ${name}`);
+  return bytes;
 }
+
 function list<T>(value: unknown, read: (value: unknown) => T): T[] {
   if (!Array.isArray(value)) throw new Error("Invalid plan list");
   return value.map(read);

@@ -1,43 +1,70 @@
 import * as THREE from "three/webgpu";
-import { Lod } from "@drawcall/lod";
-import { cornPlant, leafMaterial } from "../content/corn/index.ts";
-import { ladybird } from "../content/ladybird.ts";
-import { culled, thresholds } from "./levels.ts";
+import { Lod, LodLoader, type LodLevel } from "@drawcall/lod";
+import { cornPlant } from "../content/corn/index.ts";
+import { ladybird, ladybirdMaterial } from "../content/ladybird.ts";
+import { bundle, file, proceduralFiles } from "./cache.ts";
+import { prepare, material, foliage } from "./corn/materials.ts";
+import * as pixels from "./pixels.ts";
 import type { Terrain } from "./terrain.ts";
 
 const UP = new THREE.Vector3(0, 1, 0);
 
-/**
- * The hero plant, a `Lod` of its own: finely tessellated leaves up close, then the same
- * impostor as its variant in the field. The ladybird sits on its flattest leaf near
- * mid-height, a `Lod` of the beetle and nothing (it is gone below two pixels).
- */
-export function heroPlant(
+/** The seat and source geometry are authored only on a cache miss; materials are reconstructed on demand. */
+export async function heroPlant(
   spot: { at: THREE.Vector3; yaw: number; seed: number },
-  far: { object: THREE.Object3D; maxPixels?: number },
+  far: readonly LodLevel[],
   terrain: Terrain,
-): { hero: Lod; ladybird: Lod } {
-  const detail = cornPlant(spot.seed, { leafSegments: [192, 24] });
-  // before the Lod replaces the materials with its faded copies
-  const seat = leafSeat(detail);
-  const distant = far.object.clone();
-  distant.castShadow = distant.receiveShadow = false;
-  const lod = thresholds(new Lod([detail, distant, new THREE.Group()]), [far, culled(1)]);
-  lod.name = "hero corn plant";
-  lod.position.set(spot.at.x, terrain.height(spot.at.x, spot.at.z), spot.at.z);
-  lod.rotation.y = spot.yaw;
-  lod.updateMatrixWorld(true);
-
-  const beetle = ladybird();
-  const holder = new THREE.Group();
-  holder.position.copy(seat.point);
-  holder.quaternion.setFromUnitVectors(UP, seat.normal);
-  holder.add(beetle);
-  beetle.rotation.y = seat.heading;
-  holder.applyMatrix4(lod.matrixWorld);
-  const bug = thresholds(new Lod([holder, new THREE.Group()]), [culled(2)]);
-  bug.name = "ladybird";
-  return { hero: lod, ladybird: bug };
+): Promise<{ hero: Lod; ladybird: Lod; anchors: { hero: THREE.Vector3; ladybird: THREE.Vector3 } }> {
+  const at = new THREE.Vector3(spot.at.x, terrain.height(spot.at.x, spot.at.z), spot.at.z);
+  const key = {
+    ...proceduralFiles("src/world/hero.ts", { seed: spot.seed, at: at.toArray(), yaw: spot.yaw }, []),
+    materials: { path: "src/world/corn/materials.ts" },
+  };
+  let detail: THREE.Object3D | undefined;
+  const plantRequest = {
+    source: async () => {
+      await prepare();
+      return (detail ??= cornPlant(spot.seed, { leafSegments: [192, 24] }));
+    },
+    material,
+    key: { ...key, kind: { value: "hero" } },
+    levels: [],
+    restore: foliage,
+  };
+  const bugRequest = {
+    source: async () => {
+      const seat = leafSeat(await plantRequest.source());
+      await bugMaterial("ladybird-elytra");
+      const bug = ladybird();
+      const holder = new THREE.Group();
+      holder.position.copy(seat.point);
+      holder.quaternion.setFromUnitVectors(UP, seat.normal);
+      holder.add(bug);
+      bug.rotation.y = seat.heading;
+      holder.applyMatrix4(new THREE.Matrix4().compose(at, new THREE.Quaternion().setFromAxisAngle(UP, spot.yaw), new THREE.Vector3(1, 1, 1)));
+      return holder;
+    },
+    key: { ...key, kind: { value: "ladybird" } },
+    material: bugMaterial,
+    levels: [],
+  };
+  const loader = new LodLoader();
+  const [plant, bug] = await Promise.all([loader.loadLevelsAsync(plantRequest), loader.loadLevelsAsync(bugRequest)]);
+  const source = plant[0],
+    insectSource = bug[0];
+  if (!source || !insectSource) throw new Error("Hero assets have no source level");
+  const distant = far.map((level) => {
+    const object = level.object.clone();
+    object.castShadow = object.receiveShadow = false;
+    return { object, maxPixels: level.maxPixels };
+  });
+  const hero = new Lod([source, ...distant, { object: new THREE.Group(), maxPixels: 1 }]);
+  hero.name = "hero corn plant";
+  hero.position.copy(at);
+  hero.rotation.y = spot.yaw;
+  const insect = new Lod([insectSource, { object: new THREE.Group(), maxPixels: 2 }]);
+  insect.name = "ladybird";
+  return { hero, ladybird: insect, anchors: { hero: at, ladybird: insectSource.object.position.clone() } };
 }
 
 /**
@@ -45,7 +72,7 @@ export function heroPlant(
  * squarely up, between 1 and 1.6 m high, near the midrib and a third of the way out.
  */
 function leafSeat(plant: THREE.Object3D): { point: THREE.Vector3; normal: THREE.Vector3; heading: number } {
-  const leaves = plant.children.find((c): c is THREE.Mesh => c instanceof THREE.Mesh && c.material === leafMaterial());
+  const leaves = plant.children.find((c): c is THREE.Mesh => c instanceof THREE.Mesh && !Array.isArray(c.material) && c.material.name === "corn-leaf");
   if (!leaves) throw new Error("corn plant has no leaf mesh");
   const position = leaves.geometry.getAttribute("position");
   const normal = leaves.geometry.getAttribute("normal");
@@ -69,4 +96,25 @@ function leafSeat(plant: THREE.Object3D): { point: THREE.Vector3; normal: THREE.
   // face along the blade: toward the next vertex outward
   const ahead = new THREE.Vector3().fromBufferAttribute(position, Math.min(best + 25, position.count - 1)).sub(point);
   return { point, normal: up, heading: Math.atan2(ahead.x, ahead.z) };
+}
+
+let shell: Promise<THREE.Material> | undefined;
+
+async function bugMaterial(name: string): Promise<THREE.Material | undefined> {
+  if (name !== "ladybird-elytra") return ladybirdMaterial(name);
+  return (shell ??= (async () => {
+    let made: THREE.Material | undefined;
+    const files = await bundle("ladybird-normal@1", { generator: { path: "src/content/ladybird.ts" } }, async () => {
+      const material = ladybirdMaterial(name);
+      if (!(material instanceof THREE.MeshPhysicalMaterial) || !(material.clearcoatNormalMap instanceof THREE.DataTexture))
+        throw new Error("Ladybird has no normal pixels");
+      const data: unknown = material.clearcoatNormalMap.image.data;
+      if (!(data instanceof Uint8Array)) throw new Error("Ladybird normal map requires byte pixels");
+      made = material;
+      return { normal: await pixels.encode(data) };
+    });
+    const material = made ?? ladybirdMaterial(name, await pixels.decode(file(files, "normal"), 2048 * 2048 * 4));
+    if (!material) throw new Error("Ladybird has no shell material");
+    return material;
+  })());
 }

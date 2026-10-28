@@ -7,10 +7,11 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-transform-types --test test/*.test.ts",
+    "test": "node --experimental-transform-types --test 'test/**/*.test.ts'",
     "assets": "node --experimental-strip-types --no-warnings scripts/fetch-assets.ts",
     "shots": "node --experimental-strip-types --no-warnings scripts/shots.ts",
-    "tour": "node --experimental-strip-types --no-warnings scripts/tour.ts"
+    "tour": "node --experimental-strip-types --no-warnings scripts/tour.ts",
+    "smooth": "node --experimental-strip-types --no-warnings scripts/smooth.ts"
   },
   "dependencies": {
     "@drawcall/lod": "workspace:*",

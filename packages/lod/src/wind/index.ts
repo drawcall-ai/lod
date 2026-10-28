@@ -22,9 +22,12 @@ export interface SwayOptions {
   height?: number;
 }
 
-const bindings = new WeakMap<Object3D, { wind: Wind; options: SwayOptions; refresh: () => void }>();
+const bindings = new WeakMap<Object3D, { wind: Wind; options: SwayOptions; refresh: (added: Object3D) => void }>();
 const attached = new WeakSet<Mesh>();
 const identity = new Matrix4();
+// Every wind's values are read per object. Sharing this node keeps attachments from
+// invalidating the same material when another region starts drawing its impostor.
+const impostorSway = swayMatrix();
 
 /**
  * A shared GPU breeze: an affine sway, fixed at the base and linear with height.
@@ -100,17 +103,10 @@ export class Wind {
   }
 
   /** Attach meshes installed by a lazy level; existing meshes retain their bounds. */
-  private attach(root: Object3D, { amplitude, baseY, height }: SwayOptions, refreshing: boolean): void {
+  private attach(root: Object3D, { amplitude, baseY, height }: SwayOptions, refreshing: boolean, added = root, knownBox?: Box3): void {
     nonnegative(amplitude, "amplitude");
-    const box = sourceBox(root);
-    if (box.isEmpty()) throw new Error("Wind: object has no geometry");
-    const base = baseY ?? box.min.y;
-    const size = height ?? box.max.y - base;
-    finite(base, "baseY");
-    finite(size, "height");
-    if (size <= 0) throw new Error("Wind: height must be positive");
     const meshes: Mesh[] = [];
-    root.traverse((node) => {
+    added.traverse((node) => {
       if (node !== root && isLOD(node)) throw new Error("Wind: apply to nested LODs individually");
       if (!isMesh(node)) return;
       if (refreshing && attached.has(node)) return;
@@ -132,7 +128,7 @@ export class Wind {
       if (refreshing) return;
       throw new Error("Wind: object has no meshes");
     }
-    root.updateWorldMatrix(true, true);
+    added.updateWorldMatrix(true, true);
     invertible(root.matrixWorld);
     const inverse = root.matrixWorld.clone().invert();
     const placed = meshes.map((mesh) => {
@@ -142,20 +138,29 @@ export class Wind {
       invertible(placement);
       return { mesh, placement };
     });
+    const box = knownBox ?? sourceBox(root);
+    if (box.isEmpty()) throw new Error("Wind: object has no geometry");
+    const base = baseY ?? box.min.y;
+    const size = height ?? box.max.y - base;
+    finite(base, "baseY");
+    finite(size, "height");
+    if (size <= 0) throw new Error("Wind: height must be positive");
     const shape = new Vector2(amplitude / size, base);
     const padding = (amplitude * Math.max(Math.abs(box.min.y - base), Math.abs(box.max.y - base))) / size;
-    if (hasBounds(root) && (!refreshing || isInstancedLod(root))) root[WIND_BOUNDS](padding, amplitude / size, base);
+    if (hasBounds(root) && !refreshing) root[WIND_BOUNDS](padding, amplitude / size, base);
     for (const { mesh, placement } of placed) {
       if (!isInstancedLod(root)) windBounds(mesh, placement, amplitude, base, size);
       setSway(mesh, { breeze: this.breeze, shape, placement, fromRoot: placement.clone().invert() });
       if (isImpostorMesh(mesh)) {
-        mesh.material.deformNode = swayMatrix();
-        mesh.material.needsUpdate = true;
+        if (mesh.material.deformNode !== impostorSway) {
+          mesh.material.deformNode = impostorSway;
+          mesh.material.needsUpdate = true;
+        }
       } else mesh.material = Array.isArray(mesh.material) ? mesh.material.map((m) => levelMaterial(m, true)) : levelMaterial(mesh.material, true);
       attached.add(mesh);
     }
     const options = { amplitude, baseY: base, height: size };
-    bindings.set(root, { wind: this, options, refresh: () => this.attach(root, options, true) });
+    bindings.set(root, { wind: this, options, refresh: (next) => this.attach(root, options, true, next, box) });
   }
 }
 
@@ -201,7 +206,7 @@ export function copyWind(source: Object3D, target: Object3D): void {
   if (binding) binding.wind.apply(target, binding.options);
 }
 
-export function refreshWind(root: Object3D): void {
+export function refreshWind(root: Object3D, added: Object3D = root): void {
   const binding = bindings.get(root);
-  binding?.refresh();
+  binding?.refresh(added);
 }

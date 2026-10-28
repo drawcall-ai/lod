@@ -1,7 +1,6 @@
 import * as THREE from "three/webgpu";
 import { Fn, cameraPosition, distance, mix, modelWorldMatrix, positionLocal, smoothstep, uniform, vec3, vec4 } from "three/tsl";
-import { InstancedLod } from "@drawcall/lod";
-import { baked, diameter, instanced } from "../levels.ts";
+import { bakeMesh, boundingBox, InstancedLod } from "@drawcall/lod";
 import { BLOCK, type Plant, plantTurn, ROWS, type Tile, vigour } from "./field.ts";
 
 /**
@@ -48,7 +47,7 @@ export async function bakeCovers(designs: Plant[][], plants: { tasselled: THREE.
   return Promise.all([...canopies, ...walls]);
 }
 
-/** Build the original cover levels from raw bakeMesh results, freshly baked or decoded. */
+/** Build cover levels from raw bakeMesh results, freshly baked or decoded. */
 export function coverLevels(bakes: THREE.Mesh[], tiles: Tile[], skirt: Skirt): Cover[] {
   const designs = bakes.length - 2;
   if (designs < 1) throw new Error("Corn covers need canopies and two walls");
@@ -65,7 +64,7 @@ export function coverLevels(bakes: THREE.Mesh[], tiles: Tile[], skirt: Skirt): C
         level.receiveShadow = true;
       }
       const places = tiles.filter((tile) => tile.design === index).map((tile) => ({ matrix: tile.matrix, at: tile.centre }));
-      return { lod: coverLod(`corn block ${index + 1}`, levels, places), diameter: diameter(ridged) };
+      return { lod: coverLod(`corn block ${index + 1}`, levels, places), diameter: boundingBox(ridged).getSize(new THREE.Vector3()).length() };
     }
     const axis = index === designs ? "x" : "z";
     const wall = new THREE.Mesh(bake.geometry, rising(material, skirt));
@@ -76,7 +75,7 @@ export function coverLevels(bakes: THREE.Mesh[], tiles: Tile[], skirt: Skirt): C
         .filter((side) => side.axis === axis)
         .map((side) => ({ matrix: side.turned ? tile.matrix.clone().multiply(turn) : tile.matrix, at: tile.centre })),
     );
-    return { lod: coverLod(`corn wall ${axis}`, [wall], places), diameter: diameter(wall) };
+    return { lod: coverLod(`corn wall ${axis}`, [wall], places), diameter: boundingBox(wall).getSize(new THREE.Vector3()).length() };
   });
 }
 
@@ -138,9 +137,7 @@ function ridge(z: number): number {
 
 /** `source` baked onto `low`. */
 async function bakeCover(source: THREE.Object3D, low: THREE.BufferGeometry): Promise<THREE.Mesh> {
-  const { object } = await baked(source, new THREE.Mesh(low), 256);
-  if (!(object instanceof THREE.Mesh)) throw new Error("A baked corn cover must be a mesh");
-  return object;
+  return bakeMesh(source, { low: new THREE.Mesh(low), textureSize: 256 });
 }
 
 function coverMaterial(bake: THREE.Mesh): THREE.MeshStandardNodeMaterial {
@@ -173,12 +170,8 @@ function rising(material: THREE.MeshStandardNodeMaterial, skirt: Skirt): THREE.M
 
 /** `levels` of a baked cover over `places`, after an empty level 0 (the plants show there); thresholds are set by `Corn.update`. */
 function coverLod(name: string, levels: THREE.Mesh[], places: { matrix: THREE.Matrix4; at: THREE.Vector3 }[]): InstancedLod {
-  const lod = instanced(
-    name,
-    new THREE.Object3D(),
-    levels.map((object) => ({ object })),
-    places.length,
-  );
+  const lod = new InstancedLod([new THREE.Object3D(), ...levels], places.length);
+  lod.name = name;
   places.forEach(({ matrix, at }, i) => {
     lod.setMatrixAt(i, matrix);
     lod.setColorAt(i, tint(at));

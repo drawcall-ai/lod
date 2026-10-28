@@ -1,6 +1,5 @@
 import * as THREE from "three/webgpu";
-import { Fn, attribute, cameraPosition, distance, dot, fract, mix, modelWorldMatrix, sin, smoothstep, step, vec2, vec3, vec4 } from "three/tsl";
-import { instanceMatrixOf } from "../../../../packages/lod/src/fade.ts";
+import { attribute, cameraPosition, distance, dot, fract, mix, positionWorld, sin, smoothstep, step, vec2, vec3, vec4 } from "three/tsl";
 import { Foliage, foliage } from "./foliage.ts";
 import { baseColor } from "./materials.ts";
 import { Random } from "./random.ts";
@@ -71,21 +70,18 @@ export function grassClump(seed: number, s: ClumpShape): THREE.BufferGeometry {
 }
 
 /**
- * Blades coloured by the ground they grow from (`ground` at their root, see
+ * Blades coloured by the ground beneath them (see
  * `groundShading`): darker at the base, a little lighter and drier at the tips, each
  * blade a touch different. Two-sided, translucent in the sun.
  */
 export function grassMaterial(ground: Ground): Foliage {
   const m = foliage(new Foliage({ name: "grass", roughness: 0.75, side: THREE.DoubleSide }), { translucency: 0.5 });
   const blade = attribute<"vec3">("blade", "vec3");
-  // the blade's root in the world, worked out per vertex: only there is the instance's matrix
-  const root = Fn((builder) => {
-    const instance = instanceMatrixOf(builder.object);
-    return (instance ? modelWorldMatrix.mul(instance) : modelWorldMatrix).mul(vec4(blade.x, 0, blade.y, 1)).xz;
-  })().toVarying("vRoot");
+  const root = positionWorld.xz;
   const along = blade.z;
   const seed = fract(sin(dot(blade.xy, vec2(127.1, 311.7))).mul(43758.5453));
-  const base = ground(root, distance(cameraPosition.xz, root)).toVar();
+  // Sample ground in the vertex stage so its texture reads and zone loops are not repeated per pixel.
+  const base = ground(root, distance(cameraPosition.xz, root)).toVarying("vGrassGround");
   const lift = mix(0.5, 1.25, smoothstep(0, 1, along));
   // one blade in six is dry: straw at the tip
   const dry = step(0.83, seed).mul(smoothstep(0.3, 1, along));

@@ -2,6 +2,7 @@ import * as THREE from "three/webgpu";
 import { box, Parts } from "./geometry.ts";
 import { surface } from "./materials.ts";
 
+const faces = new Map<string, THREE.MeshStandardMaterial>();
 const plate = { w: 0.76, h: 0.17, corner: 0.02, thick: 0.002 };
 
 /**
@@ -51,7 +52,9 @@ function roundedRect(w: number, h: number, r: number): THREE.Shape {
 }
 
 /** Reflective sheeting printed with a border and the street name, plus faint grime. */
-function faceMaterial(text: string): THREE.MeshStandardMaterial {
+export function faceMaterial(text: string): THREE.MeshStandardMaterial {
+  const cached = faces.get(text);
+  if (cached) return cached;
   const px = 1600;
   const w = px;
   const h = Math.round((px * plate.h) / plate.w);
@@ -81,5 +84,8 @@ function faceMaterial(text: string): THREE.MeshStandardMaterial {
   const t = new THREE.CanvasTexture(canvas);
   t.colorSpace = THREE.SRGBColorSpace;
   t.anisotropy = 8;
-  return new THREE.MeshStandardMaterial({ name: `sign-${text}`, map: t, roughness: 0.38, metalness: 0 });
+  const material = new THREE.MeshStandardMaterial({ name: "street-sign", map: t, roughness: 0.38, metalness: 0 });
+  material.userData.text = text;
+  faces.set(text, material);
+  return material;
 }

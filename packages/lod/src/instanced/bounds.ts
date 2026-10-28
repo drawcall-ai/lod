@@ -1,5 +1,5 @@
 import { Box3, Matrix4, Sphere, Vector3 } from "three/webgpu";
-import { FADE, type LodLevel } from "../levels.js";
+import { FADE, DEMAND, type LodLevel } from "../levels.js";
 import { Dirty } from "./dirty.js";
 
 // Cover float32 matrix products, distances and threshold arithmetic. Near a switch,
@@ -178,6 +178,37 @@ export class Bounds {
       if (measured) this.visit(1, levels, view);
       else for (const box of this.levelBoxes) box.copy(at(this.tree, 1).geometry);
     }
+    this.enclose(levels, view, reaches, root, measured, 1);
+    if (!this.complete) return undefined;
+    if (this.changed) this.token = {};
+    return this.token;
+  }
+
+  /** Ahead-of-view demand without changing solid selections or their reuse token. */
+  demand(levels: readonly LodLevel[], view: BoundsView, reaches: Sphere[], root: Matrix4): void {
+    while (this.levelBoxes.length < levels.length) this.levelBoxes.push(new Box3());
+    for (const box of this.levelBoxes) box.makeEmpty();
+    this.gather(1, levels, view);
+    this.enclose(levels, view, reaches, root, true, DEMAND);
+  }
+
+  private gather(index: number, levels: readonly LodLevel[], view: BoundsView): void {
+    const node = at(this.tree, index);
+    if (node.geometry.isEmpty()) return;
+    this.interval(node, view);
+    const high = this.high / DEMAND;
+    let finest = view.forced ?? (high === Infinity ? 0 : fitting(levels, high));
+    const coarsest = view.forced ?? fitting(levels, this.low);
+    if (view.fades && finest > 0 && high >= at(levels, finest).maxPixels * (1 - FADE) * (1 - ROUND)) finest--;
+    if (finest !== coarsest && index < this.leaves) {
+      this.gather(index * 2, levels, view);
+      this.gather(index * 2 + 1, levels, view);
+      return;
+    }
+    for (let level = finest; level <= coarsest; level++) at(this.levelBoxes, level).union(node.geometry);
+  }
+
+  private enclose(levels: readonly LodLevel[], view: BoundsView, reaches: Sphere[], root: Matrix4, measured: boolean, margin: number): void {
     const top = at(this.tree, 1);
     const axis = root.getMaxScaleOnAxis();
     // Three transforms a culling sphere by max-axis scale, which underbounds shear.
@@ -186,15 +217,12 @@ export class Bounds {
       enclosing(at(this.levelBoxes, level), sphere);
       const next = levels[level + 1];
       if (measured && !top.unsafe && !unsafe(view.scale) && view.eye.length() < 1e15 && !sphere.isEmpty() && !view.ortho && view.forced === null && next) {
-        const threshold = next.maxPixels * (view.fades ? 1 - FADE : 1);
+        const threshold = next.maxPixels * (view.fades ? 1 - FADE : 1) * margin;
         const radius = (2 * top.largest * view.scale * (1 + ROUND * 4)) / threshold + top.reach + view.eye.length() * ROUND;
         if (radius < sphere.radius) sphere.set(view.eye, radius);
       }
       if (!sphere.isEmpty()) sphere.radius *= dilation;
     });
-    if (!this.complete) return undefined;
-    if (this.changed) this.token = {};
-    return this.token;
   }
 
   private visit(index: number, levels: readonly LodLevel[], view: BoundsView): void {

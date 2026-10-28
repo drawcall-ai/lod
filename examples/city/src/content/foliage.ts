@@ -1,8 +1,6 @@
 import * as THREE from "three/webgpu";
 import { Fn, color, dFdx, dFdy, dot, log2, materialOpacity, max, normalView, positionViewDirection, pow, saturate, uv, vec2, vec3, vec4 } from "three/tsl";
-import { ImpostorMesh, InstancedLod, Lod } from "@drawcall/lod";
-import { isShadowPass } from "../../../../packages/lod/src/three.ts";
-import { isNodeOf } from "../../../../packages/lod/src/tsl.ts";
+import { ImpostorMesh } from "@drawcall/lod";
 import { baseColor } from "./materials.ts";
 
 export interface FoliageOptions {
@@ -21,6 +19,15 @@ export interface FoliageOptions {
 export class Foliage extends THREE.MeshPhysicalNodeMaterial {
   translucency = 0;
   readonly tint = new THREE.Color(1, 1, 1);
+
+  override copy(source: THREE.Material): this {
+    super.copy(source);
+    if (source instanceof Foliage) {
+      this.translucency = source.translucency;
+      this.tint.copy(source.tint);
+    }
+    return this;
+  }
 
   override setupLightingModel(): THREE.PhysicalLightingModel {
     return new Translucent(super.setupLightingModel(), this.translucency, this.tint);
@@ -69,16 +76,11 @@ export function foliageModel(root: THREE.Object3D, options: FoliageOptions): voi
 }
 
 const shaded = new WeakSet<THREE.Material>();
-const watched = new WeakSet<THREE.Object3D>();
 
-/** Applies leaf translucency to existing impostors and lazy ones as they arrive. */
+/** Restores leaf translucency on a decoded impostor before its material is compiled. */
 export function foliageLevels(root: THREE.Object3D, { translucency, tint = "#e4ff8a" }: FoliageOptions): void {
   const shade = new THREE.Color(tint);
   root.traverse((o) => {
-    if ((o instanceof Lod || o instanceof InstancedLod) && !watched.has(o)) {
-      watched.add(o);
-      o.addEventListener("levelschange", () => foliageLevels(o, { translucency, tint }));
-    }
     if (!(o instanceof ImpostorMesh)) return;
     const m = o.material;
     if (shaded.has(m)) return;
@@ -153,4 +155,12 @@ class Translucent extends THREE.PhysicalLightingModel {
   override ambientOcclusion(builder: THREE.NodeBuilder): void {
     this.lighting.ambientOcclusion(builder);
   }
+}
+
+function isShadowPass(material: unknown): boolean {
+  return typeof material === "object" && material !== null && Reflect.get(material, "isShadowPassMaterial") === true;
+}
+
+function isNodeOf<T extends "vec3" | "color">(node: THREE.Node, type: T, builder: THREE.NodeBuilder): node is THREE.Node<T> {
+  return node.getNodeType(builder) === type;
 }

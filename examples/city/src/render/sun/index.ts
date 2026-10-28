@@ -70,9 +70,9 @@ export class Sun {
     return [this.light, this.light.target];
   }
 
-  /** Registers current caster draws; refresh after lazy levels replace their meshes. */
+  /** Register new caster draws beneath this root without revisiting the rest of the scene. */
   castBy(root: THREE.Object3D): void {
-    if (this.casters) this.casters.refresh(root);
+    if (this.casters) this.casters.add(root);
     else this.casters = new Casters(root);
     for (const { light } of this.cascades) light.shadow.needsUpdate = true;
   }
@@ -143,17 +143,21 @@ export class Cascade {
     const z = Math.min(((near + far) * (1 + slope)) / 2, far);
     const spread = Math.sqrt(slope);
     const reach = Math.max(Math.hypot(z - near, near * spread), Math.hypot(far - z, far * spread));
+    centre.set(0, 0, -z).applyMatrix4(camera.matrixWorld);
+    const due = frame % this.setting.every === this.setting.phase;
+    // The rounded map has room for movement around the actual slice. Comparing two
+    // equally rounded spheres would discard that room whenever their centres move.
+    const holds = this.sphere.center.distanceTo(centre) + reach <= this.sphere.radius;
+    if (!due && holds) return;
+
     const radius = 2 ** (Math.ceil(Math.log2(reach) * 8) / 8);
     const texel = (2 * radius) / this.setting.size;
     // the centre snapped to the texel grid in the sun's frame
-    centre.set(0, 0, -z).applyMatrix4(camera.matrixWorld).applyMatrix4(toSun);
+    centre.applyMatrix4(toSun);
     centre.x = Math.round(centre.x / texel) * texel;
     centre.y = Math.round(centre.y / texel) * texel;
     centre.applyMatrix4(fromSun);
 
-    const due = frame % this.setting.every === this.setting.phase;
-    const holds = this.sphere.radius >= radius && this.sphere.center.distanceTo(centre) + radius <= this.sphere.radius * 1.0001;
-    if (!due && holds) return;
     this.sphere.set(centre, radius);
     this.drawn.texel = texel;
 

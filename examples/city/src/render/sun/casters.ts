@@ -60,23 +60,22 @@ export class Casters {
   /** Meshes that cast, largest first, with their size (m). */
   private readonly meshes: { mesh: THREE.Mesh; size: number; scale: number; batch?: Batch }[] = [];
 
-  private readonly intent = new WeakMap<THREE.Mesh, boolean>();
+  private readonly seen = new WeakSet<THREE.Mesh>();
+  private readonly scales = new Map<Batch, number>();
 
   /** Takes over every mesh under `root` that casts a shadow now. */
   constructor(root: THREE.Object3D) {
-    this.refresh(root);
+    this.add(root);
   }
 
-  /** Rebuild after lazy levels replace their draws, retaining original caster intent. */
-  refresh(root: THREE.Object3D): void {
-    this.meshes.length = 0;
+  /** Register only new draws beneath an arriving level or crowd. */
+  add(root: THREE.Object3D): void {
     root.updateMatrixWorld(true);
-    const scales = new Map<Batch, number>();
+    const scales = this.scales;
     root.traverse((node) => {
-      if (!(node instanceof THREE.Mesh)) return;
-      const casts = this.intent.get(node) ?? node.castShadow;
-      this.intent.set(node, casts);
-      if (!casts) return;
+      if (!(node instanceof THREE.Mesh) || this.seen.has(node)) return;
+      this.seen.add(node);
+      if (!node.castShadow) return;
       for (const material of [node.material].flat()) material.shadowSide = THREE.DoubleSide;
       const geometry: THREE.BufferGeometry = node.geometry;
       const part = geometry.getAttribute("cityShadowPart");
@@ -95,7 +94,6 @@ export class Casters {
       if (!sphere) throw new Error(`${node.name}: no bounding sphere`);
       this.meshes.push({ mesh: node, size: 2 * sphere.radius * scale, scale });
     });
-    this.meshes.sort((a, b) => b.size - a.size);
   }
 
   /** Lets only casters at least `size` metres across cast; returns how many of those draw now. */
@@ -104,9 +102,10 @@ export class Casters {
     for (const { mesh, size: own, scale, batch } of this.meshes) {
       if (batch) {
         let mask = 0;
-        batch.sizes.forEach((diameter, part) => {
-          if (diameter * scale >= size) mask |= 1 << part;
-        });
+        for (let part = 0; part < batch.sizes.length; part++) {
+          const diameter = batch.sizes[part];
+          if (diameter !== undefined && diameter * scale >= size) mask |= 1 << part;
+        }
         batch.mask = mask >>> 0;
       }
       mesh.castShadow = batch ? batch.mask !== 0 : own >= size;

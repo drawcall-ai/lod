@@ -26,7 +26,7 @@ export interface Hole {
 }
 
 /** A doorway between two rooms; the room that hangs the leaf has `leaf` set (how far it stands open, radians). */
-export interface Doorway extends Hole {
+interface Doorway extends Hole {
   to: number;
   leaf: number | null;
 }

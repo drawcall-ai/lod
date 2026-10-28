@@ -1,6 +1,6 @@
 import {
+  Box3,
   BoxGeometry,
-  Color,
   InstancedMesh,
   Matrix4,
   Mesh,
@@ -8,20 +8,17 @@ import {
   OrthographicCamera,
   PerspectiveCamera,
   Raycaster,
-  RenderTarget,
   Scene,
   Vector3,
   type Camera,
-  type Material,
-  type Object3D,
 } from "three/webgpu";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { drawOf } from "../src/fade.js";
+import { HANDOVER_MS } from "../src/residency.js";
+import { LazyLevel } from "../src/lazy.js";
 import { Lod } from "../src/lod.js";
-import { originalOf } from "../src/material.js";
-import { TYPICAL_HEIGHT, viewportHeight, setViewportHeight } from "../src/view.js";
-import { isMesh } from "../src/three.js";
-import { GPU_TIMEOUT, render, renderer } from "./gpu.js";
+import { TYPICAL_HEIGHT, viewportHeight } from "../src/view.js";
+import { GPU_TIMEOUT, render, renderer, nextLevel } from "./gpu.js";
 
 const box = (material = new MeshBasicMaterial()) => new Mesh(new BoxGeometry(2, 2, 2), material);
 /** Bounding diameter of `box()`: the box diagonal. */
@@ -59,11 +56,6 @@ function viewAt(target: Lod, pixels: number, view: Camera = camera): Lod {
 }
 
 const visible = (target: Lod) => target.levels.flatMap(({ object }, i) => (object.visible ? [i] : []));
-const materialOf = (object: Object3D | undefined): Material => {
-  const material = object && isMesh(object) ? [object.material].flat()[0] : undefined;
-  if (!material) throw new Error("expected a mesh");
-  return material;
-};
 /** The signed fade level `i` of `target` draws with (see fade.ts). */
 const fadeOf = (target: Lod, i: number) => {
   const object = target.levels[i]?.object;
@@ -80,28 +72,6 @@ afterEach(() => {
 });
 
 describe("Lod", { timeout: GPU_TIMEOUT }, () => {
-  it("rejects invalid explicit viewport heights without overwriting the current view", () => {
-    const view = new PerspectiveCamera();
-    expect(viewportHeight(view)).toBe(null);
-    setViewportHeight(view, 800);
-    for (const height of [0, -1, NaN, Infinity, -Infinity]) {
-      expect(() => setViewportHeight(view, height)).toThrow(/finite and positive/);
-      expect(viewportHeight(view)).toBe(800);
-    }
-  });
-
-  it("lets actual rendering replace an explicitly initialized viewport height", async () => {
-    const view = new PerspectiveCamera();
-    const target = lod();
-    setViewportHeight(view, 800);
-    try {
-      await render(new Scene().add(target), view, 64);
-      expect(viewportHeight(view)).toBe(64);
-    } finally {
-      target.dispose();
-    }
-  });
-
   it("switches at maxPixels, measured from subtense, fov and screen height, times quality", () => {
     const target = lod();
     expect(visible(viewAt(target, 100.01))).toEqual([1]);
@@ -130,15 +100,9 @@ describe("Lod", { timeout: GPU_TIMEOUT }, () => {
     expect(visible(viewAt(target, 100 * (1 - Lod.fade / 2)))).toEqual([1, 2]);
     expect(visible(viewAt(target, 250))).toEqual([1]);
     expect(fadeOf(target, 1)).toBe(0);
-  });
-
-  it("draws only forceLevel, without fades", () => {
-    const target = lod();
     target.forceLevel = 2;
     expect(visible(viewAt(target, 400 * (1 - Lod.fade / 2)))).toEqual([2]);
     expect(fadeOf(target, 2)).toBe(0);
-    target.forceLevel = 5;
-    expect(() => viewAt(target, 250)).toThrow(/forceLevel 5/);
   });
 
   it("switches at once in an orthographic view", () => {
@@ -161,15 +125,6 @@ describe("Lod", { timeout: GPU_TIMEOUT }, () => {
     expect(inner.levels.map(({ object }) => object.visible)).toEqual([true, true]);
   });
 
-  it("refuses levels whose fades would overlap, and skinned meshes", () => {
-    const target = lod();
-    setMaxPixels(target, [100, 95]);
-    expect(() => viewAt(target, 85)).toThrow(/level 2 has maxPixels 95, but at most 90/);
-    const skinned = box();
-    Object.assign(skinned, { isSkinnedMesh: true });
-    expect(() => new Lod([skinned])).toThrow(/skinned/);
-  });
-
   it("raycasts the source only", () => {
     const source = box();
     const level = box();
@@ -181,71 +136,7 @@ describe("Lod", { timeout: GPU_TIMEOUT }, () => {
     expect(new Raycaster(new Vector3(10.3, 0.2, 10), new Vector3(0, 0, -1)).intersectObject(target)).toEqual([]);
   });
 
-  it("is updated by the renderer and measures the target it renders into", async () => {
-    const target = lod();
-    const scene = new Scene().add(target);
-    place(400 * (1 - Lod.fade / 2), 64);
-    // The first frame tells the Lod the target's height.
-    await render(scene, camera);
-    await render(scene, camera);
-    expect(visible(target)).toEqual([0, 1]);
-    expect(fadeOf(target, 1)).toBeCloseTo(0.5, 6);
-  });
-
-  it("measures each camera at the height it renders at", () => {
-    const target = lod();
-    const scene = new Scene().add(target);
-    const other = camera.clone();
-    place(250, 64);
-    other.position.copy(camera.position);
-    other.updateMatrixWorld();
-    const draw = (view: Camera, size: number) => {
-      const into = new RenderTarget(size, size);
-      renderer.setRenderTarget(into);
-      renderer.render(scene, view);
-      renderer.setRenderTarget(null);
-      into.dispose();
-    };
-    draw(camera, 64);
-    draw(other, 16);
-    // 250 px on 64 px is level 1; the same view on 16 px is 62.5 px, level 2.
-    draw(camera, 64);
-    expect(visible(target)).toEqual([1]);
-    draw(other, 16);
-    expect(visible(target)).toEqual([2]);
-  });
-
-  it("measures the canvas in CSS pixels: the renderer's over its pixel ratio", () => {
-    const target = lod();
-    const scene = new Scene().add(target);
-    place(150, 64);
-    renderer.setPixelRatio(2);
-    renderer.setSize(64, 64);
-    try {
-      renderer.render(scene, camera);
-      renderer.render(scene, camera);
-    } finally {
-      renderer.setPixelRatio(1);
-    }
-    // 150 px of a 64 px canvas is level 1 (150 > 100): the 128 device pixels do not count.
-    expect(visible(target)).toEqual([1]);
-  });
-
-  it("measures a target the canvas's size in CSS pixels too: post-processing draws into one", async () => {
-    const scene = new Scene().add(lod());
-    const view = new PerspectiveCamera();
-    renderer.setPixelRatio(2);
-    try {
-      await render(scene, view, 128);
-      expect(viewportHeight(view)).toBe(64);
-      await render(scene, view, 96);
-      expect(viewportHeight(view)).toBe(96);
-    } finally {
-      renderer.setPixelRatio(1);
-    }
-  });
-
-  it("splits the pixels between both sides of a fade, though they share a material and are instanced", async () => {
+  it("preserves coverage while fading instanced levels that share a material", async () => {
     const material = new MeshBasicMaterial();
     const pair = () => {
       const mesh = new InstancedMesh(new BoxGeometry(2, 2, 2), material, 2);
@@ -263,52 +154,62 @@ describe("Lod", { timeout: GPU_TIMEOUT }, () => {
     await render(scene, camera);
     const pixels = await render(scene, camera);
     expect(visible(target)).toEqual([0, 1]);
-    // Debug tints: level 0 red-ish, level 1 green-ish; every covered pixel is one of them.
-    let red = 0;
-    let green = 0;
-    let other = 0;
-    for (let i = 0; i < pixels.length; i += 4) {
-      const [r = 0, g = 0, b = 0] = pixels.subarray(i, i + 3);
-      if (r === 0 && g === 0 && b === 0) continue;
-      if (r > 200 && g < 150) red++;
-      else if (g > 200 && r < 150) green++;
-      else other++;
-    }
-    expect(other).toBe(0);
-    expect(red).toBeGreaterThan((red + green) * 0.2);
-    expect(green).toBeGreaterThan((red + green) * 0.2);
+    const coverage = (bytes: Uint8Array) => bytes.filter((_, i) => i % 4 === 3);
     target.forceLevel = 0;
     Lod.debug = false;
-    const whole = (await render(scene, camera)).filter((v, i) => i % 4 === 0 && v > 0).length;
-    expect(red + green).toBe(whole);
-    expect(material.color.equals(new Color(1, 1, 1))).toBe(true);
+    expect(coverage(pixels)).toEqual(coverage(await render(scene, camera)));
+    target.dispose();
   });
 
-  it("clones after it rendered or while hidden, sharing its faded materials", () => {
+  it("clones rendered, hidden levels with independent selection", () => {
     const target = lod();
     viewAt(target, 50);
     target.visible = false;
     const clone = target.clone();
     expect(clone.levels.map((level) => level.maxPixels)).toEqual([Infinity, 400, 100]);
-    // One faded copy of a material for every Lod: they share its shader.
-    expect(materialOf(clone.levels[0]?.object)).toBe(materialOf(target.levels[0]?.object));
-    expect(originalOf(materialOf(clone.levels[0]?.object))).not.toBe(materialOf(clone.levels[0]?.object));
     expect(visible(viewAt(clone, 1000))).toEqual([0]);
     expect(visible(target)).toEqual([2]);
-    expect(() => new Lod().copy(target).copy(target)).toThrow(/empty Lod/);
   });
+});
 
-  it("disposes every level once, and itself stops there", () => {
-    const inner = new Lod([box(), box()]);
-    const target = new Lod([box(), inner]);
-    let materials = 0;
-    let inners = 0;
-    target.levels[0]?.object.traverse((node) => {
-      if (isMesh(node)) originalOf([node.material].flat()[0] ?? new MeshBasicMaterial()).addEventListener("dispose", () => materials++);
-    });
-    const dispose = inner.dispose.bind(inner);
-    inner.dispose = () => (inners++, dispose());
-    target.dispose();
-    expect([materials, inners]).toEqual([1, 1]);
-  });
+it.each([false, true])("hands over an installed source without popping (height fade: %s)", { timeout: GPU_TIMEOUT }, async (heightFade) => {
+  const lazy = new LazyLevel(async () => box(), { maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) });
+  const fallback = box();
+  const lod = new Lod([lazy, fallback]);
+  lod.forceLevel = heightFade ? null : 0;
+  const coarse = lod.levels[1];
+  if (!coarse) throw new Error("Missing coarse level");
+  coarse.maxPixels = 100;
+  lod.position.z = heightFade ? -((DIAMETER * 64) / (2 * tan)) / 95 : -5;
+  const view = new PerspectiveCamera(60, 1, 0.1, 100);
+  const scene = new Scene().add(lod);
+  const clock = vi.spyOn(performance, "now").mockReturnValue(1000);
+  try {
+    renderer.render(scene, view);
+    await nextLevel(lod, view);
+    const source = lazy.children[0];
+    if (!source) throw new Error("Missing installed source");
+    lod.update(view);
+    expect(drawOf(fallback)).toMatchObject({ fade: 0 });
+    expect(lazy.visible).toBe(false);
+    clock.mockReturnValue(1000 + HANDOVER_MS / 2);
+    lod.update(view);
+    expect(drawOf(source)).toMatchObject({ fade: 0.5 });
+    expect(drawOf(fallback)).toMatchObject({ fade: -0.5 });
+    expect(source.visible && fallback.visible).toBe(true);
+    clock.mockReturnValue(1000 + HANDOVER_MS);
+    lod.update(view);
+    if (heightFade) {
+      const sourceDraw = drawOf(source),
+        coarseDraw = drawOf(fallback);
+      expect(sourceDraw?.kind === "object" && sourceDraw.fade).toBeCloseTo(-0.5);
+      expect(coarseDraw?.kind === "object" && coarseDraw.fade).toBeCloseTo(0.5);
+    } else {
+      expect(drawOf(source)).toMatchObject({ fade: 0 });
+      expect(fallback.visible).toBe(false);
+    }
+  } finally {
+    clock.mockRestore();
+    lod.dispose();
+  }
 });

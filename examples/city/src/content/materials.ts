@@ -13,6 +13,8 @@ let assets: Manifest | undefined;
 const loader = once(() => new THREE.ImageBitmapLoader().setOptions({ imageOrientation: "flipY", premultiplyAlpha: "none" }));
 const textures = new Map<string, THREE.Texture>();
 const files = new WeakMap<THREE.Texture, string>();
+const sourceFiles = new WeakMap<THREE.Source<unknown>, string>();
+const pending = new WeakMap<THREE.Texture, Promise<void>>();
 const materials = new Map<string, THREE.Material>();
 
 const base = "./assets/";
@@ -40,32 +42,101 @@ export function texture(id: string, map: "diff" | "nor" | "arm"): THREE.Texture 
   const key = `${id}/${map}`;
   const cached = textures.get(key);
   if (cached) return cached;
+  const t = textureInfo(id, map);
+  const path = textureFile(t);
+  if (!path) throw new Error(`texture ${key} has no source file`);
+  pending.set(
+    t,
+    loader()
+      .loadAsync(`./${path}`)
+      .then((image) => {
+        t.image = image;
+        t.needsUpdate = true;
+      }),
+  );
+  textures.set(key, t);
+  return t;
+}
+
+/** An atlas row needs file identity and sampler settings, without loading those pixels twice. */
+function textureInfo(id: string, map: "diff" | "nor" | "arm"): THREE.Texture {
   const set = manifest().textures[id];
   if (!set) throw new Error(`texture set ${id} is not in the manifest`);
-  const url = assetUrl(set[map]);
   const t = new THREE.Texture();
-  // Decode while other assets load, retaining the pixels until GPU upload. The
-  // bitmap already has upload-oriented rows; WebGPU must not flip them again.
+  // ImageBitmapLoader produces upload-oriented rows; WebGPU must not flip them again.
   t.flipY = false;
-  loader().load(url, (image) => {
-    t.image = image;
-    t.needsUpdate = true;
-  });
   files.set(t, `assets/${set[map]}`);
+  sourceFiles.set(t.source, `assets/${set[map]}`);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.repeat.set(1 / (set.size[0] ?? 1), 1 / (set.size[1] ?? 1));
   t.anisotropy = 8;
   t.colorSpace = map === "diff" ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-  textures.set(key, t);
   return t;
 }
 
 /** Actual source file of a texture loaded by the material library. */
 export function textureFile(texture: THREE.Texture): string | undefined {
-  return files.get(texture);
+  return files.get(texture) ?? sourceFiles.get(texture.source);
 }
 
-export interface SurfaceOptions {
+/** Wait only for this object's texture inputs, including bitmap decoding. */
+export async function texturesReady(object: THREE.Object3D | readonly THREE.Material[]): Promise<void> {
+  const tasks = new Set<Promise<void>>();
+  const collect = (materials: readonly THREE.Material[]) => {
+    for (const material of materials)
+      for (const value of Object.values(material)) {
+        if (!(value instanceof THREE.Texture)) continue;
+        const task = pending.get(value);
+        if (task) tasks.add(task);
+      }
+  };
+  if (object instanceof THREE.Object3D)
+    object.traverse((node) => {
+      if (node instanceof THREE.Mesh) collect([node.material].flat());
+    });
+  else collect(object);
+  await Promise.all(tasks);
+}
+
+/** Rebuild a procedural surface from the material's persisted recipe. */
+export function restoreSurface(_name: string, data: Record<string, unknown>, textures: "pixels" | "metadata" = "pixels"): Surface | undefined {
+  const value = data.surface;
+  if (value === undefined) return undefined;
+  if (typeof value !== "object" || value === null || !("id" in value) || !("options" in value)) throw new Error("Invalid surface recipe");
+  const { id, options: raw } = value;
+  if (typeof id !== "string" || typeof raw !== "object" || raw === null) throw new Error("Invalid surface recipe");
+  const options: SurfaceOptions = {};
+  for (const [key, value] of Object.entries(raw)) {
+    switch (key) {
+      case "color":
+        if (typeof value !== "number" && typeof value !== "string") throw new Error("Invalid surface colour");
+        options.color = value;
+        break;
+      case "albedo":
+      case "vertexColors":
+        if (typeof value !== "boolean") throw new Error(`Invalid surface ${key}`);
+        options[key] = value;
+        break;
+      case "side":
+        if (value !== THREE.FrontSide && value !== THREE.BackSide && value !== THREE.DoubleSide) throw new Error("Invalid surface side");
+        options.side = value;
+        break;
+      case "normalScale":
+      case "roughness":
+      case "metalness":
+      case "envMapIntensity":
+      case "weather":
+        if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`Invalid surface ${key}`);
+        options[key] = value;
+        break;
+      default:
+        throw new Error(`Unknown surface option ${key}`);
+    }
+  }
+  return textures === "metadata" ? makeSurface(id, options, textureInfo) : surface(id, options);
+}
+
+interface SurfaceOptions {
   /** Multiplies the base colour map, or replaces it when `albedo` is false. */
   color?: THREE.ColorRepresentation;
   /** Use the set's base colour map (default) or only its relief and roughness. */
@@ -99,13 +170,19 @@ export function surface(id: string, options: SurfaceOptions = {}): Surface {
   const key = `${id}|${JSON.stringify(options)}`;
   const cached = materials.get(key);
   if (cached instanceof THREE.MeshStandardMaterial || cached instanceof THREE.MeshStandardNodeMaterial) return cached;
+  const made = makeSurface(id, options, texture);
+  materials.set(key, made);
+  return made;
+}
+
+function makeSurface(id: string, options: SurfaceOptions, map: typeof texture): Surface {
   const { color = 0xffffff, albedo = true, normalScale = 1, roughness = 1, metalness, envMapIntensity = 1, vertexColors = false, side } = options;
-  const arm = texture(id, "arm");
+  const arm = map(id, "arm");
   const m = new THREE.MeshStandardMaterial({
     name: id,
     color,
-    map: albedo ? texture(id, "diff") : null,
-    normalMap: texture(id, "nor"),
+    map: albedo ? map(id, "diff") : null,
+    normalMap: map(id, "nor"),
     normalScale: new THREE.Vector2(normalScale, normalScale),
     aoMap: arm,
     roughnessMap: arm,
@@ -118,7 +195,12 @@ export function surface(id: string, options: SurfaceOptions = {}): Surface {
     side: side ?? THREE.FrontSide,
   });
   const made = options.weather ? weathered(m, options.weather) : m;
-  materials.set(key, made);
+  const recipe: Record<string, string | number | boolean> = {};
+  for (const [name, value] of Object.entries(options)) {
+    if (value instanceof THREE.Color) recipe[name] = value.getHex();
+    else if (value !== undefined) recipe[name] = value;
+  }
+  made.userData.surface = { id, options: recipe };
   return made;
 }
 

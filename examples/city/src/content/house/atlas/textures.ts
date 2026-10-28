@@ -1,25 +1,36 @@
-import { Box2, DataArrayTexture, Vector2, Vector3, type Renderer, type Texture } from "three/webgpu";
+import { DataArrayTexture, type Texture } from "three/webgpu";
 
-/** Equal-sized house maps in separate layers: repeat and every original mip survive. */
+interface TexturePixels {
+  width: number;
+  height: number;
+  depth: number;
+  data: Uint8Array;
+}
+
+/** Cached pixels upload and generate their mip chain only when the level is compiled. */
 export class TextureArray {
   readonly texture: DataArrayTexture;
-  private readonly layers = new Map<Texture, number>();
+  readonly pixels: TexturePixels;
+  private readonly layers = new Map<string, number>();
 
-  constructor(renderer: Renderer, maps: readonly (Texture | null)[], name: string) {
-    const sources = [...new Set(maps.filter((map) => map !== null))];
+  constructor(
+    maps: readonly (Texture | null)[],
+    name: string,
+    pixels?: TexturePixels,
+    private readonly identify: (texture: Texture) => string = (texture) => texture.uuid,
+  ) {
+    const sources = [...new Map(maps.filter((map) => map !== null).map((map) => [identify(map), map])).values()];
     const first = sources[0];
     if (!first) throw new Error(`${name}: no textures`);
-    const { width, height } = dimensions(first);
-    for (const source of sources) {
-      const size = dimensions(source);
-      if (size.width !== width || size.height !== height) throw new Error(`${name}: texture sizes differ`);
+    for (const [layer, source] of sources.entries()) {
       const keys: (keyof Texture)[] = ["format", "type", "colorSpace", "wrapS", "wrapT", "magFilter", "minFilter", "anisotropy", "premultiplyAlpha", "flipY"];
-      for (const key of keys) {
-        if (source[key] !== first[key]) throw new Error(`${name}: texture ${key} differs`);
-      }
-      renderer.initTexture(source);
+      for (const key of keys) if (source[key] !== first[key]) throw new Error(`${name}: texture ${key} differs`);
+      this.layers.set(identify(source), layer);
     }
-    const texture = new DataArrayTexture(null, width, height, sources.length);
+    this.pixels = pixels ?? read(sources);
+    const { data, width, height, depth } = this.pixels;
+    if (depth !== sources.length || data.length !== width * height * depth * 4) throw new Error(`${name}: invalid cached texture array`);
+    const texture = new DataArrayTexture(data, width, height, depth);
     texture.name = name;
     texture.format = first.format;
     texture.type = first.type;
@@ -30,32 +41,15 @@ export class TextureArray {
     texture.minFilter = first.minFilter;
     texture.anisotropy = first.anisotropy;
     texture.premultiplyAlpha = first.premultiplyAlpha;
-    // Allocate GPU storage without a second CPU copy of these full-resolution maps.
-    texture.source.dataReady = false;
+    texture.flipY = first.flipY;
     texture.generateMipmaps = true;
     texture.needsUpdate = true;
     this.texture = texture;
-    try {
-      renderer.initTexture(texture);
-      // Keep the allocated mip chain; each level is copied, never regenerated.
-      texture.generateMipmaps = false;
-      const levels = Math.floor(Math.log2(Math.max(width, height))) + 1;
-      sources.forEach((source, layer) => {
-        this.layers.set(source, layer);
-        for (let mip = 0; mip < levels; mip++) {
-          const region = new Box2(new Vector2(), new Vector2(Math.max(1, width >> mip), Math.max(1, height >> mip)));
-          renderer.copyTextureToTexture(source, texture, region, new Vector3(0, 0, layer), mip, mip);
-        }
-      });
-    } catch (error) {
-      texture.dispose();
-      throw error;
-    }
   }
 
   layer(map: Texture | null): number {
     if (map === null) return -1;
-    const layer = this.layers.get(map);
+    const layer = this.layers.get(this.identify(map));
     if (layer === undefined) throw new Error(`${this.texture.name}: texture is not in the atlas`);
     return layer;
   }
@@ -65,10 +59,26 @@ export class TextureArray {
   }
 }
 
-function dimensions(texture: Texture): { width: number; height: number } {
-  const image: unknown = texture.image;
-  if (!texture.generateMipmaps || texture.mipmaps.length) throw new Error(`${texture.name}: expected generated house texture mips`);
-  if (image instanceof ImageBitmap && image.width > 0 && image.height > 0) return { width: image.width, height: image.height };
-  if (!(image instanceof HTMLImageElement) || !image.complete || image.naturalWidth === 0) throw new Error(`${texture.name}: house texture is not loaded`);
-  return { width: image.naturalWidth, height: image.naturalHeight };
+function read(sources: Texture[]): TexturePixels {
+  const images = sources.map((source) => {
+    const image: unknown = source.image;
+    if (!(image instanceof ImageBitmap || image instanceof HTMLImageElement)) throw new Error(`${source.name}: house texture is not loaded`);
+    return image;
+  });
+  const first = images[0];
+  if (!first || first.width === 0 || first.height === 0) throw new Error("House texture has no pixels");
+  const { width, height } = first;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) throw new Error("House atlas needs a canvas pixel reader");
+  const data = new Uint8Array(width * height * images.length * 4);
+  images.forEach((image, layer) => {
+    if (image.width !== width || image.height !== height) throw new Error("House texture sizes differ");
+    context.clearRect(0, 0, width, height);
+    context.drawImage(image, 0, 0);
+    data.set(context.getImageData(0, 0, width, height).data, layer * width * height * 4);
+  });
+  return { width, height, depth: images.length, data };
 }

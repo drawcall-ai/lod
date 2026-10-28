@@ -7,6 +7,7 @@ export const EXTENT = 2400;
 const CELL = 8;
 /** How far the coarse ring of ground reaches, to the haze. */
 const HORIZON = 40000;
+const meshes = new WeakMap<Terrain, THREE.BufferGeometry>();
 
 /**
  * Gentle rolling ground. Heights live on a grid and between grid points are interpolated
@@ -28,8 +29,10 @@ export class Terrain {
     input:
       | Float32Array
       | { seed: number; flats: { x: number; z: number; radius: number }[]; creek: { course: THREE.Vector2[]; depth: number; crossings: THREE.Vector2[] } },
+    geometry?: THREE.BufferGeometry,
   ) {
     const n = this.cells + 1;
+    if (geometry) meshes.set(this, geometry);
     if (input instanceof Float32Array) {
       if (input.length !== n * n || input.some((height) => !Number.isFinite(height))) throw new Error("Invalid terrain heightfield");
       this.heights = input;
@@ -106,6 +109,15 @@ export class Terrain {
    * without cracks.
    */
   mesh(material: THREE.Material): THREE.Mesh {
+    let geometry = meshes.get(this);
+    if (!geometry) meshes.set(this, (geometry = this.geometry()));
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.name = "terrain";
+    mesh.receiveShadow = true;
+    return mesh;
+  }
+
+  private geometry(): THREE.BufferGeometry {
     const lines = [-EXTENT];
     for (let i = 1; i <= this.cells; i++) lines.push(-EXTENT + i * CELL);
     let step = CELL * 4;
@@ -139,10 +151,7 @@ export class Terrain {
     geometry.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
     geometry.setIndex(index);
     geometry.computeVertexNormals();
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.name = "terrain";
-    mesh.receiveShadow = true;
-    return mesh;
+    return geometry;
   }
 }
 

@@ -61,17 +61,19 @@ export class SunShadow extends THREE.ShadowBaseNode {
       // weight not yet taken by a finer cascade
       const left = float(1).toVar();
       this.cascades.forEach(({ light }, i) => {
-        const at = lightShadowMatrix(light).mul(vec4(position, 1)).xyz;
-        const edge = min(min(at.x, at.x.oneMinus()), min(at.y, at.y.oneMinus()));
-        const cover = smoothstep(0, BAND, edge).mul(step(0, at.z)).toVar();
         const map = this.lookups[i];
         if (!map) throw new Error("the sun has a cascade without a shadow");
-        If(left.greaterThan(0).and(cover.greaterThan(0)), () => {
-          // three's typings leave the shadow's type open; it is a float
-          const shade = float(1).toVar();
-          shade.assign(map);
-          lit.addAssign(left.mul(cover).mul(shade));
-          left.subAssign(left.mul(cover));
+        If(left.greaterThan(0), () => {
+          const at = lightShadowMatrix(light).mul(vec4(position, 1)).xyz.toVar();
+          const edge = min(min(at.x, at.x.oneMinus()), min(at.y, at.y.oneMinus()));
+          const cover = smoothstep(0, BAND, edge).mul(step(0, at.z)).toVar();
+          If(cover.greaterThan(0), () => {
+            // three's typings leave the shadow's type open; it is a float
+            const shade = float(1).toVar();
+            shade.assign(map);
+            lit.addAssign(left.mul(cover).mul(shade));
+            left.subAssign(left.mul(cover));
+          });
         });
       });
       return lit.add(left);

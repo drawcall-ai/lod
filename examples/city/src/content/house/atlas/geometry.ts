@@ -1,6 +1,5 @@
 import * as THREE from "three/webgpu";
 import { interleaveAttributes, mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
-import { register } from "../../../render/sun/casters.ts";
 import type { Surface } from "../../materials.ts";
 import { ceiling, floorboards, plaster, wood } from "../furnishings.ts";
 import { concrete, paint, plinth, wall } from "../materials.ts";
@@ -72,19 +71,9 @@ export function batch(source: THREE.Group, params: HouseParams, atlas: HouseAtla
         }
       }
       const geometry = combine(group, atlas, first.mesh.castShadow);
-      let material: THREE.MeshStandardNodeMaterial;
-      try {
-        material = first.mesh.castShadow
-          ? register(
-              geometry,
-              atlas.outside,
-              group.map(({ mesh }) => diameter(mesh.geometry)),
-            )
-          : atlas.inside;
-      } catch (error) {
-        geometry.dispose();
-        throw error;
-      }
+      const diameters = group.map(({ mesh }) => diameter(mesh.geometry));
+      if (first.mesh.castShadow) geometry.userData.cityShadowDiameters = diameters;
+      const material = first.mesh.castShadow ? atlas.outside : atlas.inside;
       const mesh = new THREE.Mesh(geometry, material);
       mesh.name = first.mesh.castShadow ? "house exterior atlas" : "house interior atlas";
       mesh.castShadow = first.mesh.castShadow;
@@ -98,7 +87,6 @@ export function batch(source: THREE.Group, params: HouseParams, atlas: HouseAtla
   } catch (error) {
     for (const { mesh } of made) {
       mesh.geometry.dispose();
-      if (mesh.material !== atlas.inside && !Array.isArray(mesh.material)) mesh.material.dispose();
     }
     throw error;
   }

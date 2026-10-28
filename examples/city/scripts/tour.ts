@@ -14,6 +14,7 @@
 // --keys shoots only those keys, --cold empties the browser profile (and with it the
 // page's bake cache) first.
 import { mkdir, rm, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
 import { createServer } from "vite";
@@ -38,7 +39,7 @@ declare const window: { city: City };
 const root = fileURLToPath(new URL("..", import.meta.url));
 const args = process.argv.slice(2);
 const flag = (name: string) => args.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
-const out = fileURLToPath(new URL(`../.artifacts/${flag("out") ?? "tour"}/`, import.meta.url));
+const out = resolve(root, ".artifacts", flag("out") ?? "tour") + "/";
 const [width, height] = (flag("size") ?? "1512x982").split("x").map(Number);
 const dpr = Number(flag("dpr") ?? 2);
 if (!width || !height || !dpr) throw new Error("--size takes <width>x<height> and --dpr a number");
@@ -53,7 +54,7 @@ await server.listen();
 const url = server.resolvedUrls?.local[0];
 if (!url) throw new Error("vite did not report a local URL");
 // a profile of its own keeps the page's bake cache between runs; --cold starts it empty
-const profile = fileURLToPath(new URL("../.artifacts/browser/", import.meta.url));
+const profile = resolve(root, args.find((arg) => arg.startsWith("--browser-profile="))?.slice(18) ?? ".artifacts/browser");
 if (args.includes("--cold")) await rm(profile, { recursive: true, force: true });
 const browser = await chromium.launchPersistentContext(profile, {
   // new headless: the old headless shell loses every WebGPU device once a page asks for a

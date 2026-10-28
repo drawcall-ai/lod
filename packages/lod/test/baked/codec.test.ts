@@ -20,7 +20,7 @@ import {
   Vector3,
 } from "three/webgpu";
 import { describe, expect, it } from "vitest";
-import { encodeBakedMesh, decodeBakedMesh } from "../../src/baked/codec.js";
+import { encodeBakedMesh, decodeBakedMesh, decodeBakedMeshAsync } from "../../src/baked/codec.js";
 import { bakeMesh } from "../../src/baked/index.js";
 import { InteriorMaterial } from "../../src/baked/interior/material.js";
 import { errorOf, recordError } from "../../src/levels.js";
@@ -75,14 +75,14 @@ function fixture(rooms: boolean): Mesh {
 }
 
 describe("baked mesh codec", () => {
-  it("round-trips geometry, cutout mips, room arrays, placement and error without sharing resources", () => {
+  it("round-trips geometry, cutout mips, room arrays, placement and error without sharing resources", async () => {
     for (const rooms of [false, true]) {
       const source = fixture(rooms);
       const bytes = encodeBakedMesh(source);
       // A sliced file must not accidentally read beyond its view.
       const padded = new Uint8Array(bytes.length + 13);
       padded.set(bytes, 7);
-      const decoded = decodeBakedMesh(padded.subarray(7, 7 + bytes.length));
+      const decoded = await decodeBakedMeshAsync(padded.subarray(7, 7 + bytes.length));
       expect(unzipSync(encodeBakedMesh(decoded))).toEqual(unzipSync(bytes));
       expect(errorOf(decoded)).toBe(errorOf(source));
       expect(decoded.geometry.boundingSphere).toEqual(source.geometry.boundingSphere);

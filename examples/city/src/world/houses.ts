@@ -1,212 +1,152 @@
-import {
-  InstancedLod,
-  type Impostor,
-  Lod,
-  ImpostorMesh,
-  bakeImpostor,
-  encodeImpostor,
-  decodeImpostorAsync,
-  bakeMesh,
-  encodeBakedMesh,
-  decodeBakedMesh,
-} from "@drawcall/lod";
+import { InstancedLod, Lod, LodLoader, ImpostorMesh, bakeImpostor, bakeMesh } from "@drawcall/lod";
 import * as THREE from "three/webgpu";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
-import { house, houseInterior } from "../content/house/index.ts";
+import type { Dependencies } from "vitecache";
+import { house, houseInterior, type HouseParams } from "../content/house/index.ts";
 import { batch, surfaces } from "../content/house/atlas/geometry.ts";
+import { furnishingMaterial } from "../content/house/furnishings.ts";
+import { brass, glass } from "../content/house/materials.ts";
 import { HouseAtlas } from "../content/house/atlas/material.ts";
 import { church } from "../content/church.ts";
 import { Random } from "../content/random.ts";
-import { downloaded } from "../loading.ts";
-import { instanced, place, thresholds, type Level } from "./levels.ts";
+import { texturesReady, restoreSurface } from "../content/materials.ts";
+import { register } from "../render/sun/casters.ts";
+import { place } from "./place.ts";
 import type { Plan } from "./plan.ts";
-import { bundle, file, proceduralFiles, parameterKey } from "./cache.ts";
-import { Stream, needed } from "./stream.ts";
-import { Patches } from "./patches.ts";
+import { proceduralFiles, parameterKey } from "./cache.ts";
+import { houseAtlas } from "./house-atlas.ts";
+import { record } from "./data.ts";
 
-/**
- * Houses: one InstancedLod per variant, placed along the streets turned to face them.
- * Levels: the full model (window frames, gutters and tiles as geometry, furnished rooms
- * behind see-through windows); then the outside baked onto its own low shell, built from
- * the same parameters (a few dozen triangles that keep eaves and chimney), its windows
- * showing the rooms by interior mapping; then a hemispherical impostor for the far view.
- * Each variant is baked once however often it stands in town.
- *
- * Switch heights are set for the frame budget rather than the levels' error: a town has
- * a hundred houses within a few hundred metres, and the full model can stand only where
- * a house fills a good part of the view.
- */
 const BAKED_PIXELS = 350;
 const IMPOSTOR_PIXELS = 90;
+const WARMER = new THREE.Color(1.05, 0.98, 0.88);
 
 interface Authored {
   detail: THREE.Group;
   rooms: THREE.Group;
   low: THREE.Mesh;
-  source: THREE.Group;
+  params: HouseParams;
 }
 
-export async function houses(plan: Plan, renderer: THREE.Renderer): Promise<Stream> {
-  const variants = plan.variants.map((params, variant) => ({ params, variant, spots: plan.houses.filter((h) => h.variant === variant).map((h) => h.spot) }));
-  const dependencies = proceduralFiles("src/world/houses.ts", await parameterKey(plan.variants.map((params) => ({ ...params }))), [
-    "white_stucco",
-    "wood_table_001",
-    "metal_plate_02",
-    "gravel_road",
-    "red_brick",
-    "whitewashed_brick",
-  ]);
-  let built: Promise<Authored[]> | undefined;
-  const authored = () =>
-    (built ??= (async () => {
-      const rows: Authored[] = [];
-      for (const { params } of variants) {
-        const { detail, low } = house(params);
-        const rooms = houseInterior(params);
-        rows.push({ detail, rooms, low, source: new THREE.Group().add(detail, rooms) });
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
-      }
-      const { detail, low, interior: rooms } = church();
-      rows.push({ detail, rooms, low, source: new THREE.Group().add(detail, rooms) });
-      await downloaded();
-      return rows;
-    })());
-  const farFiles = await bundle("houses-far@1", dependencies, async () => {
-    const files: Record<string, Uint8Array> = {};
-    for (const [i, { source }] of (await authored()).entries()) {
-      const maxPixels = i === variants.length ? IMPOSTOR_PIXELS * 1.6 : IMPOSTOR_PIXELS;
-      files[`${i}.ktx2`] = encodeImpostor(await bakeImpostor(source, { layout: "hemi", maxPixels }));
-    }
-    return files;
-  });
-  const atlases = await Promise.all(Array.from({ length: variants.length + 1 }, (_, i) => decodeImpostorAsync(file(farFiles, `${i}.ktx2`))));
-  const atlasAt = (i: number): Impostor => {
-    const data = atlases[i];
-    if (!data) throw new Error(`Missing house atlas ${i}`);
-    return data;
-  };
-  const card = (i: number) => {
-    const mesh = new ImpostorMesh(atlasAt(i));
-    mesh.castShadow = mesh.receiveShadow = true;
-    return mesh;
-  };
-  const placed = (variant: number, source: THREE.Object3D, levels: Level[]) => {
-    const row = variants[variant];
-    if (!row) throw new Error(`Missing house variant ${variant}`);
-    const lod = instanced(`house ${variant + 1}`, source, levels, row.spots.length);
+/** Per-variant coarse entries are eager; baked windows and atlas geometry arrive independently. */
+export async function houses(plan: Plan): Promise<THREE.Group> {
+  const root = new THREE.Group();
+  root.name = "houses";
+  const textures = ["white_stucco", "wood_table_001", "metal_plate_02", "gravel_road", "red_brick", "whitewashed_brick"];
+  for (const [variant, params] of plan.variants.entries()) {
+    const dependencies = proceduralFiles("src/world/houses.ts", await parameterKey({ ...params }), textures);
+    const levels = await loadHouse(dependencies, () => ({ ...house(params), rooms: houseInterior(params), params }));
+    const spots = plan.houses.filter((house) => house.variant === variant).map((house) => house.spot);
+    const lod = new InstancedLod(levels, spots.length);
+    lod.name = `house ${variant + 1}`;
     const color = new THREE.Color();
-    row.spots.forEach((at, i) => {
-      place(lod, i, at);
-      const r = new Random(i * 31 + variant);
-      lod.setColorAt(i, color.setRGB(1, 1, 1).multiplyScalar(r.range(0.88, 1.04)).lerp(WARMER, r.range(0, 0.4)));
+    spots.forEach((at, index) => {
+      place(lod, index, at);
+      const random = new Random(index * 31 + variant);
+      lod.setColorAt(index, color.setRGB(1, 1, 1).multiplyScalar(random.range(0.88, 1.04)).lerp(WARMER, random.range(0, 0.4)));
     });
-    return lod;
-  };
-  const churchAt = (source: THREE.Object3D, levels: Level[]) => {
-    const lod = thresholds(new Lod([source, ...levels.map((level) => level.object)]), levels);
-    lod.name = "church";
-    lod.position.set(plan.church.x, plan.church.y, plan.church.z);
-    lod.rotation.y = plan.church.angle;
-    lod.updateMatrixWorld(true);
-    return lod;
-  };
-  const far = [...variants.map(({ variant }) => placed(variant, card(variant), [])), churchAt(card(variants.length), [])];
-  const spheres: Array<{ centre: THREE.Vector3; radius: number; pixels: number }> = [];
-  for (const { variant, spots } of variants) {
-    const local = new THREE.Box3().setFromArray(atlasAt(variant).box).getBoundingSphere(new THREE.Sphere());
-    for (const spot of spots) {
-      const centre = local.center
-        .clone()
-        .multiplyScalar(spot.scale)
-        .applyAxisAngle(UP, spot.angle)
-        .add(new THREE.Vector3(spot.x, spot.y, spot.z));
-      spheres.push({ centre, radius: local.radius * spot.scale, pixels: IMPOSTOR_PIXELS * (1 - Lod.fade) });
-    }
+    root.add(lod);
   }
-  const churchSphere = new THREE.Box3().setFromArray(atlasAt(variants.length).box).getBoundingSphere(new THREE.Sphere());
-  churchSphere.center.applyAxisAngle(UP, plan.church.angle).add(new THREE.Vector3(plan.church.x, plan.church.y, plan.church.z));
-  spheres.push({ centre: churchSphere.center, radius: churchSphere.radius, pixels: IMPOSTOR_PIXELS * 1.6 * (1 - Lod.fade) });
-  return new Stream(
-    "houses",
-    far,
-    async () => {
-      const files = await bundle("houses-baked@1", dependencies, async () => {
-        const encoded: Record<string, Uint8Array> = {};
-        for (const [i, row] of (await authored()).entries())
-          encoded[`${i}.bin`] = encodeBakedMesh(
-            await bakeMesh(row.source, { low: row.low, textureSize: i === variants.length ? 1024 : 512, interior: row.rooms }),
-          );
-        return encoded;
-      });
-      const rows = await authored();
-      const sources = rows.map(({ detail, rooms }) => drawn(detail, rooms));
-      const atlas = new HouseAtlas(
-        renderer,
-        variants.flatMap(({ params, variant }) => {
-          const source = sources[variant];
-          if (!source) throw new Error(`Missing authored house ${variant}`);
-          return surfaces(source, params);
+  const building = await loadHouse(
+    proceduralFiles("src/world/houses.ts", { church: true }, textures),
+    () => {
+      const { detail, low, interior: rooms, params } = church();
+      return { detail, low, rooms, params };
+    },
+    1.6,
+  );
+  building.name = "church";
+  building.position.set(plan.church.x, plan.church.y, plan.church.z);
+  building.rotation.y = plan.church.angle;
+  root.add(building);
+  return root;
+}
+
+async function loadHouse(dependencies: Dependencies, make: () => Authored, factor = 1): Promise<Lod> {
+  let built: Promise<{ source: THREE.Group; baked: THREE.Mesh; coarse: ImpostorMesh }> | undefined;
+  const build = () =>
+    (built ??= (async () => {
+      const { detail, rooms, low, params } = make();
+      const original = new THREE.Group().add(detail, rooms);
+      await texturesReady(original);
+      const coarse = new ImpostorMesh(
+        await bakeImpostor(original, { layout: "hemi", maxPixels: IMPOSTOR_PIXELS * factor, resolution: factor === 1 ? 64 : 128, frames: 8 }),
+      );
+      const baked = await bakeMesh(original, { low, interior: rooms, textureSize: factor === 1 ? 512 : 1024 });
+      const displayed = drawn(detail, rooms);
+      const rows = factor === 1 ? surfaces(displayed, params) : [];
+      const atlas = rows.length ? await houseAtlas(rows, true) : undefined;
+      if (atlas) {
+        for (const side of ["outside", "inside"] as const)
+          atlas[side].userData.houseAtlas = { side, rows: rows.map(({ name, userData }) => ({ name, data: userData })) };
+      }
+      const source = atlas ? batch(displayed, params, atlas) : displayed;
+      return { source, baked, coarse };
+    })());
+  const atlases = new Map<string, Promise<HouseAtlas>>();
+  const material = async (name: string, data: Record<string, unknown>): Promise<THREE.Material | undefined> => {
+    if (data.houseAtlas === undefined)
+      return name === "glass" ? glass() : name === "brass" ? brass() : (furnishingMaterial(name) ?? restoreSurface(name, data));
+    const { side, rows } = record(data.houseAtlas);
+    if ((side !== "outside" && side !== "inside") || !Array.isArray(rows)) throw new Error("Invalid house atlas rows");
+    const key = JSON.stringify(rows);
+    let atlas = atlases.get(key);
+    if (!atlas) {
+      atlas = houseAtlas(
+        rows.map((row: unknown) => {
+          const { name, data } = record(row);
+          if (typeof name !== "string") throw new Error("Invalid house surface name");
+          const surface = name === "brass" ? brass() : restoreSurface(name, record(data), "metadata");
+          if (!surface) throw new Error(`Unknown house surface ${name}`);
+          return surface;
         }),
       );
-      const levels = (i: number): Level[] => {
-        const baked = decodeBakedMesh(file(files, `${i}.bin`));
-        baked.castShadow = baked.receiveShadow = true;
-        const factor = i === variants.length ? 1.6 : 1;
-        return [
-          { object: baked, maxPixels: BAKED_PIXELS * factor },
-          { object: card(i), maxPixels: IMPOSTOR_PIXELS * factor },
-        ];
-      };
-      const lods: (InstancedLod | Lod)[] = variants.map(({ params, variant }) => {
-        const source = sources[variant];
-        if (!source) throw new Error(`Missing authored house ${variant}`);
-        return placed(variant, batch(source, params, atlas), levels(variant));
-      });
-      const churchSource = sources[variants.length];
-      if (!churchSource) throw new Error("Missing authored church");
-      lods.push(churchAt(churchSource, levels(variants.length)));
-      // Live levels retain their shared geometry/materials; consumed rooms and low shells can leave memory.
-      built = undefined;
-      return lods;
+      atlases.set(key, atlas);
+    }
+    return (await atlas)[side];
+  };
+  return new LodLoader().loadAsync({
+    source: async () => (await build()).source,
+    key: { ...dependencies, atlas: { path: "src/world/house-atlas.ts" } },
+    material,
+    levels: [
+      { type: "baked", source: async () => (await build()).baked, maxPixels: BAKED_PIXELS * factor },
+      { type: "impostor", source: async () => (await build()).coarse, maxPixels: IMPOSTOR_PIXELS * factor },
+    ],
+    restore: async (object, index) => {
+      if (index === 0)
+        object.traverse((node) => {
+          if (!(node instanceof THREE.Mesh) || !node.geometry.hasAttribute("cityShadowPart")) return;
+          if (!(node.material instanceof THREE.MeshStandardNodeMaterial)) throw new Error("Invalid house atlas material");
+          const diameters: unknown = node.geometry.userData.cityShadowDiameters;
+          if (!Array.isArray(diameters) || !diameters.every((value): value is number => typeof value === "number"))
+            throw new Error("Invalid house shadow parts");
+          node.material = register(node.geometry, node.material, diameters);
+        });
+      else object.castShadow = object.receiveShadow = true;
+      await texturesReady(object);
     },
-    (camera) => spheres.some(({ centre, radius, pixels }) => needed(camera, centre, radius, pixels, Patches.height * Lod.quality)),
-    undefined,
-    (old) => {
-      for (const object of old) {
-        if (!(object instanceof InstancedLod || object instanceof Lod)) throw new Error("Unexpected house far root");
-        object.dispose();
-      }
-    },
-  );
+  });
 }
 
-const UP = new THREE.Vector3(0, 1, 0);
-
-const WARMER = new THREE.Color(1.05, 0.98, 0.88);
-
-/**
- * The house as level 0 draws it: its exterior (shared geometry) and its rooms merged by
- * material. The bake needs the rooms one child each; drawn, a hundred room meshes per
- * house would be a hundred draws. Consumes the rooms' geometry after both bakes:
- * their shared materials and textures stay alive in the merged meshes.
- */
+/** Rooms retain individual boxes for baking; their displayed geometry is merged once on a cache miss. */
 function drawn(detail: THREE.Object3D, rooms: THREE.Object3D): THREE.Group {
   const byMaterial = new Map<THREE.Material, THREE.BufferGeometry[]>();
-  const consumed = new Set<THREE.BufferGeometry>();
   rooms.updateMatrixWorld(true);
-  rooms.traverse((o) => {
-    if (!(o instanceof THREE.Mesh) || Array.isArray(o.material)) return;
-    byMaterial.set(o.material, [...(byMaterial.get(o.material) ?? []), o.geometry.clone().applyMatrix4(o.matrixWorld)]);
-    consumed.add(o.geometry);
+  rooms.traverse((object) => {
+    if (!(object instanceof THREE.Mesh) || Array.isArray(object.material)) return;
+    const parts = byMaterial.get(object.material) ?? [];
+    if (!byMaterial.has(object.material)) byMaterial.set(object.material, parts);
+    parts.push(object.geometry.clone().applyMatrix4(object.matrixWorld));
   });
   const group = new THREE.Group().add(detail.clone());
   for (const [material, parts] of byMaterial) {
     const merged = mergeGeometries(parts);
-    if (!merged) throw new Error("room geometries do not merge");
+    if (!merged) throw new Error("Room geometries do not merge");
     const mesh = new THREE.Mesh(merged, material);
     mesh.receiveShadow = true;
     group.add(mesh);
+    for (const part of parts) part.dispose();
   }
-  for (const geometry of consumed) geometry.dispose();
   return group;
 }

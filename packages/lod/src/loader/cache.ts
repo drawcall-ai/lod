@@ -1,55 +1,77 @@
-import type { GLTSSource } from "@drawcall/glts";
-import type { Object3D } from "three/webgpu";
-import type { Dependencies } from "vitecache";
-import { bake, bakeImpostor, type BakeImpostorOptions } from "../impostor/bake/index.js";
-import { cached, type ImpostorCacheOptions } from "../impostor/cache.js";
-import type { Impostor } from "../impostor/impostor.js";
+import { CacheEntry, type CacheEntryOptions, type Dependencies, type JsonValue } from "vitecache";
+import type { LevelRequest } from "../loader.js";
+import type { MaterialResolver } from "./mesh.js";
+import type { Kind } from "./bundle.js";
 
-/** Cache location and additional inputs that GLTS does not track, such as generator packages. */
-export interface LodCacheOptions extends ImpostorCacheOptions {
-  /** Extra vitecache dependencies. Names beginning with glts: or lod: are reserved. */
+/** Cache location and additional source inputs. Dependency names beginning with lod: are reserved. */
+export interface LodCacheOptions extends Pick<CacheEntryOptions, "basePath" | "root"> {
   dependencies?: Dependencies;
 }
 
-/** Loaded GLTS scenes expose their run's source even outside an active script. */
-export function originOf(object: Object3D): GLTSSource | undefined {
-  const source: unknown = Reflect.get(object, "source");
-  if (source === undefined) return undefined;
-  if (!isSource(source)) throw new Error("LodLoader: invalid GLTS source metadata");
-  return source;
+export interface Recipe {
+  levels: readonly LevelRequest[];
+  material?: MaterialResolver;
+  type?: Exclude<Kind, "empty">;
+  reference?: boolean;
 }
 
-function isSource(source: unknown): source is GLTSSource {
-  if (typeof source !== "object" || source === null) return false;
-  const url: unknown = Reflect.get(source, "url");
-  const dependencies: unknown = Reflect.get(source, "dependencyUrls");
-  return typeof url === "string" && Array.isArray(dependencies) && dependencies.every((url: unknown) => typeof url === "string");
-}
-
-/** Capture dependencies when the bake starts, including files loaded since its request. */
-export async function impostor(
-  source: Object3D,
-  options: BakeImpostorOptions,
-  origin?: GLTSSource,
-  excluded: readonly Object3D[] = [],
-  cacheOptions?: LodCacheOptions,
-): Promise<Impostor> {
-  const make = (settings: BakeImpostorOptions) => (excluded.length > 0 ? bake(source, settings, excluded) : bakeImpostor(source, settings));
-  if (!origin) return make(options);
-  const urls = origin.dependencyUrls;
-  const { dependencies = {}, ...location } = cacheOptions ?? {};
-  if (Object.keys(dependencies).some((name) => name.startsWith("glts:"))) throw new Error("LodLoader: dependency names beginning with glts: are reserved");
-  return cached(
-    options,
-    {
-      ...dependencies,
-      "glts:source": { url: origin.url },
-      // URL resolution tracks the file; retain its query parameters as inputs too.
-      "glts:query": { value: new URL(origin.url).search },
-      ...Object.fromEntries(urls.map((url, index) => [`glts:dependency:${index}`, { url }])),
-      "glts:dependencyQueries": { value: urls.map((url) => new URL(url).search) },
+export function entryFor(dependencies: Dependencies, recipe: Recipe, options?: LodCacheOptions, level?: number): CacheEntry {
+  const inputs = { ...options?.dependencies, ...dependencies };
+  if (Object.keys(inputs).some((name) => name.startsWith("lod:"))) throw new Error("LodLoader: dependency names beginning with lod: are reserved");
+  // vitecache resolves URLs to file paths; keep generation parameters in the key.
+  const queries: Record<string, string> = {};
+  for (const [name, dependency] of Object.entries(inputs)) {
+    if (dependency.url !== undefined) queries[name] = new URL(dependency.url, "https://lod.invalid").search;
+  }
+  return new CacheEntry({
+    basePath: options?.basePath,
+    root: options?.root,
+    version: "lod-levels@7",
+    dependencies: {
+      ...inputs,
+      "lod:levels": { value: recipe.levels.map(parameters) },
+      "lod:role": { value: level === undefined ? "index" : `level:${level}` },
+      "lod:materials": { value: recipe.material !== undefined },
+      "lod:reference": { value: recipe.reference ?? false },
+      "lod:type": { value: recipe.type ?? "mesh" },
+      "lod:queries": { value: queries },
+      "lod:package": { package: "@drawcall/lod" },
+      "lod:three": { package: "three" },
     },
-    make,
-    location,
-  );
+  });
+}
+
+function parameters(level: LevelRequest): JsonValue {
+  if (level.source) return { type: level.type, maxPixels: level.maxPixels ?? null, source: "factory" };
+  switch (level.type) {
+    case "empty":
+      return { type: level.type, maxPixels: level.maxPixels };
+    case "mesh":
+      return { type: level.type, maxPixels: level.maxPixels ?? null, ratio: level.ratio ?? null };
+    case "baked":
+      return {
+        type: level.type,
+        maxPixels: level.maxPixels ?? null,
+        ratio: level.ratio ?? null,
+        textureSize: level.textureSize ?? null,
+        low: typeof level.low === "function" ? "factory" : (level.low ?? null),
+        interior: typeof level.interior === "function" ? "factory" : (level.interior ?? null),
+      };
+    case "impostor":
+      return {
+        type: level.type,
+        maxPixels: level.maxPixels ?? null,
+        layout: level.layout ?? null,
+        frames: level.frames ?? null,
+        resolution: level.resolution ?? null,
+        emissive: level.emissive ?? null,
+        supersample: level.supersample ?? null,
+        draw: {
+          alphaTest: level.draw?.alphaTest ?? null,
+          parallax: level.draw?.parallax ?? null,
+          tolerance: level.draw?.tolerance ?? null,
+          mipBias: level.draw?.mipBias ?? null,
+        },
+      };
+  }
 }

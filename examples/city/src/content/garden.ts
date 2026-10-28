@@ -1,7 +1,24 @@
 import * as THREE from "three/webgpu";
 import { box, Parts, tint } from "./geometry.ts";
 import { glass } from "./house/materials.ts";
-import { surface } from "./materials.ts";
+import { once, surface } from "./materials.ts";
+
+const materials = {
+  letterbox: once(() => new THREE.MeshStandardMaterial({ name: "letterbox", color: "#2f3d33", roughness: 0.45, metalness: 0.6 })),
+  slot: once(() => new THREE.MeshStandardMaterial({ name: "slot", color: "#111111", roughness: 0.8 })),
+  aluminium: once(() => new THREE.MeshStandardMaterial({ name: "aluminium", color: "#b8bcbd", metalness: 1, roughness: 0.4 })),
+  plants: once(() => new THREE.MeshStandardMaterial({ name: "plants", color: "#3d6b2a", roughness: 0.9 })),
+  rope: once(() => new THREE.MeshStandardMaterial({ name: "rope", color: "#c8b88a", roughness: 0.9 })),
+  seat: once(() => new THREE.MeshStandardMaterial({ name: "seat", color: "#b03a2e", roughness: 0.6 })),
+  post: once(() => new THREE.MeshStandardMaterial({ name: "post", color: "#9da3a5", metalness: 0.8, roughness: 0.5 })),
+  line: once(() => new THREE.MeshStandardMaterial({ name: "line", color: "#e8e8e0", roughness: 0.7 })),
+  washing: once(() => new THREE.MeshStandardMaterial({ name: "washing", vertexColors: true, roughness: 0.9, side: THREE.DoubleSide })),
+  "garden furniture": once(() => new THREE.MeshStandardMaterial({ name: "garden furniture", color: "#ecebe6", metalness: 0.3, roughness: 0.5 })),
+};
+
+export function gardenMaterial(name: string): THREE.Material | undefined {
+  return Object.entries(materials).find(([key]) => key === name)?.[1]();
+}
 
 // Things in a garden besides plants: buildings, furniture and the odds and ends of
 // family life. Each stands on y = 0, its front toward +z.
@@ -41,8 +58,8 @@ export function shed(color: THREE.ColorRepresentation): THREE.Group {
 export function letterbox(): THREE.Group {
   const parts = new Parts();
   const post = surface("wood_table_001", { color: "#6b5a48", weather: 0.8 });
-  const metal = new THREE.MeshStandardMaterial({ name: "letterbox", color: "#2f3d33", roughness: 0.45, metalness: 0.6 });
-  const dark = new THREE.MeshStandardMaterial({ name: "slot", color: "#111111", roughness: 0.8 });
+  const metal = materials["letterbox"]();
+  const dark = materials["slot"]();
   parts.add(post, box(0.08, 1.05, 0.08).translate(0, 0.525, 0));
   parts.add(metal, box(0.3, 0.32, 0.38).translate(0, 1.2, 0));
   parts.add(
@@ -59,7 +76,7 @@ export function letterbox(): THREE.Group {
 /** A small greenhouse, 2.5 × 1.9 m: an aluminium frame, glass walls and roof on a low brick base. */
 export function greenhouse(): THREE.Group {
   const parts = new Parts();
-  const frame = new THREE.MeshStandardMaterial({ name: "aluminium", color: "#b8bcbd", metalness: 1, roughness: 0.4 });
+  const frame = materials["aluminium"]();
   const brick = surface("red_brick", { weather: 0.8 });
   const w = 2.5;
   const d = 1.9;
@@ -87,7 +104,7 @@ export function greenhouse(): THREE.Group {
     );
   }
   // tomatoes inside: a row of green
-  parts.add(new THREE.MeshStandardMaterial({ name: "plants", color: "#3d6b2a", roughness: 0.9 }), box(w - 0.4, 0.9, 0.5).translate(0, 0.85, -d / 4));
+  parts.add(materials["plants"](), box(w - 0.4, 0.9, 0.5).translate(0, 0.85, -d / 4));
   return parts.build("greenhouse");
 }
 
@@ -95,8 +112,8 @@ export function greenhouse(): THREE.Group {
 export function swing(): THREE.Group {
   const parts = new Parts();
   const timber = surface("wood_table_001", { color: "#8a6a4a", weather: 0.7 });
-  const rope = new THREE.MeshStandardMaterial({ name: "rope", color: "#c8b88a", roughness: 0.9 });
-  const seat = new THREE.MeshStandardMaterial({ name: "seat", color: "#b03a2e", roughness: 0.6 });
+  const rope = materials["rope"]();
+  const seat = materials["seat"]();
   const h = 2.1;
   const span = 2.4;
   for (const x of [-span / 2, span / 2])
@@ -118,9 +135,9 @@ export function swing(): THREE.Group {
 /** A washing line between two posts, with a row of washing pegged to it. */
 export function washingLine(): THREE.Group {
   const parts = new Parts();
-  const post = new THREE.MeshStandardMaterial({ name: "post", color: "#9da3a5", metalness: 0.8, roughness: 0.5 });
-  const line = new THREE.MeshStandardMaterial({ name: "line", color: "#e8e8e0", roughness: 0.7 });
-  const cloth = new THREE.MeshStandardMaterial({ name: "washing", vertexColors: true, roughness: 0.9, side: THREE.DoubleSide });
+  const post = materials["post"]();
+  const line = materials["line"]();
+  const cloth = materials["washing"]();
   const length = 5;
   for (const x of [-length / 2, length / 2]) parts.add(post, new THREE.CylinderGeometry(0.03, 0.03, 1.9, 6).translate(x, 0.95, 0));
   parts.add(line, new THREE.CylinderGeometry(0.004, 0.004, length, 4).rotateZ(Math.PI / 2).translate(0, 1.82, 0));
@@ -136,7 +153,7 @@ export function washingLine(): THREE.Group {
 /** A patio set: a round table and four chairs, white painted metal. */
 export function patioSet(): THREE.Group {
   const parts = new Parts();
-  const paint = new THREE.MeshStandardMaterial({ name: "garden furniture", color: "#ecebe6", metalness: 0.3, roughness: 0.5 });
+  const paint = materials["garden furniture"]();
   parts.add(paint, new THREE.CylinderGeometry(0.45, 0.45, 0.03, 20).translate(0, 0.72, 0));
   parts.add(paint, new THREE.CylinderGeometry(0.03, 0.03, 0.72, 8).translate(0, 0.36, 0));
   for (let k = 0; k < 4; k++) {

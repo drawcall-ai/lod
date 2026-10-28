@@ -1,12 +1,29 @@
 import { Object3D, Sphere, type Camera, type Intersection, type Raycaster } from "three/webgpu";
-import { measureLevels } from "./bounds.js";
+import { compileLevel } from "./install.js";
+import { measureLevels, prepareBounds } from "./bounds.js";
 import { disposeTree } from "./dispose.js";
 import { setDraw, type Draw } from "./fade.js";
 import { levelMaterial } from "./material.js";
-import { available, fallbacks, inView, type LevelsEventMap } from "./lazy.js";
-import { FADE, Level, cloneLevels, copyThresholds, estimate, fadeProgress, levelAt, tintLevels, validate, type LodLevel } from "./levels.js";
-import { inShadowPass, isLazyImpostor, isImpostorMesh, isLOD, isMesh, rejectSkinned } from "./three.js";
-import { TYPICAL_HEIGHT, View, viewportHeight, watchViewport } from "./view.js";
+import { type LazyLevel } from "./lazy.js";
+import { Residency, handover, type LevelsEventMap } from "./residency.js";
+import {
+  FADE,
+  Level,
+  cloneLevels,
+  copyThresholds,
+  estimate,
+  fadeProgress,
+  levelAt,
+  demandLevels,
+  tintLevels,
+  validate,
+  type LodLevel,
+  type LevelInput,
+  levelObjects,
+  applyThresholds,
+} from "./levels.js";
+import { inShadowPass, isLazyLevel, isImpostorMesh, isLOD, isMesh, rejectSkinned } from "./three.js";
+import { TYPICAL_HEIGHT, View, viewportHeight, watchViewport, watchContext, unwatchContext, inView, type RenderContext } from "./view.js";
 import { WIND_BOUNDS } from "./wind/hooks.js";
 import { copyWind, refreshWind } from "./wind/index.js";
 
@@ -65,28 +82,38 @@ export class Lod extends Object3D<LevelsEventMap> {
   private sphere = new Sphere();
   private casterRadius = 0;
   private disposed = false;
-  private readonly installed = new Set<Object3D>();
-  private fallback: number[] = [];
+  private readonly residency = new Residency(
+    this.entries,
+    (index, lazy, context) => this.install(index, lazy, context),
+    () => this.dispatchEvent({ type: "levelschange" }),
+    (error) => this.dispatchEvent({ type: "levelserror", error }),
+  );
+
+  get pending(): boolean {
+    return this.residency.pending;
+  }
+  get error(): Error | undefined {
+    return this.residency.error;
+  }
 
   /**
    * `levels[0]` is the source. Empty only as the target of `copy`. A source that draws
    * nothing (an empty Object3D, for detail another system draws) is measured by the
    * first level that draws something.
    */
-  constructor(levels: Object3D[] = []) {
+  constructor(levels: LevelInput = []) {
     super();
     this.levels = this.entries;
-    if (levels.length > 0) this.build(levels);
+    if (levels.length > 0) {
+      this.build(levelObjects(levels));
+      applyThresholds(levels, this.entries);
+    }
   }
 
   private build(objects: Object3D[]): void {
     const [source] = objects;
     if (!source) throw new Error("Lod: needs at least the source level");
-    if (isLazyImpostor(source)) throw new Error("Lod: the source level must be eager");
-    for (const object of objects)
-      if (isLazyImpostor(object)) {
-        object.materialize();
-      }
+    if (objects.every(isLazyLevel)) throw new Error("Lod: at least one level must be eager");
     for (const object of objects) rejectSkinned(object, "Lod");
     const { own, placed } = measureLevels(objects, "Lod");
     this.sphere = placed;
@@ -98,12 +125,17 @@ export class Lod extends Object3D<LevelsEventMap> {
       this.entries.push(level);
       this.draws.push(draw);
       this.hook(object, draw, level.nested, object);
-      if (available(object)) this.installed.add(object);
     });
     estimate(this.entries, 2 * own.radius);
-    this.fallback = fallbacks(objects);
+    this.residency.reset();
     validate(this.entries);
-    for (const object of objects) if (isLazyImpostor(object)) object.retain();
+    let drawable = false;
+    for (const object of objects)
+      if (!isLazyLevel(object))
+        object.traverseVisible((node) => {
+          drawable ||= isMesh(node);
+        });
+    if (!drawable) watchContext(this);
   }
 
   /** Fade the meshes under `node` by `draw` and learn the viewport height from them; an inner Lod fades its own. */
@@ -124,49 +156,58 @@ export class Lod extends Object3D<LevelsEventMap> {
     this.casterRadius += padding;
   }
 
-  /** Pick and fade levels for `camera`; three's renderer calls this itself while `autoUpdate`. */
+  /** Pick and fade levels for `camera`; detail starts after a draw supplies its render context. */
   update(camera: Camera): void {
     const { entries, draws } = this;
     if (this.disposed || entries.length === 0 || inShadowPass(this)) return;
-    let changed = false;
-    if (this.installed.size < entries.length)
-      entries.forEach((entry, i) => {
-        if (!isLazyImpostor(entry.object) || this.installed.has(entry.object)) return;
-        entry.object.materialize();
-        if (!available(entry.object)) return;
-        const draw = draws[i];
-        if (!draw) throw new Error("Lod: missing lazy draw");
-        this.hook(entry.object, draw, false, entry.object);
-        this.installed.add(entry.object);
-        changed = true;
-      });
-    if (changed) {
-      this.fallback = fallbacks(entries.map((entry) => entry.object));
-      refreshWind(this);
-      this.updateWorldMatrix(true, true);
-      this.dispatchEvent({ type: "levelschange" });
-    }
     validate(entries);
     view.begin(camera, viewportHeight(camera) ?? TYPICAL_HEIGHT, this.forceLevel);
     tintLevels(entries, Lod.debug);
     const height = view.pixels(this.matrixWorld, this.sphere) * Lod.quality;
     const desired = levelAt(entries, height, this.forceLevel);
-    if (isLazyImpostor(desired.object) && desired.object.status === "idle" && inView(camera, this.matrixWorld, this.sphere)) desired.object.request();
-    const fallback = this.fallback;
-    const level = entries[fallback[desired.index] ?? 0];
-    let t = view.fades ? fadeProgress(entries, desired, height) : 0;
-    const neighbour = t > 0 ? entries[desired.index - 1]?.object : undefined;
-    if (neighbour && isLazyImpostor(neighbour) && neighbour.status === "idle" && inView(camera, this.matrixWorld, this.sphere)) neighbour.request();
-    const finer = t > 0 ? entries[fallback[desired.index - 1] ?? 0] : undefined;
-    if (level === finer) t = 0;
+    this.residency.demand(
+      camera,
+      inView(camera, this.matrixWorld, this.sphere) ? demandLevels(entries, height, this.forceLevel).map(({ index }) => index) : [],
+    );
+    this.residency.update(camera);
+    const { fallback, previous } = this.residency;
+    const neighbour = Math.max(0, desired.index - 1);
+    let level = at(fallback, desired.index);
+    let finer = at(fallback, neighbour);
+    const fade = view.fades ? fadeProgress(entries, desired, height) : 0;
+    let t = level === finer ? 0 : fade;
+    const progress = this.residency.progress;
+    if (progress < 1) {
+      const before = at(previous, desired.index),
+        beforeFiner = at(previous, neighbour);
+      [level, finer, t] = handover([before, beforeFiner, before === beforeFiner ? 0 : fade], [level, finer, t], progress);
+    }
     const diameter = 2 * this.casterRadius * this.matrixWorld.getMaxScaleOnAxis();
     entries.forEach((each, i) => {
       const draw = draws[i];
       if (!draw) throw new Error("Lod: a level has no draw");
-      draw.fade = each === level ? t : each === finer ? -t : 0;
+      draw.fade = i === level ? t : i === finer ? -t : 0;
       draw.diameter = diameter;
-      each.object.visible = each === level || (t > 0 && each === finer);
+      each.object.visible = i === level || (t > 0 && i === finer);
     });
+  }
+
+  private async install(index: number, lazy: LazyLevel, context: RenderContext): Promise<void> {
+    const template = lazy.object;
+    if (!template) throw new Error("Lod: decoded level has no object");
+    const entry = at(this.entries, index);
+    const object = template.clone();
+    lazy.add(object);
+    lazy.visible = false;
+    rejectSkinned(object, "Lod");
+    prepareBounds(object, lazy.box);
+    this.hook(object, at(this.draws, index), isLOD(object), object);
+    object.updateWorldMatrix(true, true);
+    refreshWind(this, object);
+    await compileLevel(object, context);
+    if (this.disposed) return;
+    entry.nested = isLOD(object);
+    unwatchContext(this);
   }
 
   override raycast(raycaster: Raycaster, intersects: Intersection[]): boolean {
@@ -199,6 +240,15 @@ export class Lod extends Object3D<LevelsEventMap> {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    for (const { object } of this.entries) isLazyImpostor(object) ? object.release() : disposeTree(object);
+    unwatchContext(this);
+    this.residency.dispose(() => {
+      for (const { object } of this.entries) disposeTree(object);
+    });
   }
+}
+
+function at<T>(values: readonly T[], index: number): T {
+  const value = values[index];
+  if (value === undefined) throw new Error(`Lod: missing index ${index}`);
+  return value;
 }

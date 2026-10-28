@@ -69,3 +69,18 @@ export const shade = once(
 export const wallColors = ["#ece6da", "#e3dccb", "#d9e0dc", "#ead8c8", "#d6d9e2", "#efe9d6", "#d8cfbd", "#e6e1e9"];
 export const fabricColors = ["#6d7d8c", "#8a6f5a", "#4f6250", "#9c8f7a", "#7a4f4a", "#58606e", "#b7aa92", "#3f4a5a"];
 export const woodColors = ["#8a6040", "#a47a52", "#6e4a32", "#c09a70", "#5a3e2c"];
+
+export function furnishingMaterial(name: string): THREE.Material | undefined {
+  switch (name) {
+    case "tiles":
+      return tiles();
+    case "fabric":
+      return fabric();
+    case "gloss":
+      return gloss();
+    case "lamp shade":
+      return shade();
+    default:
+      return undefined;
+  }
+}

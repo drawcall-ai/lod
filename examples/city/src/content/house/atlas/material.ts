@@ -1,4 +1,4 @@
-import { MeshStandardNodeMaterial, Vector4, type Renderer, type Texture } from "three/webgpu";
+import { MeshStandardNodeMaterial, Vector4, type Texture } from "three/webgpu";
 import { attribute, normalMap, normalView, sharedUniformGroup, texture, uint, uniformArray, uv, varying, vec4 } from "three/tsl";
 import { weatherColor, weatherStrength, type Surface } from "../../materials.ts";
 import { TextureArray } from "./textures.ts";
@@ -10,12 +10,12 @@ export class HouseAtlas {
   private readonly ids = new Map<Surface, number>();
   private readonly arrays: TextureArray[] = [];
 
-  constructor(renderer: Renderer, surfaces: readonly Surface[]) {
+  constructor(surfaces: readonly Surface[], shared?: readonly TextureArray[]) {
     const rows = [...new Set(surfaces)];
     for (const material of rows) validate(material);
     try {
       const array = (maps: (Texture | null)[], name: string) => {
-        const made = new TextureArray(renderer, maps, name);
+        const made = shared?.[this.arrays.length] ?? new TextureArray(maps, name);
         this.arrays.push(made);
         return made;
       };

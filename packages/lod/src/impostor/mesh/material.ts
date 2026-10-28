@@ -1,4 +1,15 @@
-import { DoubleSide, Matrix4, MeshStandardNodeMaterial, PhysicalLightingModel, TSL, Vector3, type Node, type NodeBuilder, type Object3D } from "three/webgpu";
+import {
+  DoubleSide,
+  Matrix4,
+  MeshStandardNodeMaterial,
+  PhysicalLightingModel,
+  StorageInstancedBufferAttribute,
+  TSL,
+  Vector3,
+  type Node,
+  type NodeBuilder,
+  type Object3D,
+} from "three/webgpu";
 import {
   Fn,
   diffuseColor,
@@ -9,36 +20,41 @@ import {
   mix,
   specularColor,
   specularF90,
+  storage,
   uniform,
   varying,
   varyingProperty,
   vec3,
   vec4,
 } from "three/tsl";
-import { castPosition, instanceMatrixOf, isSingle, tint } from "../../fade.js";
+import { castPosition, instanceMatrixOf, tint } from "../../fade.js";
 import { isImpostorMesh, isShadowPass } from "../../three.js";
-import { buildKey, instanceColors, isNodeOf } from "../../tsl.js";
+import { buildKey, instanceGroup, isNodeOf } from "../../tsl.js";
 import { boundingRadius, boxCentre, boxExtent, type Impostor } from "../impostor.js";
 import { buildCard, card, type CardInputs } from "./card.js";
-import { buildSurface, cosine, type Surface, type SurfaceInputs } from "./surface.js";
+import { buildSurface, cosine, type Lighting, type Surface, type SurfaceInputs } from "./surface.js";
 import { acquireTextures, releaseTextures } from "./textures.js";
 
-/** The colour of an ImpostorMesh of one instance, white unless set, read per object as its matrix is (see `isSingle`). */
-const singleColor = uniform(new Vector3(1, 1, 1)).onObjectUpdate(({ object }, self) =>
-  object && isImpostorMesh(object) && object.instanceColor ? self.value.fromArray(object.instanceColor.array) : self.value.set(1, 1, 1),
+const white = new StorageInstancedBufferAttribute(new Float32Array([1, 1, 1, 1]), 4);
+const colors = storage(white, "vec4", 0)
+  .setName("lodCardColors")
+  .setGroup(instanceGroup)
+  .toReadOnly()
+  .onObjectUpdate(({ object }) => (object && isImpostorMesh(object) && object.instanceColor ? object.instanceColor : white));
+const colorIndex = uniform(0, "uint").onObjectUpdate(({ object }) => Number(!!object && isImpostorMesh(object) && object.instanceColor !== null));
+const placement = uniform(new Matrix4()).onObjectUpdate(({ object }, self) =>
+  object && isImpostorMesh(object) ? self.value.copy(object.placement) : self.value.identity(),
 );
 
 /** How `object`, an ImpostorMesh, places and colours its instances. */
-function instancesOf(object: Object3D): { matrix: Node<"mat4">; color: Node<"vec3"> | null } {
+function instancesOf(object: Object3D): { matrix: Node<"mat4">; color: Node<"vec3"> } {
   const matrix = instanceMatrixOf(object);
   if (!matrix || !isImpostorMesh(object)) throw new Error(`ImpostorMesh: "${object.name}" is drawn with an impostor's material but is no ImpostorMesh`);
-  if (isSingle(object)) return { matrix, color: singleColor };
-  const { instanceColor } = object;
-  return { matrix, color: instanceColor && varying(instanceColors(instanceColor).element(instanceIndex).xyz).setInterpolation("flat") };
+  return { matrix, color: varying(colors.element(instanceIndex.mul(colorIndex)).xyz).setInterpolation("flat") };
 }
 
 /** How an ImpostorMesh draws: see `ImpostorMeshOptions`. */
-export interface ImpostorShading {
+interface ImpostorShading {
   cutoff: number;
   parallax: number;
   tolerance: number;
@@ -54,8 +70,6 @@ export interface ImpostorShading {
  */
 export class ImpostorMaterial extends MeshStandardNodeMaterial {
   readonly isImpostorMaterial = true;
-  /** Where the card sits within an instance's space; identity except under InstancedLod. */
-  readonly placement = new Matrix4();
   /** An object-space deformation of every instance (wind), applied before `placement`; null for none. */
   deformNode: Node<"mat4"> | null = null;
   /** Mip bias of every atlas read: see `ImpostorMeshOptions.mipBias`, which it starts at. */
@@ -69,6 +83,7 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
    * the builder.
    */
   private readonly surfaces = new WeakMap<object, Surface>();
+  private readonly multisampled = new WeakMap<object, boolean>();
   private readonly anchor = float(0);
   private users = 0;
   private disposed = false;
@@ -93,7 +108,7 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
       radius: uniform(boundingRadius(impostor.box)),
       halfSize: uniform(impostor.halfSize),
       frames: uniform(impostor.frames),
-      placement: uniform(this.placement),
+      placement,
       cell: impostor.size / impostor.frames,
       maps: { base, normalDepth, orm, emissive: layer("emissive") },
       cutoff: shading.cutoff,
@@ -109,18 +124,25 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
       if (isShadowPass(builder.material)) return color;
       const rgb = color.rgb.mul(materialColor.rgb).mul(tint);
       const instance = instancesOf(builder.object).color;
-      return vec4(instance ? rgb.mul(instance) : rgb, color.a);
+      return vec4(rgb.mul(instance), color.a);
     })();
     this.maskNode = Fn((builder) => this.surface(builder).drawn)();
     this.maskShadowNode = this.maskNode;
     // Shadow passes only (see setupDepth): maps hold the resolved surface, not the card.
-    this.depthNode = Fn((builder) => this.surface(builder).depth)();
-    this.receivedShadowPositionNode = Fn((builder) => this.surface(builder).shadowPosition)();
+    this.depthNode = Fn((builder) => this.surface(builder).resolve().depth)();
+    this.receivedShadowPositionNode = Fn((builder) => this.surface(builder).resolve().shadowPosition)();
     this.normalNode = Fn((builder) => this.lit(builder).normal)();
     this.roughnessNode = Fn((builder) => this.lit(builder).roughness)();
     this.metalnessNode = Fn((builder) => this.lit(builder).metalness)();
     this.aoNode = Fn((builder) => this.lit(builder).occlusion)();
     if (layer("emissive")) this.emissiveNode = Fn((builder) => this.lit(builder).emissive ?? vec3(0))();
+  }
+
+  override setup(builder: NodeBuilder): void {
+    // Async shader builds yield between stages; snapshot this pass before the
+    // renderer returns to a different target while the fragment stage is pending.
+    this.multisampled.set(buildKey(builder, this.anchor), builder.renderer.currentSamples > 1);
+    super.setup(builder);
   }
 
   /** One mesh starts or stops sharing this material, including when `copy` replaces it. */
@@ -160,9 +182,11 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
     let surface = this.surfaces.get(build);
     if (!surface) {
       const shadow = isShadowPass(builder.material);
+      const multisampled = shadow ? false : this.multisampled.get(build);
+      if (multisampled === undefined) throw new Error("ImpostorMaterial: surface built before pass setup");
       surface = buildSurface(this.inputs, card, {
         parallax: shadow ? 0 : this.shading.parallax,
-        multisampled: !shadow && builder.renderer.currentSamples > 1,
+        multisampled,
         lit: !shadow,
       });
       this.surfaces.set(build, surface);
@@ -170,10 +194,10 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
     return surface;
   }
 
-  private lit(builder: NodeBuilder): NonNullable<Surface["lit"]> {
-    const lit = this.surface(builder).lit;
-    if (!lit) throw new Error("ImpostorMesh: lighting read in a shadow pass");
-    return lit;
+  private lit(builder: NodeBuilder): Lighting {
+    const light = this.surface(builder).light;
+    if (!light) throw new Error("ImpostorMesh: lighting read in a shadow pass");
+    return light();
   }
 
   override setupLightingModel(): PhysicalLightingModel {

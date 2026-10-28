@@ -82,8 +82,9 @@ const grey = (c: Node<"vec3">, weights: [number, number, number]) => dot(c, vec3
  * bare soil, so no repeat survives at any height. Fields are bare soil furrowed along
  * their x axis (the corn rows, 0.75 m apart); forests have a floor of dark litter;
  * farmland parcels show their crops, and town lawns are mown in stripes.
+ * An explicit `footprint` replaces pixel derivatives for a vertex evaluation.
  */
-export function groundShading(zones: Zones): Ground {
+export function groundShading(zones: Zones, footprint?: Node<"float">): Ground {
   // the maps once each: every read of one is a sample of the same binding
   const lawnMap = texture(textureOf("Grass001", "diff"));
   const aerialMap = texture(textureOf("aerial_grass_rock", "diff"));
@@ -149,7 +150,9 @@ export function groundShading(zones: Zones): Ground {
         bare.assign(smoothstep(0.7, 0.78, fbm(xz.div(55).add(31))).mul(smoothstep(0.55, 0.75, macro)));
       });
       const soil = raw(soilMap, xz.div(2)).rgb.toVar();
-      const earth = mix(vec3(grey(soil, [0.3, 0.55, 0.15])), soil, 0.6).mul(0.85).toVar();
+      const earth = mix(vec3(grey(soil, [0.3, 0.55, 0.15])), soil, 0.6)
+        .mul(0.85)
+        .toVar();
       const c = mix(patched, earth, bare.mul(0.85)).toVar();
 
       // forest floor: dark leaf litter with moss, out to the forest's wavy edge (forestEdge)
@@ -162,7 +165,14 @@ export function groundShading(zones: Zones): Ground {
         If(r.lessThan(f.z.mul(1.7).add(8)), () => {
           const fray = noise2(xz.div(9)).sub(0.5).mul(8);
           const edge = forestEdge(f.z, atan(d.y, d.x), f.w);
-          wood.assign(max(wood, smoothstep(-10, 4, r.sub(edge).add(fray)).oneMinus().mul(clearing(d, f.z, f.w).oneMinus())));
+          wood.assign(
+            max(
+              wood,
+              smoothstep(-10, 4, r.sub(edge).add(fray))
+                .oneMinus()
+                .mul(clearing(d, f.z, f.w).oneMinus()),
+            ),
+          );
         });
       });
       If(wood.greaterThan(0), () => {
@@ -170,7 +180,10 @@ export function groundShading(zones: Zones): Ground {
       });
 
       // fields: ploughed soil in ridges along the rows, a little weed at the margins
-      const nearFields = xz.greaterThan(vec2(fieldsLo.x, fieldsLo.y)).all().and(xz.lessThan(vec2(fieldsHi.x, fieldsHi.y)).all());
+      const nearFields = xz
+        .greaterThan(vec2(fieldsLo.x, fieldsLo.y))
+        .all()
+        .and(xz.lessThan(vec2(fieldsHi.x, fieldsHi.y)).all());
       If(nearFields, () => {
         Loop(fields.length, ({ i }) => {
           const box = fieldBoxes.element(i);
@@ -183,13 +196,22 @@ export function groundShading(zones: Zones): Ground {
             const margin = noise2(xz.mul(0.4)).sub(0.5).mul(1.5);
             const inside = smoothstep(-0.5, 1.5, out.add(margin)).oneMinus();
             // the rows stand 0.375 m off every multiple of 0.75 m from the centre (see world/corn/field.ts)
-            const ridge = cos(local.y.sub(0.375).mul((2 * Math.PI) / 0.75)).mul(0.5).add(0.5);
-            const field = soil.mul(ridge.mul(0.3).mul(smoothstep(30, 120, dist).oneMinus()).add(0.62)).mul(meso.mul(0.3).add(0.85));
+            const ridge = cos(local.y.sub(0.375).mul((2 * Math.PI) / 0.75))
+              .mul(0.5)
+              .add(0.5);
+            const field = soil
+              .mul(
+                ridge
+                  .mul(0.3)
+                  .mul(smoothstep(30, 120, dist).oneMinus())
+                  .add(0.62),
+              )
+              .mul(meso.mul(0.3).add(0.85));
             c.assign(mix(c, field, inside));
           });
         });
       });
-      if (zones.parcels) parcels(zones, zones.parcels, { xz, dist, c, soil, fine, soilMap, lawnMean, top });
+      if (zones.parcels) parcels(zones, zones.parcels, { xz, dist, c, soil, fine, soilMap, lawnMean, top, footprint });
       return c;
     },
     // no function of its own (layout): three declares no textures read in one
@@ -208,26 +230,47 @@ interface Painting {
   soilMap: THREE.TextureNode;
   lawnMean: Node<"vec3">;
   top: Node<"float">;
+  footprint?: Node<"float">;
 }
 
 /** Paints the farmland parcels and the town's mown lawns over `c` (see `Zones`). */
 function parcels(zones: Zones, { texture: cells, extent }: NonNullable<Zones["parcels"]>, p: Painting): void {
-  const { xz, dist, c, soil, fine, soilMap, lawnMean, top } = p;
+  const { xz, dist, c, soil, fine, soilMap, lawnMean, top, footprint } = p;
   const map = texture(cells);
   const size = cells.image.width;
   // the cells, looked up through a little noise so their edges do not step
-  const jitter = vec2(noise2(xz.mul(0.35)), noise2(xz.mul(0.35).add(17))).sub(0.5).mul(2.5);
-  const at = clamp(floor(xz.add(jitter).add(extent).div(2 * extent).mul(size)), 0, size - 1).toVar();
+  const jitter = vec2(noise2(xz.mul(0.35)), noise2(xz.mul(0.35).add(17)))
+    .sub(0.5)
+    .mul(2.5);
+  const at = clamp(
+    floor(
+      xz
+        .add(jitter)
+        .add(extent)
+        .div(2 * extent)
+        .mul(size),
+    ),
+    0,
+    size - 1,
+  ).toVar();
   const cell = (dx: number, dy: number) => map.load(ivec2(clamp(at.add(vec2(dx, dy)), 0, size - 1)));
   const own = cell(0, 0).toVar();
   const crop = floor(own.r.mul(255).add(0.5)).toVar();
   const { town } = zones;
   if (town) {
     // garden lawns, mown in light and dark stripes along the street grid
-    const lawn = crop.equal(0).and(own.a.lessThan(0.5 / 255)).and(distance(xz, vec2(town.x, town.z)).lessThan(town.radius));
+    const lawn = crop
+      .equal(0)
+      .and(own.a.lessThan(0.5 / 255))
+      .and(distance(xz, vec2(town.x, town.z)).lessThan(town.radius));
     If(lawn, () => {
       const stripe = sign(sin(dot(xz, vec2(Math.cos(town.angle), Math.sin(town.angle))).mul(Math.PI / 0.8)));
-      c.mulAssign(stripe.mul(0.035).mul(smoothstep(30, 90, dist).oneMinus()).add(1));
+      c.mulAssign(
+        stripe
+          .mul(0.035)
+          .mul(smoothstep(30, 90, dist).oneMinus())
+          .add(1),
+      );
     });
   }
   If(crop.greaterThanEqual(1), () => {
@@ -248,30 +291,46 @@ function parcels(zones: Zones, { texture: cells, extent }: NonNullable<Zones["pa
     const near = smoothstep(40, 160, dist).oneMinus();
     const grass = grey(fine, [0.3, 0.59, 0.11]).div(max(grey(lawnMean, [0.3, 0.59, 0.11]), 0.01));
     const detail = mix(1, grass, near.mul(0.6)).toVar();
-    const patchy = noise2(xz.div(30).add(tint.mul(40))).mul(0.3).add(0.85).toVar();
+    const patchy = noise2(xz.div(30).add(tint.mul(40)))
+      .mul(0.3)
+      .add(0.85)
+      .toVar();
     // tractor tramlines, 20 m apart, two wheel tracks each
     const lane = abs(fract(across.div(20)).sub(0.5)).mul(20);
     // once a pixel spans more than the tracks are wide they alias into rows of dots: blend
     // them to their share of the ground, a few percent
-    const tracks = mix(smoothstep(0.15, 0.3, abs(lane.sub(0.9))).oneMinus(), 0.03, smoothstep(0.08, 0.4, fwidth(across)));
+    const tracks = mix(smoothstep(0.15, 0.3, abs(lane.sub(0.9))).oneMinus(), 0.03, smoothstep(0.08, 0.4, footprint ?? fwidth(across)));
     const earth = soil.mul(0.55);
     const pasture = c.mul(vec3(1, 1.2, 0.78)).mul(tint.mul(0.3).add(1.1));
-    const wheat = mix(vec3(0.36, 0.27, 0.1), vec3(0.47, 0.37, 0.15), tint).mul(patchy).mul(detail);
-    const rapeseed = mix(vec3(0.52, 0.42, 0.02), vec3(0.2, 0.3, 0.05), tint.mul(0.2).add(0.25)).mul(patchy).mul(detail);
+    const wheat = mix(vec3(0.36, 0.27, 0.1), vec3(0.47, 0.37, 0.15), tint)
+      .mul(patchy)
+      .mul(detail);
+    const rapeseed = mix(vec3(0.52, 0.42, 0.02), vec3(0.2, 0.3, 0.05), tint.mul(0.2).add(0.25))
+      .mul(patchy)
+      .mul(detail);
     // ploughed: earth brown, the soil texture's grain in it, furrows across the near ground
     const grain = grey(soil, [0.3, 0.55, 0.15]).div(max(grey(raw(soilMap, vec2(0.5)).level(top).rgb, [0.3, 0.55, 0.15]), 0.01));
     const dirt = vec3(0.26, 0.18, 0.11).mul(tint.mul(0.4).add(0.8)).mul(grain.mul(0.6).add(0.7));
-    const furrows = cos(across.mul((2 * Math.PI) / 0.35)).mul(0.5).add(0.5).mul(0.3).mul(near).add(0.8);
-    const ploughed = dirt.mul(furrows).mul(patchy).mul(mix(1, detail, 0.5));
+    const furrows = cos(across.mul((2 * Math.PI) / 0.35))
+      .mul(0.5)
+      .add(0.5)
+      .mul(0.3)
+      .mul(near)
+      .add(0.8);
+    const ploughed = dirt
+      .mul(furrows)
+      .mul(patchy)
+      .mul(mix(1, detail, 0.5));
     // stubble: pale straw over soil, in soft swaths where the harvester went
-    const swath = sin(across.mul((2 * Math.PI) / 6).add(noise2(xz.div(20)).mul(3))).mul(0.5).add(0.5);
-    const stubble = mix(vec3(0.42, 0.36, 0.22), earth, swath.mul(0.15).add(0.25)).mul(swath.mul(0.08).add(0.92)).mul(patchy).mul(detail);
+    const swath = sin(across.mul((2 * Math.PI) / 6).add(noise2(xz.div(20)).mul(3)))
+      .mul(0.5)
+      .add(0.5);
+    const stubble = mix(vec3(0.42, 0.36, 0.22), earth, swath.mul(0.15).add(0.25))
+      .mul(swath.mul(0.08).add(0.92))
+      .mul(patchy)
+      .mul(detail);
     const grown = select(crop.equal(2), wheat, rapeseed);
-    const crops = select(
-      crop.equal(1),
-      pasture,
-      select(crop.lessThanEqual(3), mix(grown, earth, tracks.mul(0.8)), select(crop.equal(4), ploughed, stubble)),
-    );
+    const crops = select(crop.equal(1), pasture, select(crop.lessThanEqual(3), mix(grown, earth, tracks.mul(0.8)), select(crop.equal(4), ploughed, stubble)));
     c.assign(mix(crops, c, margin.mul(0.8)));
   });
 }

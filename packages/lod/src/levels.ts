@@ -1,6 +1,6 @@
 import { Color, type Object3D } from "three/webgpu";
 import { texelPixels } from "./impostor/impostor.js";
-import { isLazyImpostor, isImpostorMesh } from "./three.js";
+import { isLazyLevel, isImpostorMesh, isObject3D } from "./three.js";
 
 // The levels Lod and InstancedLod share: their thresholds, the defaults of those, which
 // level a height picks and how far it has faded in (see fade.ts).
@@ -31,6 +31,22 @@ export interface LodLevel {
   maxPixels: number;
 }
 
+/** Objects use estimated thresholds; entries keep their supplied thresholds. */
+export type LevelInput = readonly (Object3D | LodLevel)[];
+
+export function levelObjects(levels: LevelInput): Object3D[] {
+  return levels.map((level) => (isObject3D(level) ? level : level.object));
+}
+
+export function applyThresholds(input: LevelInput, levels: readonly Level[]): void {
+  input.forEach((entry, index) => {
+    if (isObject3D(entry)) return;
+    const level = levels[index];
+    if (!level) throw new Error(`LOD: missing level ${index}`);
+    level.maxPixels = entry.maxPixels;
+  });
+}
+
 export class Level implements LodLevel {
   /** Debug tint (see `Lod.debug`), white when off; shared by every draw of the level. */
   readonly tint = new Color(1, 1, 1);
@@ -45,11 +61,11 @@ export class Level implements LodLevel {
     readonly object: Object3D,
     readonly index: number,
     /** A nested LOD switches its own levels and fades by them, not by its parent. */
-    readonly nested: boolean,
+    public nested: boolean,
     /** The levels this one is in, which its default depends on. */
     private readonly ladder: readonly Level[],
   ) {
-    if (isLazyImpostor(object)) this.explicit = object.maxPixels;
+    if (isLazyLevel(object)) this.explicit = object.maxPixels;
   }
 
   get maxPixels(): number {
@@ -99,7 +115,7 @@ export function estimate(levels: readonly Level[], diameter: number): void {
   let finer = 1024;
   for (const level of levels.slice(1)) {
     const error = errorOf(level.object);
-    if (isLazyImpostor(level.object)) level.base = level.object.maxPixels;
+    if (isLazyLevel(level.object)) level.base = level.object.maxPixels;
     else if (error !== undefined) level.base = diameter / Math.max(error, diameter * 1e-4);
     else if (isImpostorMesh(level.object)) level.base = texelPixels(level.object.impostor);
     else level.base = finer / 2;
@@ -162,4 +178,26 @@ const TINTS = [0xff6060, 0x60ff60, 0x6080ff, 0xffd040, 0xff60ff, 0x60ffff].map((
 /** Give each level its debug tint, or white. */
 export function tintLevels(levels: readonly Level[], debug: boolean): void {
   for (const level of levels) level.tint.set(debug ? (TINTS[level.index % TINTS.length] ?? 0xffffff) : 0xffffff);
+}
+
+// Start refinement 20% below its lower fade bound, leaving time for decode and GPU preparation.
+export const DEMAND = 0.8;
+
+/** Logical demand and the next finer fade partner, including a small approach margin. */
+export function demandLevels(levels: readonly Level[], height: number, forced: number | null): Level[] {
+  const desired = levelAt(levels, height, forced);
+  if (forced !== null) return [desired];
+  const finer = levels[desired.index - 1];
+  return finer && height >= DEMAND * desired.maxPixels * (1 - FADE) ? [desired, finer] : [desired];
+}
+
+/** Nearest installed finer level, else nearest coarser; eager empty levels intentionally cull. */
+export function fallbacks(objects: readonly Object3D[], installed: ReadonlySet<Object3D> = new Set()): number[] {
+  const ready = objects.map((object) => !isLazyLevel(object) || installed.has(object));
+  if (!ready.some(Boolean)) throw new Error("LOD: at least one level must be eager");
+  return objects.map((_, index) => {
+    for (let finer = index; finer >= 0; finer--) if (ready[finer]) return finer;
+    for (let coarser = index + 1; coarser < ready.length; coarser++) if (ready[coarser]) return coarser;
+    throw new Error("LOD: no installed fallback");
+  });
 }

@@ -1,4 +1,4 @@
-import { unzlibSync, zlibSync } from "fflate";
+import { unzlib, unzlibSync, zlibSync } from "fflate";
 import {
   KHR_DF_CHANNEL_RGBSDA_ALPHA,
   KHR_DF_CHANNEL_RGBSDA_BLUE,
@@ -78,13 +78,20 @@ export function decodeImpostor(input: Input): Impostor {
   return decoded(file, levels);
 }
 
-/** Inflate cache files asynchronously with the runtime's native zlib decoder. */
+/** Inflate cached mips asynchronously, moving large mip payloads to a worker. */
 export async function decodeImpostorAsync(input: Input): Promise<Impostor> {
-  if (typeof DecompressionStream === "undefined") return decodeImpostor(input);
   const file = parse(input);
   const levels = await Promise.all(
-    file.levels.map(async ({ data }, m) => {
+    file.levels.map(async ({ data, length }, m) => {
       try {
+        // Move large mips off the main thread; small mips avoid worker startup cost.
+        if (length >= 8 * 1024 * 1024)
+          return await new Promise<Uint8Array>((resolve, reject) => {
+            unzlib(data.slice(), { consume: true }, (error, raw) => {
+              if (error) reject(error);
+              else resolve(raw);
+            });
+          });
         const stream = new Blob([data.slice()]).stream().pipeThrough(new DecompressionStream("deflate"));
         return new Uint8Array(await new Response(stream).arrayBuffer());
       } catch (error) {
@@ -147,7 +154,7 @@ function invalid(why: string, error: unknown): Error {
   return new Error(`Invalid impostor file: ${why} (${error instanceof Error ? error.message : String(error)})`, { cause: error });
 }
 
-export function fromBase64(text: string): Uint8Array {
+function fromBase64(text: string): Uint8Array {
   // Native where available (Node 25+, current browsers); the fallback covers the rest.
   const native: unknown = Reflect.get(Uint8Array, "fromBase64");
   const decoded: unknown = typeof native === "function" ? Reflect.apply(native, Uint8Array, [text]) : undefined;

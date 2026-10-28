@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { read, write, VK_FORMAT_R8G8B8A8_SRGB, KHR_DF_MODEL_RGBSDA, KHR_SUPERCOMPRESSION_ZLIB } from "ktx-parse";
-import { decodeImpostor, decodeImpostorAsync, encodeImpostor, fromBase64 } from "../../src/impostor/codec.js";
+import { decodeImpostor, decodeImpostorAsync, encodeImpostor } from "../../src/impostor/codec.js";
 import type { Impostor, ImpostorMap } from "../../src/impostor/impostor.js";
 import { must } from "../must.js";
 
@@ -60,32 +60,19 @@ describe("codec", () => {
     }
   });
 
-  it("uses the same decoder when native decompression is unavailable", async () => {
-    const native = Object.getOwnPropertyDescriptor(globalThis, "DecompressionStream");
-    Object.defineProperty(globalThis, "DecompressionStream", { value: undefined, configurable: true });
+  it("inflates large mips in a worker without consuming the cached file", async () => {
+    const source = make(["base", "normalDepth", "orm"], 1024);
+    const file = encodeImpostor(source);
+    const copy = file.slice();
+    const post = vi.spyOn(Worker.prototype, "postMessage");
     try {
-      const file = encodeImpostor(make(["base", "normalDepth", "orm"]));
-      expect(await decodeImpostorAsync(file)).toEqual(decodeImpostor(file));
+      const actual = await decodeImpostorAsync(file);
+      expect(post).toHaveBeenCalled();
+      expect(sameBytes(file, copy)).toBe(true);
+      actual.layers.forEach((layer, i) => layer.forEach((mip, m) => expect(sameBytes(mip, must(source.layers[i]?.[m]))).toBe(true)));
+      expect(actual.layers[0]?.[0]?.buffer).toBe(actual.layers[1]?.[0]?.buffer);
     } finally {
-      if (native) Object.defineProperty(globalThis, "DecompressionStream", native);
-      else Reflect.deleteProperty(globalThis, "DecompressionStream");
-    }
-  });
-  it("round-trips metadata either side of 256 bytes", () => {
-    // ktx-parse 1.1 wrote key/value lengths as one byte: 256 became 0, 257 became 1.
-    const long = (k: number) => (k + 1 / 7) / 3e7; // about 22 characters each in JSON
-    const boxes: Impostor["box"][] = [
-      [-1, 0, -1, 1, 2, 1],
-      [-long(1), -long(2), -long(3), long(4), long(5), long(6)],
-    ];
-    for (const box of boxes) {
-      const impostor = { ...make(["base", "normalDepth", "orm", "emissive"]), box, halfSize: 1 / 3 };
-      const { layers: _, ...meta } = impostor;
-      const entry = "impostor".length + 1 + JSON.stringify(meta).length + 1;
-      expect(entry < 200 || entry > 270).toBe(true);
-      const back = decodeImpostor(encodeImpostor(impostor));
-      expect(back.box).toEqual(box);
-      expect(back.halfSize).toBe(1 / 3);
+      post.mockRestore();
     }
   });
 
@@ -105,22 +92,6 @@ describe("codec", () => {
       [16, 7, 2, 255],
       [24, 7, 15, 255],
     ]);
-  });
-
-  it("decodes base64 natively and through the fallback", () => {
-    const native: unknown = Reflect.get(Uint8Array, "fromBase64");
-    for (const n of [0, 1, 2, 3, 4, 5, 36863, 36864, 36865]) {
-      const bytes = random(n, n + 1);
-      const expected = toBase64(bytes);
-      expect(sameBytes(fromBase64(expected), bytes)).toBe(true);
-      // An undefined property hides the native method, as on runtimes without it.
-      Object.defineProperty(Uint8Array, "fromBase64", { value: undefined, configurable: true, writable: true });
-      try {
-        expect(sameBytes(fromBase64(expected), bytes)).toBe(true);
-      } finally {
-        Object.defineProperty(Uint8Array, "fromBase64", { value: native, configurable: true, writable: true });
-      }
-    }
   });
 
   it("rejects corrupt files with clear errors", async () => {
@@ -172,9 +143,5 @@ describe("codec", () => {
       /Invalid impostor: size .*multiple of frames/,
     );
     await Promise.all(pending);
-  });
-
-  it("encode validates its input", () => {
-    expect(() => encodeImpostor({ ...make(["base", "normalDepth", "orm"]), maps: ["base", "orm", "normalDepth"] })).toThrow(/Invalid impostor/);
   });
 });

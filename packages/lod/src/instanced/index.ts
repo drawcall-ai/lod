@@ -1,7 +1,6 @@
 import {
   Box3,
   InstancedMesh,
-  type BufferAttribute,
   type Color,
   Matrix4,
   Object3D,
@@ -9,26 +8,42 @@ import {
   Sphere,
   Vector3,
   type Camera,
+  type ComputeNode,
   type Intersection,
   type Mesh,
   type Raycaster,
 } from "three/webgpu";
-import { measureLevels } from "../bounds.js";
+import { boundingBox, measureLevels, prepareBounds } from "../bounds.js";
 import { disposeTree } from "../dispose.js";
 import { drawOf, setDraw } from "../fade.js";
 import { placeInterior } from "../baked/interior/material.js";
 import { impostorInstances, type ImpostorMesh } from "../impostor/mesh/index.js";
-import { Level, cloneLevels, copyThresholds, estimate, fadeProgress, levelAt, tintLevels, validate, type LodLevel } from "../levels.js";
+import {
+  Level,
+  cloneLevels,
+  copyThresholds,
+  estimate,
+  fadeProgress,
+  levelAt,
+  tintLevels,
+  validate,
+  type LodLevel,
+  type LevelInput,
+  levelObjects,
+  applyThresholds,
+} from "../levels.js";
 import { Lod } from "../lod.js";
-import { available, fallbacks, inView, type LevelsEventMap } from "../lazy.js";
-import { gpuRenderer, inShadowPass, isLazyImpostor, isImpostorMesh, isInstancedMesh, isLOD, isMesh, rejectSkinned, sameClass } from "../three.js";
-import { TYPICAL_HEIGHT, View, viewportHeight, watchViewport } from "../view.js";
+import { type LazyLevel } from "../lazy.js";
+import { Residency, type LevelsEventMap } from "../residency.js";
+import { gpuRenderer, inShadowPass, isLazyLevel, isImpostorMesh, sameClass } from "../three.js";
+import { TYPICAL_HEIGHT, View, viewportHeight, watchViewport, watchContext, unwatchContext, inView, type RenderContext } from "../view.js";
+import { compileLevel } from "../install.js";
 import { WIND_BOUNDS } from "../wind/hooks.js";
 import { copyWind, refreshWind } from "../wind/index.js";
-import { groupMaterial, indirect, placed, ranges } from "./meshes.js";
+import { groupMaterial, indirect, placed, parts, type Part } from "./meshes.js";
 import { Bounds, stretch } from "./bounds.js";
-import { Dirty } from "./dirty.js";
-import { ARGS_BYTES, Selection, type IndirectDraw } from "./select.js";
+import { Dirty, upload } from "./dirty.js";
+import { ARGS_BYTES, Selection } from "./select.js";
 
 const IDENTITY = new Matrix4();
 const view = new View();
@@ -37,7 +52,6 @@ const ray = new Ray();
 const sphere = new Sphere();
 const instance = new Matrix4();
 const world = new Matrix4();
-const box = new Box3();
 const hits: Intersection[] = [];
 
 /**
@@ -45,7 +59,8 @@ const hits: Intersection[] = [];
  * runs them all in one compute call (each call has a cost of its own: an encoder, a
  * pass, a submit). Each renderer runs those its own buffers are not current with.
  */
-const pending = new Set<Selection>();
+const selections = new Set<Selection>();
+const passes: ComputeNode[] = [];
 
 /** A mesh drawing one level's slots: instanced, or an impostor's cards. */
 type LevelMesh = InstancedMesh | ImpostorMesh;
@@ -107,8 +122,16 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
   private readonly meshes: LevelMesh[][] = [];
   private readonly probes: Probe[] = [];
   private selection: Selection | null = null;
-  private fallback: number[] = [];
-  private readonly installed = new Set<Object3D>();
+  private readonly residency = new Residency(
+    this.entries,
+    (index, lazy, context) => this.install(index, lazy, context),
+    () => {
+      this.selection?.route(this.residency.fallback, true);
+      this.dispatchEvent({ type: "levelschange" });
+    },
+    (error) => this.dispatchEvent({ type: "levelserror", error }),
+  );
+  private readonly offsets = new Map<LevelMesh, number>();
   private disposed = false;
   /** Instance matrices, 16 floats each: the selection uploads them from here. */
   private readonly matrices: Float32Array;
@@ -134,8 +157,15 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
   private blocks: Bounds;
   private readonly last: Selected = { selected: false, eye: new Vector3(), scale: 0, ortho: false, fades: false, forced: null };
 
-  /** `levels[0]` is the source. Empty only as the target of `copy`. */
-  constructor(levels: Object3D[] = [], count = 0) {
+  get pending(): boolean {
+    return this.residency.pending;
+  }
+  get error(): Error | undefined {
+    return this.residency.error;
+  }
+
+  /** `levels[0]` is the source, or share the levels and thresholds of a Lod. */
+  constructor(levels: LevelInput | Lod = [], count = 0) {
     super();
     if (!Number.isInteger(count) || count < 0) throw new Error(`InstancedLod: count must be an integer >= 0, got ${count}`);
     this.levels = this.entries;
@@ -146,119 +176,102 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     this.matrixChanges = new Dirty(count);
     this.colorChanges = new Dirty(count);
     this.matrixChanges.all();
-    const draws = levels.length > 0 ? this.build(levels) : 0;
+    const input = levels instanceof Lod ? levels.levels : levels;
+    const objects = levelObjects(input);
+    const draws = objects.length > 0 ? this.build(objects) : 0;
+    applyThresholds(input, this.entries);
     this.blocks = new Bounds(this.matrices, this.spheres, this.sphere, this.bounds, draws, this.rest);
   }
 
-  private build(objects: Object3D[], rebuilding = false): number {
-    const [source] = objects;
-    if (!source) throw new Error("InstancedLod: needs at least the source level");
-    if (isLazyImpostor(source)) throw new Error("InstancedLod: the source level must be eager");
-    for (const object of objects) {
-      if (isLazyImpostor(object)) {
-        object.materialize();
-      }
-      if (available(object)) this.installed.add(object);
-    }
-    this.fallback = fallbacks(objects);
-    for (const object of objects) {
-      rejectSkinned(object, "InstancedLod");
-      object.traverse((node) => {
-        if (isLOD(node)) throw new Error("InstancedLod: levels cannot contain a Lod or InstancedLod; nest them with Lod");
-        if (isInstancedMesh(node) && !isImpostorMesh(node)) throw new Error(`InstancedLod: levels cannot contain an InstancedMesh ("${node.name}")`);
-      });
-    }
+  private build(objects: Object3D[]): number {
+    if (objects.length === 0) throw new Error("InstancedLod: needs at least the source level");
+    if (objects.every(isLazyLevel)) throw new Error("InstancedLod: at least one level must be eager");
     const { own, placed } = measureLevels(objects, "InstancedLod");
     this.sphere.copy(placed);
-    if (!rebuilding) {
-      objects.forEach((object, i) => this.entries.push(new Level(object, i, false, this.entries)));
-      estimate(this.entries, 2 * own.radius);
-    }
-    validate(this.entries);
-    // Every template mesh, split per material group: an indirect draw has one range.
-    const parts = objects.map((object, level) => {
-      // A template's own transform places it in the instance's space, as a Lod's child.
-      object.updateWorldMatrix(true, true);
-      const outside = object.parent ? object.parent.matrixWorld.clone().invert() : new Matrix4();
-      const found: Array<{ template: Mesh; placement: Matrix4; group: number; draw: IndirectDraw }> = [];
-      object.traverse((node) => {
-        if (!isMesh(node)) return;
-        const placement = outside.clone().multiply(node.matrixWorld);
-        if (level === 0) this.probes.push({ mesh: node, placement });
-        ranges(node).forEach((range, group) => found.push({ template: node, placement, group, draw: { level, ...range } }));
-      });
-      return found;
+    objects.forEach((object, i) => {
+      this.entries.push(new Level(object, i, false, this.entries));
+      this.reaches.push(new Sphere());
+      this.demand.push(new Sphere());
+      if (object.matrixAutoUpdate) object.updateMatrix();
+      this.envelope.union(boundingBox(object).applyMatrix4(object.matrix));
     });
-    const draws = parts.flat().map((part) => part.draw);
-    const selection =
-      this.selection ??
-      new Selection(
-        this.matrices,
-        this.sphere,
-        parts.map((found, i) => found.length > 0 || isLazyImpostor(at(objects, i))),
-        draws,
-        this.fallback,
-      );
-    if (this.selection) selection.replace(draws, this.fallback);
+    estimate(this.entries, 2 * own.radius);
+    validate(this.entries);
+    this.residency.reset();
+    this.boundLevels();
+    const templates = objects.map((object, i) => (isLazyLevel(object) ? [] : parts(object, i)));
+    this.probe(templates[0] ?? []);
+    const draws = templates.flatMap((parts) => parts.map((part) => part.draw));
+    const selection = new Selection(
+      this.matrices,
+      this.sphere,
+      templates.map((parts, i) => parts.length > 0 || isLazyLevel(at(objects, i))),
+      draws,
+      this.residency.fallback,
+    );
     this.selection = selection;
-    if (this.colors) this.useColors(selection, this.colors);
-    let k = 0;
-    parts.forEach((found, i) => {
+    if (this.colors) selection.useColors(this.colors);
+    let offset = 0;
+    templates.forEach((parts, i) => {
       const level = at(this.entries, i);
-      this.reaches[i] ??= new Sphere();
-      this.demand[i] ??= new Sphere();
-      const previous = this.meshes[i];
-      if (previous?.length && previous.length !== found.length) throw new Error("InstancedLod: an existing level's meshes changed");
-      this.meshes[i] = found.map((part, index) => {
-        const offset = k++ * ARGS_BYTES,
-          mesh = previous?.[index];
-        if (!mesh) return this.instance(level, part.template, part.placement, part.group, offset, selection);
-        this.bind(mesh, level, selection, offset);
+      this.meshes[i] = parts.map((part) => {
+        const mesh = this.instance(level, part.template, part.placement, part.group, offset, selection);
+        offset += ARGS_BYTES;
+        this.add(mesh);
         return mesh;
       });
     });
-    this.boundLevels();
-    if (!rebuilding) for (const object of objects) if (isLazyImpostor(object)) object.retain();
+    if (draws.length === 0) watchContext(this);
     return draws.length;
   }
 
-  /** Install ready atlas templates atomically before selecting this view. */
-  private refresh(): void {
-    if (this.installed.size === this.entries.length) return;
-    let changed = false;
-    for (const { object } of this.entries) {
-      if (!isLazyImpostor(object) || this.installed.has(object)) continue;
-      object.materialize();
-      changed ||= available(object);
+  private probe(parts: readonly Part[]): void {
+    const seen = new Set<Mesh>();
+    for (const { template, placement } of parts) {
+      if (seen.has(template)) continue;
+      seen.add(template);
+      this.probes.push({ mesh: template, placement });
     }
-    if (!changed) return;
-    if (this.selection) pending.delete(this.selection);
-    this.probes.length = 0;
-    this.envelope.makeEmpty();
-    const draws = this.build(
-      this.entries.map((entry) => entry.object),
-      true,
-    );
-    this.blocks = new Bounds(this.matrices, this.spheres, this.sphere, this.bounds, draws, this.rest);
-    this.matrixChanges.all();
-    this.measure();
-    refreshWind(this);
-    this.updateWorldMatrix(true, true);
-    this.dispatchEvent({ type: "levelschange" });
   }
 
-  /** Bound what the level meshes draw, including template placement and impostor boxes. */
-  private boundLevels(): void {
-    for (const meshes of this.meshes) {
-      for (const mesh of meshes) {
-        if (!isImpostorMesh(mesh)) mesh.geometry.computeBoundingBox();
-        const bounds = mesh.geometry.boundingBox;
-        if (!bounds) throw new Error("InstancedLod: a level mesh has no geometry bounds");
-        box.copy(bounds);
-        if (isImpostorMesh(mesh)) box.applyMatrix4(mesh.placement);
-        this.envelope.union(box);
-      }
+  /** Compile only the arriving level; bounds and instance buffers stay fixed. */
+  private async install(index: number, lazy: LazyLevel, context: RenderContext): Promise<void> {
+    const selection = this.selection;
+    const template = lazy.object;
+    if (!selection || !template) throw new Error("InstancedLod: missing selection or decoded level");
+    const staged = new Object3D();
+    const level = at(this.entries, index);
+    if (lazy.matrixAutoUpdate) lazy.updateMatrix();
+    prepareBounds(template, lazy.box);
+    const found = parts(template, index, lazy.matrix);
+    let offset = selection.append(found.map((part) => part.draw));
+    // A lazy level has no upfront mesh count, so its indirect draw table can relocate.
+    for (const [mesh, offset] of this.offsets) mesh.geometry.setIndirect(selection.args, selection.argsOffset + offset);
+    const meshes = found.map((part) => {
+      const mesh = this.instance(level, part.template, part.placement, part.group, offset, selection);
+      offset += ARGS_BYTES;
+      staged.add(mesh);
+      return mesh;
+    });
+    try {
+      refreshWind(this, staged);
+      await compileLevel(staged, context);
+    } catch (error) {
+      for (const mesh of meshes) this.free(mesh);
+      throw error;
     }
+    if (this.disposed) {
+      for (const mesh of meshes) this.free(mesh);
+      return;
+    }
+    if (meshes.length > 0) unwatchContext(this);
+    if (index === 0) this.probe(found);
+    this.meshes[index] = meshes;
+    this.add(...meshes);
+  }
+
+  /** Metadata includes unloaded levels, so later arrivals cannot enlarge this envelope. */
+  private boundLevels(): void {
     this.rest.copy(this.sphere);
     if (this.envelope.isEmpty()) return;
     const { center } = this.rest;
@@ -278,31 +291,41 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     // An impostor card is placed in the shader; any other mesh draws its geometry moved
     // into the instance's space, so the instance matrix is all it needs.
     const mesh: LevelMesh = isImpostorMesh(template)
-      ? impostorInstances(template, this.count, placement)
-      : new InstancedMesh(placed(template.geometry, placement), groupMaterial(template, group), this.count);
+      ? impostorInstances(template, 0, placement)
+      : new InstancedMesh(placed(template.geometry, placement), groupMaterial(template, group), 0);
+    // Indirect arguments supply the actual count. A card's public count is otherwise
+    // used by Three to specialize its shader for one object's storage bindings.
+    mesh.count = isImpostorMesh(mesh) ? 1 : this.count;
     mesh.geometry = indirect(mesh.geometry, selection, offset);
+    this.offsets.set(mesh, offset);
     this.bind(mesh, level, selection, offset);
     if (!isImpostorMesh(template)) placeInterior(mesh, placement);
     mesh.name = template.name;
     mesh.castShadow = template.castShadow;
     mesh.receiveShadow = template.receiveShadow;
-    this.reaches[level.index] ??= this.bounds.clone();
-    mesh.boundingSphere = this.reaches[level.index] ?? null;
+    mesh.boundingSphere = at(this.reaches, level.index);
+    watchViewport(mesh);
     const previous = mesh.onBeforeRender;
     // Selected once per view, before the first level mesh draws: in the view, or in a
     // shadow pass that comes first. The GPU runs it before anything drawn after it.
     mesh.onBeforeRender = (renderer, scene, camera, geometry, material, group) => {
+      if (this.disposed) return;
       previous.call(mesh, renderer, scene, camera, geometry, material, group);
-      if (pending.size === 0) return;
       const gpu = gpuRenderer(renderer);
+      // A caster outside the viewing frustum still needs its selection in a shadow draw.
+      selections.add(selection);
       // Each level's draws start at its slots (see select.ts).
       if (!gpu.hasFeature("indirect-first-instance")) throw new Error("InstancedLod: needs the GPU feature indirect-first-instance, which this device lacks");
-      const passes = [...pending].flatMap((due) => due.take(gpu));
-      pending.clear();
+      passes.length = 0;
+      for (const due of selections) passes.push(...due.take(gpu));
+      selections.clear();
       if (passes.length > 0) gpu.compute(passes);
     };
-    watchViewport(mesh);
-    this.add(mesh);
+    const after = mesh.onAfterRender;
+    mesh.onAfterRender = (renderer, scene, camera, geometry, material, group) => {
+      after.call(mesh, renderer, scene, camera, geometry, material, group);
+      if (!inShadowPass(scene)) this.residency.drawn(camera, mesh);
+    };
     return mesh;
   }
 
@@ -347,7 +370,7 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     for (const mesh of this.meshes.flat()) {
       mesh.instanceColor = selection.slots.colors;
       // Instance colours change the shader.
-      for (const material of [mesh.material].flat()) material.needsUpdate = true;
+      if (!isImpostorMesh(mesh)) for (const material of [mesh.material].flat()) material.needsUpdate = true;
     }
     this.colorChanges.all();
   }
@@ -377,7 +400,7 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     }
     const level = levelAt(this.entries, height, last.forced);
     const selected = last.fades && fadeProgress(this.entries, level, height) > 0 ? level.index - 1 : level.index;
-    return this.fallback[selected] ?? selected;
+    return at(this.residency.fallback, selected);
   }
 
   private check(index: number): void {
@@ -423,10 +446,9 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     if (matricesChanged) this.blocks.refit();
   }
 
-  /** Sort the instances into levels for `camera`; three's renderer calls this itself while `autoUpdate`. */
+  /** Sort instances for `camera`; demand begins after its first drawing context exists. */
   update(camera: Camera): void {
     if (this.disposed || inShadowPass(this)) return;
-    this.refresh();
     const { entries, selection } = this;
     if (!selection) return;
     validate(entries);
@@ -439,42 +461,56 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     const scale = view.scale * Lod.quality * (view.ortho ? worldScale : 1);
     const { last } = this;
     last.eye.copy(view.eye).applyMatrix4(inverse.copy(this.matrixWorld).invert());
-    Object.assign(last, { selected: true, scale, ortho: view.ortho, fades: view.fades, forced: this.forceLevel });
+    last.selected = true;
+    last.scale = scale;
+    last.ortho = view.ortho;
+    last.fades = view.fades;
+    last.forced = this.forceLevel;
     const stable = this.blocks.select(entries, last, this.reaches, height !== null, this.matrixWorld);
-    if (this.installed.size < entries.length) {
-      let demand = this.reaches;
-      if (height === null) {
-        // Every mesh must get a first chance to report its viewport. That conservative
-        // visibility is not a reason to load every lazy tier: use the actual default
-        // selection, including forced and empty levels, for initial atlas demand.
-        demand = this.demand;
-        this.blocks.select(entries, last, demand, true, this.matrixWorld);
-      }
+    const { residency } = this;
+    const progress = residency.progress;
+    if (selection.progress.value !== progress) {
+      selection.progress.value = progress;
+      selection.changed();
+    }
+    const needed: number[] = [];
+    if (this.bounds.isEmpty()) {
+      // Reusable crowds can be populated and drawn in the same frame.
+      for (const level of entries) if (!isLazyLevel(level.object)) needed.push(level.index);
+    } else if (residency.needsDemand(camera, this.meshes)) {
+      this.blocks.demand(entries, last, this.demand, this.matrixWorld);
       for (let i = this.reaches.length - 1; i >= 0; i--) {
-        const reach = at(this.reaches, i),
-          object = at(entries, i).object;
-        if (isLazyImpostor(object) && object.status === "idle" && inView(camera, this.matrixWorld, at(demand, i))) object.request();
-        const target = this.fallback[i] ?? i;
+        const reach = at(this.reaches, i);
+        if (inView(camera, this.matrixWorld, at(this.demand, i))) needed.push(i);
+        const target = at(residency.fallback, i);
+        if (progress < 1) {
+          const previous = at(residency.previous, i);
+          if (previous !== target) at(this.reaches, previous).union(reach);
+        }
         if (target !== i) {
           at(this.reaches, target).union(reach);
           reach.makeEmpty();
         }
       }
     }
+    residency.demand(camera, needed);
+    residency.update(camera, this.meshes);
     selection.aim(last.eye, scale, view.ortho, view.fades, this.forceLevel, entries, stable);
     // Selected only when something may draw: an InstancedLod with every level hidden
     // keeps its last selection.
-    if (this.showLevels()) pending.add(selection);
+    if (this.showLevels(camera)) selections.add(selection);
+    else selections.delete(selection);
   }
 
   /** Only levels whose conservative bounds contain a possible selected instance. */
-  private showLevels(): boolean {
+  private showLevels(camera: Camera): boolean {
     let shown = false;
-    this.meshes.forEach((meshes, level) => {
-      const visible = !this.reaches[level]?.isEmpty();
+    for (let level = 0; level < this.meshes.length; level++) {
+      const visible = !at(this.reaches, level).isEmpty();
+      const meshes = at(this.meshes, level);
       for (const mesh of meshes) mesh.visible = visible;
-      shown ||= visible && meshes.length > 0;
-    });
+      shown ||= visible && meshes.length > 0 && inView(camera, this.matrixWorld, at(this.reaches, level));
+    }
     return shown;
   }
 
@@ -537,8 +573,19 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    this.clearDraws();
-    for (const { object } of this.entries) isLazyImpostor(object) ? object.release() : disposeTree(object);
+    unwatchContext(this);
+    this.residency.dispose(() => {
+      this.clearDraws();
+      for (const { object } of this.entries) disposeTree(object);
+    });
+  }
+
+  private free(mesh: LevelMesh): void {
+    this.offsets.delete(mesh);
+    // ImpostorMesh.dispose also destroys instance buffers; the Selection owns ours.
+    if (isImpostorMesh(mesh)) mesh.material.release();
+    else mesh.dispose();
+    mesh.geometry.dispose();
   }
 
   private clearDraws(): void {
@@ -546,13 +593,13 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     // materials go with the levels' originals.
     for (const mesh of this.meshes.flat()) {
       this.remove(mesh);
-      mesh.dispose();
-      if (!isImpostorMesh(mesh)) mesh.geometry.dispose();
+      this.free(mesh);
     }
-    if (this.selection) pending.delete(this.selection);
+    if (this.selection) selections.delete(this.selection);
     this.selection?.dispose();
     this.selection = null;
     this.meshes.length = 0;
+    this.offsets.clear();
   }
 }
 
@@ -560,38 +607,4 @@ function at<T>(values: ArrayLike<T>, i: number): T {
   const value = values[i];
   if (value === undefined) throw new Error(`InstancedLod: index ${i} out of range`);
   return value;
-}
-
-/** Union pending uploads, including repeated edits while a crowd is not drawn. */
-function upload(attribute: BufferAttribute, start: number, end: number): void {
-  start *= attribute.itemSize;
-  end *= attribute.itemSize;
-  const ranges = attribute.updateRanges;
-  let low = 0;
-  let high = ranges.length;
-  while (low < high) {
-    const middle = (low + high) >>> 1;
-    const range = at(ranges, middle);
-    if (range.start + range.count < start) low = middle + 1;
-    else high = middle;
-  }
-  const first = ranges[low];
-  if (!first || first.start > end) {
-    const range = { start, count: end - start };
-    if (low === ranges.length) ranges.push(range);
-    else ranges.splice(low, 0, range);
-  } else {
-    end = Math.max(end, first.start + first.count);
-    first.start = Math.min(start, first.start);
-    let next = low + 1;
-    while (next < ranges.length) {
-      const range = at(ranges, next);
-      if (range.start > end) break;
-      end = Math.max(end, range.start + range.count);
-      next++;
-    }
-    first.count = end - first.start;
-    if (next > low + 1) ranges.splice(low + 1, next - low - 1);
-  }
-  attribute.needsUpdate = true;
 }

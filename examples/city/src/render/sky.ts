@@ -1,9 +1,11 @@
 import * as THREE from "three/webgpu";
 import { HDRLoader } from "three/addons/loaders/HDRLoader.js";
 import { assetUrl, manifest } from "../content/materials.ts";
+import { bundle, file } from "../world/cache.ts";
+import { number, numbers, record } from "../world/data.ts";
 
 /** The HDRI split into image-based light without its sun, and the sun as a direction and irradiance. */
-export interface Sky {
+interface Sky {
   /** The HDRI as shot, for the background. */
   background: THREE.DataTexture;
   /** Prefiltered light: the sky with the sun cut out and a ground below the horizon. */
@@ -20,15 +22,102 @@ export interface Sky {
 
 /** Loads the manifest's HDRI and turns it so the sun stands at `azimuth` (radians, atan2(z, x) of the direction toward it). */
 export async function loadSky(renderer: THREE.Renderer, azimuth: number): Promise<Sky> {
-  const hdr = await new HDRLoader().setDataType(THREE.FloatType).loadAsync(assetUrl(manifest().hdri.file));
-  hdr.mapping = THREE.EquirectangularReflectionMapping;
-  const { sky, direction, irradiance, horizon } = removeSun(hdr);
+  let built: { background: THREE.DataTexture; environment: THREE.Texture } | undefined;
+  const files = await bundle(
+    "sky@1",
+    {
+      hdr: { path: `assets/${manifest().hdri.file}` },
+      sky: { path: "src/render/sky.ts" },
+      three: { package: "three" },
+      backend: { value: renderer.coordinateSystem },
+    },
+    async () => {
+      const hdr = await new HDRLoader().setDataType(THREE.FloatType).loadAsync(assetUrl(manifest().hdri.file));
+      hdr.mapping = THREE.EquirectangularReflectionMapping;
+      const { sky, direction, irradiance, horizon } = removeSun(hdr);
+      const pmrem = new THREE.PMREMGenerator(renderer);
+      const environment = pmrem.fromEquirectangular(sky);
+      const pixels = await renderer.readRenderTargetPixelsAsync(environment, 0, 0, environment.width, environment.height);
+      if (!(pixels instanceof Uint16Array)) throw new Error("Expected half-float PMREM pixels");
+      pmrem.dispose();
+      sky.dispose();
+      built = { background: hdr, environment: environment.texture };
+      const backgroundPixels = hdr.image.data;
+      if (!(backgroundPixels instanceof Float32Array)) throw new Error("Expected float HDR pixels");
+      const [background, lighting] = await Promise.all([compress(backgroundPixels), compress(pixels)]);
+      return {
+        background,
+        lighting,
+        metadata: new TextEncoder().encode(
+          JSON.stringify({
+            background: [hdr.image.width, hdr.image.height],
+            environment: [environment.width, environment.height],
+            direction: direction.toArray(),
+            irradiance,
+            horizon: horizon.toArray(),
+          }),
+        ),
+      };
+    },
+  );
+  const data = record(JSON.parse(new TextDecoder().decode(file(files, "metadata"))));
+  const direction = new THREE.Vector3().fromArray(numbers(data.direction, 3));
   const turn = Math.atan2(direction.z, direction.x) - azimuth;
-  const pmrem = new THREE.PMREMGenerator(renderer);
-  const environment = pmrem.fromEquirectangular(sky).texture;
-  pmrem.dispose();
-  sky.dispose();
-  return { background: hdr, environment, turn, sun: direction.applyAxisAngle(new THREE.Vector3(0, 1, 0), turn), irradiance, horizon };
+  const textures = built ?? (await decode(renderer, files, dimensions(data.background), dimensions(data.environment)));
+  return {
+    ...textures,
+    turn,
+    sun: direction.applyAxisAngle(new THREE.Vector3(0, 1, 0), turn),
+    irradiance: number(data.irradiance),
+    horizon: new THREE.Color().fromArray(numbers(data.horizon, 3)),
+  };
+}
+
+async function decode(renderer: THREE.Renderer, files: Record<string, Uint8Array>, backgroundSize: [number, number], environmentSize: [number, number]) {
+  const [backgroundBytes, environmentBytes] = await Promise.all([decompress(file(files, "background")), decompress(file(files, "lighting"))]);
+  const [width, height] = backgroundSize;
+  const [lightWidth, lightHeight] = environmentSize;
+  if (backgroundBytes.byteLength !== width * height * 16 || environmentBytes.byteLength !== lightWidth * lightHeight * 8)
+    throw new Error("Cached sky texture dimensions do not match its pixels");
+  const background = new THREE.DataTexture(new Float32Array(backgroundBytes), width, height, THREE.RGBAFormat, THREE.FloatType);
+  background.mapping = THREE.EquirectangularReflectionMapping;
+  background.colorSpace = THREE.LinearSRGBColorSpace;
+  background.minFilter = background.magFilter = THREE.LinearFilter;
+  background.flipY = true;
+  background.needsUpdate = true;
+  const pixels = new THREE.DataTexture(new Uint16Array(environmentBytes), lightWidth, lightHeight, THREE.RGBAFormat, THREE.HalfFloatType);
+  pixels.needsUpdate = true;
+  const environment = new THREE.RenderTarget(lightWidth, lightHeight, {
+    type: THREE.HalfFloatType,
+    format: THREE.RGBAFormat,
+    colorSpace: THREE.LinearSRGBColorSpace,
+    minFilter: THREE.LinearFilter,
+    magFilter: THREE.LinearFilter,
+    generateMipmaps: false,
+    depthBuffer: false,
+  });
+  environment.texture.mapping = THREE.CubeUVReflectionMapping;
+  // Three's PMREM sampling flips a render target's direction and UV; retain both conventions.
+  renderer.initRenderTarget(environment);
+  renderer.copyTextureToTexture(pixels, environment.texture);
+  pixels.dispose();
+  return { background, environment: environment.texture };
+}
+
+function dimensions(value: unknown): [number, number] {
+  const [width, height] = numbers(value, 2);
+  if (width === undefined || height === undefined || !Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0)
+    throw new Error("Invalid cached sky dimensions");
+  return [width, height];
+}
+
+async function compress(data: ArrayBufferView): Promise<Uint8Array> {
+  const bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength).slice();
+  return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new CompressionStream("gzip"))).arrayBuffer());
+}
+
+async function decompress(bytes: Uint8Array): Promise<ArrayBuffer> {
+  return new Response(new Blob([bytes.slice()]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
 }
 
 /**
