@@ -21,8 +21,10 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      - name: Install the browser the package's tests run in, on WebGPU
-        run: pnpm --filter @drawcall/lod exec playwright install --with-deps chromium
+      - name: Install browser and software GPU
+        run: |
+          pnpm --filter @drawcall/lod exec playwright install --with-deps chromium
+          sudo apt-get install -y mesa-vulkan-drivers
       - name: Build, typecheck, and test
         run: pnpm check
       - name: Set release version
