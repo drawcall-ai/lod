@@ -58,40 +58,6 @@ importers:
         specifier: ^8.2.1
         version: 8.3.2(@types/node@24.19.1)
 
-  examples/lab:
-    dependencies:
-      '@drawcall/glts':
-        specifier: ^2.0.0
-        version: 2.0.0(@types/node@24.19.1)(three@0.185.1)(typescript@5.9.3)(vite@8.3.2(@types/node@24.19.1))
-      '@drawcall/lod':
-        specifier: workspace:*
-        version: link:../../packages/lod
-      three:
-        specifier: ^0.185.1
-        version: 0.185.1
-      vitecache:
-        specifier: ^0.1.2
-        version: 0.1.2(vite@8.3.2(@types/node@24.19.1))
-    devDependencies:
-      '@playwright/test':
-        specifier: ^1.59.1
-        version: 1.63.0
-      '@types/node':
-        specifier: ^24.13.6
-        version: 24.19.1
-      '@types/three':
-        specifier: ^0.185.0
-        version: 0.185.4
-      '@webgpu/types':
-        specifier: ^0.1.74
-        version: 0.1.74
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vite:
-        specifier: ^8.2.1
-        version: 8.3.2(@types/node@24.19.1)
-
   packages/lod:
     dependencies:
       '@drawcall/glts':
