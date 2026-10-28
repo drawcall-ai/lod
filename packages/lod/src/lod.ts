@@ -37,6 +37,8 @@ type ObjectDraw = Extract<Draw, { kind: "object" }>;
  *
  * Levels are read when the Lod is built: meshes added to a level later, or moved within
  * it, are neither faded nor measured right. Build a new Lod instead.
+ * Skinned meshes and ShaderMaterials are refused; use static meshes and node materials
+ * or supported built-in materials.
  */
 export class Lod extends Object3D<LevelsEventMap> {
   /** Multiplies every measured height: below 1, cheaper levels take over sooner. */

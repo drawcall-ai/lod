@@ -33,29 +33,27 @@ function make(maps: ImpostorMap[], size = 32, frames = 8): Impostor {
 }
 
 describe("codec", () => {
-  it("native asynchronous decode preserves every metadata field and byte of all maps and mips", async () => {
+  it("synchronous and asynchronous decode preserve all metadata and bytes for every input form", async () => {
     const sets: ImpostorMap[][] = [
       ["base", "normalDepth", "orm"],
       ["base", "normalDepth", "orm", "emissive"],
     ];
     for (const maps of sets) {
       const source = make(maps, 128, 8);
-      source.specular = [0.03, 0.06, 0.08, 1];
+      if (maps.length === 4) source.specular = [0.03, 0.06, 0.08, 1];
+      const { layers: expectedLayers, ...expectedMeta } = source;
       const file = encodeImpostor(source),
         padded = new Uint8Array(file.length + 17);
       padded.set(file, 17);
       for (const input of [file, file.slice().buffer, padded.subarray(17), toBase64(file)]) {
         const actual = await decodeImpostorAsync(input);
         const sync = decodeImpostor(input);
-        const { layers: _, ...meta } = actual;
-        const { layers: __, ...expected } = source;
-        expect(meta).toEqual(expected);
-        actual.layers.forEach((layer, i) =>
-          layer.forEach((mip, m) => {
-            expect(sameBytes(mip, must(source.layers[i]?.[m]))).toBe(true);
-            expect(sameBytes(mip, must(sync.layers[i]?.[m]))).toBe(true);
-          }),
-        );
+        for (const decoded of [sync, actual]) {
+          const { layers, ...meta } = decoded;
+          expect(meta).toEqual(expectedMeta);
+          expect(layers.map((layer) => layer.length)).toEqual(expectedLayers.map((layer) => layer.length));
+          layers.forEach((layer, i) => layer.forEach((mip, m) => expect(sameBytes(mip, must(expectedLayers[i]?.[m]))).toBe(true)));
+        }
         // Each mip has one owner buffer, shared by every map's view.
         expect(actual.layers[0]?.[0]?.buffer).toBe(actual.layers[1]?.[0]?.buffer);
       }
@@ -91,22 +89,6 @@ describe("codec", () => {
     }
   });
 
-  it("round-trips 3 and 4 layers and their mip levels byte-exact", () => {
-    const sets: ImpostorMap[][] = [
-      ["base", "normalDepth", "orm"],
-      ["base", "normalDepth", "orm", "emissive"],
-    ];
-    for (const maps of sets) {
-      const source = make(maps);
-      const back = decodeImpostor(encodeImpostor(source));
-      expect(back.layers.length).toBe(maps.length);
-      back.layers.forEach((layer, i) => layer.forEach((level, m) => expect(sameBytes(level, must(source.layers[i]?.[m]))).toBe(true)));
-      const { layers: _a, ...meta } = back;
-      const { layers: _b, ...expected } = source;
-      expect(meta).toEqual(expected);
-    }
-  });
-
   it("writes a valid RGBA8 UNORM zlib array texture", () => {
     const ktx = read(encodeImpostor(make(["base", "normalDepth", "orm"], 64)));
     expect(ktx.vkFormat).toBe(37);
@@ -123,15 +105,6 @@ describe("codec", () => {
       [16, 7, 2, 255],
       [24, 7, 15, 255],
     ]);
-  });
-
-  it("accepts ArrayBuffer, offset views and base64", () => {
-    const source = make(["base", "normalDepth", "orm"]);
-    const file = encodeImpostor(source);
-    const padded = new Uint8Array(file.length + 16);
-    padded.set(file, 16);
-    const views = [file.slice().buffer, padded.subarray(16), toBase64(file)];
-    for (const input of views) expect(sameBytes(must(decodeImpostor(input).layers[1]?.[2]), must(source.layers[1]?.[2]))).toBe(true);
   });
 
   it("decodes base64 natively and through the fallback", () => {

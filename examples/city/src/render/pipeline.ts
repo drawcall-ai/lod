@@ -78,10 +78,11 @@ export class Pipeline {
   }
 
   /**
-   * The last drawn frame's sum of GPU pass durations, not its elapsed GPU time.
-   * Live callers may share an outstanding read;
-   * measurements await it before drawing the next frame. Three returns its last value
-   * when no new queries exist, so a frame without compute must contribute zero there.
+   * Resolve render and compute pass durations; their sum is not elapsed GPU time.
+   * Live callers may share an outstanding read, and independently resolved render
+   * and compute values can come from different frames. Measurements await the read
+   * before drawing the next frame. Three returns its last value when no new queries
+   * exist, so a frame without compute must contribute zero there.
    */
   timing(): Promise<number | null> {
     if (!this.timed) return Promise.resolve(null);

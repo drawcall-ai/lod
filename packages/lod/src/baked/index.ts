@@ -45,6 +45,10 @@ export type BakeMeshOptions = {
    * transmissive (texture alpha is not read). Each room is captured from its box's centre
    * as its colours and its glow; the baked material lights the colours by the indirect
    * light reaching each window.
+   * Rooms must not overlap except at their walls. Put inward-facing walls, floors and
+   * ceilings on the box faces, with the box beginning just behind its windows. Furniture
+   * away from those faces appears flattened onto them. Glass with no nearby room stays
+   * plain; the bake fails if none of the source's glass looks into a room.
    */
   interior?: Object3D;
 } & (

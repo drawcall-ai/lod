@@ -60,6 +60,7 @@ const PAD = 0.06;
  * per map: base colour + coverage, object-space normal + depth,
  * occlusion/roughness/metalness and, if needed, emissive. A material that changes three's
  * default specular adds the object's mean specular (see `Impostor.specular`).
+ * Custom lighting behavior is not baked; the resulting surface is lit at draw time.
  */
 export function bakeImpostor(object: Object3D, options: BakeImpostorOptions = {}): Promise<Impostor> {
   return bake(object, options);

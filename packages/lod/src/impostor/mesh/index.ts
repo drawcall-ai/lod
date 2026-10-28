@@ -59,6 +59,8 @@ const sphere = new Sphere();
  * It draws nothing of an instance into a directional light's shadow map whose texels are
  * wider than the instance. Like an InstancedMesh, it is culled by `boundingSphere`,
  * which `computeBoundingSphere` makes from the instances.
+ * On multisampled targets, edges use alpha-to-coverage and leave fractional canvas
+ * alpha; use a renderer with `alpha: false` when the page must not show through them.
  */
 export class ImpostorMesh extends Mesh<PlaneGeometry, ImpostorMaterial> {
   readonly isImpostorMesh = true;

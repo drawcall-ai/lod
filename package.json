@@ -15,6 +15,7 @@
     "prettier": "^3.9.6"
   },
   "prettier": {
-    "printWidth": 160
+    "printWidth": 160,
+    "proseWrap": "never"
   }
 }

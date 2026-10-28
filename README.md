@@ -1,84 +1,23 @@
 # @drawcall/lod
 
-Level of detail for three.js. Load a model, get cheaper levels built for it — an
-octahedral impostor, a simplified mesh, a baked low-poly mesh — and switch between them
-by on-screen size, with a dithered fade so the switch does not pop.
+Level of detail for Three.js. Build simplified meshes, baked low-poly meshes, and impostors, then switch between them by on-screen size with smooth dithered fades. Supports individual objects and instanced scenes.
 
-**WebGPURenderer only** (`three/webgpu`): levels draw with three's node materials, and an
-`InstancedLod` selects its instances' levels on the GPU.
+Requires Three.js `WebGPURenderer` (`three/webgpu`).
 
 ```sh
 npm install @drawcall/lod three
 ```
 
-## Usage
+Load a model into an existing Three.js scene:
 
 ```ts
 import { LodLoader } from "@drawcall/lod";
 
-const loader = new LodLoader(manager); // a three.js Loader
-const tree = await loader.loadAsync("/models/tree.glb"); // source → impostor
-scene.add(tree); // the renderer switches levels by itself, shadows included
-
-const rock = await loader.loadAsync({ url: "/models/rock.glb", levels: [{ type: "simplified" }, { type: "impostor" }] });
-const house = await loader.loadAsync({
-  url: "/models/house.glb",
-  levels: [
-    { type: "baked", low: "/models/house-low.glb" },
-    { type: "impostor", layout: "hemi" },
-  ],
-});
+const loader = new LodLoader();
+const tree = await loader.loadAsync("/models/tree.glb");
+scene.add(tree);
 ```
 
-### Which levels for which asset
+Choose generated or authored levels to suit your assets. The [LOD skill](https://github.com/drawcall-ai/lod/blob/main/packages/lod/skills/lod/SKILL.md) covers asset choices, caching, lazy loading, wind, and scene integration. It also ships with the package at `skills/lod/SKILL.md`.
 
-| Asset                                                                       | Levels                                                                                                                                              |
-| --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Foliage: trees, bushes, grass, plants — anything of alpha-tested leaf cards | the default: straight to an `impostor` (`layout: "hemi"` if it stands upright). Never a `simplified` level: decimation tears leaf cards apart       |
-| Closed hard-surface meshes: props, rocks, vehicles                          | `simplified`, then `impostor`                                                                                                                       |
-| Buildings and large hard surfaces                                           | `baked` onto an authored or generated low mesh, then `impostor`; with `interior: "/models/house-rooms.glts"` its windows show the rooms behind them |
-| Low-poly props                                                              | `simplified`, or none: an impostor costs more than the mesh                                                                                         |
-
-A `"baked"` level (experimental) is one low-poly mesh with the source's colour, normals
-and material values baked into its own textures. Its low mesh has to keep the silhouette
-(eaves, chimneys): only surface detail moves into its textures.
-
-`.glb`/`.gltf` load through the manager's handler when one is registered (a GLTFLoader
-with Draco), `.glts` through a registered `GLTSLoader` from `@drawcall/glts`. Levels are
-built at load time.
-
-For many copies, `loader.loadInstancesAsync(url, count)` gives an `InstancedLod`: one
-draw per level and mesh, each instance switching by its own size on screen; place them
-with `setMatrixAt`.
-
-For vegetation, apply one shared breeze after building the levels:
-
-```ts
-import { Wind } from "@drawcall/lod";
-
-const wind = new Wind({ direction: [1, 0.3], speed: 0.25 });
-wind.apply(tree, { amplitude: 0.2 }); // source, cheaper levels and shadows sway together
-// Before rendering each frame:
-wind.time = elapsedSeconds;
-```
-
-The same call works on an `InstancedLod` or a standalone mesh. Objects without wind
-keep their static rendering path.
-
-Bring your own levels with `new Lod([source, ...levels])` or
-`new InstancedLod([source, ...levels], count)`: any `Object3D`, including another `Lod`
-(but not inside an `InstancedLod`). `Lod.quality` trades detail for speed globally,
-`Lod.debug` tints each level, `lod.forceLevel` pins one.
-
-### Building blocks
-
-The pieces behind the loader are exported too: `simplify` (meshoptimizer), `bakeMesh`
-(the baked level), `bakeImpostor` and `ImpostorMesh` (one draw for thousands of
-impostors, placed like an `InstancedMesh`'s instances), and `encodeImpostor`/`decodeImpostor` to save
-impostors as KTX2.
-
-The package ships a skill for coding agents with the details of when to use which part.
-
-The showcase, `examples/city` (`pnpm city`), flies over a 4 km world from two
-kilometres up down to a ladybird on a corn leaf, every kind of content on the levels
-that suit it.
+The [city example](https://github.com/drawcall-ai/lod/tree/main/examples/city) demonstrates a large scene with buildings, vegetation, and small props.

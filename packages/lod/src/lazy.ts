@@ -14,6 +14,7 @@ export interface LazyImpostorEventMap extends Object3DEventMap {
 }
 
 export interface LevelsEventMap extends Object3DEventMap {
+  /** Deferred meshes have been installed, ready for material setup and draw registries. */
   levelschange: {};
 }
 
@@ -40,6 +41,9 @@ interface Record {
  * Put it after an eager source in Lod or InstancedLod. Until ready, the nearest
  * ready finer level draws instead. The factory can decode cached data or bake it;
  * it runs once across clones and concurrent requests. It does not upload textures.
+ * Keep any source the factory reads alive and unchanged until the request completes.
+ * Automatic demand reports a failed request and keeps the finer fallback; `load`
+ * explicitly retries it.
  */
 export class LazyImpostor extends Object3D<LazyImpostorEventMap> {
   readonly isLazyImpostor = true;

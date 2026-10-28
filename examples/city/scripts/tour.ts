@@ -6,9 +6,10 @@
 //   pnpm --filter @drawcall/lod-example-city tour [--size=1512x982] [--dpr=2] [--no-terrain]
 //     [--query=debug] [--keys=1,5] [--out=tour] [--cold]
 //
-// Frame time is the GPU's time (by its timer) per frame of 12, one per animation frame,
-// the median of 5 runs: still at the key and moving on along the tour; cpu is one frame's
-// CPU work. Draw calls and triangles are three's counts, which take every indirect draw
+// `ms` is the median of five runs' summed GPU pass durations per frame, sampled
+// at stationary keys and while moving. Passes can overlap, so this is not elapsed
+// frame time or FPS; `cpu` measures one frame's CPU work.
+// Draw calls and triangles are three's counts, which take every indirect draw
 // (an InstancedLod's levels) at its full instance count. --no-terrain leaves the ground mesh out, --query adds page URL parameters,
 // --keys shoots only those keys, --cold empties the browser profile (and with it the
 // page's bake cache) first.

@@ -71,8 +71,8 @@ interface Selected {
 /**
  * `count` copies of one object with levels of detail, each switched by its own height on
  * screen: `Lod` for instances. The GPU sorts the instances into levels once per view
- * (see select.ts) and every mesh of a level draws the instances it holds in one indirect
- * draw; an instance near a switch is in both neighbours and they split its pixels with
+ * (see select.ts) and every mesh/material group of a level draws its instances in one
+ * indirect draw; an instance near a switch is in both neighbours and they split its pixels with
  * the dither. Thresholds, `forceLevel`, `Lod.quality`, `Lod.debug` and shadows work as
  * for `Lod`; nothing of an instance is drawn into a directional light's shadow map whose
  * texels are wider than it. Each level is culled by the crowd's bounds, tightened for
@@ -87,6 +87,10 @@ interface Selected {
  * added to the scene. They cannot contain skinned meshes, InstancedMeshes (other than an
  * ImpostorMesh) or nested Lods. To build a hierarchy on top, leave level 0 empty (see
  * `Lod`) and draw the detail of the instances `levelOf` reports at level 0 yourself.
+ *
+ * Requires the WebGPU feature `indirect-first-instance`. Sequential camera renders are
+ * supported; a render nested inside another replaces the outer view's selection. Exclude
+ * this object from nested reflection or cube-camera renders using camera layers.
  */
 export class InstancedLod extends Object3D<LevelsEventMap> {
   readonly isLOD = true;
