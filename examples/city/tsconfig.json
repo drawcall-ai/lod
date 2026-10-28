@@ -17,5 +17,5 @@
       "@drawcall/lod": ["../../packages/lod/src/index.ts"]
     }
   },
-  "include": ["src", "scripts", "vite.config.ts"]
+  "include": ["src", "scripts", "test", "vite.config.ts"]
 }

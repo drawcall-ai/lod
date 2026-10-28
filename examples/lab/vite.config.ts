@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { build, defineConfig, type Plugin } from "vite";
+import { vitecache } from "vitecache/vite";
 
 const entry = fileURLToPath(new URL("../../packages/lod/src/index.ts", import.meta.url));
 
@@ -52,7 +53,7 @@ const page = (name: string) => fileURLToPath(new URL(`${name}.html`, import.meta
 
 // The lab imports the package source directly so shader edits hot-reload.
 export default defineConfig({
-  plugins: [packageCdn()],
+  plugins: [vitecache(), packageCdn()],
   resolve: {
     alias: { "@drawcall/lod": entry },
     dedupe: ["three"],

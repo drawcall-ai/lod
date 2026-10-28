@@ -1,0 +1,10 @@
+import { loadingManager, onDispose, scene } from "@drawcall/glts";
+import { LodLoader } from "@drawcall/lod";
+import { shape } from "./shape.ts";
+
+const lod = await new LodLoader(loadingManager).loadAsync({
+  source: shape(),
+  levels: [{ type: "impostor", lazy: true, maxPixels: 32, frames: 2, resolution: 8, supersample: 1 }],
+});
+scene.add(lod);
+onDispose(() => lod.dispose());

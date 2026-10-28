@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { read, write, VK_FORMAT_R8G8B8A8_SRGB, KHR_DF_MODEL_RGBSDA, KHR_SUPERCOMPRESSION_ZLIB } from "ktx-parse";
-import { decodeImpostor, encodeImpostor, fromBase64 } from "../../src/impostor/codec.js";
+import { decodeImpostor, decodeImpostorAsync, encodeImpostor, fromBase64 } from "../../src/impostor/codec.js";
 import type { Impostor, ImpostorMap } from "../../src/impostor/impostor.js";
 import { must } from "../must.js";
 
@@ -33,6 +33,46 @@ function make(maps: ImpostorMap[], size = 32, frames = 8): Impostor {
 }
 
 describe("codec", () => {
+  it("native asynchronous decode preserves every metadata field and byte of all maps and mips", async () => {
+    const sets: ImpostorMap[][] = [
+      ["base", "normalDepth", "orm"],
+      ["base", "normalDepth", "orm", "emissive"],
+    ];
+    for (const maps of sets) {
+      const source = make(maps, 128, 8);
+      source.specular = [0.03, 0.06, 0.08, 1];
+      const file = encodeImpostor(source),
+        padded = new Uint8Array(file.length + 17);
+      padded.set(file, 17);
+      for (const input of [file, file.slice().buffer, padded.subarray(17), toBase64(file)]) {
+        const actual = await decodeImpostorAsync(input);
+        const sync = decodeImpostor(input);
+        const { layers: _, ...meta } = actual;
+        const { layers: __, ...expected } = source;
+        expect(meta).toEqual(expected);
+        actual.layers.forEach((layer, i) =>
+          layer.forEach((mip, m) => {
+            expect(sameBytes(mip, must(source.layers[i]?.[m]))).toBe(true);
+            expect(sameBytes(mip, must(sync.layers[i]?.[m]))).toBe(true);
+          }),
+        );
+        // Each mip has one owner buffer, shared by every map's view.
+        expect(actual.layers[0]?.[0]?.buffer).toBe(actual.layers[1]?.[0]?.buffer);
+      }
+    }
+  });
+
+  it("uses the same decoder when native decompression is unavailable", async () => {
+    const native = Object.getOwnPropertyDescriptor(globalThis, "DecompressionStream");
+    Object.defineProperty(globalThis, "DecompressionStream", { value: undefined, configurable: true });
+    try {
+      const file = encodeImpostor(make(["base", "normalDepth", "orm"]));
+      expect(await decodeImpostorAsync(file)).toEqual(decodeImpostor(file));
+    } finally {
+      if (native) Object.defineProperty(globalThis, "DecompressionStream", native);
+      else Reflect.deleteProperty(globalThis, "DecompressionStream");
+    }
+  });
   it("round-trips metadata either side of 256 bytes", () => {
     // ktx-parse 1.1 wrote key/value lengths as one byte: 256 became 0, 257 became 1.
     const long = (k: number) => (k + 1 / 7) / 3e7; // about 22 characters each in JSON
@@ -110,9 +150,13 @@ describe("codec", () => {
     }
   });
 
-  it("rejects corrupt files with clear errors", () => {
+  it("rejects corrupt files with clear errors", async () => {
     const file = encodeImpostor(make(["base", "normalDepth", "orm"]));
-    const bad = (input: Uint8Array | string, pattern: RegExp) => expect(() => decodeImpostor(input)).toThrow(pattern);
+    const pending: Promise<unknown>[] = [];
+    const bad = (input: Uint8Array | string, pattern: RegExp) => {
+      expect(() => decodeImpostor(input)).toThrow(pattern);
+      pending.push(expect(decodeImpostorAsync(input)).rejects.toThrow(pattern));
+    };
     bad(new Uint8Array(64), /Invalid impostor file: not a KTX2 container/);
     bad(file.subarray(0, 40), /Invalid impostor file: not a KTX2 container/);
     bad("not base64!", /Invalid impostor file: not base64/);
@@ -154,6 +198,7 @@ describe("codec", () => {
       ),
       /Invalid impostor: size .*multiple of frames/,
     );
+    await Promise.all(pending);
   });
 
   it("encode validates its input", () => {

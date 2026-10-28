@@ -72,9 +72,13 @@ export class Selection {
   /** Per level, its first slot, or null for a level that draws nothing. */
   readonly first: Array<number | null>;
   /** Shared page containing this selection's draws, `ARGS_BYTES` apart. */
-  readonly args: IndirectStorageBufferAttribute;
+  get args(): IndirectStorageBufferAttribute {
+    return this.slice.attribute;
+  }
   /** Byte offset of this selection's first draw in its page. */
-  readonly argsOffset: number;
+  get argsOffset(): number {
+    return this.slice.offset;
+  }
 
   // What the view sets before each selection (see InstancedLod.update).
   readonly eye = uniform(new Vector3());
@@ -88,7 +92,7 @@ export class Selection {
   readonly maxPixels: Array<{ value: number } & Node<"float">>;
 
   private readonly counts: StorageBufferAttribute;
-  private readonly slice: ArgsSlice;
+  private slice: ArgsSlice;
   // Allocation location must not specialize the handover shader for every crowd.
   private readonly argsStart = uniform(0, "uint");
   private kernels: ComputeNode[] | null = null;
@@ -109,7 +113,8 @@ export class Selection {
     private readonly sphere: Sphere,
     /** Per level, whether it draws anything. */
     drawing: readonly boolean[],
-    private readonly draws: readonly IndirectDraw[],
+    private draws: readonly IndirectDraw[],
+    private fallback: readonly number[] = drawing.map((_, i) => i),
   ) {
     const count = matrices.length / 16;
     this.count = count;
@@ -120,6 +125,11 @@ export class Selection {
     this.slots = { matrices: new StorageInstancedBufferAttribute(slots, 16), fades: new StorageBufferAttribute(slots, 1), colors: null };
     this.maxPixels = drawing.map(() => uniform(0));
     this.counts = new StorageBufferAttribute(new Uint32Array(drawing.length), 1);
+    this.slice = this.allocate(draws);
+    this.argsStart.value = this.argsOffset / 4;
+  }
+
+  private allocate(draws: readonly IndirectDraw[]): ArgsSlice {
     const values = new Uint32Array((draws.length * ARGS_BYTES) / 4);
     draws.forEach((draw, k) => {
       const at = (k * ARGS_BYTES) / 4;
@@ -131,10 +141,20 @@ export class Selection {
       values[at + 2] = draw.start;
       values[at + (draw.indexed ? 4 : 3)] = first;
     });
-    this.slice = args.take(values);
-    this.args = this.slice.attribute;
-    this.argsOffset = this.slice.offset;
+    return args.take(values);
+  }
+
+  /** Lazy levels reserve slots up front, so installing draws keeps every shader binding valid. */
+  replace(draws: readonly IndirectDraw[], fallback: readonly number[]): void {
+    const previous = this.slice;
+    this.slice = this.allocate(draws);
+    this.draws = draws;
+    this.fallback = fallback;
     this.argsStart.value = this.argsOffset / 4;
+    previous.dispose();
+    for (const kernel of this.kernels ?? []) kernel.dispose();
+    this.kernels = null;
+    this.changed();
   }
 
   /** Select for this view next; the uniforms are set and compared here. */
@@ -248,6 +268,18 @@ export class Selection {
       If(this.forced.greaterThanEqual(0), () => void chosen.assign(this.forced));
       const t = float(0).toVar();
       If(this.fades.equal(uint(1)).and(chosen.greaterThan(0)), () => void t.assign(smoothstep(top.mul(1 - FADE), top, height)));
+      const deferred = this.fallback.some((target, level) => target !== level);
+      const selected = deferred ? chosen.toVar() : chosen;
+      const finer = chosen.sub(1).toVar();
+      if (deferred) {
+        this.fallback.forEach((target, level) => {
+          If(chosen.equal(level), () => {
+            selected.assign(target);
+            finer.assign(this.fallback[level - 1] ?? target);
+          });
+        });
+        If(selected.equal(finer), () => void t.assign(0));
+      }
       const emit = (level: number, first: number, fade: Node<"float">) => {
         const slot = atomicAdd(counts.element(level), uint(1)).add(first).toVar();
         out.matrices.element(slot).assign(m);
@@ -256,9 +288,9 @@ export class Selection {
       };
       this.first.forEach((first, level) => {
         if (first === null) return;
-        If(chosen.equal(level), () => emit(level, first, t));
+        If(selected.equal(level), () => emit(level, first, t));
         // The finer neighbour fading out with it.
-        If(chosen.equal(level + 1).and(t.greaterThan(0)), () => emit(level, first, t.negate()));
+        If(finer.equal(level).and(t.greaterThan(0)), () => emit(level, first, t.negate()));
       });
     })().compute(count);
   }

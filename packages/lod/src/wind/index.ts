@@ -22,7 +22,7 @@ export interface SwayOptions {
   height?: number;
 }
 
-const bindings = new WeakMap<Object3D, { wind: Wind; options: SwayOptions }>();
+const bindings = new WeakMap<Object3D, { wind: Wind; options: SwayOptions; refresh: () => void }>();
 const attached = new WeakSet<Mesh>();
 const identity = new Matrix4();
 
@@ -96,6 +96,11 @@ export class Wind {
   /** Attach once, after constructing all levels. Objects without this call keep their original shaders. */
   apply(root: Object3D, { amplitude, baseY, height }: SwayOptions): void {
     if (bindings.has(root)) throw new Error("Wind: already applied to this object");
+    this.attach(root, { amplitude, baseY, height }, false);
+  }
+
+  /** Attach meshes installed by a lazy level; existing meshes retain their bounds. */
+  private attach(root: Object3D, { amplitude, baseY, height }: SwayOptions, refreshing: boolean): void {
     nonnegative(amplitude, "amplitude");
     const box = sourceBox(root);
     if (box.isEmpty()) throw new Error("Wind: object has no geometry");
@@ -108,6 +113,7 @@ export class Wind {
     root.traverse((node) => {
       if (node !== root && isLOD(node)) throw new Error("Wind: apply to nested LODs individually");
       if (!isMesh(node)) return;
+      if (refreshing && attached.has(node)) return;
       if (attached.has(node)) throw new Error("Wind: a mesh already belongs to a wind root");
       if (isSkinnedMesh(node) || isBatchedMesh(node)) throw new Error("Wind: skinned and batched meshes are not supported");
       if (node !== root && !isInstancedLod(root) && (isInstancedMesh(node) || (isImpostorMesh(node) && node.count > 1)))
@@ -122,7 +128,10 @@ export class Wind {
         throw new Error("Wind: use tangent-space normal maps");
       meshes.push(node);
     });
-    if (meshes.length === 0) throw new Error("Wind: object has no meshes");
+    if (meshes.length === 0) {
+      if (refreshing) return;
+      throw new Error("Wind: object has no meshes");
+    }
     root.updateWorldMatrix(true, true);
     invertible(root.matrixWorld);
     const inverse = root.matrixWorld.clone().invert();
@@ -135,7 +144,7 @@ export class Wind {
     });
     const shape = new Vector2(amplitude / size, base);
     const padding = (amplitude * Math.max(Math.abs(box.min.y - base), Math.abs(box.max.y - base))) / size;
-    if (hasBounds(root)) root[WIND_BOUNDS](padding, amplitude / size, base);
+    if (hasBounds(root) && (!refreshing || isInstancedLod(root))) root[WIND_BOUNDS](padding, amplitude / size, base);
     for (const { mesh, placement } of placed) {
       if (!isInstancedLod(root)) windBounds(mesh, placement, amplitude, base, size);
       setSway(mesh, { breeze: this.breeze, shape, placement, fromRoot: placement.clone().invert() });
@@ -145,7 +154,8 @@ export class Wind {
       } else mesh.material = Array.isArray(mesh.material) ? mesh.material.map((m) => levelMaterial(m, true)) : levelMaterial(mesh.material, true);
       attached.add(mesh);
     }
-    bindings.set(root, { wind: this, options: { amplitude, baseY: base, height: size } });
+    const options = { amplitude, baseY: base, height: size };
+    bindings.set(root, { wind: this, options, refresh: () => this.attach(root, options, true) });
   }
 }
 
@@ -189,4 +199,9 @@ function nonnegative(value: number, name: string): void {
 export function copyWind(source: Object3D, target: Object3D): void {
   const binding = bindings.get(source);
   if (binding) binding.wind.apply(target, binding.options);
+}
+
+export function refreshWind(root: Object3D): void {
+  const binding = bindings.get(root);
+  binding?.refresh();
 }

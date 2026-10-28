@@ -1,11 +1,15 @@
-export { type LevelRequest, type LodRequest, LodLoader } from "./loader.js";
+export { type LevelRequest, type LodRequest, type LodCacheOptions, LodLoader } from "./loader.js";
+export { setViewportHeight } from "./view.js";
 export { Lod } from "./lod.js";
+export { LazyImpostor, type LazyImpostorOptions } from "./lazy.js";
+export { cachedImpostor, type ImpostorCacheOptions } from "./impostor/cache.js";
 export { Wind, type WindOptions, type SwayOptions } from "./wind/index.js";
 export { InstancedLod } from "./instanced/index.js";
 export { type LodLevel } from "./levels.js";
 export { type SimplifyOptions, simplify } from "./simplify.js";
 export { type BakeMeshOptions, bakeMesh } from "./baked/index.js";
+export { encodeBakedMesh, decodeBakedMesh } from "./baked/codec.js";
 export { type BakeImpostorOptions, bakeImpostor } from "./impostor/bake/index.js";
 export { type ImpostorMeshOptions, ImpostorMesh } from "./impostor/mesh/index.js";
 export { type Impostor, type ImpostorLayout, type ImpostorMap } from "./impostor/impostor.js";
-export { decodeImpostor, encodeImpostor } from "./impostor/codec.js";
+export { decodeImpostor, decodeImpostorAsync, encodeImpostor } from "./impostor/codec.js";

@@ -19,7 +19,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { drawOf } from "../src/fade.js";
 import { Lod } from "../src/lod.js";
 import { originalOf } from "../src/material.js";
-import { TYPICAL_HEIGHT, viewportHeight } from "../src/view.js";
+import { TYPICAL_HEIGHT, viewportHeight, setViewportHeight } from "../src/view.js";
 import { isMesh } from "../src/three.js";
 import { GPU_TIMEOUT, render, renderer } from "./gpu.js";
 
@@ -80,6 +80,28 @@ afterEach(() => {
 });
 
 describe("Lod", { timeout: GPU_TIMEOUT }, () => {
+  it("rejects invalid explicit viewport heights without overwriting the current view", () => {
+    const view = new PerspectiveCamera();
+    expect(viewportHeight(view)).toBe(null);
+    setViewportHeight(view, 800);
+    for (const height of [0, -1, NaN, Infinity, -Infinity]) {
+      expect(() => setViewportHeight(view, height)).toThrow(/finite and positive/);
+      expect(viewportHeight(view)).toBe(800);
+    }
+  });
+
+  it("lets actual rendering replace an explicitly initialized viewport height", async () => {
+    const view = new PerspectiveCamera();
+    const target = lod();
+    setViewportHeight(view, 800);
+    try {
+      await render(new Scene().add(target), view, 64);
+      expect(viewportHeight(view)).toBe(64);
+    } finally {
+      target.dispose();
+    }
+  });
+
   it("switches at maxPixels, measured from subtense, fov and screen height, times quality", () => {
     const target = lod();
     expect(visible(viewAt(target, 100.01))).toEqual([1]);

@@ -1,14 +1,13 @@
 import { HalfFloatType, Matrix4, NearestFilter, OrthographicCamera, RenderTarget, Scene, Vector3, type Object3D, type Renderer } from "three/webgpu";
 import { uniform } from "three/tsl";
-import { clone } from "three/addons/utils/SkeletonUtils.js";
 import { MAPS, boundingRadius, texelPixels, validateImpostor, type Impostor, type ImpostorLayout, type ImpostorMap } from "../impostor.js";
 import { frameBasis, frameDirection, type Vec3 } from "../octahedral.js";
-import { boundingBox, forEachMesh, forEachVertex, showDetail } from "../../bounds.js";
+import { boundingBox, forEachVertex, showDetail } from "../../bounds.js";
 import { pause } from "../../pause.js";
 import { borrow, readFloats, sharedRenderer } from "../../renderer.js";
-import { isImpostorMesh } from "../../three.js";
 import { Atlas } from "./atlas.js";
 import { OUTPUTS, swapMaterials, type BakeSettings, type Output } from "./materials.js";
+import { sourceForBake } from "./source.js";
 
 export interface BakeImpostorOptions {
   /**
@@ -62,7 +61,12 @@ const PAD = 0.06;
  * occlusion/roughness/metalness and, if needed, emissive. A material that changes three's
  * default specular adds the object's mean specular (see `Impostor.specular`).
  */
-export async function bakeImpostor(object: Object3D, options: BakeImpostorOptions = {}): Promise<Impostor> {
+export function bakeImpostor(object: Object3D, options: BakeImpostorOptions = {}): Promise<Impostor> {
+  return bake(object, options);
+}
+
+/** Loader entry: rooms attached for the close source are absent from distant bakes. */
+export async function bake(object: Object3D, options: BakeImpostorOptions, excluded: readonly Object3D[] = []): Promise<Impostor> {
   const layout = options.layout ?? "full";
   const frames = options.frames ?? (layout === "hemi" ? 12 : 16);
   const resolution = options.resolution ?? 128;
@@ -73,12 +77,7 @@ export async function bakeImpostor(object: Object3D, options: BakeImpostorOption
   if (options.maxPixels !== undefined && !(options.maxPixels > 0)) throw new Error("bakeImpostor: maxPixels must be > 0");
   const cell = 2 ** Math.floor(Math.log2(resolution));
 
-  // SkeletonUtils.clone rebinds skinned meshes to cloned bones; Object3D.clone would
-  // keep the original skeleton, posed by the original's world transform.
-  forEachMesh(object, (mesh) => {
-    if (isImpostorMesh(mesh)) throw new Error(`bakeImpostor: cannot bake an ImpostorMesh ("${mesh.name}"); bake from its source instead`);
-  });
-  const source = clone(object);
+  const source = sourceForBake(object, excluded);
   source.matrix.identity();
   source.matrix.decompose(source.position, source.quaternion, source.scale);
   // Bones are descendants, so this also moves them; getVertexPosition reads bone.matrixWorld.
@@ -188,7 +187,13 @@ async function bakeMip(atlas: Atlas, supersample: number, renderer: Renderer, sc
   const names: Output[] = OUTPUTS.filter((name) => (name === "emissive" ? maps.includes("emissive") : name !== "specular" || atlas.specular));
   const passes = Array.from({ length: Math.ceil(names.length / PER_PASS) }, (_, p) => {
     const outputs = names.slice(p * PER_PASS, (p + 1) * PER_PASS);
-    const target = new RenderTarget(width, width, { count: outputs.length, type: HalfFloatType, minFilter: NearestFilter, magFilter: NearestFilter, depthBuffer: true });
+    const target = new RenderTarget(width, width, {
+      count: outputs.length,
+      type: HalfFloatType,
+      minFilter: NearestFilter,
+      magFilter: NearestFilter,
+      depthBuffer: true,
+    });
     outputs.forEach((name, i) => {
       const texture = target.textures[i];
       if (!texture) throw new Error("bakeImpostor: a render target lacks a texture");

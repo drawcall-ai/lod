@@ -24,6 +24,61 @@ function selection(count: number, indexed: boolean, start: number): Selection {
 const read = (selection: Selection, gpu: Renderer = renderer) => gpu.getArrayBufferAsync(selection.args, null, selection.argsOffset, 2 * ARGS_BYTES);
 const words = (buffer: ArrayBuffer) => Array.from(new Uint32Array(buffer));
 
+it("installs lazy draws without replacing storage buffers already bound by render and shadow shaders", { timeout: GPU_TIMEOUT }, async () => {
+  const draw = { level: 0, count: 6, start: 0, indexed: true };
+  const a = new Selection(new Float32Array(new Matrix4().makeTranslation(3, 0, 0).elements), new Sphere(new Vector3(), 1), [true, true], [draw], [0, 0]);
+  a.useColors(new Float32Array([0.25, 0.5, 0.75, 1]));
+  const matrices = a.slots.matrices,
+    colors = a.slots.colors,
+    fades = a.slots.fades;
+  try {
+    a.aim(new Vector3(), 1, true, false, 1, levels);
+    renderer.compute(a.take(renderer));
+    expect(words(await renderer.getArrayBufferAsync(a.args, null, a.argsOffset, ARGS_BYTES))).toEqual([6, 1, 0, 0, 0]);
+    a.replace([draw, { ...draw, level: 1, count: 9 }], [0, 1]);
+    expect(a.slots.matrices).toBe(matrices);
+    expect(a.slots.colors).toBe(colors);
+    expect(a.slots.fades).toBe(fades);
+    renderer.compute(a.take(renderer));
+    expect(words(await read(a))).toEqual([6, 0, 0, 0, 0, 9, 1, 0, 0, 1]);
+    expect(new Float32Array(await renderer.getArrayBufferAsync(matrices))[16 + 12]).toBe(3);
+    if (!colors) throw new Error("missing colors");
+    expect(Array.from(new Float32Array(await renderer.getArrayBufferAsync(colors)).slice(4, 8))).toEqual([0.25, 0.5, 0.75, 1]);
+  } finally {
+    a.dispose();
+  }
+});
+
+it("draws pending levels through a solid finer fallback and fades ready coarse levels against that fallback", { timeout: GPU_TIMEOUT }, async () => {
+  const a = new Selection(
+    new Float32Array(new Matrix4().elements),
+    new Sphere(new Vector3(), 1),
+    [true, false, true],
+    [
+      { level: 0, count: 6, start: 0, indexed: true },
+      { level: 2, count: 9, start: 0, indexed: true },
+    ],
+    [0, 0, 2],
+  );
+  const thresholds = [{ maxPixels: Infinity }, { maxPixels: 100 }, { maxPixels: 10 }];
+  try {
+    // Height 95 lies in the unavailable level's fade: fallback must draw exactly once, solid.
+    a.aim(new Vector3(0, 0, 2), 95, false, true, null, thresholds);
+    renderer.compute(a.take(renderer));
+    expect(words(await read(a))).toEqual([6, 1, 0, 0, 0, 9, 0, 0, 0, 1]);
+    expect(new Float32Array(await renderer.getArrayBufferAsync(a.slots.fades))[0]).toBe(0);
+    // Height 9.5 fades a ready coarse card against level 0, skipping pending level 1.
+    a.aim(new Vector3(0, 0, 2), 9.5, false, true, null, thresholds);
+    renderer.compute(a.take(renderer));
+    expect(words(await read(a))).toEqual([6, 1, 0, 0, 0, 9, 1, 0, 0, 1]);
+    const fades = new Float32Array(await renderer.getArrayBufferAsync(a.slots.fades));
+    expect(fades[0]).toBeCloseTo(-0.5);
+    expect(fades[1]).toBeCloseTo(0.5);
+  } finally {
+    a.dispose();
+  }
+});
+
 it("initializes appended and reused GPU slices without overwriting live draws or local firstInstance", { timeout: GPU_TIMEOUT }, async () => {
   const a = selection(3, true, 6);
   let b: Selection | undefined;

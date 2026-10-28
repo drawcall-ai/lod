@@ -1,6 +1,6 @@
 import { Color, type Object3D } from "three/webgpu";
 import { texelPixels } from "./impostor/impostor.js";
-import { isImpostorMesh } from "./three.js";
+import { isLazyImpostor, isImpostorMesh } from "./three.js";
 
 // The levels Lod and InstancedLod share: their thresholds, the defaults of those, which
 // level a height picks and how far it has faded in (see fade.ts).
@@ -48,7 +48,9 @@ export class Level implements LodLevel {
     readonly nested: boolean,
     /** The levels this one is in, which its default depends on. */
     private readonly ladder: readonly Level[],
-  ) {}
+  ) {
+    if (isLazyImpostor(object)) this.explicit = object.maxPixels;
+  }
 
   get maxPixels(): number {
     return this.value;
@@ -97,7 +99,8 @@ export function estimate(levels: readonly Level[], diameter: number): void {
   let finer = 1024;
   for (const level of levels.slice(1)) {
     const error = errorOf(level.object);
-    if (error !== undefined) level.base = diameter / Math.max(error, diameter * 1e-4);
+    if (isLazyImpostor(level.object)) level.base = level.object.maxPixels;
+    else if (error !== undefined) level.base = diameter / Math.max(error, diameter * 1e-4);
     else if (isImpostorMesh(level.object)) level.base = texelPixels(level.object.impostor);
     else level.base = finer / 2;
     finer = level.base;

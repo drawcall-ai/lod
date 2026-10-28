@@ -1,23 +1,6 @@
 import * as THREE from "three/webgpu";
-import {
-  Fn,
-  color,
-  dFdx,
-  dFdy,
-  dot,
-  log2,
-  materialOpacity,
-  max,
-  normalView,
-  positionViewDirection,
-  pow,
-  saturate,
-  uv,
-  vec2,
-  vec3,
-  vec4,
-} from "three/tsl";
-import { ImpostorMesh } from "@drawcall/lod";
+import { Fn, color, dFdx, dFdy, dot, log2, materialOpacity, max, normalView, positionViewDirection, pow, saturate, uv, vec2, vec3, vec4 } from "three/tsl";
+import { ImpostorMesh, InstancedLod, Lod } from "@drawcall/lod";
 import { isShadowPass } from "../../../../packages/lod/src/three.ts";
 import { isNodeOf } from "../../../../packages/lod/src/tsl.ts";
 import { baseColor } from "./materials.ts";
@@ -85,15 +68,21 @@ export function foliageModel(root: THREE.Object3D, options: FoliageOptions): voi
   });
 }
 
-/**
- * Gives the impostors a Lod or InstancedLod under `root` draws the leaves' translucency:
- * they light the baked surface as a standard material, by its averaged normals.
- */
+const shaded = new WeakSet<THREE.Material>();
+const watched = new WeakSet<THREE.Object3D>();
+
+/** Applies leaf translucency to existing impostors and lazy ones as they arrive. */
 export function foliageLevels(root: THREE.Object3D, { translucency, tint = "#e4ff8a" }: FoliageOptions): void {
   const shade = new THREE.Color(tint);
   root.traverse((o) => {
+    if ((o instanceof Lod || o instanceof InstancedLod) && !watched.has(o)) {
+      watched.add(o);
+      o.addEventListener("levelschange", () => foliageLevels(o, { translucency, tint }));
+    }
     if (!(o instanceof ImpostorMesh)) return;
     const m = o.material;
+    if (shaded.has(m)) return;
+    shaded.add(m);
     const lighting = m.setupLightingModel.bind(m);
     const key = m.customProgramCacheKey.bind(m);
     m.setupLightingModel = () => new Translucent(lighting(), translucency, shade);
@@ -104,7 +93,14 @@ export function foliageLevels(root: THREE.Object3D, { translucency, tint = "#e4f
 /** Boosts alpha by the mip `map` is read at. */
 function boostOf(map: THREE.Texture) {
   const image: unknown = map.image;
-  if (typeof image !== "object" || image === null || !("width" in image) || !("height" in image) || typeof image.width !== "number" || typeof image.height !== "number")
+  if (
+    typeof image !== "object" ||
+    image === null ||
+    !("width" in image) ||
+    !("height" in image) ||
+    typeof image.width !== "number" ||
+    typeof image.height !== "number"
+  )
     throw new Error(`foliage: the leaves' map "${map.name}" has no image to measure`);
   const texel = uv().mul(vec2(image.width, image.height));
   const mip = max(log2(max(dot(dFdx(texel), dFdx(texel)), dot(dFdy(texel), dFdy(texel)))).mul(0.5), 0);
@@ -129,7 +125,9 @@ class Translucent extends THREE.PhysicalLightingModel {
       throw new Error("foliage: three's direct light is not a direction, a colour and a sum");
     const behind = saturate(dot(normalView, lightDirection).negate());
     // light scatters forward through the leaf: strongest when looking toward the sun
-    const forward = pow(saturate(dot(positionViewDirection, lightDirection.negate())), 3).mul(0.65).add(0.35);
+    const forward = pow(saturate(dot(positionViewDirection, lightDirection.negate())), 3)
+      .mul(0.65)
+      .add(0.35);
     directDiffuse.addAssign(behind.mul(forward).mul(this.share).mul(lightColor).mul(THREE.TSL.diffuseContribution).mul(color(this.tint)));
   }
 

@@ -1,15 +1,21 @@
 import { Loader, LoaderUtils, type LoadingManager, type Object3D } from "three/webgpu";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { getGLTSSource, type GLTSSource } from "@drawcall/glts";
 import { bakeMesh } from "./baked/index.js";
+import { measureLevels } from "./bounds.js";
 import { disposeTree } from "./dispose.js";
-import { bakeImpostor, type BakeImpostorOptions } from "./impostor/bake/index.js";
+import type { BakeImpostorOptions } from "./impostor/bake/index.js";
 import type { Impostor } from "./impostor/impostor.js";
 import { ImpostorMesh } from "./impostor/mesh/index.js";
 import { InstancedLod } from "./instanced/index.js";
-import { validate } from "./levels.js";
+import { estimate, Level, validate } from "./levels.js";
 import { Lod } from "./lod.js";
+import { LazyImpostor } from "./lazy.js";
+import { impostor, originOf, type LodCacheOptions } from "./loader/cache.js";
+import { disposeSimplified } from "./loader/dispose.js";
+export type { LodCacheOptions } from "./loader/cache.js";
 import { simplify, type SimplifyOptions } from "./simplify.js";
-import { isObject3D, placeLike, rejectSkinned } from "./three.js";
+import { isLOD, isObject3D, placeLike, rejectSkinned } from "./three.js";
 
 /** A level the loader builds from the source, cheapest last; `maxPixels` overrides its default (see `LodLevel.maxPixels`). */
 export type LevelRequest =
@@ -36,16 +42,26 @@ export type LevelRequest =
         }
       | { low?: never; ratio?: number }
     ))
-  | ({ type: "impostor"; maxPixels?: number } & BakeImpostorOptions);
+  | ({
+      type: "impostor";
+      /** Build only when needed; requires an explicit positive maxPixels. Default false. */
+      lazy?: boolean;
+    } & BakeImpostorOptions);
 
-/** A model URL (.glb, .gltf or .glts), with the levels to build after the source. */
-export type LodRequest = string | { url: string; levels?: readonly LevelRequest[] };
+/**
+ * A model URL (.glb, .gltf or .glts), or the complete asset passed from its active GLTS
+ * script. The whole GLTS asset is the cache unit, not individual parts of its scene.
+ * GLTS impostors persist through vitecache; its Vite plugin tracks the script and its
+ * dependency files. Pass an object only after its dependency loads have finished;
+ * deferred impostors read retained dependencies when loading begins.
+ */
+export type LodRequest = string | Object3D | { url: string; levels?: readonly LevelRequest[] } | { source: Object3D; levels?: readonly LevelRequest[] };
 
 const DEFAULT_LEVELS: readonly LevelRequest[] = [{ type: "impostor" }];
 
 /**
  * Loads a model and builds a `Lod` of it: the model as level 0, then the requested
- * levels (default: an impostor). Building runs at load time; impostors bake on a
+ * levels (default: an impostor). Unless explicitly lazy, building runs at load time; impostors bake on a
  * renderer this package keeps for that. Each level's maxPixels is its default (see
  * `LodLevel.maxPixels`) unless the request sets it; a failed load frees what it built.
  *
@@ -59,7 +75,10 @@ const DEFAULT_LEVELS: readonly LevelRequest[] = [{ type: "impostor" }];
 export class LodLoader extends Loader<Lod, LodRequest> {
   private gltf: GLTFLoader | undefined;
 
-  constructor(manager?: LoadingManager) {
+  constructor(
+    manager?: LoadingManager,
+    private readonly cacheOptions?: LodCacheOptions,
+  ) {
     super(manager);
   }
 
@@ -69,22 +88,22 @@ export class LodLoader extends Loader<Lod, LodRequest> {
   }
 
   override async loadAsync(request: LodRequest): Promise<Lod> {
-    return this.loading(request, (object, levels, base) => this.build(object, levels, base, (objects) => new Lod(objects)));
+    return this.loading(request, (object, levels, base, origin) => this.build(object, levels, base, (objects) => new Lod(objects), origin));
   }
 
   /** Load `request` as `count` instances: an `InstancedLod`. */
   async loadInstancesAsync(request: LodRequest, count: number): Promise<InstancedLod> {
-    return this.loading(request, (object, levels, base) => this.build(object, levels, base, (objects) => new InstancedLod(objects, count)));
+    return this.loading(request, (object, levels, base, origin) => this.build(object, levels, base, (objects) => new InstancedLod(objects, count), origin));
   }
 
-  /** Build a `Lod` of `object`, which becomes its level 0. A baked level's relative `low` and `interior` URLs resolve against `path`. */
+  /** Build a `Lod` of the complete `object` inside GLTS. Relative low/interior URLs use the script's directory. */
   async parseAsync(object: Object3D, levels: readonly LevelRequest[] = DEFAULT_LEVELS): Promise<Lod> {
-    return this.build(object, levels, this.path, (objects) => new Lod(objects));
+    return this.loadAsync({ source: object, levels });
   }
 
-  /** Build an `InstancedLod` of `count` instances of `object`, which is its level 0. */
+  /** Build an `InstancedLod` of the complete `object` inside GLTS. */
   async parseInstancesAsync(object: Object3D, count: number, levels: readonly LevelRequest[] = DEFAULT_LEVELS): Promise<InstancedLod> {
-    return this.build(object, levels, this.path, (objects) => new InstancedLod(objects, count));
+    return this.loadInstancesAsync({ source: object, levels }, count);
   }
 
   /**
@@ -97,33 +116,45 @@ export class LodLoader extends Loader<Lod, LodRequest> {
     requests: readonly LevelRequest[],
     base: string,
     make: (objects: Object3D[]) => T,
+    origin?: GLTSSource,
   ): Promise<T> {
     rejectSkinned(object, "LodLoader");
     if (requests.filter((request) => request.type === "baked" && request.interior !== undefined).length > 1)
       throw new Error("LodLoader: give an interior to one baked level only: the source shows one");
     const built: Object3D[] = [];
     const interiors: Object3D[] = [];
-    let lod: T | undefined;
     try {
       // One at a time: bakes share one renderer.
       for (const request of requests) {
-        const { level, interior } = await this.buildLevel(object, request, base);
+        const { level, interior } = await this.buildLevel(object, request, base, origin, interiors);
         built.push(level);
         if (interior) interiors.push(interior);
       }
-      // After every bake, so that none of them sees the rooms.
+      // Eager bakes have finished; deferred bakes exclude these attached children.
       if (interiors.length > 0) object.add(...interiors);
-      lod = make([object, ...built]);
+      const objects = [object, ...built];
+      // Reject bad overrides before a constructor hooks the caller's source or
+      // allocates a crowd's pooled indirect arguments and selection buffers.
+      const preview: Level[] = [];
+      objects.forEach((object, i) => preview.push(new Level(object, i, isLOD(object), preview)));
+      estimate(preview, 2 * measureLevels(objects, "LodLoader").own.radius);
+      requests.forEach(({ maxPixels }, i) => {
+        const level = preview[i + 1];
+        if (level && maxPixels !== undefined) level.maxPixels = maxPixels;
+      });
+      validate(preview);
+      const lod = make(objects);
       for (const [i, { maxPixels }] of requests.entries()) {
         const level = lod.levels[i + 1];
         if (!level) throw new Error("LodLoader: a built level is missing");
         if (maxPixels !== undefined) level.maxPixels = maxPixels;
       }
-      validate(lod.levels);
       return lod;
     } catch (error) {
-      lod?.remove(object);
-      for (const level of built) disposeTree(level);
+      built.forEach((level, i) => {
+        if (requests[i]?.type === "simplified") disposeSimplified(level, object);
+        else disposeTree(level);
+      });
       for (const interior of interiors) {
         object.remove(interior);
         disposeTree(interior);
@@ -133,7 +164,13 @@ export class LodLoader extends Loader<Lod, LodRequest> {
   }
 
   /** The level `request` asks for, and the interior a baked level loaded for the source. */
-  private async buildLevel(source: Object3D, request: LevelRequest, base: string): Promise<{ level: Object3D; interior?: Object3D }> {
+  private async buildLevel(
+    source: Object3D,
+    request: LevelRequest,
+    base: string,
+    origin?: GLTSSource,
+    interiors: readonly Object3D[] = [],
+  ): Promise<{ level: Object3D; interior?: Object3D }> {
     switch (request.type) {
       case "simplified": {
         const { type: _, maxPixels: __, ...options } = request;
@@ -142,8 +179,17 @@ export class LodLoader extends Loader<Lod, LodRequest> {
       case "baked":
         return this.bake(source, request, base);
       case "impostor": {
-        const { type: _, maxPixels: __, ...options } = request;
-        return { level: impostorOf(source, await bakeImpostor(source, options)) };
+        const { type: _, lazy, ...options } = request;
+        if (lazy) {
+          const { maxPixels } = options;
+          if (maxPixels === undefined || !Number.isFinite(maxPixels) || maxPixels <= 0)
+            throw new Error("LodLoader: a lazy impostor needs an explicit positive maxPixels");
+          const level = new LazyImpostor(() => impostor(source, options, origin, interiors, this.cacheOptions), { maxPixels });
+          level.name = `${source.name || "object"} impostor`;
+          placeLike(level, source);
+          return { level };
+        }
+        return { level: impostorOf(source, await impostor(source, options, origin, [], this.cacheOptions)) };
       }
       default: {
         const unknown: never = request;
@@ -178,14 +224,25 @@ export class LodLoader extends Loader<Lod, LodRequest> {
    * Load `request`'s model and `build` it, reporting to the manager as one item; `build`
    * gets the model's directory. On failure, the model is freed.
    */
-  private async loading<T>(request: LodRequest, build: (object: Object3D, levels: readonly LevelRequest[], base: string) => Promise<T>): Promise<T> {
-    const { url, levels = DEFAULT_LEVELS } = typeof request === "string" ? { url: request, levels: undefined } : request;
+  private async loading<T>(
+    request: LodRequest,
+    build: (object: Object3D, levels: readonly LevelRequest[], base: string, origin?: GLTSSource) => Promise<T>,
+  ): Promise<T> {
+    const input = typeof request === "string" ? { url: request } : isObject3D(request) ? { source: request } : request;
+    const { levels = DEFAULT_LEVELS } = input;
+    if ("source" in input) {
+      // Native async code loses the GLTS execution after its first await.
+      const source = getGLTSSource();
+      return build(input.source, levels, LoaderUtils.extractUrlBase(source.url), source);
+    }
+    const { url } = input;
     const full = LoaderUtils.resolveURL(url, this.path);
     this.manager.itemStart(full);
     let object: Object3D | undefined;
     try {
       object = await this.loadSource(full);
-      return await build(object, levels, LoaderUtils.extractUrlBase(full));
+      const origin = originOf(object);
+      return await build(object, levels, LoaderUtils.extractUrlBase(origin?.url ?? full), origin);
     } catch (error) {
       if (object) disposeTree(object);
       this.manager.itemError(full);

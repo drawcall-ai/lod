@@ -20,10 +20,11 @@ import { placeInterior } from "../baked/interior/material.js";
 import { impostorInstances, type ImpostorMesh } from "../impostor/mesh/index.js";
 import { Level, cloneLevels, copyThresholds, estimate, fadeProgress, levelAt, tintLevels, validate, type LodLevel } from "../levels.js";
 import { Lod } from "../lod.js";
-import { gpuRenderer, inShadowPass, isImpostorMesh, isInstancedMesh, isLOD, isMesh, rejectSkinned, sameClass } from "../three.js";
+import { available, fallbacks, inView, type LevelsEventMap } from "../lazy.js";
+import { gpuRenderer, inShadowPass, isLazyImpostor, isImpostorMesh, isInstancedMesh, isLOD, isMesh, rejectSkinned, sameClass } from "../three.js";
 import { TYPICAL_HEIGHT, View, viewportHeight, watchViewport } from "../view.js";
 import { WIND_BOUNDS } from "../wind/hooks.js";
-import { copyWind } from "../wind/index.js";
+import { copyWind, refreshWind } from "../wind/index.js";
 import { groupMaterial, indirect, placed, ranges } from "./meshes.js";
 import { Bounds, stretch } from "./bounds.js";
 import { Dirty } from "./dirty.js";
@@ -87,7 +88,7 @@ interface Selected {
  * ImpostorMesh) or nested Lods. To build a hierarchy on top, leave level 0 empty (see
  * `Lod`) and draw the detail of the instances `levelOf` reports at level 0 yourself.
  */
-export class InstancedLod extends Object3D {
+export class InstancedLod extends Object3D<LevelsEventMap> {
   readonly isLOD = true;
   readonly isInstancedLod = true;
   /** Let the renderer call `update` with its camera every frame. */
@@ -102,6 +103,9 @@ export class InstancedLod extends Object3D {
   private readonly meshes: LevelMesh[][] = [];
   private readonly probes: Probe[] = [];
   private selection: Selection | null = null;
+  private fallback: number[] = [];
+  private readonly installed = new Set<Object3D>();
+  private disposed = false;
   /** Instance matrices, 16 floats each: the selection uploads them from here. */
   private readonly matrices: Float32Array;
   /** Instance colours, 4 floats each, once `setColorAt` was called. */
@@ -117,6 +121,8 @@ export class InstancedLod extends Object3D {
   readonly bounds = new Sphere();
   /** Per level, what its meshes are culled by: `bounds`, or less where its instances must be near the camera. */
   private readonly reaches: Sphere[] = [];
+  /** Logical demand at the initial default viewport, separate from first-draw visibility. */
+  private readonly demand: Sphere[] = [];
   /** Source-radius padding for the shadow caster cutoff; culling pads every level separately. */
   private padding = 0;
   private readonly matrixChanges: Dirty;
@@ -140,9 +146,17 @@ export class InstancedLod extends Object3D {
     this.blocks = new Bounds(this.matrices, this.spheres, this.sphere, this.bounds, draws, this.rest);
   }
 
-  private build(objects: Object3D[]): number {
+  private build(objects: Object3D[], rebuilding = false): number {
     const [source] = objects;
     if (!source) throw new Error("InstancedLod: needs at least the source level");
+    if (isLazyImpostor(source)) throw new Error("InstancedLod: the source level must be eager");
+    for (const object of objects) {
+      if (isLazyImpostor(object)) {
+        object.materialize();
+      }
+      if (available(object)) this.installed.add(object);
+    }
+    this.fallback = fallbacks(objects);
     for (const object of objects) {
       rejectSkinned(object, "InstancedLod");
       object.traverse((node) => {
@@ -152,6 +166,11 @@ export class InstancedLod extends Object3D {
     }
     const { own, placed } = measureLevels(objects, "InstancedLod");
     this.sphere.copy(placed);
+    if (!rebuilding) {
+      objects.forEach((object, i) => this.entries.push(new Level(object, i, false, this.entries)));
+      estimate(this.entries, 2 * own.radius);
+    }
+    validate(this.entries);
     // Every template mesh, split per material group: an indirect draw has one range.
     const parts = objects.map((object, level) => {
       // A template's own transform places it in the instance's space, as a Lod's child.
@@ -167,24 +186,61 @@ export class InstancedLod extends Object3D {
       return found;
     });
     const draws = parts.flat().map((part) => part.draw);
-    const selection = new Selection(
-      this.matrices,
-      this.sphere,
-      parts.map((found) => found.length > 0),
-      draws,
-    );
+    const selection =
+      this.selection ??
+      new Selection(
+        this.matrices,
+        this.sphere,
+        parts.map((found, i) => found.length > 0 || isLazyImpostor(at(objects, i))),
+        draws,
+        this.fallback,
+      );
+    if (this.selection) selection.replace(draws, this.fallback);
     this.selection = selection;
     if (this.colors) this.useColors(selection, this.colors);
     let k = 0;
     parts.forEach((found, i) => {
-      const level = new Level(at(objects, i), i, false, this.entries);
-      this.entries.push(level);
-      this.meshes.push(found.map((part) => this.instance(level, part.template, part.placement, part.group, k++ * ARGS_BYTES, selection)));
+      const level = at(this.entries, i);
+      this.reaches[i] ??= new Sphere();
+      this.demand[i] ??= new Sphere();
+      const previous = this.meshes[i];
+      if (previous?.length && previous.length !== found.length) throw new Error("InstancedLod: an existing level's meshes changed");
+      this.meshes[i] = found.map((part, index) => {
+        const offset = k++ * ARGS_BYTES,
+          mesh = previous?.[index];
+        if (!mesh) return this.instance(level, part.template, part.placement, part.group, offset, selection);
+        this.bind(mesh, level, selection, offset);
+        return mesh;
+      });
     });
     this.boundLevels();
-    estimate(this.entries, 2 * own.radius);
-    validate(this.entries);
+    if (!rebuilding) for (const object of objects) if (isLazyImpostor(object)) object.retain();
     return draws.length;
+  }
+
+  /** Install ready atlas templates atomically before selecting this view. */
+  private refresh(): void {
+    if (this.installed.size === this.entries.length) return;
+    let changed = false;
+    for (const { object } of this.entries) {
+      if (!isLazyImpostor(object) || this.installed.has(object)) continue;
+      object.materialize();
+      changed ||= available(object);
+    }
+    if (!changed) return;
+    if (this.selection) pending.delete(this.selection);
+    this.probes.length = 0;
+    this.envelope.makeEmpty();
+    const draws = this.build(
+      this.entries.map((entry) => entry.object),
+      true,
+    );
+    this.blocks = new Bounds(this.matrices, this.spheres, this.sphere, this.bounds, draws, this.rest);
+    this.matrixChanges.all();
+    this.measure();
+    refreshWind(this);
+    this.updateWorldMatrix(true, true);
+    this.dispatchEvent({ type: "levelschange" });
   }
 
   /** Bound what the level meshes draw, including template placement and impostor boxes. */
@@ -215,16 +271,13 @@ export class InstancedLod extends Object3D {
 
   /** Material group `group` of `template` drawn for every instance in `level`'s slots, from indirect draw arguments at byte `offset`. */
   private instance(level: Level, template: Mesh, placement: Matrix4, group: number, offset: number, selection: Selection): LevelMesh {
-    const { slots } = selection;
     // An impostor card is placed in the shader; any other mesh draws its geometry moved
     // into the instance's space, so the instance matrix is all it needs.
     const mesh: LevelMesh = isImpostorMesh(template)
       ? impostorInstances(template, this.count, placement)
       : new InstancedMesh(placed(template.geometry, placement), groupMaterial(template, group), this.count);
     mesh.geometry = indirect(mesh.geometry, selection, offset);
-    mesh.instanceMatrix = slots.matrices;
-    mesh.instanceColor = slots.colors;
-    setDraw(mesh, { kind: "instances", fades: slots.fades, radius: this.drawRadius, tint: level.tint });
+    this.bind(mesh, level, selection, offset);
     if (!isImpostorMesh(template)) placeInterior(mesh, placement);
     mesh.name = template.name;
     mesh.castShadow = template.castShadow;
@@ -247,6 +300,13 @@ export class InstancedLod extends Object3D {
     watchViewport(mesh);
     this.add(mesh);
     return mesh;
+  }
+
+  private bind(mesh: LevelMesh, level: Level, selection: Selection, offset: number): void {
+    mesh.geometry.setIndirect(selection.args, selection.argsOffset + offset);
+    mesh.instanceMatrix = selection.slots.matrices;
+    mesh.instanceColor = selection.slots.colors;
+    setDraw(mesh, { kind: "instances", fades: selection.slots.fades, radius: this.drawRadius, tint: level.tint });
   }
 
   setMatrixAt(index: number, matrix: Matrix4): void {
@@ -312,7 +372,8 @@ export class InstancedLod extends Object3D {
       height /= Math.max(Math.sqrt(dx * dx + dy * dy + dz * dz), 1e-6);
     }
     const level = levelAt(this.entries, height, last.forced);
-    return last.fades && fadeProgress(this.entries, level, height) > 0 ? level.index - 1 : level.index;
+    const selected = last.fades && fadeProgress(this.entries, level, height) > 0 ? level.index - 1 : level.index;
+    return this.fallback[selected] ?? selected;
   }
 
   private check(index: number): void {
@@ -360,8 +421,10 @@ export class InstancedLod extends Object3D {
 
   /** Sort the instances into levels for `camera`; three's renderer calls this itself while `autoUpdate`. */
   update(camera: Camera): void {
+    if (this.disposed || inShadowPass(this)) return;
+    this.refresh();
     const { entries, selection } = this;
-    if (!selection || inShadowPass(this)) return;
+    if (!selection) return;
     validate(entries);
     if (this.forceLevel !== null && !entries[this.forceLevel]) throw new Error(`Lod: forceLevel ${this.forceLevel} is not a level`);
     this.measure();
@@ -374,6 +437,26 @@ export class InstancedLod extends Object3D {
     last.eye.copy(view.eye).applyMatrix4(inverse.copy(this.matrixWorld).invert());
     Object.assign(last, { selected: true, scale, ortho: view.ortho, fades: view.fades, forced: this.forceLevel });
     const stable = this.blocks.select(entries, last, this.reaches, height !== null, this.matrixWorld);
+    if (this.installed.size < entries.length) {
+      let demand = this.reaches;
+      if (height === null) {
+        // Every mesh must get a first chance to report its viewport. That conservative
+        // visibility is not a reason to load every lazy tier: use the actual default
+        // selection, including forced and empty levels, for initial atlas demand.
+        demand = this.demand;
+        this.blocks.select(entries, last, demand, true, this.matrixWorld);
+      }
+      for (let i = this.reaches.length - 1; i >= 0; i--) {
+        const reach = at(this.reaches, i),
+          object = at(entries, i).object;
+        if (isLazyImpostor(object) && object.status === "idle" && inView(camera, this.matrixWorld, at(demand, i))) object.request();
+        const target = this.fallback[i] ?? i;
+        if (target !== i) {
+          at(this.reaches, target).union(reach);
+          reach.makeEmpty();
+        }
+      }
+    }
     selection.aim(last.eye, scale, view.ortho, view.fades, this.forceLevel, entries, stable);
     // Selected only when something may draw: an InstancedLod with every level hidden
     // keeps its last selection.
@@ -448,16 +531,24 @@ export class InstancedLod extends Object3D {
    * geometry and textures, so dispose only once no clone draws any more.
    */
   dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.clearDraws();
+    for (const { object } of this.entries) isLazyImpostor(object) ? object.release() : disposeTree(object);
+  }
+
+  private clearDraws(): void {
     // An ImpostorMesh frees its own material and geometry; the other meshes' faded
     // materials go with the levels' originals.
     for (const mesh of this.meshes.flat()) {
+      this.remove(mesh);
       mesh.dispose();
       if (!isImpostorMesh(mesh)) mesh.geometry.dispose();
     }
     if (this.selection) pending.delete(this.selection);
     this.selection?.dispose();
     this.selection = null;
-    for (const { object } of this.entries) disposeTree(object);
+    this.meshes.length = 0;
   }
 }
 

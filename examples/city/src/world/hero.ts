@@ -1,5 +1,5 @@
 import * as THREE from "three/webgpu";
-import { ImpostorMesh, Lod } from "@drawcall/lod";
+import { Lod } from "@drawcall/lod";
 import { cornPlant, leafMaterial } from "../content/corn/index.ts";
 import { ladybird } from "../content/ladybird.ts";
 import { culled, thresholds } from "./levels.ts";
@@ -14,13 +14,15 @@ const UP = new THREE.Vector3(0, 1, 0);
  */
 export function heroPlant(
   spot: { at: THREE.Vector3; yaw: number; seed: number },
-  far: { object: ImpostorMesh; maxPixels?: number },
+  far: { object: THREE.Object3D; maxPixels?: number },
   terrain: Terrain,
 ): { hero: Lod; ladybird: Lod } {
   const detail = cornPlant(spot.seed, { leafSegments: [192, 24] });
   // before the Lod replaces the materials with its faded copies
   const seat = leafSeat(detail);
-  const lod = thresholds(new Lod([detail, new ImpostorMesh(far.object.impostor, 1, { parallax: 0 }), new THREE.Group()]), [far, culled(1)]);
+  const distant = far.object.clone();
+  distant.castShadow = distant.receiveShadow = false;
+  const lod = thresholds(new Lod([detail, distant, new THREE.Group()]), [far, culled(1)]);
   lod.name = "hero corn plant";
   lod.position.set(spot.at.x, terrain.height(spot.at.x, spot.at.z), spot.at.z);
   lod.rotation.y = spot.yaw;

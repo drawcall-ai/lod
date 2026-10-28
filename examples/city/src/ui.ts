@@ -49,6 +49,12 @@ export class Ui {
     this.bar.style.width = `${Math.round(done * 100)}%`;
   }
 
+  waiting(text: string): void {
+    this.loading.hidden = false;
+    this.status.textContent = text;
+    this.bar.style.width = "100%";
+  }
+
   ready(): void {
     this.loading.hidden = true;
     this.controls.hidden = false;

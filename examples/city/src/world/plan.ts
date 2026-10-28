@@ -114,13 +114,13 @@ const FORESTS: Forest[] = [
 export function plan(seed: number): Plan {
   const r = new Random(seed);
   const flats = [{ x: TOWN.x, z: TOWN.z, radius: TOWN.radius * 0.8 }, ...FIELDS.map((f) => ({ x: f.x, z: f.z, radius: Math.hypot(f.halfX, f.halfZ) }))];
-  const terrain = new Terrain(seed, flats, { course: CREEK.course, depth: CREEK.depth, crossings: crossings(CREEK.course, crossRoad(TOWN)) });
+  const terrain = new Terrain({ seed, flats, creek: { course: CREEK.course, depth: CREEK.depth, crossings: crossings(CREEK.course, crossRoad(TOWN)) } });
   const land = new Land();
   for (const f of FIELDS) land.paint(Use.Field, f.x - 250, f.z - 250, f.x + 250, f.z + 250, (x, z) => inRect(f, x, z));
   for (const f of FORESTS)
     land.paint(Use.Forest, f.x - f.radius * 1.6, f.z - f.radius * 1.6, f.x + f.radius * 1.6, f.z + f.radius * 1.6, (x, z) => inForest(f, x, z));
 
-  const variants = Array.from({ length: HOUSE_VARIANTS }, (_, i) => houseParams(i + 1));
+  const variants = houseVariants();
   const built = town(TOWN, variants, terrain, r);
   const roads = [...built.roads, ...country(TOWN, built.mainRoad, FIELDS), ...built.paths];
   for (const road of roads) {
@@ -167,6 +167,8 @@ export function plan(seed: number): Plan {
     models,
   };
 }
+
+export const houseVariants = (): HouseParams[] => Array.from({ length: HOUSE_VARIANTS }, (_, i) => houseParams(i + 1));
 
 /** A spot on the ground at x, z. */
 export function spot(terrain: Terrain, x: number, z: number, angle: number, scale = 1): Spot {

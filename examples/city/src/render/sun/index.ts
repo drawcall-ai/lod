@@ -70,9 +70,11 @@ export class Sun {
     return [this.light, this.light.target];
   }
 
-  /** Sorts the casters under `root` by size; call once the scene is built. */
+  /** Registers current caster draws; refresh after lazy levels replace their meshes. */
   castBy(root: THREE.Object3D): void {
-    this.casters = new Casters(root);
+    if (this.casters) this.casters.refresh(root);
+    else this.casters = new Casters(root);
+    for (const { light } of this.cascades) light.shadow.needsUpdate = true;
   }
 
   /**

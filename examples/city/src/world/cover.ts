@@ -1,5 +1,7 @@
 import * as THREE from "three/webgpu";
 import { Lod } from "@drawcall/lod";
+import { Stream } from "./stream.ts";
+import { model } from "./cache.ts";
 import { Random } from "../content/random.ts";
 import { step } from "../loading.ts";
 import { foliageLevels } from "../content/foliage.ts";
@@ -73,7 +75,36 @@ const KINDS: Kind[] = [
   },
 ];
 
-export async function cover(plan: Plan, zones: Zones): Promise<Patches[]> {
+export async function cover(plan: Plan, zones: Zones): Promise<Stream> {
+  const eye = new THREE.Vector3();
+  const reference = new THREE.PerspectiveCamera(50);
+  // The original cull is size × referenceScale / reach. Size cancels when Patches
+  // converts it back to a reach for the current view; no plant geometry is needed.
+  const limits = KINDS.map((kind) => reachFor(reference, 1, kind.reach, 800, 1));
+  return new Stream(
+    "ground cover",
+    [],
+    () => buildCover(plan, zones),
+    (camera) => {
+      eye.setFromMatrixPosition(camera.matrixWorld);
+      const above = Math.max(0, eye.y - plan.terrain.height(eye.x, eye.z));
+      return limits.some((limit) => above <= reachFor(camera, 1, limit, Patches.height, Lod.quality) * (1 + 1e-7));
+    },
+    (root, wind) => {
+      for (const patches of root.children) {
+        if (!(patches instanceof Patches)) throw new Error("Ground cover contains a non-patch object");
+        for (const lod of patches.lods) {
+          const source = lod.levels[0];
+          if (!source) throw new Error("Ground cover has no source level");
+          const box = new THREE.Box3().setFromObject(source.object);
+          wind.apply(lod, { amplitude: (box.max.y - box.min.y) * 0.07 });
+        }
+      }
+    },
+  );
+}
+
+async function buildCover(plan: Plan, zones: Zones): Promise<Patches[]> {
   const ground = groundShading(zones);
   const material = grassMaterial(ground);
   const all: Patches[] = [];
@@ -89,11 +120,11 @@ export async function cover(plan: Plan, zones: Zones): Promise<Patches[]> {
     const perTile = tiles.perKind;
     const lods = await step(kind.name, () =>
       Promise.all(
-        sources.map(async (source) => {
+        sources.map(async (source, variant) => {
           const levels =
             "grass" in kind
               ? [{ object: thinned(source), maxPixels: cull * 4 }, culled(cull)]
-              : [await impostor(source, { resolution: 64, maxPixels: 64 }), culled(cull)];
+              : [impostor(source, { dependencies: model(kind.id, variant, kind.groups), resolution: 64, maxPixels: 64 }), culled(cull)];
           // a tuft's shadow is a dark speck on the ground that the terrain lacks further
           // out, where the tufts are gone: they receive shadows but cast none
           for (const level of [source, ...levels.map((l) => l.object)]) level.traverse((o) => (o.castShadow = false));

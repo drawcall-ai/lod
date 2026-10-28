@@ -69,14 +69,19 @@ async function prepare(name: string, requests: Array<{ key: string; request: Lev
   const { load, low } = subject(name);
   const source = await load();
   const shell = low?.();
-  const loader = new LodLoader(await shellManager(shell)).setPath("/");
+  const manager = await shellManager(shell);
+  const model = new THREE.Loader<THREE.Object3D>(manager);
+  // Keep this benchmark in memory while exercising the URL loader's level builder.
+  model.loadAsync = async () => source.clone(true);
+  manager.addHandler(/\/subject\.glb$/, model);
+  const loader = new LodLoader(manager).setPath("/");
   const sphere = boundingSphere(source);
   prepared = { source, sphere, levels: [] };
   const levels: Array<{ key: string; predicted: number; triangles: number; buildMs: number; error: number | null }> = [];
   for (const { key, request } of requests) {
     if (request.type === "baked" && request.low !== undefined && !shell) continue;
     const start = performance.now();
-    const lod = await loader.parseAsync(source.clone(true), [request]);
+    const lod = await loader.loadAsync({ url: "subject.glb", levels: [request] });
     const buildMs = performance.now() - start;
     lod.forceLevel = 1;
     const level = at(lod.levels, 1);

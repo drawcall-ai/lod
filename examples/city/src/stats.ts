@@ -12,20 +12,31 @@ export interface LevelCount {
  * instances by the finest level they drew (`levelOf`: the GPU selects, the counts are
  * worked out again here; an instance fading also draws the next coarser level, not
  * counted), the visible levels of each Lod; triangles as instances times what one
- * instance of the level draws. The city's topology and source geometry stay fixed,
- * so only selection and visibility need reading again for an overlay sample.
+ * instance of the level draws. Triangle totals refresh when a lazy level arrives; only selection and visibility
+ * need reading again for an overlay sample.
  */
 export class Counts {
   private readonly entries: { lod: InstancedLod | Lod; triangles: number[] }[] = [];
   private levels = 0;
+  private readonly detach: Array<() => void> = [];
 
   constructor(roots: readonly THREE.Object3D[]) {
     for (const root of roots)
       root.traverse((node) => {
         if (!(node instanceof InstancedLod || node instanceof Lod)) return;
-        this.entries.push({ lod: node, triangles: node.levels.map((level) => triangles(level.object)) });
+        const entry = { lod: node, triangles: node.levels.map((level) => triangles(level.object)) };
+        this.entries.push(entry);
+        const changed = () => {
+          entry.triangles = node.levels.map((level) => triangles(level.object));
+        };
+        node.addEventListener("levelschange", changed);
+        this.detach.push(() => node.removeEventListener("levelschange", changed));
         this.levels = Math.max(this.levels, node.levels.length);
       });
+  }
+
+  dispose(): void {
+    for (const remove of this.detach) remove();
   }
 
   read(): LevelCount[] {

@@ -17,6 +17,7 @@ import { drawOf } from "../src/fade.js";
 import { InstancedLod } from "../src/instanced/index.js";
 import { Lod } from "../src/lod.js";
 import { isMesh } from "../src/three.js";
+import { setViewportHeight } from "../src/view.js";
 import { GPU_TIMEOUT, render, renderer } from "./gpu.js";
 
 const box = (name: string) => Object.assign(new Mesh(new BoxGeometry(2, 2, 2), new MeshBasicMaterial()), { name });
@@ -82,6 +83,46 @@ afterEach(() => {
 });
 
 describe("InstancedLod", { timeout: GPU_TIMEOUT }, () => {
+  it("prunes unused tiers before any draw when the application supplies its viewport", () => {
+    const { lod, camera } = setup([5]);
+    try {
+      camera.updateMatrixWorld();
+      lod.updateMatrixWorld();
+      lod.update(camera);
+      expect(meshes(lod).map((mesh) => mesh.visible)).toEqual([true, true, true]);
+      setViewportHeight(camera, SIZE);
+      lod.update(camera);
+      expect(meshes(lod).map((mesh) => mesh.visible)).toEqual([false, false, true]);
+      setViewportHeight(camera, SIZE * 16);
+      lod.update(camera);
+      expect(meshes(lod).map((mesh) => mesh.visible)).toEqual([true, false, false]);
+    } finally {
+      lod.dispose();
+    }
+  });
+
+  it("can keep every tier culled before the first draw and recover after an explicit resize", () => {
+    const source = box("source");
+    const lod = new InstancedLod([source, new Group()], 1);
+    const camera = new PerspectiveCamera(60, 1, 0.1, 1e5);
+    const empty = lod.levels[1];
+    if (!empty) throw new Error("Missing empty level");
+    empty.maxPixels = 10;
+    lod.setMatrixAt(0, new Matrix4().makeTranslation(0, 0, -at(5)));
+    camera.updateMatrixWorld();
+    lod.updateMatrixWorld();
+    try {
+      setViewportHeight(camera, SIZE);
+      lod.update(camera);
+      expect(meshes(lod).map((mesh) => mesh.visible)).toEqual([false]);
+      setViewportHeight(camera, SIZE * 4);
+      lod.update(camera);
+      expect(meshes(lod).map((mesh) => mesh.visible)).toEqual([true]);
+    } finally {
+      lod.dispose();
+    }
+  });
+
   it("puts every instance into its level, and into both neighbours inside a fade, splitting its pixels", async () => {
     const heights = [100, 40 * (1 - Lod.fade / 2), 25, 10 * (1 - Lod.fade / 2), 5];
     const { lod, camera } = setup(heights);

@@ -23,6 +23,7 @@ import {
 } from "three/tsl";
 import { isMesh, isNodeMaterial, isPhysical, isStandard, isStandardNode, toNodeMaterial } from "../../three.js";
 import { affine, biasedTextures, isNodeOf } from "../../tsl.js";
+import { originalOf } from "../../material.js";
 
 /** What every bake material reads, shared by all of them and set per bake. */
 export interface BakeSettings {
@@ -55,7 +56,10 @@ export function swapMaterials(root: Object3D, settings: BakeSettings): { materia
     // rather than `visible`, which would also hide any mesh children.
     if ("isLine" in node || "isPoints" in node || "isSprite" in node) return node.layers.disableAll();
     if (!isMesh(node)) return;
-    const swap = (source: Material): Material => {
+    const swap = (material: Material): Material => {
+      // A deferred bake may see a source already hooked by Lod or Wind. Bake its
+      // authored surface at rest, without the runtime fade/tint/sway wrappers.
+      const source = originalOf(material);
       let entry = baked.get(source);
       if (!entry) {
         entry = bakeMaterial(source, settings);

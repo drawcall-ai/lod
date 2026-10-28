@@ -1,10 +1,12 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
+import { vitecache } from "vitecache/vite";
 
 // Import the package source directly so library edits hot-reload here.
 const entry = fileURLToPath(new URL("../../packages/lod/src/index.ts", import.meta.url));
 
 export default defineConfig({
+  plugins: [vitecache()],
   resolve: {
     alias: { "@drawcall/lod": entry },
     dedupe: ["three"],

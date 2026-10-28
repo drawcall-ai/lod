@@ -6,16 +6,16 @@
 // ?wind=0 builds vegetation without wind, for a static performance baseline.
 // window.city exposes the tour and frame measurements to scripts/tour.ts.
 import * as THREE from "three/webgpu";
-import { type InstancedLod, Lod, Wind } from "@drawcall/lod";
+import { InstancedLod, Lod, Wind, setViewportHeight } from "@drawcall/lod";
 import { loadManifest } from "./content/materials.ts";
 import { terrainMaterial } from "./content/terrain.ts";
 import { Fly } from "./flight/fly.ts";
 import { route } from "./flight/route.ts";
 import { Tour } from "./flight/tour.ts";
-import { building } from "./loading.ts";
+import { building, downloaded } from "./loading.ts";
 import { haze } from "./render/haze.ts";
 import { Pipeline } from "./render/pipeline.ts";
-import { prepare } from "./render/prepare.ts";
+import { prefetch, loadLevels } from "./render/prepare.ts";
 import { Sun } from "./render/sun/index.ts";
 import { loadSky } from "./render/sky.ts";
 import { Counts } from "./stats.ts";
@@ -25,7 +25,9 @@ import { cover } from "./world/cover.ts";
 import { water } from "./world/creek.ts";
 import { houses } from "./world/houses.ts";
 import { Patches } from "./world/patches.ts";
-import { plan, TOWN } from "./world/plan.ts";
+import { TOWN } from "./world/plan.ts";
+import { loadPlan } from "./world/plan/cache.ts";
+import type { Family } from "./world/stream.ts";
 import { EXTENT } from "./world/terrain.ts";
 import { props } from "./world/props.ts";
 import { roads } from "./world/roads.ts";
@@ -52,7 +54,7 @@ pipeline.canvas.style.visibility = "hidden";
 document.body.prepend(pipeline.canvas);
 
 // late afternoon: the sun low in the south-west, raking across the town
-const sky = await loadSky(pipeline.renderer, 2.4);
+const [world, sky] = await Promise.all([loadPlan(Number(params.get("seed") ?? 7)), loadSky(pipeline.renderer, 2.4)]);
 scene.background = sky.background;
 scene.environment = sky.environment;
 scene.backgroundRotation.y = scene.environmentRotation.y = sky.turn;
@@ -70,8 +72,10 @@ scene.fogNode = haze(
   new THREE.Color(1, 0.86, 0.66).multiplyScalar(sky.horizon.r + sky.horizon.g + sky.horizon.b),
 );
 
-const world = plan(Number(params.get("seed") ?? 7));
 const zones = { fields: world.fields, forests: world.forests, parcels: { texture: world.land.texture(), extent: EXTENT }, town: TOWN };
+const content = Promise.all([houses(world, pipeline.renderer), trees(world), props(world), Corn.build(world), cover(world, zones)]);
+// Let cache discovery start before constructing the ground on this thread.
+await new Promise<void>((resolve) => setTimeout(resolve, 0));
 if (terrain) {
   const ground = world.terrain.mesh(terrainMaterial(zones));
   // the ground's shader is the costliest per pixel and much of it ends up under corn, grass
@@ -81,48 +85,48 @@ if (terrain) {
 }
 scene.add(roads(world), water(world.terrain));
 
-const houseLods = await houses(world);
-const treeLods = await trees(world);
-const propLods = await props(world);
-const corn = await Corn.build(world);
-const groundCover = await cover(world, zones);
-scene.add(...houseLods, ...treeLods, ...propLods, corn, ...groundCover);
+const [houseFamily, treeFamilies, propFamily, corn, coverFamily] = await content;
+const families: Family[] = [houseFamily, ...treeFamilies, propFamily, corn, coverFamily];
+scene.add(...families.map((family) => family.object));
 
 const wind = params.get("wind") === "0" ? undefined : new Wind({ direction: [1, 0.35], speed: 0.22 });
-if (wind) {
-  sway(wind, treeLods, 0.025);
-  for (const patches of groundCover) sway(wind, patches.lods, 0.07);
-  sway(wind, corn.plants.lods, 0.04);
-  // The millimetre close-up follows the ladybird's rest-pose seat on the hero plant.
-  // Its separate insect Lod and the distant field covers stay still.
-}
-
-/** Top displacement as a share of plant height, so small plants never sway like trees. */
-function sway(wind: Wind, lods: InstancedLod[], fraction: number): void {
-  for (const lod of lods) {
-    const source = lod.levels[0];
-    if (!source) throw new Error(`${lod.name}: no source level for wind`);
-    const box = new THREE.Box3().setFromObject(source.object);
-    wind.apply(lod, { amplitude: (box.max.y - box.min.y) * fraction });
-  }
-}
-sun.castBy(scene);
-// Scene transforms are fixed: patches change instance buffers and wind runs in the
-// shaders. The camera and the cascades' lights live outside this tree and update themselves.
+if (wind) for (const family of families) family.applyWind(wind);
+// Fixed objects keep their transforms; streamed replacements update theirs once.
 scene.matrixWorldAutoUpdate = false;
-/** The content by kind, each counted on its own. */
+const watched = new WeakSet<THREE.Object3D>();
+function watch(): void {
+  scene.updateMatrixWorld(true);
+  sun.castBy(scene);
+  scene.traverse((object) => {
+    if (!(object instanceof Lod || object instanceof InstancedLod) || watched.has(object)) return;
+    watched.add(object);
+    object.addEventListener("levelschange", () => sun.castBy(scene));
+  });
+  for (const cascade of sun.cascades) cascade.light.shadow.needsUpdate = true;
+}
+/** Rebuild immutable count metadata only when a family replaces its roots. */
 const kinds = [
-  { name: "houses", roots: houseLods },
-  { name: "trees", roots: treeLods },
-  { name: "props", roots: propLods },
-  { name: "corn covers", roots: corn.covers.map((c) => c.lod) },
-  { name: "corn plants", roots: [corn.plants, corn.hero] },
-  { name: "ladybird", roots: [corn.ladybird] },
-  { name: "ground cover", roots: groundCover },
-].map(({ name, roots }) => ({ name, counts: new Counts(roots) }));
+  { name: "houses", roots: () => [houseFamily.object] },
+  { name: "trees", roots: () => treeFamilies.map((family) => family.object) },
+  { name: "props", roots: () => [propFamily.object] },
+  { name: "corn covers", roots: () => corn.covers.map((c) => c.lod) },
+  { name: "corn plants", roots: () => (corn.ready ? [corn.plants, corn.hero] : []) },
+  { name: "ladybird", roots: () => (corn.ready ? [corn.ladybird] : []) },
+  { name: "ground cover", roots: () => [coverFamily.object] },
+].map(({ name, roots }) => ({ name, roots, counts: new Counts(roots()) }));
+for (const family of families)
+  family.onReady = () => {
+    watch();
+    for (const kind of kinds) {
+      kind.counts.dispose();
+      kind.counts = new Counts(kind.roots());
+    }
+  };
+watch();
 
-const tour = new Tour(route(world, corn));
+const tour = new Tour(route(world, corn.anchors));
 let time = 0;
+let requested: number | undefined;
 let playing = !shot;
 const fly = new Fly(pipeline.canvas, camera, (at) => at.y - world.terrain.height(at.x, at.z));
 ui.bind(
@@ -131,68 +135,138 @@ ui.bind(
     toggle: () => {
       fly.release();
       playing = !playing;
-      if (playing && time >= tour.duration) time = 0;
+      if (playing && time >= tour.duration) requested = 0;
       return playing;
     },
     seek: (t) => {
       fly.release();
       playing = false;
-      time = t;
+      requested = t;
     },
   },
   wind,
 );
 
+let viewportVersion = 0;
 function resize(): void {
+  viewportVersion++;
   pipeline.setSize(innerWidth, innerHeight);
   Patches.height = innerHeight;
+  setViewportHeight(camera, innerHeight);
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
 }
 addEventListener("resize", resize);
 resize();
 
-/** Moves the camera by `dt` seconds of tour or flight and draws a frame. */
-function frame(dt: number): void {
-  if (wind) wind.time += dt;
-  let focus: number;
-  if (fly.touched) focus = fly.update(dt);
-  else {
-    if (playing) time = Math.min(time + dt, tour.duration);
-    playing &&= time < tour.duration;
-    focus = tour.pose(time, camera);
-  }
-  // near and far follow the scale of the view; reversed float depth keeps both ends sharp
-  camera.near = THREE.MathUtils.clamp(focus * 0.02, 0.0002, 2);
+// Camera movement commits only when all families needed by that view are ready.
+// Offscreen casters count too; a far card must never replace a required near shadow.
+const beforePosition = new THREE.Vector3();
+const beforeRotation = new THREE.Quaternion();
+let focus = tour.pose(time, camera);
+let waiting: Promise<void> | undefined;
+let failure: unknown;
+const ready = new Set<Family>();
+const requests = new Map<Family, Promise<void>>();
+function request(family: Family): Promise<void> {
+  let pending = requests.get(family);
+  if (pending) return pending;
+  pending = family
+    .load()
+    .then(() => loadLevels(family.object))
+    .then(() => {
+      ready.add(family);
+    })
+    .catch((error: unknown) => {
+      failure = error;
+      pipeline.renderer.setAnimationLoop(null);
+      ui.waiting(`Could not load ${family.object.name}. Reload to retry.`);
+      throw error;
+    });
+  requests.set(family, pending);
+  return pending;
+}
+function fitCamera(value: number): void {
+  camera.near = THREE.MathUtils.clamp(value * 0.02, 0.0002, 2);
   camera.far = 60000;
   camera.updateProjectionMatrix();
   camera.updateMatrixWorld();
-  // nothing stands much more than 40 m above the ground or rises far above where the camera is over it
+}
+
+/** Move and draw only when the requested view is complete; otherwise hold the last frame. */
+function frame(dt: number): boolean {
+  if (failure) throw failure;
+  if (waiting) return false;
+  if (wind) wind.time += dt;
+  beforePosition.copy(camera.position);
+  beforeRotation.copy(camera.quaternion);
+  const nextTime = requested ?? (playing ? Math.min(time + dt, tour.duration) : time);
+  const nextFocus = fly.touched ? fly.update(dt) : tour.pose(nextTime, camera);
+  fitCamera(nextFocus);
+  const needed = families.filter((family) => !ready.has(family) && family.needs(camera));
+  if (needed.length) {
+    const target = camera.clone();
+    setViewportHeight(target, Patches.height);
+    camera.position.copy(beforePosition);
+    camera.quaternion.copy(beforeRotation);
+    fitCamera(focus);
+    ui.waiting("Loading this view…");
+    // Let this frame finish before a source factory starts its synchronous work.
+    waiting = new Promise<void>((resolve) => setTimeout(resolve, 0))
+      .then(() => Promise.all(needed.map(request)))
+      .then(() => prefetch(scene, target))
+      .then(() => {
+        waiting = undefined;
+        if (!failure && pipeline.canvas.style.visibility === "visible") ui.ready();
+      })
+      .catch((error: unknown) => {
+        if (!failure) {
+          failure = error;
+          pipeline.renderer.setAnimationLoop(null);
+          ui.waiting("Could not load this view. Reload to retry.");
+        }
+        throw error;
+      });
+    return false;
+  } else {
+    focus = nextFocus;
+    time = nextTime;
+    requested = undefined;
+    playing &&= time < tour.duration;
+  }
   const clear = camera.position.y - world.terrain.height(camera.position.x, camera.position.z) - 80;
   sun.update(camera, focus, clear);
   pipeline.render();
+  return true;
 }
 
-await prepare(
-  scene,
-  pipeline,
-  sun.cascades.map(({ light }) => light.shadow),
-  (done, total) => ui.progress("Preparing scene…", 0.85 + (0.15 * done) / total),
-);
-// The empty preparation draws leave empty shadow maps. Draw the real starting
-// view, with normal selection and streaming, before showing the canvas.
-await new Promise<void>((resolve, reject) =>
-  pipeline.renderer.setAnimationLoop(() => {
-    pipeline.renderer.setAnimationLoop(null);
-    try {
-      frame(0);
-      resolve();
-    } catch (error) {
-      reject(error);
-    }
-  }),
-);
-await pipeline.wait();
+fitCamera(focus);
+ui.progress("Loading the first view…", 0.85);
+await Promise.all(families.filter((family) => !ready.has(family) && family.needs(camera)).map(request));
+await prefetch(scene, camera);
+await downloaded();
+// Compile and upload only the actual first view, through its normal main/shadow passes.
+// Other families and their graphics variants are prepared when they are requested.
+for (;;) {
+  const version = viewportVersion;
+  const rendered = await new Promise<boolean>((resolve, reject) =>
+    pipeline.renderer.setAnimationLoop(() => {
+      pipeline.renderer.setAnimationLoop(null);
+      try {
+        resolve(frame(0));
+      } catch (error) {
+        reject(error);
+      }
+    }),
+  );
+  if (!rendered) {
+    await waiting;
+    continue;
+  }
+  await pipeline.wait();
+  // A resize replaces render targets; reveal only a completed frame at the current size.
+  if (version === viewportVersion) break;
+}
 const loadMs = performance.now() - started;
 ui.ready();
 pipeline.canvas.style.visibility = "visible";
@@ -207,6 +281,7 @@ function live(): void {
   frameMs += (now - last - frameMs) * 0.1;
   last = now;
   frame(dt);
+  anticipate(now);
   void pipeline.timing();
   ui.showTime(time, playing);
   if (now - shown < 250) return;
@@ -214,6 +289,21 @@ function live(): void {
   ui.showStats({ ms: frameMs, gpu: pipeline.gpuMs, ...pipeline.drawn }, counts());
 }
 pipeline.renderer.setAnimationLoop(live);
+// Prefetch only the upcoming tour view; a paused or static view keeps unused sources idle.
+const ahead = camera.clone();
+let predicted = 0;
+function anticipate(now: number): void {
+  if (!playing || fly.touched || now - predicted < 500) return;
+  predicted = now;
+  ahead.copy(camera);
+  tour.pose(Math.min(time + 5, tour.duration), ahead);
+  ahead.updateMatrixWorld();
+  const needed = families.filter((family) => !requests.has(family) && family.needs(ahead));
+  if (needed.length)
+    setTimeout(() => {
+      void Promise.all(needed.map(request));
+    }, 0);
+}
 
 /**
  * Draws `count` frames at the current pose, `before(i)` setting up frame i, each in a tick
@@ -255,7 +345,14 @@ const api = {
   async seek(t: number): Promise<void> {
     fly.release();
     playing = false;
+    pipeline.renderer.setAnimationLoop(null);
+    await waiting;
+    requested = undefined;
     time = t;
+    focus = tour.pose(time, camera);
+    fitCamera(focus);
+    await Promise.all(families.filter((family) => !ready.has(family) && family.needs(camera)).map(request));
+    await prefetch(scene, camera);
     await draw(4, () => {});
     resume();
   },
@@ -270,6 +367,10 @@ const api = {
    */
   async measure(frames: number, runs: number, move = 0) {
     if (!pipeline.renderer.hasFeature("timestamp-query")) throw new Error("measure needs the GPU's timer (timestamp-query), which this browser does not offer");
+    // Measurements must not include asynchronous family replacement or live movement.
+    pipeline.renderer.setAnimationLoop(null);
+    await waiting;
+    await Promise.all(families.map(request));
     const start = time;
     const breeze = wind?.time ?? 0;
     const perFrame: number[] = [];

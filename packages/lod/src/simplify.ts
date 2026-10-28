@@ -39,6 +39,12 @@ export async function simplify(object: Object3D, options: SimplifyOptions = {}):
 export async function decimate(object: Object3D, ratio: number): Promise<Object3D> {
   if (!(ratio > 0 && ratio <= 1)) throw new Error(`simplify: ratio must be in (0, 1], got ${ratio}`);
   await MeshoptSimplifier.ready;
+  // clone() also visits hidden children, whose crowd allocations must never be
+  // created just to reject them (or skipped by the visible-detail walk below).
+  object.traverse((node) => {
+    if (isInstancedLod(node)) throw new Error(`simplify: cannot simplify an InstancedLod ("${node.name}"); simplify its source and build a new one`);
+    if (isSkinnedMesh(node)) throw new Error(`simplify: skinned meshes are not supported ("${node.name}")`);
+  });
   const copy = object.clone(true);
   decimateTree(copy, ratio, new Map());
   return copy;
@@ -46,8 +52,6 @@ export async function decimate(object: Object3D, ratio: number): Promise<Object3
 
 /** Decimate the meshes of `node` drawn at full detail; `done` maps each geometry to its simplified one. */
 function decimateTree(node: Object3D, ratio: number, done: Map<BufferGeometry, BufferGeometry>): void {
-  if (isInstancedLod(node)) throw new Error(`simplify: cannot simplify an InstancedLod ("${node.name}"); simplify its source and build a new one`);
-  if (isSkinnedMesh(node)) throw new Error(`simplify: skinned meshes are not supported ("${node.name}")`);
   if (isMesh(node) && !isImpostorMesh(node)) {
     let geometry = done.get(node.geometry);
     if (!geometry) done.set(node.geometry, (geometry = simplifyGeometry(node.geometry, ratio)));

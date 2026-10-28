@@ -1,5 +1,4 @@
 import * as THREE from "three/webgpu";
-import type { Corn } from "../world/corn/index.ts";
 import type { Plan } from "../world/plan.ts";
 import type { Key } from "./tour.ts";
 
@@ -9,7 +8,7 @@ import type { Key } from "./tour.ts";
  * into the corn, to one plant, onto a leaf, and the ladybird on it filling the screen.
  * Headings keep the sun mostly behind the camera's shoulder.
  */
-export function route(plan: Plan, corn: Corn): Key[] {
+export function route(plan: Plan, anchors: { hero: THREE.Vector3; ladybird: THREE.Vector3 }): Key[] {
   const ground = (x: number, z: number, above: number) => new THREE.Vector3(x, plan.terrain.height(x, z) + above, z);
   const plaza = ground(plan.plaza.x, plan.plaza.z, 2);
   const street = coreStreet(plan);
@@ -18,9 +17,8 @@ export function route(plan: Plan, corn: Corn): Key[] {
   // a house near the street's end, looked at square from in front, from where its baked level shows
   const facade = [...plan.houses].sort((a, b) => Math.hypot(a.spot.x - end.x, a.spot.z - end.y) - Math.hypot(b.spot.x - end.x, b.spot.z - end.y))[0]?.spot;
   if (!facade) throw new Error("the town has no houses");
-  const hero = corn.hero.position.clone();
-  const bug = corn.ladybird.levels[0]?.object.getWorldPosition(new THREE.Vector3());
-  if (!bug) throw new Error("the ladybird has no source level");
+  const hero = anchors.hero.clone();
+  const bug = anchors.ladybird.clone();
   const k = (name: string, time: number, target: THREE.Vector3, distance: number, heading: number, pitchDegrees: number): Key => ({
     name,
     time,

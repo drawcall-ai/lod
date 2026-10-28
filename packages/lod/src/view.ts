@@ -50,7 +50,17 @@ const canvas = new Vector2();
  */
 const heights = new WeakMap<Camera, number>();
 
-/** The height `camera` last drew at, or null before any level mesh drew with it. */
+/**
+ * Set the view height before the first LOD update, or after a resize while no level
+ * meshes draw. Use CSS pixels for the canvas or a full-size postprocessing target;
+ * use target pixels for other render targets. Subsequent draws measure it automatically.
+ */
+export function setViewportHeight(camera: Camera, height: number): void {
+  if (!Number.isFinite(height) || height <= 0) throw new RangeError("LOD viewport height must be finite and positive");
+  heights.set(camera, height);
+}
+
+/** The explicit or last drawn height, or null before either is known. */
 export const viewportHeight = (camera: Camera): number | null => heights.get(camera) ?? null;
 
 /** Learn the height whenever `mesh` draws. */

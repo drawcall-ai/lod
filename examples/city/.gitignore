@@ -1,3 +1,4 @@
 assets/
 .artifacts/
 dist/
+public/_vitecache/*

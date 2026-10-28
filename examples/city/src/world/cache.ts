@@ -1,81 +1,118 @@
+export { cachedImpostor } from "@drawcall/lod";
+import { CacheEntry, type Dependencies, type JsonValue } from "vitecache";
+import { unzipSync, zipSync } from "fflate";
 import * as THREE from "three/webgpu";
-import { bakeImpostor, decodeImpostor, encodeImpostor, type Impostor } from "@drawcall/lod";
+import { manifest, textureFile } from "../content/materials.ts";
 
-/**
- * Impostors saved across page loads in the browser's Cache Storage, saved with
- * `encodeImpostor` and read with `decodeImpostor`. The key is a fingerprint of what the
- * bake sees: every vertex, index and colour of the source, its materials' settings and
- * the pixels of their textures, and the bake options. Change the content and the key
- * changes with it; nothing is ever read back stale. The key does not see the baker:
- * when the package bakes differently, name a new store (older ones are deleted).
- */
-const STORE = "city-impostors-v6";
+// Procedural assets share geometry, noise and material helpers. Tracking the whole
+// content directory deliberately invalidates more than necessary when one changes.
+const content = Object.fromEntries(
+  Object.keys(import.meta.glob("../content/**/*.ts"))
+    .sort()
+    .map((path, i) => [`code:${i}`, { path: path.replace("../", "src/") }]),
+);
 
-export async function cachedImpostor(source: THREE.Object3D, options: { resolution?: number; frames?: number; maxPixels?: number }): Promise<Impostor> {
-  const key = `/${fingerprint(source)}-${options.resolution ?? "d"}-${options.frames ?? "d"}-${options.maxPixels ?? "d"}.ktx2`;
-  const store = await openStore();
-  const hit = await store.match(key);
-  if (hit) return decodeImpostor(await hit.arrayBuffer());
-  const impostor = await bakeImpostor(source, { layout: "hemi", ...options });
-  await store.put(key, new Response(new Uint8Array(encodeImpostor(impostor))));
-  return impostor;
-}
+const shared: Dependencies = {
+  manifest: { path: "assets/manifest.json" },
+  levels: { path: "src/world/levels.ts" },
+  cache: { path: "src/world/cache.ts" },
+};
 
-let opened: Promise<Cache> | null = null;
-
-/** The store, once older stores are gone. */
-function openStore(): Promise<Cache> {
-  opened ??= (async () => {
-    for (const name of await caches.keys()) if (name.startsWith("city-impostors-") && name !== STORE) await caches.delete(name);
-    return caches.open(STORE);
-  })();
-  return opened;
-}
-
-/** FNV-1a over everything a bake reads from `root`, as hex. */
-function fingerprint(root: THREE.Object3D): string {
-  let h = 0x811c9dc5;
-  const bytes = (data: ArrayBufferView) => {
-    const view = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-    for (let i = 0; i < view.length; i++) h = Math.imul(h ^ (view[i] ?? 0), 0x01000193);
+/** Real fetched model inputs, including which nodes become this centred variant. */
+export function model(id: string, variant: number, groups?: string[][], ratio?: number): Dependencies {
+  const entry = manifest().models[id];
+  if (!entry) throw new Error(`No model dependency for ${id}`);
+  const nodes = (groups ?? entry.variants.map((name) => [name]))[variant];
+  if (!nodes) throw new Error(`No variant ${variant} in model ${id}`);
+  return {
+    ...shared,
+    model: { path: `assets/${entry.file}` },
+    selection: { value: { nodes, ratio: ratio ?? 1 } },
+    ...(ratio === undefined ? {} : { simplifier: { package: "meshoptimizer" } }),
+    models: { path: "src/content/models.ts" },
+    foliage: { path: "src/content/foliage.ts" },
+    materials: { path: "src/content/materials.ts" },
   };
-  const text = (s: string) => bytes(new TextEncoder().encode(s));
-  root.updateMatrixWorld(true);
-  root.traverse((node) => {
-    if (!node.visible) return;
-    text(node.type);
-    bytes(new Float32Array(node.matrix.elements));
-    if (!(node instanceof THREE.Mesh)) return;
-    const g: THREE.BufferGeometry = node.geometry;
-    for (const name of Object.keys(g.attributes).sort()) {
-      const attribute = g.getAttribute(name);
-      if (attribute instanceof THREE.BufferAttribute) bytes(attribute.array);
-    }
-    if (g.index) bytes(g.index.array);
-    for (const m of [node.material].flat()) settings(m);
+}
+
+/** Generator parameters, helpers and the actual image files its materials read. */
+export function procedural(generator: string, parameters: JsonValue, source: THREE.Object3D): Dependencies {
+  const files = new Set<string>();
+  source.traverse((object) => {
+    if (!(object instanceof THREE.Mesh)) return;
+    for (const material of [object.material].flat())
+      for (const value of Object.values(material)) {
+        if (!(value instanceof THREE.Texture)) continue;
+        const file = textureFile(value);
+        if (file) files.add(file);
+        else if (!(value instanceof THREE.CanvasTexture || value instanceof THREE.DataTexture))
+          throw new Error(`No source file for procedural texture ${value.name}`);
+      }
   });
-  function settings(m: THREE.Material) {
-    for (const [name, value] of Object.entries(m)) {
-      // identity and edit counters differ from load to load without changing the look
-      if (name === "uuid" || name === "version") continue;
-      if (value instanceof THREE.Texture) texture(name, value);
-      else if (value instanceof THREE.Color) text(`${name}:${value.getHexString()}`);
-      else if (typeof value === "number" || typeof value === "boolean" || typeof value === "string") text(`${name}:${value}`);
-    }
+  const textures = Object.fromEntries([...files].sort().map((path, i) => [`image:${i}`, { path }]));
+  return { ...shared, ...content, ...textures, generator: { path: generator }, parameters: { value: parameters } };
+}
+
+/** Dependencies available before a procedural asset has been constructed. */
+export function proceduralFiles(generator: string, parameters: JsonValue, textureIds: readonly string[]): Dependencies {
+  const files = new Set<string>();
+  for (const id of textureIds) {
+    const maps = manifest().textures[id];
+    if (!maps) throw new Error(`No texture set ${id} in the asset manifest`);
+    for (const path of [maps.diff, maps.nor, maps.arm]) files.add(`assets/${path}`);
   }
-  function texture(name: string, t: THREE.Texture) {
-    text(`${name}:${t.repeat.x},${t.repeat.y},${t.colorSpace}`);
-    const image: unknown = t.image;
-    if (image instanceof HTMLImageElement) return text(image.src);
-    // decoded from a fetched model, which is a fixed file: its name and size identify it
-    if (image instanceof ImageBitmap) return text(`${t.name}:${image.width}x${image.height}`);
-    if (image instanceof HTMLCanvasElement) {
-      const g = image.getContext("2d");
-      if (!g) throw new Error("cache: a canvas texture without a 2d context");
-      return bytes(g.getImageData(0, 0, image.width, image.height).data);
-    }
-    if (t instanceof THREE.DataTexture && ArrayBuffer.isView(t.image.data)) return bytes(t.image.data);
-    throw new Error(`cache: cannot fingerprint the ${name} texture "${t.name}"`);
-  }
-  return (h >>> 0).toString(16);
+  return {
+    ...shared,
+    ...content,
+    ...Object.fromEntries([...files].sort().map((path, i) => [`image:${i}`, { path }])),
+    generator: { path: generator },
+    parameters: { value: parameters },
+    lod: { package: "@drawcall/lod" },
+    three: { package: "three" },
+  };
+}
+
+/** One fetched file's selected variants; no GLTF parse is needed to identify it. */
+export function modelFamily(id: string, groups?: string[][], ratio?: number): Dependencies {
+  const entry = manifest().models[id];
+  if (!entry) throw new Error(`No model dependency for ${id}`);
+  return {
+    ...shared,
+    model: { path: `assets/${entry.file}` },
+    selection: { value: { groups: groups ?? entry.variants.map((name) => [name]), ratio: ratio ?? 1 } },
+    models: { path: "src/content/models.ts" },
+    foliage: { path: "src/content/foliage.ts" },
+    materials: { path: "src/content/materials.ts" },
+    lod: { package: "@drawcall/lod" },
+    three: { package: "three" },
+    ...(ratio === undefined ? {} : { simplifier: { package: "meshoptimizer" } }),
+  };
+}
+
+/** Cache complete related representations before invoking their expensive source factory. */
+export async function bundle(
+  version: string,
+  dependencies: Dependencies,
+  make: () => Promise<Record<string, Uint8Array>>,
+): Promise<Record<string, Uint8Array>> {
+  const entry = new CacheEntry({ version: `city-${version}`, dependencies });
+  const bytes = await entry.load();
+  if (bytes !== undefined) return unzipSync(bytes);
+  const files = await make();
+  // Entries already use their own lossless encoding. This is just a named container.
+  await entry.save(zipSync(files, { level: 0 }));
+  return files;
+}
+
+export function file(files: Record<string, Uint8Array>, name: string): Uint8Array {
+  const bytes = files[name];
+  if (!bytes) throw new Error(`Missing city asset ${name}`);
+  return bytes;
+}
+
+/** Compact large parameter lists so vitecache's dependency headers remain bounded. */
+export async function parameterKey(value: JsonValue): Promise<string> {
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  const hash = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }

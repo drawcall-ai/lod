@@ -1,111 +1,55 @@
 import * as THREE from "three/webgpu";
+import { InstancedLod, LazyImpostor, Lod } from "@drawcall/lod";
 
-import type { Pipeline } from "./pipeline.ts";
-
-function updates(object: THREE.Object3D): object is THREE.Object3D & { autoUpdate: boolean } {
-  return "isLOD" in object && object.isLOD === true && "autoUpdate" in object && typeof object.autoUpdate === "boolean";
+function updates(object: THREE.Object3D): object is THREE.Object3D & { autoUpdate: boolean; update(camera: THREE.Camera): void } {
+  return (
+    "isLOD" in object &&
+    object.isLOD === true &&
+    "autoUpdate" in object &&
+    typeof object.autoUpdate === "boolean" &&
+    "update" in object &&
+    typeof object.update === "function"
+  );
 }
 
-/**
- * Prepare the city's main and shadow materials before its first frame, while the
- * canvas is hidden. LOD selection and patch streaming stay stopped. Each batch
- * goes through the real render passes with empty draws, keeping the same mesh,
- * material and indirect-draw specialization that later frames use.
- *
- * Scene transforms must already be current. The Sun has not been fitted yet, so
- * its zero texel sizes include every registered caster. After restoration, draw
- * one normal frame and await pipeline.wait() before revealing the canvas.
- */
-export async function prepare(
-  scene: THREE.Scene,
-  pipeline: Pipeline,
-  shadows: readonly THREE.LightShadow[],
-  progress: (done: number, total: number) => void,
-): Promise<void> {
-  const meshes: THREE.Mesh[] = [];
-  const objects: Array<{ object: THREE.Object3D; visible: boolean; frustumCulled: boolean; castShadow: boolean; autoUpdate: boolean | null }> = [];
-  const geometries = new Map<
-    THREE.BufferGeometry,
-    { indirect: THREE.IndirectStorageBufferAttribute | null; offset: number | number[]; start: number; count: number }
-  >();
+/** Resolve only impostors requested by the first view, before compiling its draws. */
+export async function prefetch(scene: THREE.Scene, camera: THREE.Camera): Promise<void> {
+  const lods: (Lod | InstancedLod)[] = [];
   scene.traverse((object) => {
-    objects.push({
-      object,
-      visible: object.visible,
-      frustumCulled: object.frustumCulled,
-      castShadow: object.castShadow,
-      autoUpdate: updates(object) ? object.autoUpdate : null,
-    });
-    if (!(object instanceof THREE.Mesh)) return;
-    meshes.push(object);
-    const geometry = object.geometry;
-    if (!geometries.has(geometry))
-      geometries.set(geometry, {
-        indirect: geometry.getIndirect(),
-        offset: geometry.indirectOffset,
-        start: geometry.drawRange.start,
-        count: geometry.drawRange.count,
-      });
+    if (object instanceof Lod || object instanceof InstancedLod) lods.push(object);
   });
-  // Keep one existing receiver in each batch so the real Sun renders its maps.
-  const receiver = meshes.find(
-    (mesh) =>
-      mesh.receiveShadow &&
-      [mesh.material].flat().some((material) => material instanceof THREE.MeshStandardMaterial || material instanceof THREE.MeshStandardNodeMaterial),
-  );
-  if (!receiver) throw new Error("City preparation needs a lit shadow receiver");
-  // A non-null indirect attribute preserves single-instance impostor specialization.
-  const empty = new THREE.IndirectStorageBufferAttribute(new Uint32Array(5), 1);
-  try {
-    for (const { object } of objects) {
-      object.visible = !(object instanceof THREE.Mesh);
-      object.frustumCulled = false;
-      if (updates(object)) object.autoUpdate = false;
+  for (;;) {
+    // Match the renderer's parent-first updates: Corn/Patches fill their slots
+    // before the child InstancedLods decide which atlases this view needs.
+    scene.traverseVisible((object) => {
+      if (updates(object) && object.autoUpdate) object.update(camera);
+    });
+    const pending = new Set<LazyImpostor>();
+    for (const lod of lods) {
+      for (const { object } of lod.levels)
+        object.traverse((node) => {
+          if (node instanceof LazyImpostor && node.status === "loading") pending.add(node);
+        });
     }
-    for (const [geometry, before] of geometries) {
-      geometry.setDrawRange(0, 0);
-      if (before.indirect) geometry.setIndirect(empty, 0);
-    }
-    for (let offset = 0; offset < meshes.length; offset += 32) {
-      const end = Math.min(offset + 32, meshes.length);
-      const shown = new Set<THREE.Object3D>();
-      for (const mesh of [receiver, ...meshes.slice(offset, end)]) {
-        for (let object: THREE.Object3D | null = mesh; object; object = object.parent) {
-          if (!object.visible) {
-            object.visible = true;
-            shown.add(object);
-          }
-        }
-      }
-      for (const shadow of shadows) shadow.needsUpdate = true;
-      await new Promise<void>((resolve, reject) =>
-        pipeline.renderer.setAnimationLoop(() => {
-          pipeline.renderer.setAnimationLoop(null);
-          try {
-            pipeline.render();
-            resolve();
-          } catch (error) {
-            reject(error);
-          }
-        }),
-      );
-      await pipeline.wait();
-      for (const object of shown) object.visible = false;
-      progress(end, meshes.length);
-    }
-  } finally {
-    pipeline.renderer.setAnimationLoop(null);
-    for (const [geometry, before] of geometries) {
-      geometry.setIndirect(before.indirect, before.offset);
-      geometry.setDrawRange(before.start, before.count);
-    }
-    for (const { object, visible, frustumCulled, castShadow, autoUpdate } of objects) {
-      object.visible = visible;
-      object.frustumCulled = frustumCulled;
-      object.castShadow = castShadow;
-      if (autoUpdate !== null && updates(object)) object.autoUpdate = autoUpdate;
-    }
-    for (const shadow of shadows) shadow.needsUpdate = true;
-    empty.dispose();
+    if (pending.size === 0) return;
+    await Promise.all([...pending].map((level) => level.load()));
   }
+}
+
+/** Load a requested family's bounded lazy tiers without changing live selection. */
+export async function loadLevels(root: THREE.Object3D): Promise<void> {
+  const pending = new Set<LazyImpostor>();
+  const seen = new Set<THREE.Object3D>();
+  const visit = (object: THREE.Object3D): void => {
+    if (seen.has(object)) return;
+    seen.add(object);
+    if (object instanceof LazyImpostor) pending.add(object);
+    if (object instanceof Lod || object instanceof InstancedLod) {
+      for (const level of object.levels) visit(level.object);
+    } else {
+      for (const child of object.children) visit(child);
+    }
+  };
+  visit(root);
+  await Promise.all([...pending].map((level) => level.load()));
 }

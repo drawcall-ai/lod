@@ -27,9 +27,14 @@ const RESOLUTION = 2;
  */
 export class Land {
   readonly size = Math.round((2 * EXTENT) / RESOLUTION);
-  private readonly cells = new Uint8Array(this.size * this.size);
   /** Per cell: crop, the parcel's tint (0–255), the parcel's row direction (0–255 over half a turn), the parcel id's low byte. */
-  private readonly parcels = new Uint8Array(this.size * this.size * 4);
+  constructor(
+    readonly cells: Uint8Array = new Uint8Array(this.size * this.size),
+    readonly parcels: Uint8Array = new Uint8Array(this.size * this.size * 4),
+  ) {
+    if (cells.length !== this.size * this.size || parcels.length !== cells.length * 4 || cells.some((cell) => USES[cell] === undefined))
+      throw new Error("Invalid land raster");
+  }
 
   at(x: number, z: number): Use {
     const i = Math.floor((x + EXTENT) / RESOLUTION);

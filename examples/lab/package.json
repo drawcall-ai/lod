@@ -18,9 +18,10 @@
     "interior": "node --experimental-strip-types --no-warnings scripts/interior.ts"
   },
   "dependencies": {
-    "@drawcall/glts": "^0.12.0",
+    "@drawcall/glts": "^2.0.0",
     "@drawcall/lod": "workspace:*",
-    "three": "^0.185.1"
+    "three": "^0.185.1",
+    "vitecache": "^0.1.2"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",

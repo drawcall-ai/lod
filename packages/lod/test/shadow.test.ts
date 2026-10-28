@@ -1,9 +1,23 @@
-import { AmbientLight, BoxGeometry, DirectionalLight, Group, Matrix4, Mesh, MeshBasicMaterial, MeshStandardMaterial, OrthographicCamera, PlaneGeometry, Scene, type Object3D } from "three/webgpu";
+import {
+  AmbientLight,
+  BoxGeometry,
+  DirectionalLight,
+  Group,
+  Matrix4,
+  Mesh,
+  MeshBasicMaterial,
+  MeshStandardMaterial,
+  OrthographicCamera,
+  PlaneGeometry,
+  Scene,
+  type Object3D,
+} from "three/webgpu";
 import { describe, expect, it } from "vitest";
 import { bakeImpostor } from "../src/impostor/bake/index.js";
 import { ImpostorMesh } from "../src/impostor/mesh/index.js";
 import { InstancedLod } from "../src/instanced/index.js";
 import { Lod } from "../src/lod.js";
+import { LazyImpostor } from "../src/lazy.js";
 import { isMesh } from "../src/three.js";
 import { Wind } from "../src/wind/index.js";
 import { GPU_TIMEOUT, render, renderer } from "./gpu.js";
@@ -76,6 +90,52 @@ function placed<T extends Object3D>(object: T, at: { x: number; z: number }, sca
 const at = (point: { x: number; z: number }, scale = 1) => new Matrix4().makeScale(scale, scale, scale).setPosition(point.x, 0, point.z);
 
 describe("casters smaller than a shadow texel", { timeout: GPU_TIMEOUT }, () => {
+  it("keeps shared crowds' compiled main and shadow bindings valid when a lazy level installs", async () => {
+    const template = box();
+    template.castShadow = true;
+    const data = await bakeImpostor(template, { frames: 4, resolution: 16 });
+    const lazy = new LazyImpostor(async () => data, { maxPixels: 100 });
+    lazy.castShadow = true;
+    const a = new InstancedLod([template, lazy], 1),
+      b = new InstancedLod([template, lazy], 1);
+    a.setMatrixAt(0, at(SMALL, 3));
+    b.setMatrixAt(0, at(LARGE, 3));
+    a.forceLevel = b.forceLevel = 0;
+    const ground = new Mesh(new PlaneGeometry(32, 32).rotateX(-Math.PI / 2), new MeshStandardMaterial({ color: 0xffffff, roughness: 1 }));
+    ground.position.y = -4;
+    ground.receiveShadow = true;
+    const sun = new DirectionalLight(0xffffff, 3);
+    sun.position.set(0, 20, 0);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(64, 64);
+    Object.assign(sun.shadow.camera, { left: -16, right: 16, top: 16, bottom: -16, near: 0, far: 40 });
+    sun.shadow.camera.updateProjectionMatrix();
+    const scene = new Scene().add(a, b, ground, sun, sun.target, new AmbientLight(0xffffff, 0.2));
+    const camera = new OrthographicCamera(-16, 16, 16, -16, 0.1, 100);
+    camera.position.set(0, 20, 0);
+    camera.up.set(0, 0, -1);
+    camera.lookAt(0, 0, 0);
+    camera.updateMatrixWorld();
+    renderer.shadowMap.enabled = true;
+    try {
+      const before = await render(scene, camera);
+      expect(lazy.status).toBe("idle");
+      await lazy.load();
+      const after = await render(scene, camera);
+      expect(a.children).toHaveLength(2);
+      expect(b.children).toHaveLength(2);
+      expect(after).toEqual(before);
+      a.forceLevel = b.forceLevel = 1;
+      const cards = await render(scene, camera);
+      expect(cards.some((value) => value > 0)).toBe(true);
+    } finally {
+      a.dispose();
+      b.dispose();
+      ground.geometry.dispose();
+      ground.material.dispose();
+      sun.dispose();
+    }
+  });
   it("cast nothing: a Lod's meshes, by the whole object", async () => {
     // 3.5 units across its bounding sphere, narrower than a texel; 3× that, wider.
     const lods = new Group().add(placed(new Lod([box()]), SMALL), placed(new Lod([box()]), LARGE, 3));

@@ -10,7 +10,7 @@ import {
   type BufferGeometry,
   type Object3D,
 } from "three";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { boundingSphere } from "../src/bounds.js";
 import type { Impostor } from "../src/impostor/impostor.js";
 import { ImpostorMesh } from "../src/impostor/mesh/index.js";
@@ -79,7 +79,19 @@ describe("simplify", () => {
     expect(triangles(many.geometry)).toBeLessThan(triangles(instanced.geometry) * 0.15);
     expect(many.count).toBe(2);
     expect(kept.impostor).toBe(impostor);
-    await expect(simplify(new Group().add(new InstancedLod([sphere()], 2)), { ratio: 0.5 })).rejects.toThrow(/InstancedLod/);
+    const crowd = new InstancedLod([sphere()], 2);
+    const clone = vi.spyOn(crowd, "clone");
+    const source = new Group().add(sphere(), crowd);
+    try {
+      for (const visible of [true, false]) {
+        crowd.visible = visible;
+        await expect(simplify(source, { ratio: 0.5 })).rejects.toThrow(/InstancedLod/);
+        expect(clone).not.toHaveBeenCalled();
+      }
+    } finally {
+      clone.mockRestore();
+      crowd.dispose();
+    }
   });
 
   it("measures a source whose cut-out textures the CPU cannot read, as opaque", async () => {

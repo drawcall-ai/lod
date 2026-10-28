@@ -63,8 +63,39 @@ export function encodeImpostor(impostor: Impostor): Uint8Array {
   return write(ktx);
 }
 
+type Input = Uint8Array | ArrayBuffer | string;
+
+interface Parsed {
+  meta: object;
+  layerCount: number;
+  levels: { data: Uint8Array; length: number }[];
+}
+
 /** Parses a file written by `encodeImpostor`, given as bytes or base64. */
-export function decodeImpostor(input: Uint8Array | ArrayBuffer | string): Impostor {
+export function decodeImpostor(input: Input): Impostor {
+  const file = parse(input);
+  const levels = file.levels.map(({ data, length }, m) => attempt(`level ${m} does not inflate`, () => unzlibSync(data, { out: new Uint8Array(length) })));
+  return decoded(file, levels);
+}
+
+/** Inflate cache files asynchronously with the runtime's native zlib decoder. */
+export async function decodeImpostorAsync(input: Input): Promise<Impostor> {
+  if (typeof DecompressionStream === "undefined") return decodeImpostor(input);
+  const file = parse(input);
+  const levels = await Promise.all(
+    file.levels.map(async ({ data }, m) => {
+      try {
+        const stream = new Blob([data.slice()]).stream().pipeThrough(new DecompressionStream("deflate"));
+        return new Uint8Array(await new Response(stream).arrayBuffer());
+      } catch (error) {
+        throw invalid(`level ${m} does not inflate`, error);
+      }
+    }),
+  );
+  return decoded(file, levels);
+}
+
+function parse(input: Input): Parsed {
   const bytes = typeof input === "string" ? attempt("not base64", () => fromBase64(input)) : input instanceof Uint8Array ? input : new Uint8Array(input);
   // ktx-parse reads through `bytes.buffer` without checking the view's end, so a truncated
   // view would read past it; give it a buffer of exactly the file instead.
@@ -78,19 +109,23 @@ export function decodeImpostor(input: Uint8Array | ArrayBuffer | string): Impost
   // ktx-parse returns values of keys not starting with "KTX" as raw bytes, NUL included.
   const meta: unknown = attempt("metadata is not JSON", () => JSON.parse(new TextDecoder().decode(json).replace(/\0$/, "")));
   if (typeof meta !== "object" || meta === null) fail("metadata is not an object");
-
-  // Layers are views into one buffer per level, in layer-major order as KTX2 stores arrays.
   const levels = ktx.levels.map((level, m) => {
     const bytes = (ktx.pixelWidth >> m) ** 2 * 4;
     if (level.uncompressedByteLength !== bytes * ktx.layerCount) fail(`level ${m} size does not match the atlas`);
-    const raw = attempt(`level ${m} does not inflate`, () => unzlibSync(level.levelData, { out: new Uint8Array(level.uncompressedByteLength) }));
-    if (raw.length !== level.uncompressedByteLength) fail(`level ${m} inflates to the wrong size`);
-    return raw;
+    return { data: level.levelData, length: level.uncompressedByteLength };
   });
-  const layers = Array.from({ length: ktx.layerCount }, (_, i) =>
-    levels.map((raw) => raw.subarray((i * raw.length) / ktx.layerCount, ((i + 1) * raw.length) / ktx.layerCount)),
+  return { meta, layerCount: ktx.layerCount, levels };
+}
+
+function decoded(file: Parsed, levels: Uint8Array[]): Impostor {
+  levels.forEach((raw, m) => {
+    if (raw.length !== file.levels[m]?.length) fail(`level ${m} inflates to the wrong size`);
+  });
+  // Layers share one inflated buffer per mip, in KTX2's layer-major order.
+  const layers = Array.from({ length: file.layerCount }, (_, i) =>
+    levels.map((raw) => raw.subarray((i * raw.length) / file.layerCount, ((i + 1) * raw.length) / file.layerCount)),
   );
-  const impostor: unknown = { ...meta, layers };
+  const impostor: unknown = { ...file.meta, layers };
   validateImpostor(impostor);
   return impostor;
 }
@@ -104,8 +139,12 @@ function attempt<T>(why: string, run: () => T): T {
   try {
     return run();
   } catch (error) {
-    throw new Error(`Invalid impostor file: ${why} (${error instanceof Error ? error.message : String(error)})`, { cause: error });
+    throw invalid(why, error);
   }
+}
+
+function invalid(why: string, error: unknown): Error {
+  return new Error(`Invalid impostor file: ${why} (${error instanceof Error ? error.message : String(error)})`, { cause: error });
 }
 
 export function fromBase64(text: string): Uint8Array {

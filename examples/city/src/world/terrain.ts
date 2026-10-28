@@ -17,15 +17,25 @@ const HORIZON = 40000;
  */
 export class Terrain {
   private readonly cells = Math.round((2 * EXTENT) / CELL);
-  private readonly heights: Float32Array;
+  readonly heights: Float32Array;
 
   /**
    * `flats` are sites the relief eases off around (the town, fields); `creek` cuts a
    * valley along its course, `depth` deep, except within 40 m of each `crossing` (where a
    * road passes over it at grade).
    */
-  constructor(seed: number, flats: { x: number; z: number; radius: number }[], creek: { course: THREE.Vector2[]; depth: number; crossings: THREE.Vector2[] }) {
+  constructor(
+    input:
+      | Float32Array
+      | { seed: number; flats: { x: number; z: number; radius: number }[]; creek: { course: THREE.Vector2[]; depth: number; crossings: THREE.Vector2[] } },
+  ) {
     const n = this.cells + 1;
+    if (input instanceof Float32Array) {
+      if (input.length !== n * n || input.some((height) => !Number.isFinite(height))) throw new Error("Invalid terrain heightfield");
+      this.heights = input;
+      return;
+    }
+    const { seed, flats, creek } = input;
     this.heights = new Float32Array(n * n);
     const waves = new Random(seed);
     const terms = Array.from({ length: 6 }, (_, i) => {

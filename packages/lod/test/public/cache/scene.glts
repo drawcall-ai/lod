@@ -1,0 +1,9 @@
+import { onDispose, scene } from "@drawcall/glts";
+import { shape } from "./shape.ts";
+
+const mesh = shape();
+scene.add(mesh);
+onDispose(() => {
+  mesh.geometry.dispose();
+  mesh.material.dispose();
+});
