@@ -15,7 +15,6 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { drawOf } from "../src/fade.js";
 import { HANDOVER_MS } from "../src/residency.js";
-import { LazyLevel } from "../src/lazy.js";
 import { Lod } from "../src/lod.js";
 import { TYPICAL_HEIGHT, viewportHeight } from "../src/view.js";
 import { GPU_TIMEOUT, render, renderer, nextLevel } from "./gpu.js";
@@ -28,7 +27,7 @@ const tan = Math.tan(Math.PI / 6);
 
 /** A source and two levels used up to 400 and 100 px tall. */
 function lod(): Lod {
-  const result = new Lod([box(), box(), box()]);
+  const result = new Lod([{ object: box() }, { object: box() }, { object: box() }]);
   setMaxPixels(result, [400, 100]);
   return result;
 }
@@ -55,7 +54,7 @@ function viewAt(target: Lod, pixels: number, view: Camera = camera): Lod {
   return target;
 }
 
-const visible = (target: Lod) => target.levels.flatMap(({ object }, i) => (object.visible ? [i] : []));
+const visible = (target: Lod) => target.levels.flatMap(({ object }, i) => (object?.visible ? [i] : []));
 /** The signed fade level `i` of `target` draws with (see fade.ts). */
 const fadeOf = (target: Lod, i: number) => {
   const object = target.levels[i]?.object;
@@ -115,24 +114,25 @@ describe("Lod", { timeout: GPU_TIMEOUT }, () => {
   });
 
   it("leaves a nested Lod's levels to it and hands over to it at once", () => {
-    const inner = new Lod([box(), box()]);
-    const outer = new Lod([box(), inner]);
+    const outer = new Lod([{ object: box() }, { object: new Lod([{ object: box() }, { object: box() }]) }]);
+    const inner = outer.levels[1]?.object;
+    if (!(inner instanceof Lod)) throw new Error("Missing nested Lod");
     setMaxPixels(outer, [400]);
     viewAt(outer, 1000);
-    expect([outer.levels[0]?.object.visible, inner.visible]).toEqual([true, false]);
+    expect([outer.levels[0]?.object?.visible, inner.visible]).toEqual([true, false]);
     viewAt(outer, 400 * (1 - Lod.fade / 2));
-    expect([outer.levels[0]?.object.visible, inner.visible]).toEqual([false, true]);
-    expect(inner.levels.map(({ object }) => object.visible)).toEqual([true, true]);
+    expect([outer.levels[0]?.object?.visible, inner.visible]).toEqual([false, true]);
+    expect(inner.levels.map(({ object }) => object?.visible)).toEqual([true, true]);
   });
 
   it("raycasts the source only", () => {
     const source = box();
     const level = box();
     level.position.x = 10;
-    const target = new Lod([source, level]);
+    const target = new Lod([{ object: source }, { object: level }]);
     target.updateMatrixWorld();
     const hits = new Raycaster(new Vector3(0.3, 0.2, 10), new Vector3(0, 0, -1)).intersectObject(target);
-    expect(hits.map((hit) => hit.object)).toEqual([source]);
+    expect(hits.map((hit) => hit.object)).toEqual([target.levels[0]?.object]);
     expect(new Raycaster(new Vector3(10.3, 0.2, 10), new Vector3(0, 0, -1)).intersectObject(target)).toEqual([]);
   });
 
@@ -144,7 +144,7 @@ describe("Lod", { timeout: GPU_TIMEOUT }, () => {
       mesh.setMatrixAt(1, new Matrix4().makeTranslation(1.5, 0, 0));
       return mesh;
     };
-    const target = new Lod([pair(), pair()]);
+    const target = new Lod([{ object: pair() }, { object: pair() }]);
     const diameter = Math.hypot(5, 2, 2);
     const scene = new Scene().add(target);
     setMaxPixels(target, [40]);
@@ -173,9 +173,10 @@ describe("Lod", { timeout: GPU_TIMEOUT }, () => {
 });
 
 it.each([false, true])("hands over an installed source without popping (height fade: %s)", { timeout: GPU_TIMEOUT }, async (heightFade) => {
-  const lazy = new LazyLevel(async () => box(), { maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) });
-  const fallback = box();
-  const lod = new Lod([lazy, fallback]);
+  const deferred = { load: async () => box(), maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) };
+  const lod = new Lod([deferred, { object: box() }]);
+  const fallback = lod.levels[1]?.object;
+  if (!fallback) throw new Error("Missing coarse object");
   lod.forceLevel = heightFade ? null : 0;
   const coarse = lod.levels[1];
   if (!coarse) throw new Error("Missing coarse level");
@@ -187,11 +188,11 @@ it.each([false, true])("hands over an installed source without popping (height f
   try {
     renderer.render(scene, view);
     await nextLevel(lod, view);
-    const source = lazy.children[0];
+    const source = lod.levels[0]?.object;
     if (!source) throw new Error("Missing installed source");
     lod.update(view);
     expect(drawOf(fallback)).toMatchObject({ fade: 0 });
-    expect(lazy.visible).toBe(false);
+    expect(source.visible).toBe(false);
     clock.mockReturnValue(1000 + HANDOVER_MS / 2);
     lod.update(view);
     expect(drawOf(source)).toMatchObject({ fade: 0.5 });

@@ -13,31 +13,17 @@ import {
   type Mesh,
   type Raycaster,
 } from "three/webgpu";
-import { boundingBox, measureLevels, prepareBounds } from "../bounds.js";
+import { levelBox, measureLevels, prepareBounds } from "../bounds.js";
 import { disposeTree } from "../dispose.js";
 import { drawOf, setDraw } from "../fade.js";
 import { placeInterior } from "../baked/interior/material.js";
 import { impostorInstances, type ImpostorMesh } from "../impostor/mesh/index.js";
-import {
-  Level,
-  cloneLevels,
-  copyThresholds,
-  estimate,
-  fadeProgress,
-  levelAt,
-  tintLevels,
-  validate,
-  type LodLevel,
-  type LevelInput,
-  levelObjects,
-  applyThresholds,
-} from "../levels.js";
+import { Level, cloneLevels, estimate, fadeProgress, levelAt, tintLevels, validate, type LodLevel } from "../levels.js";
 import { Lod } from "../lod.js";
-import { type LazyLevel } from "../lazy.js";
 import { Residency, type LevelsEventMap } from "../residency.js";
-import { gpuRenderer, inShadowPass, isLazyLevel, isImpostorMesh, sameClass } from "../three.js";
+import { gpuRenderer, inShadowPass, isImpostorMesh, sameClass } from "../three.js";
 import { TYPICAL_HEIGHT, View, viewportHeight, watchViewport, watchContext, unwatchContext, inView, type RenderContext } from "../view.js";
-import { compileLevel } from "../install.js";
+import { compileLevel } from "../queue.js";
 import { WIND_BOUNDS } from "../wind/hooks.js";
 import { copyWind, refreshWind } from "../wind/index.js";
 import { groupMaterial, indirect, placed, parts, type Part } from "./meshes.js";
@@ -84,28 +70,17 @@ interface Selected {
 }
 
 /**
- * `count` copies of one object with levels of detail, each switched by its own height on
- * screen: `Lod` for instances. The GPU sorts the instances into levels once per view
- * (see select.ts) and every mesh/material group of a level draws its instances in one
- * indirect draw; an instance near a switch is in both neighbours and they split its pixels with
- * the dither. Thresholds, `forceLevel`, `Lod.quality`, `Lod.debug` and shadows work as
- * for `Lod`; nothing of an instance is drawn into a directional light's shadow map whose
- * texels are wider than it. Each level is culled by the crowd's bounds, tightened for
- * finer levels to the region near the camera where their instances can draw.
+ * Independently selected copies of one object, batched into indirect draws per view.
+ * Thresholds, fades, global settings and shadows follow Lod. Each level's bounds tighten
+ * to the region where its instances can draw. Instance matrices may scale arbitrarily;
+ * the crowd's own transform and its parents should scale uniformly. Scale 0 draws nothing.
  *
- * Instance matrices are model transforms of the object, as for an InstancedMesh; set
- * them with `setMatrixAt`, and instance colours with `setColorAt`. An instance at scale 0
- * draws nothing. Its own transform (and its parents') should scale uniformly; instances
- * may scale any way.
+ * Level templates are cloned, then their meshes are instanced. Skinned meshes,
+ * InstancedMeshes (except ImpostorMesh) and nested Lods are unsupported. For external
+ * detail, leave level 0 empty and draw the instances that `levelOf` reports there.
  *
- * Levels are templates, read when it is built: their meshes are drawn instanced, not
- * added to the scene. They cannot contain skinned meshes, InstancedMeshes (other than an
- * ImpostorMesh) or nested Lods. To build a hierarchy on top, leave level 0 empty (see
- * `Lod`) and draw the detail of the instances `levelOf` reports at level 0 yourself.
- *
- * Requires the WebGPU feature `indirect-first-instance`. Sequential camera renders are
- * supported; a render nested inside another replaces the outer view's selection. Exclude
- * this object from nested reflection or cube-camera renders using camera layers.
+ * Requires WebGPU `indirect-first-instance`. Sequential cameras are supported; nested
+ * renders replace the outer selection, so exclude this crowd with camera layers.
  */
 export class InstancedLod extends Object3D<LevelsEventMap> {
   readonly isLOD = true;
@@ -114,7 +89,7 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
   autoUpdate = true;
   /** Draw only this level for every instance, without fades. */
   forceLevel: number | null = null;
-  readonly levels: readonly LodLevel[];
+  readonly levels: readonly Level[];
   readonly count: number;
 
   private readonly entries: Level[] = [];
@@ -124,7 +99,7 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
   private selection: Selection | null = null;
   private readonly residency = new Residency(
     this.entries,
-    (index, lazy, context) => this.install(index, lazy, context),
+    (level, object, context) => this.install(level, object, context),
     () => {
       this.selection?.route(this.residency.fallback, true);
       this.dispatchEvent({ type: "levelschange" });
@@ -164,8 +139,8 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     return this.residency.error;
   }
 
-  /** `levels[0]` is the source, or share the levels and thresholds of a Lod. */
-  constructor(levels: LevelInput | Lod = [], count = 0) {
+  /** `levels[0]` is the source. Empty only as the target of `copy`. */
+  constructor(levels: readonly LodLevel[] = [], count = 0) {
     super();
     if (!Number.isInteger(count) || count < 0) throw new Error(`InstancedLod: count must be an integer >= 0, got ${count}`);
     this.levels = this.entries;
@@ -176,36 +151,30 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     this.matrixChanges = new Dirty(count);
     this.colorChanges = new Dirty(count);
     this.matrixChanges.all();
-    const input = levels instanceof Lod ? levels.levels : levels;
-    const objects = levelObjects(input);
-    const draws = objects.length > 0 ? this.build(objects) : 0;
-    applyThresholds(input, this.entries);
+    const draws = levels.length > 0 ? this.build(levels) : 0;
     this.blocks = new Bounds(this.matrices, this.spheres, this.sphere, this.bounds, draws, this.rest);
   }
 
-  private build(objects: Object3D[]): number {
-    if (objects.length === 0) throw new Error("InstancedLod: needs at least the source level");
-    if (objects.every(isLazyLevel)) throw new Error("InstancedLod: at least one level must be eager");
-    const { own, placed } = measureLevels(objects, "InstancedLod");
+  private build(inputs: readonly LodLevel[]): number {
+    const { own, placed } = measureLevels(inputs, "InstancedLod");
     this.sphere.copy(placed);
-    objects.forEach((object, i) => {
-      this.entries.push(new Level(object, i, false, this.entries));
+    inputs.forEach((input, i) => {
+      this.entries.push(new Level(input, i, this.entries));
       this.reaches.push(new Sphere());
       this.demand.push(new Sphere());
-      if (object.matrixAutoUpdate) object.updateMatrix();
-      this.envelope.union(boundingBox(object).applyMatrix4(object.matrix));
+      this.envelope.union(levelBox(input));
     });
     estimate(this.entries, 2 * own.radius);
     validate(this.entries);
     this.residency.reset();
     this.boundLevels();
-    const templates = objects.map((object, i) => (isLazyLevel(object) ? [] : parts(object, i)));
+    const templates = this.entries.map(({ object }, i) => (object ? parts(object, i) : []));
     this.probe(templates[0] ?? []);
     const draws = templates.flatMap((parts) => parts.map((part) => part.draw));
     const selection = new Selection(
       this.matrices,
       this.sphere,
-      templates.map((parts, i) => parts.length > 0 || isLazyLevel(at(objects, i))),
+      templates.map((parts, i) => parts.length > 0 || at(inputs, i).box?.isEmpty() === false),
       draws,
       this.residency.fallback,
     );
@@ -235,17 +204,16 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
   }
 
   /** Compile only the arriving level; bounds and instance buffers stay fixed. */
-  private async install(index: number, lazy: LazyLevel, context: RenderContext): Promise<void> {
+  private async install(level: Level, template: Object3D, context: RenderContext): Promise<void> {
     const selection = this.selection;
-    const template = lazy.object;
-    if (!selection || !template) throw new Error("InstancedLod: missing selection or decoded level");
+    if (!selection) throw new Error("InstancedLod: missing selection");
     const staged = new Object3D();
-    const level = at(this.entries, index);
-    if (lazy.matrixAutoUpdate) lazy.updateMatrix();
-    prepareBounds(template, lazy.box);
-    const found = parts(template, index, lazy.matrix);
+    const object = template.clone();
+    level.object = object;
+    if (level.box) prepareBounds(object, level.box);
+    const found = parts(object, level.index);
     let offset = selection.append(found.map((part) => part.draw));
-    // A lazy level has no upfront mesh count, so its indirect draw table can relocate.
+    // A deferred level has no upfront mesh count, so its indirect draw table can relocate.
     for (const [mesh, offset] of this.offsets) mesh.geometry.setIndirect(selection.args, selection.argsOffset + offset);
     const meshes = found.map((part) => {
       const mesh = this.instance(level, part.template, part.placement, part.group, offset, selection);
@@ -265,9 +233,9 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
       return;
     }
     if (meshes.length > 0) unwatchContext(this);
-    if (index === 0) this.probe(found);
-    this.meshes[index] = meshes;
-    this.add(...meshes);
+    if (level.index === 0) this.probe(found);
+    this.meshes[level.index] = meshes;
+    for (const mesh of meshes) this.add(mesh);
   }
 
   /** Metadata includes unloaded levels, so later arrivals cannot enlarge this envelope. */
@@ -400,7 +368,8 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     }
     const level = levelAt(this.entries, height, last.forced);
     const selected = last.fades && fadeProgress(this.entries, level, height) > 0 ? level.index - 1 : level.index;
-    return at(this.residency.fallback, selected);
+    const ready = at(this.residency.fallback, selected);
+    return ready < 0 ? null : ready;
   }
 
   private check(index: number): void {
@@ -476,7 +445,7 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     const needed: number[] = [];
     if (this.bounds.isEmpty()) {
       // Reusable crowds can be populated and drawn in the same frame.
-      for (const level of entries) if (!isLazyLevel(level.object)) needed.push(level.index);
+      for (const level of entries) if (level.object) needed.push(level.index);
     } else if (residency.needsDemand(camera, this.meshes)) {
       this.blocks.demand(entries, last, this.demand, this.matrixWorld);
       for (let i = this.reaches.length - 1; i >= 0; i--) {
@@ -485,10 +454,10 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
         const target = at(residency.fallback, i);
         if (progress < 1) {
           const previous = at(residency.previous, i);
-          if (previous !== target) at(this.reaches, previous).union(reach);
+          if (previous >= 0 && previous !== target) at(this.reaches, previous).union(reach);
         }
         if (target !== i) {
-          at(this.reaches, target).union(reach);
+          if (target >= 0) at(this.reaches, target).union(reach);
           reach.makeEmpty();
         }
       }
@@ -552,7 +521,6 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     if (this.colors) this.colorChanges.all();
     const draws = source.entries.length > 0 ? this.build(cloneLevels(source.entries)) : 0;
     this.blocks = new Bounds(this.matrices, this.spheres, this.sphere, this.bounds, draws, this.rest);
-    copyThresholds(source.entries, this.entries);
     this.forceLevel = source.forceLevel;
     this.autoUpdate = source.autoUpdate;
     copyWind(source, this);
@@ -566,17 +534,14 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     return clone;
   }
 
-  /**
-   * Frees every level, the source included, and the instanced meshes. Clones share
-   * geometry and textures, so dispose only once no clone draws any more.
-   */
+  /** Release drawables and templates only after every owner sharing their geometry, materials and textures has stopped drawing. */
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
     unwatchContext(this);
     this.residency.dispose(() => {
       this.clearDraws();
-      for (const { object } of this.entries) disposeTree(object);
+      for (const { object } of this.entries) if (object) disposeTree(object);
     });
   }
 

@@ -1,5 +1,5 @@
 import * as THREE from "three/webgpu";
-import { InstancedLod, LazyLevel, Lod, LodLoader, type Wind } from "@drawcall/lod";
+import { InstancedLod, Lod, LodLoader, type LodLevel, type Wind } from "@drawcall/lod";
 import { cornPlant } from "../../content/corn/index.ts";
 import { step } from "../../loading.ts";
 import { heroPlant } from "../hero.ts";
@@ -66,9 +66,9 @@ export class Corn extends THREE.Object3D {
       })());
     const bakes = await Promise.all(
       Array.from({ length: DESIGNS + 2 }, async (_, index) => {
-        const levels = await loader.loadLevelsAsync({
+        const levels = await loader.loadAsync({
           type: "baked",
-          source: async () => {
+          make: async () => {
             const cover = (await bake())[index];
             if (!cover) throw new Error(`Missing corn cover ${index}`);
             return cover;
@@ -76,8 +76,7 @@ export class Corn extends THREE.Object3D {
           key: { ...key, cover: { value: index } },
           levels: [],
         });
-        const source = levels[0]?.object;
-        const mesh = source instanceof LazyLevel ? await source.load() : source;
+        const mesh = levels[0]?.object;
         if (!(mesh instanceof THREE.Mesh)) throw new Error(`Corn cover ${index} is not a mesh`);
         return mesh;
       }),
@@ -89,11 +88,12 @@ export class Corn extends THREE.Object3D {
     );
     const lods: InstancedLod[] = [];
     const sizes: number[] = [];
+    let far: LodLevel[] = [];
     for (let variant = 0; variant < VARIANTS; variant++) {
       const count = perTile[variant];
       if (count === undefined) throw new Error("Missing corn variant tile capacity");
       const levels = await loader.loadAsync({
-        source: async () => {
+        make: async () => {
           await prepare();
           return cornPlant(variant + 1, { leafSegments: FIELD_LEAVES, detail: "field" });
         },
@@ -102,24 +102,22 @@ export class Corn extends THREE.Object3D {
         levels: [
           { type: "impostor", layout: "hemi", maxPixels: PLANT_PIXELS, resolution: 256, frames: 8, draw: { parallax: 0 } },
           { type: "impostor", layout: "hemi", maxPixels: FAR_PIXELS, resolution: 64, frames: 8, draw: { parallax: 0 } },
-          { type: "empty", maxPixels: PLANT_GONE },
         ],
         restore: (object, index) => {
           foliage(object);
           if (index === 1 || index === 2) object.castShadow = false;
         },
       });
+      levels.push({ object: new THREE.Group(), maxPixels: PLANT_GONE });
+      if (variant === spot.variant) far = levels.slice(1, 3);
       const lod = new InstancedLod(levels, CHUNKS * count);
       lod.name = `corn plant ${variant + 1}`;
-      const box = sourceBox(lod);
+      const box = sourceBox(lod.levels);
       sizes.push(box.getSize(new THREE.Vector3()).length());
       lods.push(lod);
     }
-    const crop = lods[spot.variant];
-    const detailed = crop?.levels[1],
-      coarse = crop?.levels[2];
-    if (!detailed || !coarse) throw new Error("The hero's variant has no impostor levels");
-    const details = await heroPlant({ ...spot, seed: spot.variant + 1 }, [detailed, coarse], plan.terrain);
+    if (far.length !== 2) throw new Error("The hero's variant has no impostor levels");
+    const details = await heroPlant({ ...spot, seed: spot.variant + 1 }, far, plan.terrain);
     let corn: Corn | undefined;
     const patches = new Patches(lods, perTile, CHUNKS, new FieldTiles(tiles, designs, plan.terrain, spot), () => {
       if (!corn) throw new Error("Corn tiles requested before initialization");
@@ -131,7 +129,7 @@ export class Corn extends THREE.Object3D {
 
   applyWind(wind: Wind): void {
     for (const lod of this.plants.lods) {
-      const box = sourceBox(lod);
+      const box = sourceBox(lod.levels);
       wind.apply(lod, { amplitude: (box.max.y - box.min.y) * 0.04 });
     }
   }

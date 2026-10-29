@@ -1,4 +1,4 @@
-import { InstancedLod, Lod, LodLoader, ImpostorMesh, bakeImpostor, bakeMesh } from "@drawcall/lod";
+import { InstancedLod, Lod, LodLoader, ImpostorMesh, bakeImpostor, bakeMesh, type LodLevel } from "@drawcall/lod";
 import * as THREE from "three/webgpu";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import type { Dependencies } from "vitecache";
@@ -47,13 +47,15 @@ export async function houses(plan: Plan): Promise<THREE.Group> {
     });
     root.add(lod);
   }
-  const building = await loadHouse(
-    proceduralFiles("src/world/houses.ts", { church: true }, textures),
-    () => {
-      const { detail, low, interior: rooms, params } = church();
-      return { detail, low, rooms, params };
-    },
-    1.6,
+  const building = new Lod(
+    await loadHouse(
+      proceduralFiles("src/world/houses.ts", { church: true }, textures),
+      () => {
+        const { detail, low, interior: rooms, params } = church();
+        return { detail, low, rooms, params };
+      },
+      1.6,
+    ),
   );
   building.name = "church";
   building.position.set(plan.church.x, plan.church.y, plan.church.z);
@@ -62,7 +64,7 @@ export async function houses(plan: Plan): Promise<THREE.Group> {
   return root;
 }
 
-async function loadHouse(dependencies: Dependencies, make: () => Authored, factor = 1): Promise<Lod> {
+async function loadHouse(dependencies: Dependencies, make: () => Authored, factor = 1): Promise<LodLevel[]> {
   let built: Promise<{ source: THREE.Group; baked: THREE.Mesh; coarse: ImpostorMesh }> | undefined;
   const build = () =>
     (built ??= (async () => {
@@ -106,12 +108,12 @@ async function loadHouse(dependencies: Dependencies, make: () => Authored, facto
     return (await atlas)[side];
   };
   return new LodLoader().loadAsync({
-    source: async () => (await build()).source,
+    make: async () => (await build()).source,
     key: { ...dependencies, atlas: { path: "src/world/house-atlas.ts" } },
     material,
     levels: [
-      { type: "baked", source: async () => (await build()).baked, maxPixels: BAKED_PIXELS * factor },
-      { type: "impostor", source: async () => (await build()).coarse, maxPixels: IMPOSTOR_PIXELS * factor },
+      { type: "baked", make: async () => (await build()).baked, maxPixels: BAKED_PIXELS * factor },
+      { type: "impostor", make: async () => (await build()).coarse, maxPixels: IMPOSTOR_PIXELS * factor },
     ],
     restore: async (object, index) => {
       if (index === 0)

@@ -1,11 +1,11 @@
 import { Box3, Group, Matrix4, type Material, type Object3D } from "three/webgpu";
 import { decodeBakedMeshAsync, encodeBakedMesh } from "../baked/codec.js";
 import { boundingBox } from "../bounds.js";
+import { decode as decodeLevel } from "../deferred.js";
 import { disposeTree } from "../dispose.js";
 import { decodeImpostorAsync, encodeImpostor } from "../impostor/codec.js";
 import { ImpostorMesh, type ImpostorMeshOptions } from "../impostor/mesh/index.js";
-import { LazyLevel } from "../lazy.js";
-import { errorOf, recordError, type LodLevel } from "../levels.js";
+import { deviationOf, recordDeviation, type LodLevel } from "../levels.js";
 import { isImpostorMesh, isMesh } from "../three.js";
 import { decodeMesh, encodeMesh, type MaterialResolver } from "./mesh.js";
 
@@ -16,7 +16,7 @@ interface Metadata {
   materials?: Array<{ name: string; data: Record<string, unknown> }>;
   name: string;
   maxPixels: number;
-  error?: number;
+  deviation?: number;
   box: Box3;
   matrix: Matrix4;
   matrixAutoUpdate: boolean;
@@ -59,7 +59,7 @@ export async function encode(
       materials: references,
       name: object.name,
       maxPixels: index === 0 ? null : thresholds[index],
-      error: errorOf(object),
+      deviation: deviationOf(object),
       box: box.isEmpty() ? null : [...box.min.toArray(), ...box.max.toArray()],
       matrix: object.matrix.toArray(),
       matrixAutoUpdate: object.matrixAutoUpdate,
@@ -112,9 +112,9 @@ export function decode(
   const resolved = new Map<string, Promise<Material>>();
   const materials = async (level: Metadata): Promise<Material[]> => {
     if (!level.materials) {
-      const source = levels[0]?.object;
-      if (!(source instanceof LazyLevel)) fail("missing source materials");
-      return materialsOf(await source.load());
+      const source = levels[0];
+      if (!source) fail("missing source materials");
+      return materialsOf(source.object ?? (await decodeLevel(source.load).promise));
     }
     return Promise.all(
       level.materials.map(({ name, data }) => {
@@ -129,44 +129,34 @@ export function decode(
     );
   };
   const levels: LodLevel[] = metadata.map((level, index) => {
-    if (level.kind === "empty") {
-      const object = new Group();
-      place(object, level);
-      return { object, maxPixels: level.maxPixels };
-    }
-    const object = new LazyLevel(
-      async () => {
-        const bytes = level.kind === "source" ? new Uint8Array() : index === coarsest && coarsest > 0 ? coarse : await loadLevel(index);
-        if (bytes.length !== level.length) fail(`level ${index} payload length`);
-        const loaded =
-          level.kind === "source"
-            ? await loadSource(index)
+    const load = async () => {
+      const bytes = level.kind === "source" || level.kind === "empty" ? new Uint8Array() : index === coarsest && coarsest > 0 ? coarse : await loadLevel(index);
+      if (bytes.length !== level.length) fail(`level ${index} payload length`);
+      const loaded =
+        level.kind === "source"
+          ? await loadSource(index)
+          : level.kind === "empty"
+            ? new Group()
             : level.kind === "impostor"
               ? new ImpostorMesh(await decodeImpostorAsync(bytes), 1, level.draw)
               : level.kind === "baked"
                 ? await decodeBakedMeshAsync(bytes)
                 : await decodeMesh(bytes, await materials(level));
-        try {
-          loaded.name = level.name;
-          loaded.castShadow = level.castShadow;
-          loaded.receiveShadow = level.receiveShadow;
-          loaded.matrixAutoUpdate = level.matrixAutoUpdate;
-          if (level.error !== undefined) recordError(loaded, level.error);
-          loaded.position.set(0, 0, 0);
-          loaded.quaternion.identity();
-          loaded.scale.set(1, 1, 1);
-          loaded.updateMatrix();
-          await restore?.(loaded, index);
-          return loaded;
-        } catch (error) {
-          disposeTree(loaded);
-          throw error;
-        }
-      },
-      { maxPixels: level.maxPixels, box: level.box },
-    );
-    place(object, level);
-    return { object, maxPixels: level.maxPixels };
+      try {
+        place(loaded, level);
+        if (level.deviation !== undefined) recordDeviation(loaded, level.deviation);
+        await restore?.(loaded, index);
+        return loaded;
+      } catch (error) {
+        disposeTree(loaded);
+        throw error;
+      }
+    };
+    return {
+      load,
+      maxPixels: level.maxPixels,
+      box: level.box.clone().applyMatrix4(level.matrix),
+    };
   });
   return levels;
 }
@@ -216,15 +206,15 @@ function read(bytes: Uint8Array): { metadata: Metadata[]; coarsest: number; coar
     if (!box.isEmpty()) coarsest = index;
     if ((kind === "empty" || kind === "source") !== (size === 0)) fail("invalid level payload length");
     const matrix = new Matrix4().fromArray(numbers(meta.matrix, 16));
-    const error = meta.error === undefined ? undefined : finite(meta.error);
-    if (error !== undefined && error < 0) fail("negative error");
+    const deviation = meta.deviation === undefined ? undefined : finite(meta.deviation);
+    if (deviation !== undefined && deviation < 0) fail("negative deviation");
     const draw = meta.draw === undefined ? undefined : drawOptions(meta.draw);
     const level: Metadata = {
       kind,
       materials: meta.materials === undefined ? undefined : references(meta.materials),
       name: meta.name,
       maxPixels,
-      error,
+      deviation,
       box,
       matrix,
       matrixAutoUpdate: meta.matrixAutoUpdate,

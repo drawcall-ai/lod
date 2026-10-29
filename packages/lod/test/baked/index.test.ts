@@ -81,7 +81,7 @@ const EYES: Array<[number, number, number]> = [
 ];
 
 describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
-  it("bakes a mesh that renders like its source, and sets its default maxPixels from its error", async () => {
+  it("bakes a mesh that renders like its source, and sets its default maxPixels from its deviation", async () => {
     const source = textured(new BoxGeometry(1, 1, 1, 6, 6, 6));
     const baked = await bakeMesh(source, { textureSize: 256 });
     expect(baked.geometry.index?.count).toBeLessThan((source.geometry.index?.count ?? 0) / 4);
@@ -90,7 +90,7 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
       // A plain grey box is off by 7 to 23 here.
       expect(difference(real, await render(baked, eye))).toBeLessThan(5);
     }
-    expect(new Lod([source, baked]).levels[1]?.maxPixels).not.toBe(512);
+    expect(new Lod([{ object: source }, { object: baked }]).levels[1]?.maxPixels).not.toBe(512);
   });
 
   it("keeps the textures of a source in which some meshes have no UVs", async () => {
@@ -127,7 +127,7 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
       box.matrix.fromArray(Float32Array.from(spot.elements));
       plain.add(box);
     }
-    const lod = new InstancedLod([new Mesh(geometry, material), new Mesh(new SphereGeometry(), material)], spots.length);
+    const lod = new InstancedLod([{ object: new Mesh(geometry, material) }, { object: new Mesh(new SphereGeometry(), material) }], spots.length);
     const instanced = new InstancedMesh(geometry, material, spots.length);
     spots.forEach((spot, i) => (lod.setMatrixAt(i, spot), instanced.setMatrixAt(i, spot)));
     const low = () => new Mesh(new BoxGeometry(3.2, 1.6, 3.2));
@@ -153,10 +153,10 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
   it("bakes normals that turn with an instance: a rotated InstancedLod copy looks like a rotated Lod", async () => {
     const baked = await bakeMesh(textured(new BoxGeometry(1, 1, 1, 4, 4, 4)), { textureSize: 128 });
     const turn = new Matrix4().makeRotationY(Math.PI / 2);
-    const lod = new Lod([new Mesh(new BoxGeometry()), baked.clone()]);
+    const lod = new Lod([{ object: new Mesh(new BoxGeometry()) }, { object: baked.clone() }]);
     lod.forceLevel = 1;
     lod.quaternion.setFromRotationMatrix(turn);
-    const instanced = new InstancedLod([new Mesh(new BoxGeometry()), baked.clone()], 1);
+    const instanced = new InstancedLod([{ object: new Mesh(new BoxGeometry()) }, { object: baked.clone() }], 1);
     instanced.forceLevel = 1;
     instanced.setMatrixAt(0, turn);
     const eye: [number, number, number] = [2, 1.5, 2.5];
@@ -214,7 +214,7 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
     expect((await gap(half(0xff0000, 0, true)))[3]).toBe(0);
   });
 
-  it("measures its error only against source faces seen from outside", async () => {
+  it("measures its deviation only against source faces seen from outside", async () => {
     // A box open at the bottom (BoxGeometry groups: +x, -x, +y, -y, +z, -z), as the low mesh too.
     const shell = () => {
       const box = new BoxGeometry(2, 2, 2);
@@ -229,10 +229,10 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
     const floor = new Mesh(new PlaneGeometry(2, 2), material).rotateX(-Math.PI / 2).translateZ(-0.99);
     const partition = new Mesh(new PlaneGeometry(1.9, 1.9), new MeshStandardMaterial({ side: DoubleSide }));
     const furnished = new Group().add(new Mesh(shell(), material), floor, partition);
-    // The error, read through the default maxPixels it gives in a Lod: inversely proportional.
-    const error = async (source: Object3D) =>
-      1 / must(new Lod([source, await bakeMesh(source, { low: new Mesh(shell()), textureSize: 64 })]).levels[1]).maxPixels;
-    const [bare, inside] = [await error(plain), await error(furnished)];
+    // The deviation, read through the default maxPixels it gives in a Lod: inversely proportional.
+    const deviation = async (source: Object3D) =>
+      1 / must(new Lod([{ object: source }, { object: await bakeMesh(source, { low: new Mesh(shell()), textureSize: 64 }) }]).levels[1]).maxPixels;
+    const [bare, inside] = [await deviation(plain), await deviation(furnished)];
     expect(Math.abs(inside - bare) / bare).toBeLessThan(0.1);
   });
 });

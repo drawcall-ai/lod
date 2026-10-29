@@ -1,140 +1,137 @@
-import { Color, type Object3D } from "three/webgpu";
+import { Color, type Box3, type Object3D } from "three/webgpu";
 import { texelPixels } from "./impostor/impostor.js";
-import { isLazyLevel, isImpostorMesh, isObject3D } from "./three.js";
+import { isImpostorMesh, isLOD } from "./three.js";
 
-// The levels Lod and InstancedLod share: their thresholds, the defaults of those, which
-// level a height picks and how far it has faded in (see fade.ts).
-
-/**
- * A fade dithers over the top of a level's range: from maxPixels × (1 - FADE) to
- * maxPixels. Instances inside it draw twice; a narrower fade pops no more visibly, as
- * the dither spreads the switch over the frames an approach takes to cross it.
- */
+/** Share of each level's range over which its finer neighbour fades out. */
 export const FADE = 0.1;
 
-/** One entry of `Lod.levels`. */
-export interface LodLevel {
-  readonly object: Object3D;
-  /**
-   * The largest on-screen height, in CSS pixels, at which this level is used
-   * (heights are × `Lod.quality`). Level 0, the source, has Infinity.
-   * Every further level's must be at most 0.9 of the previous one's, so that one fade has
-   * ended before the next begins.
-   *
-   * Unless set, it is where the level is about a pixel off: for a level `simplify` or
-   * `bakeMesh` returned, where its measured error reaches a pixel (a clone you make of
-   * it does not carry the error; a cloned Lod keeps it); for an ImpostorMesh, where two
-   * atlas texels span one pixel; else half the previous level's (512 px for level 1).
-   * Such defaults are raised to twice the next level's where they would leave no room
-   * for the fades.
-   */
-  maxPixels: number;
-}
+/** A reusable level description. Deferred objects arrive already placed in the owner's space. */
+export type LodLevel =
+  { object: Object3D; maxPixels?: number; load?: never; box?: never } | { load: () => Promise<Object3D>; maxPixels: number; box: Box3; object?: never };
 
-/** Objects use estimated thresholds; entries keep their supplied thresholds. */
-export type LevelInput = readonly (Object3D | LodLevel)[];
-
-export function levelObjects(levels: LevelInput): Object3D[] {
-  return levels.map((level) => (isObject3D(level) ? level : level.object));
-}
-
-export function applyThresholds(input: LevelInput, levels: readonly Level[]): void {
-  input.forEach((entry, index) => {
-    if (isObject3D(entry)) return;
-    const level = levels[index];
-    if (!level) throw new Error(`LOD: missing level ${index}`);
-    level.maxPixels = entry.maxPixels;
-  });
-}
-
-export class Level implements LodLevel {
-  /** Debug tint (see `Lod.debug`), white when off; shared by every draw of the level. */
+/** One owner's resolved threshold and drawable, separate from its reusable description. */
+export class Level {
   readonly tint = new Color(1, 1, 1);
-  /** maxPixels as set, or null for the default */
-  explicit: number | null = null;
-  /** The default before raising for the fades: see `resolve`. */
+  readonly box: Box3 | undefined;
+  object: Object3D | undefined;
+  nested: boolean;
+  explicit: number | null;
   base = Infinity;
-  /** maxPixels as resolved; see `resolve` */
   value = Infinity;
 
   constructor(
-    readonly object: Object3D,
+    readonly input: LodLevel,
     readonly index: number,
-    /** A nested LOD switches its own levels and fades by them, not by its parent. */
-    public nested: boolean,
-    /** The levels this one is in, which its default depends on. */
     private readonly ladder: readonly Level[],
   ) {
-    if (isLazyLevel(object)) this.explicit = object.maxPixels;
+    this.explicit = input.maxPixels ?? null;
+    if (input.maxPixels !== undefined) checkThreshold(input.maxPixels, index);
+    this.box = input.box;
+    if (this.box && !this.box.isEmpty() && ![...this.box.min.toArray(), ...this.box.max.toArray()].every(Number.isFinite))
+      throw new Error("Lod: a deferred level's box must be finite");
+    this.object = input.object?.clone();
+    const deviation = input.object && deviationOf(input.object);
+    if (this.object && deviation !== undefined) recordDeviation(this.object, deviation);
+    this.nested = this.object ? isLOD(this.object) : false;
   }
 
+  /**
+   * Largest on-screen height, in CSS pixels × Lod.quality, at which this level draws.
+   * Level 0 is Infinity. Every later threshold must be at most 0.9 of its predecessor.
+   * Defaults use measured surface deviation, impostor texels, or half the previous
+   * threshold (512 for level 1), raised where needed to leave room for fades.
+   */
   get maxPixels(): number {
     return this.value;
   }
-
   set maxPixels(value: number) {
-    if (this.index === 0 && value !== Infinity) throw new Error(`Lod: level 0, the source, is used at any height: its maxPixels is Infinity, not ${value}`);
-    if (this.index === 0) return;
-    if (!(value > 0)) throw new Error(`Lod: maxPixels must be > 0, got ${value}`);
+    checkThreshold(value, this.index);
     this.explicit = value;
     resolve(this.ladder);
   }
 }
 
-/** Error a built level reports: how far its surface is from its source's, in the source's units. */
-const errors = new WeakMap<Object3D, number>();
+function checkThreshold(value: number, index: number): void {
+  if (index === 0 && value !== Infinity) throw new Error(`Lod: level 0, the source, is used at any height: its maxPixels is Infinity, not ${value}`);
+  if (!(value > 0)) throw new Error(`Lod: maxPixels must be > 0, got ${value}`);
+}
 
-/** Record that `level` is `error` off its source (see `errors`). */
-export const recordError = (level: Object3D, error: number): void => void errors.set(level, error);
-/** The error recorded for `level`, if any. */
-export const errorOf = (level: Object3D): number | undefined => errors.get(level);
+const deviations = new WeakMap<Object3D, number>();
+/** Surface deviation from the source, in the source's units. */
+export const recordDeviation = (level: Object3D, deviation: number): void => void deviations.set(level, deviation);
+export const deviationOf = (level: Object3D): number | undefined => deviations.get(level);
 
-/** Clones of `levels`' objects, which keep the errors recorded for them. */
-export function cloneLevels(levels: readonly Level[]): Object3D[] {
-  return levels.map(({ object }) => {
-    const clone = object.clone();
-    const error = errorOf(object);
-    if (error !== undefined) errors.set(clone, error);
-    return clone;
+/** Descriptions for a new owner, retaining threshold edits and sharing deferred decode. */
+export function cloneLevels(levels: readonly Level[]): LodLevel[] {
+  return levels.map((level) => {
+    const { input, object, explicit } = level;
+    if (input.load) return { ...input, maxPixels: level.maxPixels };
+    if (!object) throw new Error("Lod: an eager level has no object");
+    return { object, ...(explicit === null ? {} : { maxPixels: explicit }) };
   });
 }
 
-/** Give `to` the maxPixels set on `from`, level by level. */
-export function copyThresholds(from: readonly Level[], to: readonly Level[]): void {
-  to.forEach((level, i) => {
-    const explicit = from[i]?.explicit ?? null;
-    if (explicit !== null) level.maxPixels = explicit;
-  });
+interface Threshold {
+  index: number;
+  explicit: number | null;
+  base: number;
+  value: number;
 }
 
-/**
- * Give each level its default `base`, for a source of bounding diameter `diameter` in its
- * own units, and resolve the thresholds (see `LodLevel.maxPixels`).
- */
-export function estimate(levels: readonly Level[], diameter: number): void {
+function bases(levels: readonly LodLevel[], diameter: number): number[] {
   let finer = 1024;
-  for (const level of levels.slice(1)) {
-    const error = errorOf(level.object);
-    if (isLazyLevel(level.object)) level.base = level.object.maxPixels;
-    else if (error !== undefined) level.base = diameter / Math.max(error, diameter * 1e-4);
-    else if (isImpostorMesh(level.object)) level.base = texelPixels(level.object.impostor);
-    else level.base = finer / 2;
-    finer = level.base;
-  }
+  return levels.map(({ object, maxPixels }, index) => {
+    if (index === 0) return Infinity;
+    const deviation = object && deviationOf(object);
+    const base = !object
+      ? maxPixels
+      : deviation !== undefined
+        ? diameter / Math.max(deviation, diameter * 1e-4)
+        : isImpostorMesh(object)
+          ? texelPixels(object.impostor)
+          : finer / 2;
+    if (base === undefined) throw new Error("Lod: a deferred level needs maxPixels");
+    finer = base;
+    return base;
+  });
+}
+
+/** Resolve thresholds from metadata without constructing renderer state. */
+export function resolveThresholds(levels: readonly LodLevel[], diameter: number): number[] {
+  const defaults = bases(levels, diameter);
+  const thresholds = levels.map((level, index) => {
+    if (level.maxPixels !== undefined) checkThreshold(level.maxPixels, index);
+    return { index, explicit: level.maxPixels ?? null, base: defaults[index] ?? Infinity, value: Infinity };
+  });
+  resolve(thresholds);
+  validate(thresholds.map(({ value }) => ({ maxPixels: value })));
+  return thresholds.map(({ value }) => value);
+}
+
+/** Resolve defaults once, retaining writable owner thresholds. */
+export function estimate(levels: readonly Level[], diameter: number): void {
+  const defaults = bases(
+    levels.map(({ input }) => input),
+    diameter,
+  );
+  levels.forEach((level, index) => {
+    level.base = defaults[index] ?? Infinity;
+  });
   resolve(levels);
 }
 
-/** Each level's maxPixels: as set, else its base raised to twice the next level's, from the cheapest up. */
-function resolve(levels: readonly Level[]): void {
+function resolve(levels: readonly Threshold[]): void {
   let next = 0;
-  for (const level of [...levels].reverse()) {
+  for (let i = levels.length - 1; i >= 0; i--) {
+    const level = levels[i];
+    if (!level) continue;
     level.value = level.index === 0 ? Infinity : (level.explicit ?? Math.max(level.base, 2 * next));
     next = level.value;
   }
 }
 
-/** Throws unless each level's fade ends before the next one's begins (see `LodLevel.maxPixels`). */
-export function validate(levels: readonly LodLevel[]): void {
+/** Throws when neighbouring fades overlap. */
+export function validate(levels: readonly { maxPixels: number }[]): void {
   levels.forEach((level, i) => {
     const finer = levels[i - 1];
     if (finer && level.maxPixels > finer.maxPixels * (1 - FADE))
@@ -191,13 +188,17 @@ export function demandLevels(levels: readonly Level[], height: number, forced: n
   return finer && height >= DEMAND * desired.maxPixels * (1 - FADE) ? [desired, finer] : [desired];
 }
 
-/** Nearest installed finer level, else nearest coarser; eager empty levels intentionally cull. */
-export function fallbacks(objects: readonly Object3D[], installed: ReadonlySet<Object3D> = new Set()): number[] {
-  const ready = objects.map((object) => !isLazyLevel(object) || installed.has(object));
-  if (!ready.some(Boolean)) throw new Error("LOD: at least one level must be eager");
-  return objects.map((_, index) => {
-    for (let finer = index; finer >= 0; finer--) if (ready[finer]) return finer;
-    for (let coarser = index + 1; coarser < ready.length; coarser++) if (ready[coarser]) return coarser;
-    throw new Error("LOD: no installed fallback");
+/** Nearest ready finer level, else nearest coarser; -1 draws nothing until one is ready. */
+export function fallbacks(levels: readonly Level[], ready: ReadonlySet<Level>): number[] {
+  return levels.map((_, index) => {
+    for (let finer = index; finer >= 0; finer--) {
+      const level = levels[finer];
+      if (level && ready.has(level)) return finer;
+    }
+    for (let coarser = index + 1; coarser < levels.length; coarser++) {
+      const level = levels[coarser];
+      if (level && ready.has(level)) return coarser;
+    }
+    return -1;
   });
 }

@@ -1,5 +1,5 @@
 import { Box3, Matrix4, ObjectSpaceNormalMap, Vector2, type Mesh, type Object3D } from "three/webgpu";
-import { boundingBox } from "../bounds.js";
+import { boundingBox, levelBox } from "../bounds.js";
 import { levelMaterial } from "../material.js";
 import { isBatchedMesh, isImpostorMesh, isInstancedLod, isInstancedMesh, isLOD, isMesh, isSkinnedMesh, isStorageInstanced } from "../three.js";
 import { WIND_BOUNDS, type WindBounds } from "./hooks.js";
@@ -102,7 +102,7 @@ export class Wind {
     this.attach(root, { amplitude, baseY, height }, false);
   }
 
-  /** Attach meshes installed by a lazy level; existing meshes retain their bounds. */
+  /** Attach meshes arriving with a deferred level; existing meshes retain their bounds. */
   private attach(root: Object3D, { amplitude, baseY, height }: SwayOptions, refreshing: boolean, added = root, knownBox?: Box3): void {
     nonnegative(amplitude, "amplitude");
     const meshes: Mesh[] = [];
@@ -126,7 +126,7 @@ export class Wind {
     });
     if (meshes.length === 0) {
       if (refreshing) return;
-      throw new Error("Wind: object has no meshes");
+      if (!isLOD(root)) throw new Error("Wind: object has no meshes");
     }
     added.updateWorldMatrix(true, true);
     invertible(root.matrixWorld);
@@ -170,11 +170,9 @@ function hasBounds(root: Object3D): root is Object3D & WindBounds {
 
 function sourceBox(root: Object3D): Box3 {
   if (isLOD(root)) {
-    for (const { object } of root.levels) {
-      const box = boundingBox(object);
-      if (box.isEmpty()) continue;
-      if (object.matrixAutoUpdate) object.updateMatrix();
-      return box.applyMatrix4(object.matrix);
+    for (const level of root.levels) {
+      const box = levelBox(level);
+      if (!box.isEmpty()) return box;
     }
     return new Box3();
   }

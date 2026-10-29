@@ -26,7 +26,7 @@ export function entryFor(dependencies: Dependencies, recipe: Recipe, options?: L
   return new CacheEntry({
     basePath: options?.basePath,
     root: options?.root,
-    version: "lod-levels@7",
+    version: "lod-levels@8",
     dependencies: {
       ...inputs,
       "lod:levels": { value: recipe.levels.map(parameters) },
@@ -42,11 +42,11 @@ export function entryFor(dependencies: Dependencies, recipe: Recipe, options?: L
 }
 
 function parameters(level: LevelRequest): JsonValue {
-  if (level.source) return { type: level.type, maxPixels: level.maxPixels ?? null, source: "factory" };
+  if (level.make) return { type: level.type, maxPixels: level.maxPixels ?? null, make: "factory" };
   switch (level.type) {
     case "empty":
       return { type: level.type, maxPixels: level.maxPixels };
-    case "mesh":
+    case "simplify":
       return { type: level.type, maxPixels: level.maxPixels ?? null, ratio: level.ratio ?? null };
     case "baked":
       return {

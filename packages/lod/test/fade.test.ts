@@ -93,14 +93,14 @@ const at = (point: { x: number; z: number }, scale = 1) => new Matrix4().makeSca
 describe("casters smaller than a shadow texel", { timeout: GPU_TIMEOUT }, () => {
   it("cast nothing: a Lod's meshes, by the whole object", async () => {
     // 3.5 units across its bounding sphere, narrower than a texel; 3× that, wider.
-    const lods = new Group().add(placed(new Lod([box()]), SMALL), placed(new Lod([box()]), LARGE, 3));
+    const lods = new Group().add(placed(new Lod([{ object: box() }]), SMALL), placed(new Lod([{ object: box() }]), LARGE, 3));
     const [small, large] = await shadowAt(lods, SMALL, LARGE);
     expect(small).toBeLessThan(0.1);
     expect(large).toBeGreaterThan(0.15);
   });
 
   it("cast nothing: an InstancedLod's instances, each by its own size", async () => {
-    const lod = new InstancedLod([box()], 2);
+    const lod = new InstancedLod([{ object: box() }], 2);
     lod.setMatrixAt(0, at(SMALL));
     lod.setMatrixAt(1, at(LARGE, 3));
     const [small, large] = await shadowAt(lod, SMALL, LARGE);
@@ -128,7 +128,7 @@ describe("casters smaller than a shadow texel", { timeout: GPU_TIMEOUT }, () => 
 describe("instance fades", { timeout: GPU_TIMEOUT }, () => {
   it("preserves coverage and instance colors when neighbouring levels split the pixels", async () => {
     const box = () => new Mesh(new BoxGeometry(2, 2, 2), new MeshBasicMaterial());
-    const lod = new InstancedLod([box(), box()], 2);
+    const lod = new InstancedLod([{ object: box() }, { object: box() }], 2);
     const coarse = lod.levels[1];
     if (!coarse) throw new Error("Missing coarse level");
     coarse.maxPixels = 40;

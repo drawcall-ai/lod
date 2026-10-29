@@ -18,7 +18,6 @@ import { drawOf, setDraw } from "../../../src/fade.js";
 import { bakeImpostor } from "../../../src/impostor/bake/index.js";
 import { ImpostorMesh, impostorInstances } from "../../../src/impostor/mesh/index.js";
 import { InstancedLod } from "../../../src/instanced/index.js";
-import { LazyLevel } from "../../../src/lazy.js";
 import { Lod } from "../../../src/lod.js";
 import { GPU_TIMEOUT, render, renderer } from "../../gpu.js";
 
@@ -49,8 +48,10 @@ const color = (pixels: Uint8Array, x: number, y: number, expected: "white" | "re
 it.each([false, true])("shares one impostor shader across crowd/single bindings (first draw colored: %s)", { timeout: GPU_TIMEOUT }, async (colored) => {
   const source = new Mesh(new BoxGeometry(1.5, 1.5, 1.5), new MeshStandardMaterial());
   const template = new ImpostorMesh(await bakeImpostor(source, { frames: 4, resolution: 16 }));
-  const left = new InstancedLod([template], 2);
-  const right = new InstancedLod(left.levels, 3);
+  const disposed = vi.fn();
+  template.material.addEventListener("dispose", disposed);
+  const left = new InstancedLod([{ object: template }], 2);
+  const right = new InstancedLod([{ object: template }], 3);
   left.setMatrixAt(0, at(-2, 1));
   left.setMatrixAt(1, at(-2, -1));
   for (let index = 0; index < 3; index++) right.setMatrixAt(index, at(2, 2 - index * 2));
@@ -58,8 +59,9 @@ it.each([false, true])("shares one impostor shader across crowd/single bindings 
     left.setColorAt(0, new Color("red"));
     left.setColorAt(1, new Color("green"));
   } else for (let index = 0; index < 3; index++) right.setColorAt(index, new Color("blue"));
-  const single = template.clone();
-  const lod = new Lod([single]);
+  const lod = new Lod([{ object: template }]);
+  const single = lod.levels[0]?.object;
+  if (!(single instanceof ImpostorMesh)) throw new Error("Missing single card");
   const scene = new Scene().add(left, right, lod, new AmbientLight(0xffffff, 3));
   const view = camera();
   const setup = vi.spyOn(template.material, "setup");
@@ -112,6 +114,7 @@ it.each([false, true])("shares one impostor shader across crowd/single bindings 
     left.dispose();
     right.dispose();
     lod.dispose();
+    expect(disposed).toHaveBeenCalledOnce();
     fades.dispose();
     source.geometry.dispose();
     source.material.dispose();
@@ -122,12 +125,12 @@ it("shares shadow shader builds while each crowd and single card keeps its own m
   const source = new Mesh(new BoxGeometry(1.5, 1.5, 1.5), new MeshStandardMaterial());
   const template = new ImpostorMesh(await bakeImpostor(source, { frames: 4, resolution: 16 }));
   template.castShadow = true;
-  const left = new InstancedLod([template], 2);
-  const right = new InstancedLod(left.levels, 3);
+  const left = new InstancedLod([{ object: template }], 2);
+  const right = new InstancedLod([{ object: template }], 3);
   left.setMatrixAt(0, at(-3, 0));
   left.setMatrixAt(1, at(-3, 0, 2));
   for (let index = 0; index < 3; index++) right.setMatrixAt(index, at(3, 0, 2 - index * 2));
-  const lod = new Lod([template.clone()]);
+  const lod = new Lod([{ object: template.clone() }]);
   for (const root of [left, right, lod])
     root.traverse((object) => {
       if (object instanceof Mesh) object.layers.set(1);
@@ -218,21 +221,23 @@ it("keeps shared shading's placements and colours separate in direct light", { t
   source.material.dispose();
 });
 
-it("keeps shared crowds' compiled main and shadow bindings valid when a lazy level installs", { timeout: GPU_TIMEOUT }, async () => {
+it("keeps shared crowds' compiled main and shadow bindings valid when a deferred level installs", { timeout: GPU_TIMEOUT }, async () => {
   const template = new Mesh(new BoxGeometry(2, 2, 2), new MeshStandardMaterial());
   template.castShadow = true;
   const data = await bakeImpostor(template, { frames: 4, resolution: 16 });
-  const lazy = new LazyLevel(
-    async () => {
+  const disposed = vi.fn();
+  const deferred = {
+    load: async () => {
       const card = new ImpostorMesh(data);
       card.castShadow = true;
+      card.material.addEventListener("dispose", disposed);
       return card;
     },
-    { maxPixels: 100, box: new Box3().setFromArray(data.box) },
-  );
-  lazy.castShadow = true;
-  const a = new InstancedLod([template, lazy], 1),
-    b = new InstancedLod([template, lazy], 1);
+    maxPixels: 100,
+    box: new Box3().setFromArray(data.box),
+  };
+  const a = new InstancedLod([{ object: template }, deferred], 1),
+    b = new InstancedLod([{ object: template }, deferred], 1);
   a.setMatrixAt(0, new Matrix4().makeScale(3, 3, 3).setPosition(-6, 0, 2));
   b.setMatrixAt(0, new Matrix4().makeScale(3, 3, 3).setPosition(6, 0, 2));
   a.forceLevel = b.forceLevel = 0;
@@ -254,8 +259,7 @@ it("keeps shared crowds' compiled main and shadow bindings valid when a lazy lev
   renderer.shadowMap.enabled = true;
   try {
     const before = await render(scene, camera);
-    expect(lazy.object).toBeUndefined();
-    await lazy.load();
+    expect(a.levels[1]?.object).toBeUndefined();
     a.forceLevel = b.forceLevel = 1;
     await vi.waitFor(
       () => {
@@ -279,6 +283,7 @@ it("keeps shared crowds' compiled main and shadow bindings valid when a lazy lev
   } finally {
     a.dispose();
     b.dispose();
+    expect(disposed).toHaveBeenCalledOnce();
     ground.geometry.dispose();
     ground.material.dispose();
     sun.dispose();

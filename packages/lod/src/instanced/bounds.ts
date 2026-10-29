@@ -1,5 +1,5 @@
 import { Box3, Matrix4, Sphere, Vector3 } from "three/webgpu";
-import { FADE, DEMAND, type LodLevel } from "../levels.js";
+import { FADE, DEMAND } from "../levels.js";
 import { Dirty } from "./dirty.js";
 
 // Cover float32 matrix products, distances and threshold arithmetic. Near a switch,
@@ -35,7 +35,7 @@ export class Bounds {
   private readonly tree: Branch[];
   private readonly dirty: Dirty;
   private readonly radii: Float64Array;
-  private readonly errors: Float64Array;
+  private readonly roundoff: Float64Array;
   private readonly unsafe: Uint8Array;
   private readonly levelBoxes: Box3[] = [];
   private token: object = {};
@@ -71,7 +71,7 @@ export class Bounds {
     }));
     this.dirty = new Dirty(Math.ceil(count / this.block));
     this.radii = new Float64Array(count);
-    this.errors = new Float64Array(count);
+    this.roundoff = new Float64Array(count);
     this.unsafe = new Uint8Array(count);
   }
 
@@ -96,7 +96,7 @@ export class Bounds {
         radius,
         this.geometry.radius,
       );
-      this.errors[i] = ROUND * Math.sqrt(3) * terms;
+      this.roundoff[i] = ROUND * Math.sqrt(3) * terms;
       // WGSL length squares its inputs. Guard the intermediates, not only the final
       // screen height: infinity / infinity would select level zero, not the CPU tier.
       this.unsafe[i] = Number(unsafe(axis) || unsafe(radius) || terms > 1e15 || !Number.isFinite(terms));
@@ -142,10 +142,10 @@ export class Bounds {
       const radius = at(this.spheres, i * 4 + 3);
       if (radius === 0 && !at(this.unsafe, i)) continue;
       node.unsafe ||= Boolean(at(this.unsafe, i));
-      const error = at(this.errors, i);
-      const reach = at(this.radii, i) * (1 + this.padding) + error;
+      const roundoff = at(this.roundoff, i);
+      const reach = at(this.radii, i) * (1 + this.padding) + roundoff;
       point.fromArray(this.spheres, i * 4);
-      expand(node.centers, point, error);
+      expand(node.centers, point, roundoff);
       expand(node.geometry, point, reach);
       node.smallest = Math.min(node.smallest, radius);
       node.largest = Math.max(node.largest, radius);
@@ -169,7 +169,7 @@ export class Bounds {
   }
 
   /** Level bounds plus a token only when every block has an unchanged solid choice. */
-  select(levels: readonly LodLevel[], view: BoundsView, reaches: Sphere[], measured: boolean, root: Matrix4): object | undefined {
+  select(levels: readonly { maxPixels: number }[], view: BoundsView, reaches: Sphere[], measured: boolean, root: Matrix4): object | undefined {
     while (this.levelBoxes.length < levels.length) this.levelBoxes.push(new Box3());
     for (const box of this.levelBoxes) box.makeEmpty();
     this.complete = measured;
@@ -185,14 +185,14 @@ export class Bounds {
   }
 
   /** Ahead-of-view demand without changing solid selections or their reuse token. */
-  demand(levels: readonly LodLevel[], view: BoundsView, reaches: Sphere[], root: Matrix4): void {
+  demand(levels: readonly { maxPixels: number }[], view: BoundsView, reaches: Sphere[], root: Matrix4): void {
     while (this.levelBoxes.length < levels.length) this.levelBoxes.push(new Box3());
     for (const box of this.levelBoxes) box.makeEmpty();
     this.gather(1, levels, view);
     this.enclose(levels, view, reaches, root, true, DEMAND);
   }
 
-  private gather(index: number, levels: readonly LodLevel[], view: BoundsView): void {
+  private gather(index: number, levels: readonly { maxPixels: number }[], view: BoundsView): void {
     const node = at(this.tree, index);
     if (node.geometry.isEmpty()) return;
     this.interval(node, view);
@@ -208,7 +208,7 @@ export class Bounds {
     for (let level = finest; level <= coarsest; level++) at(this.levelBoxes, level).union(node.geometry);
   }
 
-  private enclose(levels: readonly LodLevel[], view: BoundsView, reaches: Sphere[], root: Matrix4, measured: boolean, margin: number): void {
+  private enclose(levels: readonly { maxPixels: number }[], view: BoundsView, reaches: Sphere[], root: Matrix4, measured: boolean, margin: number): void {
     const top = at(this.tree, 1);
     const axis = root.getMaxScaleOnAxis();
     // Three transforms a culling sphere by max-axis scale, which underbounds shear.
@@ -225,7 +225,7 @@ export class Bounds {
     });
   }
 
-  private visit(index: number, levels: readonly LodLevel[], view: BoundsView): void {
+  private visit(index: number, levels: readonly { maxPixels: number }[], view: BoundsView): void {
     const node = at(this.tree, index);
     if (node.geometry.isEmpty()) return;
     this.interval(node, view);
@@ -257,9 +257,9 @@ export class Bounds {
 
   private interval(node: Branch, view: BoundsView): void {
     const distance = node.sphere.center.distanceTo(view.eye);
-    const error = view.eye.length() * ROUND;
-    const near = view.ortho ? 1 : Math.max(distance - node.sphere.radius - error, 1e-6);
-    const far = view.ortho ? 1 : Math.max(distance + node.sphere.radius + error, 1e-6);
+    const roundoff = view.eye.length() * ROUND;
+    const near = view.ortho ? 1 : Math.max(distance - node.sphere.radius - roundoff, 1e-6);
+    const far = view.ortho ? 1 : Math.max(distance + node.sphere.radius + roundoff, 1e-6);
     this.low = ((2 * node.smallest * view.scale) / far) * (1 - ROUND * 4);
     this.high = ((2 * node.largest * view.scale) / near) * (1 + ROUND * 4);
     // Float32 overflow/underflow can invalidate a real-number interval. Keep all
@@ -290,7 +290,7 @@ export function stretch(matrix: Matrix4): number {
   );
 }
 
-function fitting(levels: readonly LodLevel[], height: number): number {
+function fitting(levels: readonly { maxPixels: number }[], height: number): number {
   for (let i = levels.length - 1; i > 0; i--) if (height <= at(levels, i).maxPixels) return i;
   return 0;
 }

@@ -54,15 +54,13 @@ async function hedges(plan: Plan): Promise<InstancedLod[]> {
       };
       const mine = plan.hedges.filter((_, i) => i % 3 === d);
       const levels = await new LodLoader().loadAsync({
-        source: () => make("fine"),
+        make: () => make("fine"),
         key: proceduralFiles("src/world/garden-objects.ts", { length: HEDGE, seed }, ["leafy_grass"]),
         material: restoreSurface,
         restore: texturesReady,
-        levels: [
-          { type: "mesh", source: () => make("box"), maxPixels: 120 },
-          { type: "empty", maxPixels: 3 },
-        ],
+        levels: [{ type: "mesh", make: () => make("box"), maxPixels: 120 }],
       });
+      levels.push({ object: new THREE.Group(), maxPixels: 3 });
       const lod = new InstancedLod(levels, mine.length);
       lod.name = `hedges ${seed}`;
       const r = new Random(d + 7);

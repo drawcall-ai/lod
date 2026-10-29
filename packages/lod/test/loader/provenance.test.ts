@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CacheEntryOptions } from "vitecache";
 import { bakeImpostor } from "../../src/impostor/bake/index.js";
 import type { Impostor } from "../../src/impostor/impostor.js";
-import { LazyLevel } from "../../src/lazy.js";
 import { LodLoader, type LodRequest } from "../../src/loader.js";
 
 const cache = vi.hoisted(
@@ -75,8 +74,7 @@ beforeEach(() => {
 describe("GLTS cache provenance", () => {
   it("discovers provenance once, retains query inputs, and fetches source detail only on demand", async () => {
     const { loader, load } = fixture(() => ({ url: canonical, dependencyUrls: [helper] }));
-    const cold = await loader().loadAsync(script);
-    cold.dispose();
+    await loader().loadAsync(script);
     expect(load).toHaveBeenCalledExactlyOnceWith(script);
     expect(cache.saved.map(({ role }) => role)).toEqual(["index", "dependencies"]);
     const index = cache.saved.find(({ role }) => role === "index");
@@ -88,22 +86,18 @@ describe("GLTS cache provenance", () => {
     });
     cache.loaded.length = 0;
     const warm = await loader().loadAsync(script);
-    try {
-      expect(cache.loaded).toEqual([
-        { role: "dependencies", hit: true },
-        { role: "index", hit: true },
-      ]);
-      expect(load).toHaveBeenCalledOnce();
-      expect(bakeImpostor).toHaveBeenCalledOnce();
-      const source = warm.levels[0]?.object;
-      if (!(source instanceof LazyLevel)) throw new Error("Expected deferred source");
-      await source.load();
-      expect(cache.loaded.at(-1)).toEqual({ role: "index", hit: true });
-      expect(load).toHaveBeenCalledTimes(2);
-      expect(cache.saved).toHaveLength(2);
-    } finally {
-      warm.dispose();
-    }
+    expect(cache.loaded).toEqual([
+      { role: "dependencies", hit: true },
+      { role: "index", hit: true },
+    ]);
+    expect(load).toHaveBeenCalledOnce();
+    expect(bakeImpostor).toHaveBeenCalledOnce();
+    const source = warm[0];
+    if (!source?.load) throw new Error("Expected deferred source");
+    await source.load();
+    expect(cache.loaded.at(-1)).toEqual({ role: "index", hit: true });
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(cache.saved).toHaveLength(2);
   });
 
   it("tracks auxiliary scripts and their imported files without executing them on a warm load", async () => {
@@ -113,7 +107,7 @@ describe("GLTS cache provenance", () => {
       url: script,
       levels: [{ type: "baked", low: "low.glts?ratio=0.1", textureSize: 16, maxPixels: 100 }],
     };
-    (await loader().loadAsync(request)).dispose();
+    await loader().loadAsync(request);
     expect(load.mock.calls.map(([url]) => url)).toEqual([script, low]);
     const index = cache.saved.find(({ role }) => role === "index");
     expect(index?.options.dependencies).toMatchObject({
@@ -124,7 +118,7 @@ describe("GLTS cache provenance", () => {
       "lod:queries": { value: { "auxiliary:0:low": "?ratio=0.1", "glts:1:source": "?ratio=0.1", "glts:1:dependency:0": "?size=small" } },
     });
     cache.loaded.length = 0;
-    (await loader().loadAsync(request)).dispose();
+    await loader().loadAsync(request);
     expect(cache.loaded).toEqual([
       { role: "dependencies", hit: true },
       { role: "dependencies", hit: true },

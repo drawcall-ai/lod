@@ -14,7 +14,10 @@ describe("boundingSphere", () => {
       box.applyMatrix4(spot);
       plain.add(box);
     }
-    const lod = new InstancedLod([new Mesh(new BoxGeometry(1, 2, 1), material), new Mesh(new SphereGeometry(9), material)], spots.length);
+    const lod = new InstancedLod(
+      [{ object: new Mesh(new BoxGeometry(1, 2, 1), material) }, { object: new Mesh(new SphereGeometry(9), material) }],
+      spots.length,
+    );
     spots.forEach((spot, i) => lod.setMatrixAt(i, spot));
     // Before its first update, and moved inside a parent group: placements compose.
     lod.position.set(0, 2, 0);

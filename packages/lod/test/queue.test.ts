@@ -14,12 +14,12 @@ import {
 } from "three/webgpu";
 import { mrt, output, texture, vec3, vec4 } from "three/tsl";
 import { expect, it, vi } from "vitest";
+import { decode } from "../src/deferred.js";
 import { Lod } from "../src/lod.js";
 import { InstancedLod } from "../src/instanced/index.js";
-import { LazyLevel } from "../src/lazy.js";
 import { ImpostorMesh } from "../src/impostor/mesh/index.js";
 import * as surface from "../src/impostor/mesh/surface.js";
-import { compileLevel } from "../src/install.js";
+import { compileLevel } from "../src/queue.js";
 import { GPU_TIMEOUT, renderer, nextLevel } from "./gpu.js";
 
 vi.mock("../src/impostor/mesh/surface.js", { spy: true });
@@ -134,8 +134,8 @@ it.each(["Lod", "InstancedLod"])(
   async (kind) => {
     const source = new Mesh(new BoxGeometry(), new MeshBasicNodeMaterial());
     const fallback = new Mesh(new BoxGeometry(), new MeshBasicNodeMaterial());
-    const lazy = new LazyLevel(async () => source, { maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) });
-    const owner = kind === "Lod" ? new Lod([lazy, fallback]) : new InstancedLod([lazy, fallback], 1);
+    const deferred = { load: async () => source, maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) };
+    const owner = kind === "Lod" ? new Lod([deferred, { object: fallback }]) : new InstancedLod([deferred, { object: fallback }], 1);
     owner.autoUpdate = false;
     owner.forceLevel = 0;
     owner.position.z = -5;
@@ -159,7 +159,7 @@ it.each(["Lod", "InstancedLod"])(
       camera.updateMatrixWorld();
       owner.update(camera);
       renderer.render(scene, camera);
-      await lazy.load();
+      await decode(deferred.load).promise;
       vi.spyOn(renderer, "compileAsync").mockImplementation(async (...args) => {
         begin();
         await original(...args);
@@ -173,8 +173,8 @@ it.each(["Lod", "InstancedLod"])(
         expect(owner.levelOf(0)).toBe(1);
         expect(owner.children).toHaveLength(1);
       } else {
-        expect(lazy.visible).toBe(false);
-        expect(fallback.visible).toBe(true);
+        expect(owner.levels[0]?.object?.visible).toBe(false);
+        expect(owner.levels[1]?.object?.visible).toBe(true);
       }
       owner.dispose();
       expect(disposed).not.toHaveBeenCalled();
@@ -190,26 +190,56 @@ it.each(["Lod", "InstancedLod"])(
   GPU_TIMEOUT,
 );
 
-it.each(["Lod", "InstancedLod"])("discovers the view through %s's empty eager fallback", { timeout: GPU_TIMEOUT }, async (kind) => {
-  const load = vi.fn(async () => new Mesh(new BoxGeometry(), new MeshBasicNodeMaterial()));
-  const lazy = new LazyLevel(load, { maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) });
-  const levels = [lazy, new Object3D()];
+it.each(["Lod", "InstancedLod"].flatMap((kind) => [false, true].map((empty) => ({ kind, empty }))))(
+  "discovers the view for $kind before drawing (empty fallback: $empty)",
+  { timeout: GPU_TIMEOUT },
+  async ({ kind, empty }) => {
+    const load = vi.fn(async () => new Mesh(new BoxGeometry(), new MeshBasicNodeMaterial()));
+    const deferred = { load: load, maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) };
+    const levels = empty ? [deferred, { object: new Object3D() }] : [deferred];
+    const owner = kind === "Lod" ? new Lod(levels) : new InstancedLod(levels, 1);
+    owner.forceLevel = 0;
+    owner.position.set(1000, 0, -5);
+    const camera = new PerspectiveCamera(60, 1, 0.1, 100);
+    const scene = new Scene().add(owner);
+    try {
+      renderer.render(scene, camera);
+      owner.update(camera);
+      expect(load).not.toHaveBeenCalled();
+      expect(owner.levels[0]?.object).toBeUndefined();
+      owner.position.x = 0;
+      owner.updateMatrixWorld();
+      await nextLevel(owner, camera);
+      expect(load).toHaveBeenCalledOnce();
+      expect(owner.pending).toBe(false);
+      expect(owner.error).toBeUndefined();
+    } finally {
+      owner.dispose();
+    }
+  },
+);
+
+it.each(["Lod", "InstancedLod"])("shares a failed decode with a cloned %s without retrying", { timeout: GPU_TIMEOUT }, async (kind) => {
+  const load = vi.fn<() => Promise<Object3D>>().mockRejectedValue(undefined);
+  const levels = [{ load, maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) }];
   const owner = kind === "Lod" ? new Lod(levels) : new InstancedLod(levels, 1);
-  owner.forceLevel = 0;
-  owner.position.set(1000, 0, -5);
+  const clone = owner.clone();
   const camera = new PerspectiveCamera(60, 1, 0.1, 100);
-  const scene = new Scene().add(owner);
+  const scene = new Scene();
+  const report = vi.spyOn(console, "error").mockImplementation(() => {});
   try {
-    renderer.render(scene, camera);
-    owner.update(camera);
-    expect(load).not.toHaveBeenCalled();
-    owner.position.x = 0;
-    owner.updateMatrixWorld();
-    await nextLevel(owner, camera);
+    for (const copy of [owner, clone]) {
+      copy.position.z = -5;
+      scene.clear().add(copy);
+      renderer.render(scene, camera);
+      await expect(nextLevel(copy, camera)).rejects.toThrow("load failed");
+      expect(copy.pending).toBe(false);
+    }
+    expect(clone.error).toBe(owner.error);
     expect(load).toHaveBeenCalledOnce();
-    expect(owner.pending).toBe(false);
-    expect(owner.error).toBeUndefined();
   } finally {
+    report.mockRestore();
     owner.dispose();
+    clone.dispose();
   }
 });

@@ -15,7 +15,7 @@ let running = false;
 const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
 /** Run at most one installation per animation frame across all LODs. */
-export function queueInstall(run: () => Promise<void>, priority = 0): Promise<void> {
+export function enqueue(run: () => Promise<void>, priority = 0): Promise<void> {
   const promise = new Promise<void>((resolve, reject) => {
     queue.push({ run, resolve, reject, priority });
     queue.sort((a, b) => b.priority - a.priority);

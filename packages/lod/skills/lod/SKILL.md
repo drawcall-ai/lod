@@ -7,7 +7,7 @@ description: Use @drawcall/lod for cached, progressively loaded levels of detail
 
 ## Start with the loader
 
-Use `LodLoader` for model files and procedural sources. A warm load fetches enough to draw a coarse representation. Finer representations, including the original source, are fetched and decoded as the camera needs them. Keep rendering while they load. A source-only ladder loads its source eagerly; to defer that source too, compose the result of `loadLevelsAsync` with an eager fallback you already have.
+Use `LodLoader` for model files and procedural sources. A warm load fetches enough to draw a coarse representation. Finer representations, including the original source, are fetched and decoded as the camera needs them. Keep rendering while they load. A source-only ladder loads its source eagerly. The same returned levels can construct an individual `Lod` or an `InstancedLod` crowd.
 
 Choose levels from the asset's silhouette, materials and expected viewing range. Alpha-tested leaf cards often work best as source → impostor; simplifying the cards can destroy their shape. Dense foliage geometry may benefit from simplification first. Hard-surface props often suit source → simplified → impostor. Detailed structures can use source → baked shell → impostor, with interiors supplied separately for windows. Add an empty final level when the object should disappear at distance.
 
@@ -15,17 +15,17 @@ This example creates a crowd with independent placements and colour variation. `
 
 ```ts
 import { Color, Matrix4 } from "three/webgpu";
-import { InstancedLod, LodLoader, Wind } from "@drawcall/lod";
+import { InstancedLod, Lod, LodLoader, Wind } from "@drawcall/lod";
 
 const loader = new LodLoader();
-const asset = await loader.loadAsync({
+const levels = await loader.loadAsync({
   url: "/tree.glb",
   levels: [
     { type: "impostor", layout: "hemi", maxPixels: 120, draw: { parallax: 2 } },
     { type: "empty", maxPixels: 4 },
   ],
 });
-const trees = new InstancedLod(asset, positions.length);
+const trees = new InstancedLod(levels, positions.length);
 
 const matrix = new Matrix4();
 const color = new Color();
@@ -44,16 +44,7 @@ Configure a loading manager for asset formats and compression before passing it 
 
 Prefer passing a GLTS URL from the host when the full source should stay unloaded in an overview. The loader tracks that script's dependencies without executing the script on warm loads.
 
-When a factory selects nodes or variants from a model file, mark it `reference: true` and include the file and selection in its key. The selected original supplies the source level and the materials shared by simplified levels. Its factory runs when a mesh level is demanded; an overview using impostor, baked or empty levels does not need it. Put simplification in a derived mesh level so warm loads reuse the computed geometry.
-
-```ts
-const plant = await loader.loadAsync({
-  source: async () => selectVariant(await sharedModel(), variant),
-  reference: true,
-  key: { model: { url: "/plants.glb" }, variant: { value: variant } },
-  levels: [{ type: "impostor", layout: "hemi", maxPixels: 120 }],
-});
-```
+When a factory selects nodes or variants from a model file, mark it `reference: true` and include the file and selection in its key. The selected original supplies the source level and the materials shared by simplified levels. Its factory runs when a mesh level loads; an overview can defer it when a self-contained baked or impostor level is the coarsest drawable. Put simplification in a derived mesh level so warm loads reuse the computed geometry.
 
 ## Cache procedural inputs honestly
 
@@ -63,7 +54,7 @@ In this example, `makeHouse` constructs the full house and `shape` contains its 
 
 ```ts
 const house = await loader.loadAsync({
-  source: async () => makeHouse(shape),
+  make: async () => makeHouse(shape),
   material: (name, data) => houseMaterial(name, data),
   key: {
     generator: { path: "src/assets/house.ts" },
@@ -71,55 +62,39 @@ const house = await loader.loadAsync({
     wallTexture: { path: "public/textures/wall.png" },
   },
   levels: [
-    { type: "mesh", ratio: 0.3, maxPixels: 400 },
+    { type: "simplify", ratio: 0.3, maxPixels: 400 },
     { type: "impostor", layout: "hemi", maxPixels: 100 },
   ],
 });
-scene.add(house);
+scene.add(new Lod(house));
 ```
 
 Follow the [vitecache skill](https://github.com/drawcall-ai/vitecache/blob/main/packages/vitecache/skills/vitecache/SKILL.md) to configure the host and include generated cache files in deployment. Match the loader's cache location to the application's URL base independently of asset paths. A cache miss builds the requested representations once. Warm loads fetch cached geometry and baked representations; mesh levels resolve their materials when demanded. Measure those two cases separately.
 
 Supply a material resolver for every procedural mesh material. Give each material a stable name and put its reconstruction inputs in `material.userData`; keep shared materials and textures in that resolver. External textures stay original asset inputs. Regenerate cheap generated textures there, or cache their raw pixels separately when generation is expensive. Include material inputs in the request key when they affect baked representations. Use `restore` for effects or shadow settings that apply after loading each level, including lazy arrivals. Keep heavy geometry generation inside source factories.
 
-```ts
-const house = await loader.loadAsync({
-  source: async () => makeHouse(shape),
-  key: houseInputs,
-  material: (name, data) => houseMaterial(name, data),
-  levels: [
-    { type: "baked", low: async () => makeShell(shape), maxPixels: 400 },
-    { type: "impostor", layout: "hemi", maxPixels: 100 },
-  ],
-});
-```
-
 Use an authored level factory when a generated representation does not suit the asset. For example, a `mesh` level can construct a low-detail grass clump; its factory runs on a cache miss, and subsequent loads decode the saved geometry. Include every factory's inputs in the request key. Keep source, shell and interior geometry in the same coordinate system.
 
 ## Assemble levels you already have
 
-Use `Lod` for independently placed objects and `InstancedLod` for repeated objects with per-instance matrices and colours. Pass levels in finest-to-coarsest order. An empty object can be a deliberate culled level, but a ladder needs drawable bounds and at least one eager level.
+Use `Lod` for independently placed objects and `InstancedLod` for repeated objects with per-instance matrices and colours. Pass levels in finest-to-coarsest order. An empty object can be a deliberate culled level. A ladder needs measurable bounds; when all levels are deferred, it draws nothing until a level is ready.
 
-Use `LazyLevel` for any representation whose data is deferred, including the source. Its factory returns the drawing object: for a cached impostor, decode the atlas and return an `ImpostorMesh` with the intended draw settings. Provide bounds in the level's own space and a transition height before loading. Keep these bounds consistent with the returned object, including its children.
+Describe a deferred representation with a load function, bounds and a transition height. The function returns the object already placed in the owner's space; the bounds cover it in that same space, including its children. For a cached impostor, decode the atlas and return an `ImpostorMesh` with the intended draw settings.
 
-Here, `loadDetailedMesh` loads the detailed object, `sourceBox` describes its local bounds, and `coarseMesh` is already available.
+Here, `loadDetailedMesh` loads the detailed object, `sourceBox` describes its bounds in the owner's space, and `coarseMesh` is already available.
 
 ```ts
-import { LazyLevel, Lod } from "@drawcall/lod";
+import { Lod } from "@drawcall/lod";
 
-const detail = new LazyLevel(loadDetailedMesh, {
-  maxPixels: Infinity,
-  box: sourceBox,
-});
-const object = new Lod([detail, coarseMesh]);
+const object = new Lod([{ load: loadDetailedMesh, maxPixels: Infinity, box: sourceBox }, { object: coarseMesh }]);
 scene.add(object);
 ```
 
-A missing level uses the nearest installed finer representation, or the nearest coarser one if none is finer. Requests follow the visible view and begin ahead of the transition. Clones share loading work. Keep a factory's inputs alive until it finishes.
+A missing level uses the nearest ready finer representation, or the nearest coarser one if none is finer. Requests follow the visible view and begin ahead of the transition. Clones share loading work. Keep a factory's inputs alive until it finishes.
 
 For direct preparation and storage outside `LodLoader`, combine `simplify`, `bakeMesh`, or `bakeImpostor` with the corresponding codecs and drawing objects. Use `ImpostorMesh` directly when copies stay distant throughout their lifetime. For external detail systems, combine an empty near level with a coarse representation and use `levelOf` or level visibility to decide where to supply detail.
 
-Load an asset once and build spatial crowds from its `Lod` or its levels, each with its own instance count, placements and colours. `loadLevelsAsync` supplies levels when an application assembles its own ladder. Clones and crowds share geometry, materials, textures and deferred loads. Dispose shared resources only after every copy has stopped drawing; disposal does not count references.
+Load an asset once and build spatial crowds from its levels, each with its own instance count, placements and colours. Reuse descriptors across owners; adjust each owner's resolved thresholds through its `levels` view. Clones and crowds share geometry, materials, textures and deferred loads. Dispose shared resources only after every copy has stopped drawing; disposal does not count references.
 
 Apply a shared `Wind` after assembling a LOD and before rendering; arriving levels inherit the effect. Apply it separately to nested LODs and independently managed batches. Clone a `Lod` for independently placed copies, or use an `InstancedLod` when many copies make separate objects too expensive. Plan the lifetime of shared geometry, materials and textures together.
 

@@ -5,7 +5,7 @@ import { GPU_TIMEOUT, render, renderer } from "./gpu.js";
 import { Lod } from "../src/lod.js";
 
 it("replaces the initial viewport height independently for each camera", { timeout: GPU_TIMEOUT }, async () => {
-  const lod = new Lod([new Mesh(new BoxGeometry(), new MeshBasicMaterial())]);
+  const lod = new Lod([{ object: new Mesh(new BoxGeometry(), new MeshBasicMaterial()) }]);
   const scene = new Scene().add(lod);
   const first = new PerspectiveCamera(),
     second = first.clone();
@@ -22,7 +22,7 @@ it("replaces the initial viewport height independently for each camera", { timeo
 });
 
 it("uses CSS pixels for the canvas and same-sized postprocessing targets", { timeout: GPU_TIMEOUT }, async () => {
-  const lod = new Lod([new Mesh(new BoxGeometry(), new MeshBasicMaterial())]);
+  const lod = new Lod([{ object: new Mesh(new BoxGeometry(), new MeshBasicMaterial()) }]);
   const scene = new Scene().add(lod);
   const camera = new PerspectiveCamera();
   camera.position.z = 5;

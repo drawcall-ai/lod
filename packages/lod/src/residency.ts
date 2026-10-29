@@ -1,8 +1,8 @@
 import type { Camera, Object3D, Object3DEventMap } from "three/webgpu";
-import { compileLevel, queueInstall } from "./install.js";
-import { type LazyLevel } from "./lazy.js";
-import { fallbacks, type LodLevel } from "./levels.js";
-import { isLazyLevel } from "./three.js";
+import { compileLevel, enqueue } from "./queue.js";
+import { disposeTree } from "./dispose.js";
+import { decode, decoded } from "./deferred.js";
+import { fallbacks, type Level } from "./levels.js";
 import { renderContext, type RenderContext } from "./view.js";
 
 export const HANDOVER_MS = 200;
@@ -10,41 +10,38 @@ export const HANDOVER_MS = 200;
 export interface LevelsEventMap extends Object3DEventMap {
   /** A compiled level has joined this LOD's draws. */
   levelschange: {};
-  /** Fetch, decode, or GPU preparation failed; installed fallbacks remain drawable. */
+  /** Fetch, decode, or GPU preparation failed; ready fallbacks remain drawable. */
   levelserror: { error: unknown };
 }
 
 const compiled = new WeakMap<RenderContext, WeakSet<Object3D>>();
 
-/** Decoding is shared by LazyLevel; residency and the handover belong to each owner. */
+/** Decode is shared by load function; readiness and handover belong to each owner. */
 export class Residency {
-  readonly installed = new Set<Object3D>();
-  private objects: Object3D[] = [];
+  readonly ready = new Set<Level>();
   fallback: number[] = [];
   previous: number[] = [];
   private start: number | undefined;
-  private task: { done: Promise<void>; lazy?: LazyLevel } | undefined;
-  private readonly demanded = new Set<Object3D>();
+  private task: { done: Promise<void>; level?: Level } | undefined;
+  private readonly demanded = new Set<Level>();
+  private readonly requested = new Set<() => Promise<Object3D>>();
   private disposed = false;
   private failure: Error | undefined;
 
   get error(): Error | undefined {
-    if (this.failure) return this.failure;
-    for (const object of this.demanded) if (isLazyLevel(object) && object.error) return object.error;
-    return undefined;
+    return this.failure;
   }
 
   constructor(
-    private readonly levels: readonly LodLevel[],
-    private readonly install: (index: number, lazy: LazyLevel, context: RenderContext) => Promise<void>,
+    private readonly levels: readonly Level[],
+    private readonly install: (level: Level, object: Object3D, context: RenderContext) => Promise<void>,
     private readonly changed: () => void,
     private readonly failed: (error: unknown) => void,
   ) {}
 
   reset(): void {
-    this.objects = this.levels.map(({ object }) => object);
-    for (const object of this.objects) if (!isLazyLevel(object)) this.installed.add(object);
-    this.fallback = fallbacks(this.objects, this.installed);
+    for (const level of this.levels) if (level.object) this.ready.add(level);
+    this.fallback = fallbacks(this.levels, this.ready);
   }
 
   get progress(): number {
@@ -56,33 +53,33 @@ export class Residency {
 
   get pending(): boolean {
     if (this.disposed || this.error) return false;
-    if (this.task?.lazy) return true;
-    for (const object of this.demanded) if (!this.installed.has(object)) return true;
+    if (this.task?.level) return true;
+    for (const level of this.demanded) if (!this.ready.has(level)) return true;
     return false;
   }
 
   demand(camera: Camera, indices: Iterable<number>): void {
     this.demanded.clear();
-    if (this.disposed || !renderContext(camera)) return;
+    if (this.disposed || this.failure || !renderContext(camera)) return;
     for (const index of indices) {
       const level = this.levels[index];
-      if (!level) throw new Error(`LOD: missing level ${index}`);
-      const object = level.object;
-      this.demanded.add(object);
-      const target = this.fallback[index];
-      const fallback = target === undefined ? undefined : this.objects[target];
-      if (!fallback) throw new Error(`LOD: missing fallback ${index}`);
-      this.demanded.add(fallback);
-      if (isLazyLevel(object) && !object.promise) void object.load().catch((error: unknown) => this.report(error));
+      if (!level) throw new Error(`Lod: missing level ${index}`);
+      this.demanded.add(level);
+      const fallback = this.levels[this.fallback[index] ?? -1];
+      if (fallback) this.demanded.add(fallback);
+      const load = level.input.load;
+      if (!load || this.requested.has(load)) continue;
+      this.requested.add(load);
+      void decode(load).promise.catch((error: unknown) => this.report(error));
     }
   }
 
   needsDemand(camera: Camera, meshes: readonly (readonly Object3D[])[]): boolean {
-    if (this.installed.size < this.levels.length || this.progress < 1) return true;
+    if (this.ready.size < this.levels.length || this.progress < 1) return true;
     const context = renderContext(camera);
     if (!context) return false;
     const warmed = compiled.get(context);
-    return this.levels.some(({ object }, index) => !isLazyLevel(object) && meshes[index]?.some((draw) => !warmed?.has(draw)));
+    return this.levels.some(({ input }, index) => !input.load && meshes[index]?.some((draw) => !warmed?.has(draw)));
   }
 
   drawn(camera: Camera, object: Object3D): void {
@@ -97,13 +94,10 @@ export class Residency {
 
   update(camera: Camera, meshes?: readonly (readonly Object3D[])[]): void {
     const context = renderContext(camera);
-    if (!context || this.disposed || this.task || this.error) return;
-    if (this.progress < 1) return;
+    if (!context || this.disposed || this.task || this.error || this.progress < 1) return;
     let warmed = compiled.get(context);
     if (!warmed) compiled.set(context, (warmed = new WeakSet()));
-    const eager = this.levels.findIndex(
-      ({ object }, index) => !isLazyLevel(object) && this.demanded.has(object) && meshes?.[index]?.some((draw) => !warmed.has(draw)),
-    );
+    const eager = this.levels.findIndex((level, index) => !level.input.load && this.demanded.has(level) && meshes?.[index]?.some((draw) => !warmed.has(draw)));
     const draws = meshes?.[eager];
     if (draws) {
       this.run(async () => {
@@ -118,49 +112,67 @@ export class Residency {
       });
       return;
     }
-    const level = this.levels.find(({ object }) => isLazyLevel(object) && object.object && this.demanded.has(object) && !this.installed.has(object));
-    if (level && isLazyLevel(level.object)) {
-      const lazy = level.object;
+    for (const level of this.levels) {
+      const object = level.input.load && decoded(level.input.load)?.object;
+      if (!object || !this.demanded.has(level) || this.ready.has(level)) continue;
       this.run(async () => {
-        await this.install(this.levels.indexOf(level), lazy, context);
+        await this.install(level, object, context);
         if (this.disposed) return;
         this.previous = this.fallback;
-        this.installed.add(lazy);
-        this.fallback = fallbacks(this.objects, this.installed);
+        this.ready.add(level);
+        this.fallback = fallbacks(this.levels, this.ready);
         this.start = performance.now();
-      }, lazy);
+      }, level);
+      return;
     }
   }
 
-  private run(action: () => Promise<void>, lazy?: LazyLevel): void {
-    const done = queueInstall(
+  private run(action: () => Promise<void>, level?: Level): void {
+    const done = enqueue(
       async () => {
         if (!this.disposed) await action();
       },
-      lazy ? 0 : 1,
+      level ? 0 : 1,
     )
-      .catch((error: unknown) => {
-        this.failure = error instanceof Error ? error : new Error("LOD: preparation failed", { cause: error });
-        this.report(this.failure);
-      })
+      .catch((error: unknown) => this.report(error))
       .finally(() => {
         this.task = undefined;
       })
       .then(() => {
-        if (lazy && !this.disposed && this.installed.has(lazy)) this.changed();
+        if (level && !this.disposed && this.ready.has(level)) this.changed();
       });
-    this.task = { done, lazy };
+    this.task = { done, level };
   }
 
   private report(error: unknown): void {
-    this.failed(error);
-    console.error(error);
+    if (this.disposed || this.failure) return;
+    this.failure = error instanceof Error ? error : new Error("Lod: level failed", { cause: error });
+    this.failed(this.failure);
+    console.error(this.failure);
   }
 
   dispose(release: () => void): void {
     this.disposed = true;
-    if (this.task) void this.task.done.then(release);
-    else release();
+    const free = () => {
+      release();
+      const templates = new Set<Object3D>();
+      for (const { input } of this.levels) {
+        const object = input.object ?? decoded(input.load)?.object;
+        if (object) templates.add(object);
+      }
+      for (const template of templates) disposeTree(template);
+    };
+    const finish = () => {
+      const pending = this.levels.flatMap(({ input }) => {
+        const entry = input.load && decoded(input.load);
+        return entry && !entry.object && !entry.error ? [entry.promise] : [];
+      });
+      // A mesh decode can begin its source-material dependency after disposal starts.
+      if (pending.length) void Promise.allSettled(pending).then(free);
+      else free();
+    };
+    if (this.task) void this.task.done.then(finish);
+    else finish();
   }
 }
 

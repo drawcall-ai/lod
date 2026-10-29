@@ -13,8 +13,9 @@ import {
 } from "three/webgpu";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CacheEntryOptions } from "vitecache";
+import { Lod } from "../src/lod.js";
+import { decode } from "../src/deferred.js";
 import { LodLoader, type LodRequest } from "../src/loader.js";
-import { LazyLevel } from "../src/lazy.js";
 import { bakeImpostor } from "../src/impostor/bake/index.js";
 import type { Impostor } from "../src/impostor/impostor.js";
 import { InteriorMaterial } from "../src/baked/interior/material.js";
@@ -77,21 +78,21 @@ describe("LodLoader", () => {
     const material = new MeshStandardMaterial({ name: "surface" });
     const factory = vi.fn(async () => tree(material));
     const request: LodRequest = {
-      source: factory,
+      make: factory,
       key: { fixture: { value: "missing" } },
       material: (name) => (name === "surface" ? material : undefined),
     };
     const loader = new LodLoader();
     const cold = await loader.loadAsync(request);
-    cold.dispose();
     for (const [key] of cache.files) if (key.includes('"value":"level:0"')) cache.files.delete(key);
     const warm = await loader.loadAsync(request);
-    const source = warm.levels[0]?.object;
-    if (!(source instanceof LazyLevel)) throw new Error("Expected lazy source");
+    expect(cold.map((level) => Object.keys(level).sort())).toEqual(warm.map((level) => Object.keys(level).sort()));
+    expect(cold.map((level) => level.maxPixels)).toEqual(warm.map((level) => level.maxPixels));
+    const source = warm[0];
+    if (!source?.load) throw new Error("Expected lazy source");
     await expect(source.load()).rejects.toThrow("cached level 0 is missing");
     expect(factory).toHaveBeenCalledOnce();
     expect(cache.saved.map((entry) => entry.role)).toEqual(["level:0", "index"]);
-    warm.dispose();
   });
 
   it("loads original textures only on mesh demand and shares them with cached simplified levels", async () => {
@@ -110,7 +111,7 @@ describe("LodLoader", () => {
     const loader = new LodLoader(manager).setPath("/models/");
     const request: LodRequest = {
       url: "tree.glb?seed=2",
-      levels: [{ type: "mesh", ratio: 0.5, maxPixels: 100 }, { type: "impostor" }],
+      levels: [{ type: "simplify", ratio: 0.5, maxPixels: 100 }, { type: "impostor" }],
       restore: (object, index) => {
         if (index === 2) return;
         const first = object.children[0];
@@ -120,35 +121,31 @@ describe("LodLoader", () => {
         });
       },
     };
-    const cold = await loader.loadAsync(request);
+    await loader.loadAsync(request);
     expect(load).toHaveBeenCalledExactlyOnceWith("/models/tree.glb?seed=2");
     expect(cache.entries[0]?.dependencies?.["lod:queries"]).toEqual({ value: { source: "?seed=2" } });
     expect(cache.saved.map(({ role }) => role)).toEqual(["level:1", "index"]);
-    cold.dispose();
     const warm = await loader.loadAsync(request);
-    try {
-      expect(load).toHaveBeenCalledOnce();
-      const source = warm.levels[0]?.object;
-      const detail = warm.levels[1]?.object;
-      if (!(source instanceof LazyLevel) || !(detail instanceof LazyLevel)) throw new Error("Expected deferred mesh levels");
-      const simplified = await detail.load();
-      expect(load).toHaveBeenCalledTimes(2);
-      const original = await source.load();
-      expect(load).toHaveBeenCalledTimes(2);
-      expect(original.children).toHaveLength(2);
-      expect(simplified.children).toHaveLength(2);
-      for (let index = 0; index < 2; index++) {
-        const sourceMesh = original.children[index];
-        const detailMesh = simplified.children[index];
-        if (!(sourceMesh instanceof Mesh) || !(detailMesh instanceof Mesh) || !(sourceMesh.material instanceof MeshStandardMaterial))
-          throw new Error("Expected original and simplified meshes");
-        expect(detailMesh.material).toBe(sourceMesh.material);
-        if (!(sourceMesh.material.map instanceof DataTexture)) throw new Error("Expected original texture");
-        expect(sourceMesh.material.map.image.data).toEqual(new Uint8Array([86, 98, 43, 0, 86, 98, 43, 255]));
-      }
-    } finally {
-      warm.dispose();
+    expect(load).toHaveBeenCalledOnce();
+    const source = warm[0];
+    const detail = warm[1];
+    if (!source?.load || !detail?.load) throw new Error("Expected deferred mesh levels");
+    const simplified = await detail.load();
+    const original = await decode(source.load).promise;
+    expect(load).toHaveBeenCalledTimes(2);
+    const released = vi.fn();
+    for (let index = 0; index < 2; index++) {
+      const sourceMesh = original.children[index];
+      const detailMesh = simplified.children[index];
+      if (!(sourceMesh instanceof Mesh) || !(detailMesh instanceof Mesh) || !(sourceMesh.material instanceof MeshStandardMaterial))
+        throw new Error("Expected original and simplified meshes");
+      sourceMesh.geometry.addEventListener("dispose", released);
+      expect(detailMesh.material).toBe(sourceMesh.material);
+      if (!(sourceMesh.material.map instanceof DataTexture)) throw new Error("Expected original texture");
+      expect(sourceMesh.material.map.image.data).toEqual(new Uint8Array([86, 98, 43, 0, 86, 98, 43, 255]));
     }
+    new Lod(warm).dispose();
+    expect(released).toHaveBeenCalledTimes(2);
   });
 
   it("persists baked interiors separately from source detail and keeps both on warm loads", async () => {
@@ -167,25 +164,26 @@ describe("LodLoader", () => {
     const rooms = vi.fn(async () => inside);
     const shell = vi.fn(async () => low());
     const request: LodRequest = {
-      source: factory,
+      make: factory,
       key: { building: { value: "one-room" } },
       material: (name) => materials.get(name),
       levels: [{ type: "baked", low: shell, interior: rooms, textureSize: 32, maxPixels: 100 }],
     };
     const loader = new LodLoader();
     const cold = await loader.loadAsync(request);
-    const count = cold.levels[0]?.object.children.length;
-    cold.dispose();
+    const original = cold[0];
+    if (!original?.load) throw new Error("Expected deferred source");
+    const count = (await original.load()).children.length;
     const warm = await loader.loadAsync(request);
     expect(factory).toHaveBeenCalledOnce();
     expect(rooms).toHaveBeenCalledOnce();
     expect(shell).toHaveBeenCalledOnce();
     expect(cache.saved).toHaveLength(2);
-    const baked = warm.levels[1]?.object;
+    const baked = warm[1]?.object;
     if (!(baked instanceof Mesh) || !(baked.material instanceof InteriorMaterial)) throw new Error("Expected restored baked windows");
     expect(baked.material.rooms?.boxes).toHaveLength(1);
-    const lazy = warm.levels[0]?.object;
-    if (!(lazy instanceof LazyLevel)) throw new Error("Expected deferred source rooms");
+    const lazy = warm[0];
+    if (!lazy?.load) throw new Error("Expected deferred source rooms");
     const restored = await lazy.load();
     expect(restored.children).toHaveLength(count ?? 0);
     let inward = 0;
@@ -193,29 +191,46 @@ describe("LodLoader", () => {
       if (node instanceof Mesh) for (const material of [node.material].flat()) if (material.side === BackSide) inward++;
     });
     expect(inward).toBe(6);
-    warm.dispose();
   }, 120_000);
+
+  it("preloads a placed source when it is the only drawable, on cold and warm loads", async () => {
+    const material = new MeshStandardMaterial({ name: "surface" });
+    const make = vi.fn(async () => new Mesh(new BoxGeometry(), material).translateX(7));
+    const request: LodRequest = {
+      make,
+      key: { fixture: { value: "source-only" } },
+      material: () => material,
+      levels: [{ type: "empty", maxPixels: 1 }],
+    };
+    const loader = new LodLoader();
+    for (let run = 0; run < 2; run++) {
+      const levels = await loader.loadAsync(request);
+      expect(levels[0]?.object?.position.x).toBe(7);
+      expect(levels[0]?.maxPixels).toBe(Infinity);
+      expect(levels[1]?.load).toBeTypeOf("function");
+      expect(levels[1]?.box?.isEmpty()).toBe(true);
+    }
+    expect(make).toHaveBeenCalledOnce();
+  });
 
   it("requires procedural material references and caches authored mesh factories", async () => {
     const source = vi.fn(async () => new Mesh(new BoxGeometry(), new MeshStandardMaterial({ name: "surface" })));
     const detail = vi.fn(async () => new Mesh(new BoxGeometry(), new MeshStandardMaterial({ name: "surface" })));
-    const request: LodRequest = { source, key: { fixture: { value: "authored" } }, levels: [{ type: "mesh", source: detail, maxPixels: 100 }] };
+    const request: LodRequest = { make: source, key: { fixture: { value: "authored" } }, levels: [{ type: "mesh", make: detail, maxPixels: 100 }] };
     const loader = new LodLoader();
     await expect(loader.loadAsync(request)).rejects.toThrow(/material/i);
     const material = new MeshStandardNodeMaterial({ name: "surface" });
     const resolved: LodRequest = { ...request, material: (name) => (name === "surface" ? material : undefined) };
-    const cold = await loader.loadAsync(resolved);
+    await loader.loadAsync(resolved);
     expect(source).toHaveBeenCalledTimes(2);
     expect(detail).toHaveBeenCalledTimes(2);
     const warm = await loader.loadAsync(resolved);
     expect(source).toHaveBeenCalledTimes(2);
     expect(detail).toHaveBeenCalledTimes(2);
-    const lazy = warm.levels[0]?.object;
-    if (!(lazy instanceof LazyLevel)) throw new Error("Expected deferred source");
+    const lazy = warm[0];
+    if (!lazy?.load) throw new Error("Expected deferred source");
     const mesh = await lazy.load();
     if (!(mesh instanceof Mesh)) throw new Error("Expected source mesh");
     expect(mesh.material).toBe(material);
-    warm.dispose();
-    cold.dispose();
   });
 });

@@ -21,7 +21,7 @@ import {
   Vector3,
   type Texture,
 } from "three/webgpu";
-import { errorOf, recordError } from "../levels.js";
+import { deviationOf, recordDeviation } from "../levels.js";
 import { InteriorMaterial } from "./interior/material.js";
 
 type Files = Record<string, Uint8Array>;
@@ -47,13 +47,13 @@ const file = (files: Files, name: string): Uint8Array => files[name] ?? fail(`mi
 /**
  * Encode an unmodified `bakeMesh` result, before adding it to a Lod or changing its
  * materials. This is a baked-result format, not an Object3D/NodeMaterial serializer.
- * Geometry, map bytes (including cutout mips), rooms, placement and LOD error survive
+ * Geometry, map bytes (including cutout mips), rooms, placement and LOD deviation survive
  * exactly. Decoding owns fresh resources; the input mesh remains owned by its caller.
  */
 export function encodeBakedMesh(mesh: Mesh): Uint8Array {
-  const error = errorOf(mesh);
+  const deviation = deviationOf(mesh);
   const { geometry, material } = mesh;
-  if (error === undefined || !(error >= 0) || !Number.isFinite(error)) fail("expected a bakeMesh result with its LOD error");
+  if (deviation === undefined || !(deviation >= 0) || !Number.isFinite(deviation)) fail("expected a bakeMesh result with its LOD deviation");
   if (
     mesh.children.length ||
     !mesh.matrixAutoUpdate ||
@@ -124,9 +124,9 @@ export function encodeBakedMesh(mesh: Mesh): Uint8Array {
   files.index = new Uint8Array(index.array.buffer, index.array.byteOffset, index.array.byteLength);
   const rooms = material instanceof InteriorMaterial ? (material.rooms ?? fail("unfurnished interior")) : null;
   const meta = {
-    version: 1,
+    version: 2,
     name: mesh.name,
-    error,
+    deviation,
     position: mesh.position.toArray(),
     quaternion: mesh.quaternion.toArray(),
     scale: mesh.scale.toArray(),
@@ -165,10 +165,10 @@ export async function decodeBakedMeshAsync(input: Uint8Array | ArrayBuffer): Pro
 function fromFiles(files: Files): Mesh {
   const parsed: unknown = JSON.parse(strFromU8(file(files, "meta")));
   const meta = object(parsed);
-  if (meta.version !== 1) fail("unsupported version");
+  if (meta.version !== 2) fail("unsupported version");
   if (typeof meta.name !== "string") fail("missing name");
-  const error = number(meta.error);
-  if (error < 0) fail("negative LOD error");
+  const deviation = number(meta.deviation);
+  if (deviation < 0) fail("negative LOD deviation");
   const position = floats(file(files, "position"));
   const normal = floats(file(files, "normal"));
   const uv = floats(file(files, "uv"));
@@ -215,7 +215,7 @@ function fromFiles(files: Files): Mesh {
   mesh.scale.fromArray(numbers(meta.scale, 3));
   mesh.castShadow = boolean(meta.castShadow);
   mesh.receiveShadow = boolean(meta.receiveShadow);
-  recordError(mesh, error);
+  recordDeviation(mesh, deviation);
   return mesh;
 }
 

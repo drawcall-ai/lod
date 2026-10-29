@@ -253,7 +253,7 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
       plain.add(box);
     }
     // Its level 1 would draw a sphere, at any height.
-    const field = new InstancedLod([new Mesh(new BoxGeometry(), material), new Mesh(new SphereGeometry(), material)], spots.length);
+    const field = new InstancedLod([{ object: new Mesh(new BoxGeometry(), material) }, { object: new Mesh(new SphereGeometry(), material) }], spots.length);
     spots.forEach((spot, i) => field.setMatrixAt(i, spot));
     field.forceLevel = 1;
     const [a, b] = [await bake(plain), await bake(new Group().add(field))];

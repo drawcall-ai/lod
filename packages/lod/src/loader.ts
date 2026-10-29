@@ -2,26 +2,25 @@ import { Group, Loader, LoaderUtils, LoadingManager, type Object3D } from "three
 import type { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import type { Dependencies } from "vitecache";
 import { bakeMesh } from "./baked/index.js";
-import { boundingBox, measureLevels } from "./bounds.js";
+import { measureLevels } from "./bounds.js";
+import { decode as decodeLevel } from "./deferred.js";
 import { disposeTree } from "./dispose.js";
 import { bakeImpostor, type BakeImpostorOptions } from "./impostor/bake/index.js";
 import { ImpostorMesh, type ImpostorMeshOptions } from "./impostor/mesh/index.js";
-import { LazyLevel } from "./lazy.js";
-import { estimate, Level, validate, type LodLevel } from "./levels.js";
-import { Lod } from "./lod.js";
+import { resolveThresholds, type LodLevel } from "./levels.js";
 import { decode, encode, type Kind } from "./loader/bundle.js";
 import { entryFor, type LodCacheOptions, type Recipe } from "./loader/cache.js";
 import { gltfLoader, type MaterialResolver } from "./loader/mesh.js";
 import { Provenance } from "./loader/provenance.js";
 import { simplify, type SimplifyOptions } from "./simplify.js";
-import { isLOD, isObject3D, placeLike, rejectSkinned } from "./three.js";
+import { isObject3D, placeLike, rejectSkinned } from "./three.js";
 export type { LodCacheOptions } from "./loader/cache.js";
 
 type Factory = () => Promise<Object3D>;
 type Auxiliary = string | Factory;
 
 type DerivedLevel =
-  | ({ type: "mesh"; maxPixels?: number } & SimplifyOptions)
+  | ({ type: "simplify"; maxPixels?: number } & SimplifyOptions)
   | ({
       type: "baked";
       maxPixels?: number;
@@ -33,7 +32,7 @@ type DerivedLevel =
   | { type: "empty"; maxPixels: number };
 
 /** Derived or authored levels, finest first. Computed geometry and baked results are persisted. */
-export type LevelRequest = (DerivedLevel & { source?: never }) | { type: Exclude<Kind, "empty">; source: Factory; maxPixels: number };
+export type LevelRequest = (DerivedLevel & { make?: never }) | { type: Exclude<Kind, "empty">; make: Factory; maxPixels: number };
 
 interface Presentation {
   levels?: readonly LevelRequest[];
@@ -48,7 +47,7 @@ export type LodRequest =
   | string
   | ({ url: string } & Presentation)
   | ({
-      source: Factory;
+      make: Factory;
       key: Dependencies;
       type?: Exclude<Kind, "empty">;
       /** The factory selects an original asset: reference it instead of persisting a copy. */
@@ -66,7 +65,7 @@ interface Part {
  * use the manager's handler, otherwise GLTFLoader. Register GLTSLoader for .glts;
  * its scene.source imports are remembered without executing scripts on warm loads.
  */
-export class LodLoader extends Loader<Lod, LodRequest> {
+export class LodLoader extends Loader<LodLevel[], LodRequest> {
   private sourceGltf: GLTFLoader | undefined;
 
   constructor(
@@ -76,39 +75,29 @@ export class LodLoader extends Loader<Lod, LodRequest> {
     super(manager);
   }
 
-  override load(request: LodRequest, onLoad: (lod: Lod) => void, _onProgress?: (event: ProgressEvent) => void, onError?: (error: unknown) => void): void {
+  override load(
+    request: LodRequest,
+    onLoad: (levels: LodLevel[]) => void,
+    _onProgress?: (event: ProgressEvent) => void,
+    onError?: (error: unknown) => void,
+  ): void {
     this.loadAsync(request).then(onLoad, onError ?? ((error: unknown) => console.error(error)));
   }
 
-  /** Load the coarsest drawable level eagerly; finer levels load on demand. */
-  override async loadAsync(request: LodRequest): Promise<Lod> {
-    const levels = await this.loadLevelsAsync(request);
-    const coarse = [...levels].reverse().find(({ object }) => !boundingBox(object).isEmpty());
-    if (!coarse) throw new Error("LodLoader: ladder has no drawable level");
-    if (coarse.object instanceof LazyLevel) {
-      const placeholder = coarse.object;
-      const object = await placeholder.load();
-      object.applyMatrix4(placeholder.matrix);
-      const index = levels.indexOf(coarse);
-      levels[index] = { object, maxPixels: coarse.maxPixels };
-    }
-    return new Lod(levels);
-  }
-
-  /** Cached drawable levels stay lazy, including the source. Supply an eager fallback when composing them into a Lod. */
-  async loadLevelsAsync(request: LodRequest): Promise<LodLevel[]> {
+  /** Load the coarsest drawable level eagerly; every other level loads on demand. */
+  override async loadAsync(request: LodRequest): Promise<LodLevel[]> {
     const input = typeof request === "string" ? { url: request } : request;
     const levels = (input.levels ?? DEFAULT_LEVELS).map((level) =>
-      level.type === "impostor" && !level.source ? { ...level, draw: level.draw && { ...level.draw } } : { ...level },
+      level.type === "impostor" && !level.make ? { ...level, draw: level.draw && { ...level.draw } } : { ...level },
     );
-    if (levels.filter((level) => level.type === "baked" && !level.source && level.interior !== undefined).length > 1)
+    if (levels.filter((level) => level.type === "baked" && !level.make && level.interior !== undefined).length > 1)
       throw new Error("LodLoader: give an interior to one baked level only: the source shows one");
     const url = "url" in input ? LoaderUtils.resolveURL(input.url, this.path) : undefined;
     const base = url === undefined ? this.path : LoaderUtils.extractUrlBase(url);
     const dependencies: Dependencies = "key" in input ? structuredClone(input.key) : { source: { url: LoaderUtils.resolveURL(input.url, this.path) } };
     const auxiliaries: Record<string, { url: string }> = {};
     levels.forEach((level, index) => {
-      if (level.type !== "baked" || level.source) return;
+      if (level.type !== "baked" || level.make) return;
       for (const name of ["low", "interior"] as const) {
         const value = level[name];
         if (typeof value === "string") auxiliaries[`auxiliary:${index}:${name}`] = { url: LoaderUtils.resolveURL(value, base) };
@@ -129,30 +118,41 @@ export class LodLoader extends Loader<Lod, LodRequest> {
       await provenance.load();
       const known = provenance.known ? provenance.dependencies(inputs) : undefined;
       const lookup = known && entryFor(known, recipe, options);
-      const bytes = await lookup?.load();
-      if (bytes !== undefined && known)
-        return decode(
-          bytes,
-          async () => {
-            const source = "source" in input ? await input.source() : await this.loadSource(LoaderUtils.resolveURL(input.url, this.path), provenance);
-            for (const level of levels) {
-              if (level.type !== "baked" || level.source || !level.interior) continue;
-              source.add(
-                typeof level.interior === "function" ? await level.interior() : await this.loadSource(LoaderUtils.resolveURL(level.interior, base), provenance),
-              );
-            }
-            return source;
-          },
-          async (index) => {
-            const payload = await entryFor(known, recipe, options, index).load();
-            if (payload === undefined) throw new Error(`LodLoader: cached level ${index} is missing`);
-            return payload;
-          },
-          input.restore,
-          input.material,
-        );
-      const source = "source" in input ? await input.source() : await this.loadSource(LoaderUtils.resolveURL(input.url, this.path), provenance);
-      return await this.persist(source, recipe, input.restore, base, inputs, provenance, options);
+      const bytes =
+        (await lookup?.load()) ??
+        (await this.persist(
+          "make" in input ? await input.make() : await this.loadSource(LoaderUtils.resolveURL(input.url, this.path), provenance),
+          recipe,
+          base,
+          inputs,
+          provenance,
+          options,
+        ));
+      const resolved = provenance.dependencies(inputs);
+      const result = decode(
+        bytes,
+        async () => {
+          const source = "make" in input ? await input.make() : await this.loadSource(LoaderUtils.resolveURL(input.url, this.path), provenance);
+          for (const level of levels) {
+            if (level.type !== "baked" || level.make || !level.interior) continue;
+            source.add(
+              typeof level.interior === "function" ? await level.interior() : await this.loadSource(LoaderUtils.resolveURL(level.interior, base), provenance),
+            );
+          }
+          return source;
+        },
+        async (index) => {
+          const payload = await entryFor(resolved, recipe, options, index).load();
+          if (payload === undefined) throw new Error(`LodLoader: cached level ${index} is missing`);
+          return payload;
+        },
+        input.restore,
+        input.material,
+      );
+      const coarse = [...result].reverse().find((level) => level.box && !level.box.isEmpty());
+      if (!coarse?.load) throw new Error("LodLoader: ladder has no drawable level");
+      result[result.indexOf(coarse)] = { object: await decodeLevel(coarse.load).promise, maxPixels: coarse.maxPixels };
+      return result;
     } catch (error) {
       this.manager.itemError(item);
       throw error;
@@ -164,12 +164,11 @@ export class LodLoader extends Loader<Lod, LodRequest> {
   private async persist(
     source: Object3D,
     recipe: Recipe,
-    restore: Presentation["restore"],
     base: string,
     inputs: Dependencies,
     provenance: Provenance,
     options?: LodCacheOptions,
-  ): Promise<LodLevel[]> {
+  ): Promise<Uint8Array> {
     const built = [source];
     const parts: Part[] = recipe.levels.map((request) => ({ request }));
     try {
@@ -177,7 +176,7 @@ export class LodLoader extends Loader<Lod, LodRequest> {
       const load = (value: Auxiliary | undefined) =>
         typeof value === "function" ? value() : value === undefined ? undefined : this.loadSource(LoaderUtils.resolveURL(value, base), provenance);
       for (const part of parts) {
-        if (part.request.type !== "baked" || part.request.source) continue;
+        if (part.request.type !== "baked" || part.request.make) continue;
         part.low = await load(part.request.low);
         part.interior = await load(part.request.interior);
       }
@@ -187,19 +186,12 @@ export class LodLoader extends Loader<Lod, LodRequest> {
       await entry.load();
       for (const part of parts) built.push(await this.build(source, part));
       for (const part of parts) if (part.interior) source.add(part.interior);
-      const levels: Level[] = [];
-      built.forEach((object, index) => levels.push(new Level(object, index, isLOD(object), levels)));
-      estimate(levels, measureLevels(built, "LodLoader").own.radius * 2);
-      recipe.levels.forEach((request, index) => {
-        const level = levels[index + 1];
-        if (!level) throw new Error("LodLoader: missing built level");
-        if (request.maxPixels !== undefined) level.maxPixels = request.maxPixels;
-      });
-      validate(levels);
+      const levels = built.map((object, index) => ({ object, maxPixels: recipe.levels[index - 1]?.maxPixels }));
+      const thresholds = resolveThresholds(levels, measureLevels(levels, "LodLoader").own.radius * 2);
       const encoded = await encode(
         built,
-        [recipe.reference ? "source" : (recipe.type ?? "mesh"), ...recipe.levels.map((level) => level.type)],
-        levels.map((level) => level.maxPixels),
+        [recipe.reference ? "source" : (recipe.type ?? "mesh"), ...recipe.levels.map((level) => (level.type === "simplify" ? "mesh" : level.type))],
+        thresholds,
         recipe.material,
       );
       for (const level of encoded.levels) {
@@ -210,23 +202,20 @@ export class LodLoader extends Loader<Lod, LodRequest> {
       // Publish only after every deferred payload is available.
       await entry.save(encoded.index);
       await provenance.save();
-      if (restore) for (const [index, object] of built.entries()) await restore(object, index);
-      return levels;
-    } catch (error) {
+      return encoded.index;
+    } finally {
       for (const part of parts) if (part.interior && part.interior.parent !== source) disposeTree(part.interior);
       for (const object of built) disposeTree(object);
-      throw error;
-    } finally {
       for (const part of parts) if (part.low) disposeTree(part.low);
     }
   }
 
   private async build(source: Object3D, { request, low, interior }: Part): Promise<Object3D> {
-    if (request.source) return request.source();
+    if (request.make) return request.make();
     switch (request.type) {
       case "empty":
         return new Group();
-      case "mesh":
+      case "simplify":
         return simplify(source, { ratio: request.ratio });
       case "impostor": {
         const { type: _, draw, ...options } = request;

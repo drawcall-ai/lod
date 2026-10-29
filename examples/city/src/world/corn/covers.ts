@@ -91,7 +91,7 @@ function plantGroup(variants: { tasselled: THREE.Object3D[]; bare: THREE.Object3
   for (const [tassel, models] of [[true, variants.tasselled] as const, [false, variants.bare] as const])
     models.forEach((model, v) => {
       const mine = plants.filter((p) => p.variant === v && hash(p) < TASSELLED === tassel);
-      const lod = new InstancedLod([model], mine.length);
+      const lod = new InstancedLod([{ object: model }], mine.length);
       mine.forEach((p, i) => lod.setMatrixAt(i, matrix.compose(new THREE.Vector3(p.x, 0, p.z), plantTurn(p, 0, turn), one)));
       group.add(lod);
     });
@@ -170,7 +170,10 @@ function rising(material: THREE.MeshStandardNodeMaterial, skirt: Skirt): THREE.M
 
 /** `levels` of a baked cover over `places`, after an empty level 0 (the plants show there); thresholds are set by `Corn.update`. */
 function coverLod(name: string, levels: THREE.Mesh[], places: { matrix: THREE.Matrix4; at: THREE.Vector3 }[]): InstancedLod {
-  const lod = new InstancedLod([new THREE.Object3D(), ...levels], places.length);
+  const lod = new InstancedLod(
+    [new THREE.Object3D(), ...levels].map((object) => ({ object })),
+    places.length,
+  );
   lod.name = name;
   places.forEach(({ matrix, at }, i) => {
     lod.setMatrixAt(i, matrix);

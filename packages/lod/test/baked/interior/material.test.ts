@@ -116,9 +116,9 @@ describe("interiors", { timeout: GPU_TIMEOUT }, () => {
     source.position.set(0.3, 0, 0);
     const baked = await bakeMesh(source, { low: low(), textureSize: 128, interior: rooms });
     const turn = new Matrix4().makeRotationY(0.4);
-    const lod = new Lod([source.clone(), baked.clone()]);
+    const lod = new Lod([{ object: source.clone() }, { object: baked.clone() }]);
     lod.quaternion.setFromRotationMatrix(turn);
-    const instanced = new InstancedLod([source.clone(), baked.clone()], 1);
+    const instanced = new InstancedLod([{ object: source.clone() }, { object: baked.clone() }], 1);
     instanced.forceLevel = 1;
     instanced.setMatrixAt(0, turn);
     const window = new Vector3(0.3, 0, 1).applyMatrix4(turn);

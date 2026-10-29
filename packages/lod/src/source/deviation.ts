@@ -5,18 +5,18 @@ import type { Source } from "./source.js";
 import { triangleArea, type Surface } from "./surface.js";
 import { Tracer } from "./trace.js";
 
-/** Points sampled per surface to measure the error. */
+/** Points sampled per surface to measure the deviation. */
 const SAMPLES = 20000;
 
 /**
  * How far a level's surface `low` is from `source`'s: the distances from points spread
  * evenly by area over each surface to the other, measured with a BVH. Source points
  * nobody sees from outside (a floor inside, the inner side of a partition) are left out:
- * they need no counterpart on the level. `error` is the 99.9th percentile of the
+ * they need no counterpart on the level. `deviation` is the 99.9th percentile of the
  * distances, `widest` the largest. A high percentile, as what a level moves (a part
  * collapsed or cut off) is often a sliver of the area.
  */
-export function measureError(source: Source, low: Surface): { error: number; widest: number } {
+export function measureDeviation(source: Source, low: Surface): { deviation: number; widest: number } {
   const geometry = new BufferGeometry();
   geometry.setAttribute("position", new BufferAttribute(low.positions, 3));
   // The BVH reorders the index it is built on.
@@ -29,13 +29,13 @@ export function measureError(source: Source, low: Surface): { error: number; wid
     if (visible(point, triangle)) distances.push(closest(toLow, point));
   });
   const sorted = Float64Array.from(distances).sort();
-  return { error: sorted[Math.floor(0.999 * (sorted.length - 1))] ?? 0, widest: sorted[sorted.length - 1] ?? 0 };
+  return { deviation: sorted[Math.floor(0.999 * (sorted.length - 1))] ?? 0, widest: sorted[sorted.length - 1] ?? 0 };
 }
 
 const hit = { point: new Vector3(), distance: 0, faceIndex: 0 };
 
 function closest(bvh: MeshBVH, point: Vector3): number {
-  if (!bvh.closestPointToPoint(point, hit)) throw new Error("@drawcall/lod: no closest point to measure the error by");
+  if (!bvh.closestPointToPoint(point, hit)) throw new Error("@drawcall/lod: no closest point to measure the deviation by");
   return hit.distance;
 }
 

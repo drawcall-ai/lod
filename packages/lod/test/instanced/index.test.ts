@@ -24,7 +24,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { drawOf } from "../../src/fade.js";
 import { InstancedLod } from "../../src/instanced/index.js";
 import { ImpostorMesh } from "../../src/impostor/mesh/index.js";
-import { LazyLevel } from "../../src/lazy.js";
 import { Lod } from "../../src/lod.js";
 import { Wind } from "../../src/wind/index.js";
 import { isMesh } from "../../src/three.js";
@@ -41,7 +40,7 @@ const at = (pixels: number) => (DIAMETER * SIZE) / (2 * tan * pixels);
 
 /** Camera at the origin looking down -z; instance i at the distance where it is `heights[i]` px tall. */
 function setup(heights: number[]) {
-  const lod = new InstancedLod([box("source"), box("simplified"), box("impostor")], heights.length);
+  const lod = new InstancedLod([{ object: box("source") }, { object: box("simplified") }, { object: box("impostor") }], heights.length);
   lod.levels.forEach((level, i) => (level.maxPixels = [Infinity, 40, 10][i] ?? level.maxPixels));
   heights.forEach((pixels, i) => lod.setMatrixAt(i, new Matrix4().makeTranslation(0, 0, -at(pixels))));
   const camera = new PerspectiveCamera(60, 1, 0.1, 1e5);
@@ -97,7 +96,7 @@ afterEach(() => {
 describe("InstancedLod", { timeout: GPU_TIMEOUT }, () => {
   it("can keep every tier culled before the first draw and recover after an explicit resize", () => {
     const source = box("source");
-    const lod = new InstancedLod([source, new Group()], 1);
+    const lod = new InstancedLod([{ object: source }, { object: new Group() }], 1);
     const camera = new PerspectiveCamera(60, 1, 0.1, 1e5);
     const empty = lod.levels[1];
     if (!empty) throw new Error("Missing empty level");
@@ -151,7 +150,7 @@ describe("InstancedLod", { timeout: GPU_TIMEOUT }, () => {
   });
 
   it("measures an empty level 0 by the first level that draws, and draws nothing of it", async () => {
-    const lod = new InstancedLod([new Group(), box("baked")], 2);
+    const lod = new InstancedLod([{ object: new Group() }, { object: box("baked") }], 2);
     lod.levels.forEach((level, i) => (level.maxPixels = [Infinity, 40][i] ?? level.maxPixels));
     lod.setMatrixAt(0, new Matrix4().makeTranslation(0, 0, -at(100)));
     lod.setMatrixAt(1, new Matrix4().makeTranslation(0, 0, -at(20)));
@@ -159,7 +158,7 @@ describe("InstancedLod", { timeout: GPU_TIMEOUT }, () => {
     await select(lod, camera);
     expect([lod.levelOf(0), lod.levelOf(1)]).toEqual([0, 1]);
     expect(await distances(lod)).toEqual([[Math.round(at(20))]]);
-    expect(() => new InstancedLod([new Group()], 1)).toThrow(/no level has visible geometry/);
+    expect(() => new InstancedLod([{ object: new Group() }], 1)).toThrow(/no level has visible geometry/);
   });
 
   it("scales heights by Lod.quality, draws only forceLevel, and nothing of an instance at scale 0", async () => {
@@ -200,9 +199,9 @@ describe("InstancedLod", { timeout: GPU_TIMEOUT }, () => {
 
 const mesh = () => new Mesh(new BoxGeometry(2, 2, 2), new MeshBasicMaterial());
 
-it("replaces a lazy source's coarse fallback after preparation", { timeout: GPU_TIMEOUT }, async () => {
-  const lazy = new LazyLevel(async () => mesh(), { maxPixels: Infinity, box: new Box3(new Vector3(-1, -1, -1), new Vector3(1, 1, 1)) });
-  const crowd = new InstancedLod([lazy, mesh()], 3);
+it("replaces a deferred source's coarse fallback after preparation", { timeout: GPU_TIMEOUT }, async () => {
+  const deferred = { load: async () => mesh(), maxPixels: Infinity, box: new Box3(new Vector3(-1, -1, -1), new Vector3(1, 1, 1)) };
+  const crowd = new InstancedLod([deferred, { object: mesh() }], 3);
   crowd.forceLevel = 0;
   for (let i = 0; i < crowd.count; i++) crowd.setMatrixAt(i, new Matrix4().makeTranslation(0, 0, -5));
   const scene = new Scene().add(crowd);
@@ -210,7 +209,6 @@ it("replaces a lazy source's coarse fallback after preparation", { timeout: GPU_
   try {
     await render(scene, camera);
     expect(crowd.levelOf(0)).toBe(1);
-    await lazy.load();
     await nextLevel(crowd, camera);
     crowd.update(camera);
     expect(crowd.children).toHaveLength(2);
@@ -231,8 +229,8 @@ it("keeps shared instance slots alive when an arriving impostor fails compilatio
     maps: ["base", "normalDepth", "orm"],
     layers: [0, 1, 2].map(() => [16, 8, 4].map((size) => new Uint8Array(size * size * 4))),
   });
-  const lazy = new LazyLevel(async () => impostor, { maxPixels: Infinity, box: new Box3().setFromArray(impostor.impostor.box) });
-  const crowd = new InstancedLod([lazy, mesh()], 1);
+  const deferred = { load: async () => impostor, maxPixels: Infinity, box: new Box3().setFromArray(impostor.impostor.box) };
+  const crowd = new InstancedLod([deferred, { object: mesh() }], 1);
   crowd.forceLevel = 0;
   crowd.setMatrixAt(0, new Matrix4().makeTranslation(0, 0, -5));
   crowd.setColorAt(0, new Color("red"));
@@ -253,7 +251,6 @@ it("keeps shared instance slots alive when an arriving impostor fails compilatio
       object.instanceColor.addEventListener("dispose", () => colorsDisposed++);
       throw failure;
     });
-    await lazy.load();
     await expect(nextLevel(crowd, camera)).rejects.toBe(failure);
     expect(report).toHaveBeenCalledWith(failure);
     expect(matricesDisposed).toBe(0);
@@ -268,17 +265,16 @@ it("keeps shared instance slots alive when an arriving impostor fails compilatio
 
 it("installs shared decoded detail only in crowds whose current view demands it", { timeout: GPU_TIMEOUT }, async () => {
   const load = vi.fn(async () => mesh());
-  const lazy = new LazyLevel(load, { maxPixels: Infinity, box: new Box3(new Vector3(-1, -1, -1), new Vector3(1, 1, 1)) });
-  const template = new Lod([lazy, mesh()]);
-  const near = new InstancedLod(template, 1);
-  const away = new InstancedLod(template, 1);
+  const deferred = { load, maxPixels: Infinity, box: new Box3(new Vector3(-1, -1, -1), new Vector3(1, 1, 1)) };
+  const levels = [deferred, { object: mesh() }];
+  const near = new InstancedLod(levels, 1);
+  const away = new InstancedLod(levels, 1);
   near.setMatrixAt(0, new Matrix4().makeTranslation(0, 0, -5));
   away.setMatrixAt(0, new Matrix4().makeTranslation(500, 0, -5));
   near.forceLevel = away.forceLevel = 0;
   const camera = new PerspectiveCamera(60, 1, 0.1, 100);
   const scene = new Scene().add(near, away);
   try {
-    await lazy.load();
     const nearInstalled = nextLevel(near, camera);
     await render(scene, camera);
     await nearInstalled;
@@ -295,14 +291,13 @@ it("installs shared decoded detail only in crowds whose current view demands it"
   } finally {
     near.dispose();
     away.dispose();
-    template.dispose();
   }
 });
 
 it("still selects an offscreen crowd when its shadow reaches the visible ground", { timeout: GPU_TIMEOUT }, async () => {
   const source = mesh();
   source.castShadow = true;
-  const crowd = new InstancedLod([source], 1);
+  const crowd = new InstancedLod([{ object: source }], 1);
   crowd.position.set(4, 4, 0);
   const ground = new Mesh(new PlaneGeometry(24, 24).rotateX(-Math.PI / 2), new MeshStandardMaterial());
   ground.receiveShadow = true;
@@ -369,7 +364,7 @@ it("bounds all placed levels and template shear without changing source-based LO
   const coarse = new Mesh(new BoxGeometry(20, 10, 2), material);
   coarse.position.set(30, 10, 0);
   coarse.geometry.computeTangents();
-  const lod = new InstancedLod([source, coarse], 1);
+  const lod = new InstancedLod([{ object: source }, { object: coarse }], 1);
   const translated = lod.children[1];
   if (!(translated instanceof InstancedMesh)) throw new Error("Missing translated level mesh");
   expect(new Vector3().fromBufferAttribute(translated.geometry.getAttribute("position"), 0).toArray()).toEqual([40, 15, 1]);
@@ -399,7 +394,7 @@ it("bounds wind on taller coarse levels and cloned crowds", () => {
   const source = new Mesh(new BoxGeometry(2, 0, 2), material);
   const coarse = new Mesh(new BoxGeometry(2, 100, 2), material);
   coarse.position.y = 50;
-  const lod = new InstancedLod([source, coarse], 1);
+  const lod = new InstancedLod([{ object: source }, { object: coarse }], 1);
   const wind = new Wind();
   wind.apply(lod, { amplitude: 1, baseY: 0, height: 1 });
   lod.setMatrixAt(0, shear);
@@ -425,7 +420,7 @@ it("raycasts source faces outside the max-axis sphere of a sheared template", ()
   // Three's delegated Mesh.raycast also uses max-axis sphere scaling. A consumer
   // can supply a conservative sphere; our outer broadphase must not reject it first.
   source.geometry.boundingSphere = new Sphere(new Vector3(), 4);
-  const lod = new InstancedLod([source], 1);
+  const lod = new InstancedLod([{ object: source }], 1);
   const face = new Vector3(0.8, 0.9, 1).applyMatrix4(shear);
   const ray = new Raycaster(face.clone().add(new Vector3(0, 0, 10)), new Vector3(0, 0, -1));
   const hits: Intersection[] = [];

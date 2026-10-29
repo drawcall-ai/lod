@@ -11,11 +11,11 @@ npm install @drawcall/lod three
 Load a model into an existing Three.js scene. With a warm cache, the coarse level draws first and finer levels load as the camera approaches:
 
 ```ts
-import { LodLoader } from "@drawcall/lod";
+import { Lod, LodLoader } from "@drawcall/lod";
 
 const loader = new LodLoader();
-const tree = await loader.loadAsync("/models/tree.glb");
-scene.add(tree);
+const levels = await loader.loadAsync("/models/tree.glb");
+scene.add(new Lod(levels));
 ```
 
 Configure [vitecache](https://github.com/drawcall-ai/vitecache) in the host and ship its generated cache files. A cache miss builds the levels once; warm loads fetch and decode them. Procedural sources and named custom materials use the same loader.

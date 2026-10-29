@@ -22,7 +22,7 @@ export async function heroPlant(
   };
   let detail: THREE.Object3D | undefined;
   const plantRequest = {
-    source: async () => {
+    make: async () => {
       await prepare();
       return (detail ??= cornPlant(spot.seed, { leafSegments: [192, 24] }));
     },
@@ -32,8 +32,8 @@ export async function heroPlant(
     restore: foliage,
   };
   const bugRequest = {
-    source: async () => {
-      const seat = leafSeat(await plantRequest.source());
+    make: async () => {
+      const seat = leafSeat(await plantRequest.make());
       await bugMaterial("ladybird-elytra");
       const bug = ladybird();
       const holder = new THREE.Group();
@@ -49,16 +49,11 @@ export async function heroPlant(
     levels: [],
   };
   const loader = new LodLoader();
-  const [plant, bug] = await Promise.all([loader.loadLevelsAsync(plantRequest), loader.loadLevelsAsync(bugRequest)]);
+  const [plant, bug] = await Promise.all([loader.loadAsync(plantRequest), loader.loadAsync(bugRequest)]);
   const source = plant[0],
     insectSource = bug[0];
-  if (!source || !insectSource) throw new Error("Hero assets have no source level");
-  const distant = far.map((level) => {
-    const object = level.object.clone();
-    object.castShadow = object.receiveShadow = false;
-    return { object, maxPixels: level.maxPixels };
-  });
-  const hero = new Lod([source, ...distant, { object: new THREE.Group(), maxPixels: 1 }]);
+  if (!source || !insectSource?.object) throw new Error("Hero assets have no source level");
+  const hero = new Lod([source, ...far, { object: new THREE.Group(), maxPixels: 1 }]);
   hero.name = "hero corn plant";
   hero.position.copy(at);
   hero.rotation.y = spot.yaw;

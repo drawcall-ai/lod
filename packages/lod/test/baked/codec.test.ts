@@ -23,7 +23,7 @@ import { describe, expect, it } from "vitest";
 import { encodeBakedMesh, decodeBakedMesh, decodeBakedMeshAsync } from "../../src/baked/codec.js";
 import { bakeMesh } from "../../src/baked/index.js";
 import { InteriorMaterial } from "../../src/baked/interior/material.js";
-import { errorOf, recordError } from "../../src/levels.js";
+import { deviationOf, recordDeviation } from "../../src/levels.js";
 import { disposeTree } from "../../src/dispose.js";
 import { house, interior, low } from "../house.js";
 
@@ -70,12 +70,12 @@ function fixture(rooms: boolean): Mesh {
   mesh.rotation.set(0.2, 0.4, -0.3);
   mesh.scale.set(2, 3, 4);
   mesh.castShadow = mesh.receiveShadow = true;
-  recordError(mesh, 1 / 7);
+  recordDeviation(mesh, 1 / 7);
   return mesh;
 }
 
 describe("baked mesh codec", () => {
-  it("round-trips geometry, cutout mips, room arrays, placement and error without sharing resources", async () => {
+  it("round-trips geometry, cutout mips, room arrays, placement and deviation without sharing resources", async () => {
     for (const rooms of [false, true]) {
       const source = fixture(rooms);
       const bytes = encodeBakedMesh(source);
@@ -84,7 +84,7 @@ describe("baked mesh codec", () => {
       padded.set(bytes, 7);
       const decoded = await decodeBakedMeshAsync(padded.subarray(7, 7 + bytes.length));
       expect(unzipSync(encodeBakedMesh(decoded))).toEqual(unzipSync(bytes));
-      expect(errorOf(decoded)).toBe(errorOf(source));
+      expect(deviationOf(decoded)).toBe(deviationOf(source));
       expect(decoded.geometry.boundingSphere).toEqual(source.geometry.boundingSphere);
       expect(decoded.geometry.attributes.position?.array).not.toBe(source.geometry.attributes.position?.array);
       if (!(decoded.material instanceof MeshStandardNodeMaterial) || !(source.material instanceof MeshStandardNodeMaterial))
@@ -114,7 +114,7 @@ describe("baked mesh codec", () => {
       if (corrupt === "meta") {
         const meta = files.meta;
         if (!meta) throw new Error("missing metadata");
-        files.meta = strToU8(strFromU8(meta).replace('"version":1', '"version":999'));
+        files.meta = strToU8(strFromU8(meta).replace('"version":2', '"version":999'));
       } else files[corrupt] = new Uint8Array(1);
       expect(() => decodeBakedMesh(zipSync(files))).toThrow(/Invalid baked mesh/);
     }

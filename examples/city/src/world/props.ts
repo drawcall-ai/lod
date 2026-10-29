@@ -1,5 +1,5 @@
 import * as THREE from "three/webgpu";
-import { Lod, LodLoader, type LevelRequest } from "@drawcall/lod";
+import { LodLoader } from "@drawcall/lod";
 import { picketFence } from "../content/fence.ts";
 import { streetSign } from "../content/sign.ts";
 import { step } from "../loading.ts";
@@ -12,11 +12,9 @@ import { object } from "./objects.ts";
 import { propMeshes } from "./prop-meshes.ts";
 
 /**
- * Street furniture, cars and fences: hard surfaces, so a simplified copy (keeping half or
- * a quarter of the triangles, as thin parts tear beyond that) and no impostor, which
- * would cost more than the mesh. Below a few pixels (more for thin lamps and fences, which
- * vanish into a line long before) they are not drawn at all; from above the town they are
- * specks. The empty far level also lets the overview defer every original model fetch.
+ * Street furniture and cars keep their meshes nearby and use a small impostor in the
+ * distance. Its self-contained textures let the overview defer original model fetches.
+ * Below a few pixels (more for thin lamps, which vanish into a line sooner) they disappear.
  */
 const PROPS: { id: string; groups: string[][]; ratio: number; cull: number }[] = [
   { id: "street_lamp_01", groups: [["street_lamp_01"]], ratio: 0.03, cull: 8 },
@@ -55,19 +53,20 @@ export async function props(plan: Plan): Promise<THREE.Group> {
     const models = await step(id, () =>
       Promise.all(
         variants(id, groups).map(async (source, index) => {
-          const levels: LevelRequest[] = [{ type: "mesh", ratio }];
-          levels.push({ type: "empty", maxPixels: cull });
-          const loaded = await loader.loadLevelsAsync({
-            source: async () => propMeshes(await source()),
+          const levels = await loader.loadAsync({
+            make: async () => propMeshes(await source()),
             reference: true,
             key: {
               ...model(id, index, groups),
               props: { path: "src/world/props.ts" },
               batching: { path: "src/world/prop-meshes.ts" },
             },
-            levels,
+            levels: [
+              { type: "simplify", ratio },
+              { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 60 },
+            ],
           });
-          return new Lod(loaded);
+          return [...levels, { object: new THREE.Group(), maxPixels: cull }];
         }),
       ),
     );

@@ -180,10 +180,10 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
     const wind = new Wind();
     const fades = (lod: Lod) =>
       lod.levels.map(({ object }) => {
-        const draw = drawOf(object);
+        const draw = object && drawOf(object);
         return draw?.kind === "object" ? draw.fade : null;
       });
-    const still = new Lod([cube(), cube(), cube()]);
+    const still = new Lod([{ object: cube() }, { object: cube() }, { object: cube() }]);
     still.levels.forEach((level, i) => (level.maxPixels = [Infinity, 400, 100][i] ?? Infinity));
     const moving = still.clone();
     wind.apply(moving, { amplitude: 0.8 });
@@ -193,7 +193,7 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
         lod.updateMatrixWorld();
         lod.update(camera);
       }
-      expect(moving.levels.map((level) => level.object.visible)).toEqual(still.levels.map((level) => level.object.visible));
+      expect(moving.levels.map((level) => level.object?.visible)).toEqual(still.levels.map((level) => level.object?.visible));
       expect(fades(moving)).toEqual(fades(still));
     }
 
@@ -203,7 +203,7 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
 
   it("keeps a fade whole when the instances sway", async () => {
     const mesh = () => new Mesh(new BoxGeometry(0.7, 3, 0.7).translate(0, 1.5, 0), new MeshStandardMaterial());
-    const lod = new InstancedLod([mesh(), mesh()], 2);
+    const lod = new InstancedLod([{ object: mesh() }, { object: mesh() }], 2);
     const coarse = lod.levels[1];
     if (!coarse) throw new Error("missing coarse level");
     coarse.maxPixels = 60;
@@ -253,7 +253,7 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
     source.matrixAutoUpdate = false;
     source.matrix.makeTranslation(0, 10, 0);
     source.matrixWorldNeedsUpdate = true;
-    const lod = new InstancedLod([source], 1);
+    const lod = new InstancedLod([{ object: source }], 1);
     wind.apply(lod, { amplitude: 0.9 });
     wind.time = 1;
     const reference = plant();
@@ -316,8 +316,8 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
     const data = await baked();
     const wind = new Wind({ direction: [1, 0.4], speed: 0.6 });
     const objects = [
-      placed(new Lod([plant(), new ImpostorMesh(data)])),
-      placed(new InstancedLod([plant(), new ImpostorMesh(data)], 1)),
+      placed(new Lod([{ object: plant() }, { object: new ImpostorMesh(data) }])),
+      placed(new InstancedLod([{ object: plant() }, { object: new ImpostorMesh(data) }], 1)),
       placed(new ImpostorMesh(data)),
     ];
     for (const object of objects) {

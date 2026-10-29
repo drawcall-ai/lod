@@ -1,6 +1,6 @@
 import * as THREE from "three/webgpu";
 import { float } from "three/tsl";
-import { InstancedLod, Lod, LodLoader, type Wind } from "@drawcall/lod";
+import { InstancedLod, Lod, LodLoader, type LodLevel, type Wind } from "@drawcall/lod";
 import { sourceBox } from "./bounds.ts";
 import { model } from "./cache.ts";
 import { Random } from "../content/random.ts";
@@ -90,13 +90,13 @@ export async function cover(plan: Plan, zones: Zones, wind?: Wind): Promise<THRE
       const chunks = Math.ceil((Math.PI * (2 * kind.reach + TILE) ** 2) / (TILE * TILE));
       const tiles = new GroundTiles(plan, kind.density, where(plan, kind.ground), kind.scale, models.length);
       const lods = models.map((model, variant) => {
-        const middle = model.levels[1];
-        const empty = model.levels[2];
+        const lod = new InstancedLod(model, chunks * tiles.perKind);
+        const middle = lod.levels[1];
+        const empty = lod.levels[2];
         const box = boxes[variant];
         if (!middle || !empty || !box) throw new Error(`${kind.name}: incomplete cover levels`);
         middle.maxPixels = "grass" in kind ? cull * 4 : 64;
         empty.maxPixels = cull;
-        const lod = new InstancedLod(model, chunks * tiles.perKind);
         lod.name = `${kind.name} ${variant + 1}`;
         wind?.apply(lod, { amplitude: (box.max.y - box.min.y) * 0.07 });
         return lod;
@@ -116,18 +116,15 @@ export async function cover(plan: Plan, zones: Zones, wind?: Wind): Promise<THRE
   return root;
 }
 
-async function plantModels(kind: Kind & { id: string; groups: string[][] }): Promise<Lod[]> {
+async function plantModels(kind: Kind & { id: string; groups: string[][] }): Promise<LodLevel[][]> {
   const loader = new LodLoader();
   return Promise.all(
-    variants(kind.id, kind.groups).map((source, variant) =>
-      loader.loadAsync({
-        source,
+    variants(kind.id, kind.groups).map(async (source, variant) => {
+      const levels = await loader.loadAsync({
+        make: source,
         reference: true,
         key: model(kind.id, variant, kind.groups),
-        levels: [
-          { type: "impostor", layout: "hemi", resolution: 64, maxPixels: 64 },
-          { type: "empty", maxPixels: 1 },
-        ],
+        levels: [{ type: "impostor", layout: "hemi", resolution: 64, maxPixels: 64 }],
         restore: (object) => {
           foliageModel(object, MODEL_FOLIAGE);
           foliageLevels(object, MODEL_FOLIAGE);
@@ -136,12 +133,13 @@ async function plantModels(kind: Kind & { id: string; groups: string[][] }): Pro
             node.receiveShadow = true;
           });
         },
-      }),
-    ),
+      });
+      return [...levels, { object: new THREE.Group(), maxPixels: 1 }];
+    }),
   );
 }
 
-async function grassModels(kind: Kind & { grass: ClumpShape; designs: number }, material: THREE.Material): Promise<Lod[]> {
+async function grassModels(kind: Kind & { grass: ClumpShape; designs: number }, material: THREE.Material): Promise<LodLevel[][]> {
   return Promise.all(
     Array.from({ length: kind.designs }, async (_, variant) => {
       const dependencies = {
@@ -157,18 +155,16 @@ async function grassModels(kind: Kind & { grass: ClumpShape; designs: number }, 
         source.receiveShadow = true;
         return source;
       };
-      return new LodLoader().loadAsync({
-        source: async () => make(),
+      const levels = await new LodLoader().loadAsync({
+        make: async () => make(),
         key: dependencies,
         material: (name) => {
           if (name !== "grass") throw new Error(`Unknown grass material ${name}`);
           return material;
         },
-        levels: [
-          { type: "mesh", source: async () => thinned(make()), maxPixels: 512 },
-          { type: "empty", maxPixels: 1 },
-        ],
+        levels: [{ type: "mesh", make: async () => thinned(make()), maxPixels: 512 }],
       });
+      return [...levels, { object: new THREE.Group(), maxPixels: 1 }];
     }),
   );
 }

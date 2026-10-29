@@ -5,7 +5,7 @@ import { BoxGeometry, Matrix4, Mesh, MeshBasicMaterial, PerspectiveCamera } from
 import { Patches, type Tiles } from "../../src/world/patches.ts";
 
 test("reusing a patch chunk parks the instances its replacement leaves empty", () => {
-  const lod = new InstancedLod([new Mesh(new BoxGeometry(), new MeshBasicMaterial())], 2);
+  const lod = new InstancedLod([{ object: new Mesh(new BoxGeometry(), new MeshBasicMaterial()) }], 2);
   let nearby = [2];
   const matrix = new Matrix4();
   const tiles: Tiles = {

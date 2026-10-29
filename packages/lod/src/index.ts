@@ -1,7 +1,6 @@
 export { type LevelRequest, type LodRequest, type LodCacheOptions, LodLoader } from "./loader.js";
 export { setViewportHeight } from "./view.js";
 export { Lod } from "./lod.js";
-export { LazyLevel, type LazyLevelOptions } from "./lazy.js";
 export { Wind, type WindOptions, type SwayOptions } from "./wind/index.js";
 export { InstancedLod } from "./instanced/index.js";
 export { type LodLevel } from "./levels.js";

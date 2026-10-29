@@ -51,15 +51,14 @@ export async function trees(plan: Plan, wind?: Wind): Promise<THREE.Group> {
       if (!spots?.length) return [];
       const models = await step(id, () =>
         Promise.all(
-          variants(id, groups).map((source, index) => {
+          variants(id, groups).map(async (source, index) => {
             const levels: LevelRequest[] = [
               { type: "impostor", layout: "hemi", maxPixels, resolution, frames },
               { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
             ];
-            if (ratio !== undefined) levels.unshift({ type: "mesh", ratio, maxPixels: 10000 });
-            if (cull !== undefined) levels.push({ type: "empty", maxPixels: cull });
-            return loader.loadAsync({
-              source,
+            if (ratio !== undefined) levels.unshift({ type: "simplify", ratio, maxPixels: 10000 });
+            const loaded = await loader.loadAsync({
+              make: source,
               reference: true,
               key: model(id, index, groups, ratio),
               levels,
@@ -69,13 +68,15 @@ export async function trees(plan: Plan, wind?: Wind): Promise<THREE.Group> {
                 foliageLevels(object, MODEL_FOLIAGE);
               },
             });
+            if (cull !== undefined) loaded.push({ object: new THREE.Group(), maxPixels: cull });
+            return loaded;
           }),
         ),
       );
       const crowds = spread(id, models, spots, foliageTint);
       if (wind)
         for (const crowd of crowds) {
-          const box = sourceBox(crowd);
+          const box = sourceBox(crowd.levels);
           const height = box.max.y - box.min.y;
           wind.apply(crowd, { amplitude: height * 0.025 });
         }

@@ -1,5 +1,5 @@
 import * as THREE from "three/webgpu";
-import { InstancedLod, type Lod } from "@drawcall/lod";
+import { InstancedLod, type LodLevel } from "@drawcall/lod";
 
 /** Places instance `i` of `lod` at a spot: on the ground, turned and scaled. */
 export function place(lod: InstancedLod, i: number, at: { x: number; y: number; z: number; angle: number; scale: number }): void {
@@ -22,7 +22,7 @@ const REGION = 1000;
  */
 export function spread(
   name: string,
-  variants: readonly Lod[],
+  variants: readonly (readonly LodLevel[])[],
   spots: { x: number; y: number; z: number; angle: number; scale: number }[],
   tint?: (i: number, color: THREE.Color) => THREE.Color,
 ): InstancedLod[] {

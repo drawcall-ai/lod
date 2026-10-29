@@ -25,10 +25,11 @@ const meshes = (root: Object3D) => root.children.filter(isMesh);
 const sphere = (material = new MeshStandardMaterial()) => new Mesh(new SphereGeometry(1, 64, 32), material);
 
 /** How far `copy` is from `source`, in `source`'s units, read back from the default maxPixels it gets in a Lod. */
-const error = (source: Object3D, copy: Object3D) => (2 * boundingSphere(source).radius) / must(new Lod([source.clone(), copy]).levels[1]).maxPixels;
+const deviation = (source: Object3D, copy: Object3D) =>
+  (2 * boundingSphere(source).radius) / must(new Lod([{ object: source.clone() }, { object: copy }]).levels[1]).maxPixels;
 
 describe("simplify", () => {
-  it("reduces triangles, keeps materials and shared geometry shared, and measures its error in the source's units", async () => {
+  it("reduces triangles, keeps materials and shared geometry shared, and measures its deviation in the source's units", async () => {
     const geometry = new SphereGeometry(1, 64, 32);
     const material = new MeshStandardMaterial();
     const scaled = new Mesh(geometry, material);
@@ -42,18 +43,18 @@ describe("simplify", () => {
     expect(meshes(copy).every((mesh) => mesh.material === material)).toBe(true);
     // The scaled copy, most of the area, moved three times as far.
     const single = new Mesh(geometry, material);
-    expect(error(source, copy) / (3 * error(single, await simplify(single, { ratio: 0.1 })))).toBeCloseTo(1, 1);
+    expect(deviation(source, copy) / (3 * deviation(single, await simplify(single, { ratio: 0.1 })))).toBeCloseTo(1, 1);
     await expect(simplify(source, { ratio: 0 })).rejects.toThrow(/ratio/);
   });
 
   it("simplifies a nested Lod's source whatever it shows, and leaves its other levels", async () => {
     const material = new MeshStandardMaterial();
     const far = new Mesh(new SphereGeometry(1, 8, 4), material);
-    const inner = new Lod([sphere(material), far]);
-    inner.levels.forEach((level, i) => (level.object.visible = i === 1));
+    const inner = new Lod([{ object: sphere(material) }, { object: far }]);
+    inner.levels.forEach((level, i) => (must(level.object).visible = i === 1));
     const [nested] = (await simplify(new Group().add(inner), { ratio: 0.1 })).children;
     if (!nested || !isLOD(nested)) throw new Error("expected the nested Lod");
-    const [source, cheap] = nested.levels.map((level) => (isMesh(level.object) ? triangles(level.object.geometry) : 0));
+    const [source, cheap] = nested.levels.map((level) => (level.object && isMesh(level.object) ? triangles(level.object.geometry) : 0));
     expect(source).toBeLessThan(64 * 32 * 2 * 0.15);
     expect(cheap).toBe(triangles(far.geometry));
   });
@@ -79,7 +80,7 @@ describe("simplify", () => {
     expect(triangles(many.geometry)).toBeLessThan(triangles(instanced.geometry) * 0.15);
     expect(many.count).toBe(2);
     expect(kept.impostor).toBe(impostor);
-    const crowd = new InstancedLod([sphere()], 2);
+    const crowd = new InstancedLod([{ object: sphere() }], 2);
     const clone = vi.spyOn(crowd, "clone");
     const source = new Group().add(sphere(), crowd);
     try {

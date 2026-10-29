@@ -8,6 +8,7 @@ import {
   MeshStandardNodeMaterial,
   MeshToonNodeMaterial,
   type BatchedMesh,
+  type Box3,
   type BufferAttribute,
   type Color,
   type InstancedMesh,
@@ -25,7 +26,6 @@ import {
 } from "three/webgpu";
 import type { InstancedLod } from "./instanced/index.js";
 import type { ImpostorMesh } from "./impostor/mesh/index.js";
-import type { LazyLevel } from "./lazy.js";
 
 // Type guards on three's `isX` flags, which hold across copies of three (and of this
 // package, as in .glts scripts) where `instanceof` does not, and small checks on objects.
@@ -39,10 +39,11 @@ export const isBatchedMesh = (node: Object3D): node is BatchedMesh => flag(node,
 export const isLight = (node: Object3D): boolean => flag(node, "isLight");
 export const isScene = (node: Object3D): node is Scene => flag(node, "isScene");
 export const isImpostorMesh = (node: Object3D): node is ImpostorMesh => flag(node, "isImpostorMesh");
-export const isLazyLevel = (node: Object3D): node is LazyLevel => flag(node, "isLazyLevel");
 export const isInstancedLod = (node: Object3D): node is InstancedLod => flag(node, "isInstancedLod");
 /** three's LOD and this package's Lod and InstancedLod. */
-export const isLOD = (node: Object3D): node is Object3D & { isLOD: true; autoUpdate: boolean; readonly levels: ReadonlyArray<{ readonly object: Object3D }> } =>
+export const isLOD = (
+  node: Object3D,
+): node is Object3D & { isLOD: true; autoUpdate: boolean; readonly levels: ReadonlyArray<{ readonly object?: Object3D; readonly box?: Box3 }> } =>
   flag(node, "isLOD");
 export const isStandard = (material: Material): material is MeshStandardMaterial => flag(material, "isMeshStandardMaterial");
 export const isPhysical = (material: Material): material is MeshPhysicalMaterial => flag(material, "isMeshPhysicalMaterial");

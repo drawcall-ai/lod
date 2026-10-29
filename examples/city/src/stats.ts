@@ -1,5 +1,5 @@
 import * as THREE from "three/webgpu";
-import { InstancedLod, LazyLevel, Lod } from "@drawcall/lod";
+import { InstancedLod, Lod } from "@drawcall/lod";
 
 /** Per level: instances drawing it this frame and their triangles. */
 export interface LevelCount {
@@ -27,13 +27,13 @@ export function countLevels(roots: readonly THREE.Object3D[]): LevelCount[] {
       }
     } else
       lod.levels.forEach((level, index) => {
-        instances[index] = level.object.visible ? 1 : 0;
+        instances[index] = level.object?.visible ? 1 : 0;
       });
     for (const [index, level] of lod.levels.entries()) {
       const count = (counts[index] ??= { instances: 0, triangles: 0 });
       const drawing = instances[index];
       if (!drawing) continue;
-      const object = level.object instanceof LazyLevel ? level.object.object : level.object;
+      const object = level.object;
       if (!object) throw new Error(`${lod.name}: selected level ${index} is not loaded`);
       const each = triangles(object);
       if (!each) continue;

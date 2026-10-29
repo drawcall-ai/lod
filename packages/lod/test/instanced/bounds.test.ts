@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { Matrix4, Object3D, Sphere, Vector3 } from "three/webgpu";
+import { Matrix4, Sphere, Vector3 } from "three/webgpu";
 import { Bounds, type BoundsView } from "../../src/instanced/bounds.js";
-import type { LodLevel } from "../../src/levels.js";
 
-const levels: LodLevel[] = [Infinity, 40, 10].map((maxPixels) => ({ object: new Object3D(), maxPixels }));
+const levels = [Infinity, 40, 10].map((maxPixels) => ({ maxPixels }));
 const identity = new Matrix4();
 function setup(count: number) {
   const matrices = new Float32Array(count * 16);
