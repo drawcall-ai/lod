@@ -7,7 +7,7 @@
     "build": "pnpm -r --if-present build",
     "typecheck": "pnpm -r --if-present typecheck",
     "test": "pnpm -r --if-present test",
-    "check": "pnpm build && pnpm typecheck && pnpm test",
+    "check": "pnpm --filter \"./packages/*\" build && pnpm typecheck && pnpm test",
     "city": "pnpm --filter @drawcall/lod build && pnpm --filter @drawcall/lod-example-city dev --force",
     "format": "prettier --write ."
   },
