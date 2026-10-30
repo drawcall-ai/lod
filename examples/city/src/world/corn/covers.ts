@@ -1,143 +1,69 @@
 import * as THREE from "three/webgpu";
 import { Fn, cameraPosition, distance, mix, modelWorldMatrix, positionLocal, smoothstep, uniform, vec3, vec4 } from "three/tsl";
-import { bakeMesh, boundingBox, InstancedLod } from "@drawcall/lod";
-import { BLOCK, type Plant, plantTurn, ROWS, type Tile, vigour } from "./field.ts";
+import { boundingBox, InstancedLod } from "@drawcall/lod";
+import { type Tile, vigour } from "./field.ts";
+import { BLOCK } from "../../../public/content/corn/layout.ts";
+import { canopy, SINK, TOP } from "../../../public/content/corn/cover/shapes.ts";
 
-/**
- * Mean height of the baked canopy: just under the tops of the leaves, so that where
- * plants stand over it their tops and tassels still rise above it.
- */
-export const TOP = 1.95;
-/** How far the canopy rises over each row and dips between rows: seen across the rows, the ridges hide the furrows. */
-const RIDGE = 0.2;
-/** How far a cover reaches into the soil: below the lowest ground of a sloping block. */
-const SINK = 0.3;
-/**
- * Share of the plants baked with their tassel. The bake looks straight down, where tassels
- * cover far more of the canopy than in any view across the field; with every plant
- * tasselled the cover is sprinkled with pale blobs where the plants hand over to it.
- */
-const TASSELLED = 0.35;
-/** The tint of the most vigorous patches of a field: a little yellower. */
 const YELLOWER = new THREE.Color(1.05, 1, 0.85);
 
 /** Distances (m) from the camera over which the covers rise out of the soil, shared by their shaders. */
 export const skirt = () => uniform(new THREE.Vector2());
 export type Skirt = ReturnType<typeof skirt>;
 
-/** Baked levels over the tiles: a block's canopy (rising out of the soil near, ridged, flat far away) or a field's outer wall. */
+/**
+ * Baked levels over the tiles, after an empty level 0. A block's canopy rises out of the
+ * soil near, then is ridged, then flat far away; a field's outer wall only rises.
+ */
 export interface Cover {
+  kind: "canopy" | "wall";
   lod: InstancedLod;
   diameter: number;
 }
 
-/**
- * The baked covers: per design its canopy over the tiles of that design, and per axis
- * the walls of the fields' outer blocks. Canopies bake a design's plants; walls bake the
- * plants nearest the side, the outermost row or row ends. The plants are sown unevenly
- * (see `layout`), so even the bake's straight, parallel rays find leaves nearly everywhere.
- * `plants` are the variants with and without their tassel.
- */
-export async function bakeCovers(designs: Plant[][], plants: { tasselled: THREE.Object3D[]; bare: THREE.Object3D[] }): Promise<THREE.Mesh[]> {
-  const canopies = designs.map((design) => bakeCover(plantGroup(plants, design), canopy(1)));
-  const walls = (["x", "z"] as const).map((axis) => {
-    const outer = (p: Plant) => (axis === "x" ? p.x : p.z) > BLOCK / 2 - 1;
-    return bakeCover(plantGroup(plants, (designs[0] ?? []).filter(outer)), side(axis));
-  });
-  return Promise.all([...canopies, ...walls]);
+/** The raw bakeMesh results the covers are built from, freshly baked or decoded. */
+export interface CoverBakes {
+  /** Indexed by block design. */
+  canopies: THREE.Mesh[];
+  walls: Record<Axis, THREE.Mesh>;
 }
 
-/** Build cover levels from raw bakeMesh results, freshly baked or decoded. */
-export function coverLevels(bakes: THREE.Mesh[], tiles: Tile[], skirt: Skirt): Cover[] {
-  const designs = bakes.length - 2;
-  if (designs < 1) throw new Error("Corn covers need canopies and two walls");
-  return bakes.map((bake, index) => {
-    const material = coverMaterial(bake);
-    if (index < designs) {
-      const ridged = new THREE.Mesh(bake.geometry, material);
-      // Near the camera it rises in front of the plants' fade; far away the ridges are subpixel.
-      const near = new THREE.Mesh(canopy(BLOCK * 2), rising(material, skirt));
-      const flat = new THREE.Mesh(new THREE.PlaneGeometry(BLOCK, BLOCK).rotateX(-Math.PI / 2).translate(0, TOP, 0), material);
-      const levels = [near, ridged, flat];
-      for (const level of levels) {
-        level.castShadow = false;
-        level.receiveShadow = true;
-      }
-      const places = tiles.filter((tile) => tile.design === index).map((tile) => ({ matrix: tile.matrix, at: tile.centre }));
-      return { lod: coverLod(`corn block ${index + 1}`, levels, places), diameter: boundingBox(ridged).getSize(new THREE.Vector3()).length() };
-    }
-    const axis = index === designs ? "x" : "z";
-    const wall = new THREE.Mesh(bake.geometry, rising(material, skirt));
-    wall.castShadow = wall.receiveShadow = true;
-    const turn = new THREE.Matrix4().makeRotationY(Math.PI);
-    const places = tiles.flatMap((tile) =>
-      tile.walls
-        .filter((side) => side.axis === axis)
-        .map((side) => ({ matrix: side.turned ? tile.matrix.clone().multiply(turn) : tile.matrix, at: tile.centre })),
-    );
-    return { lod: coverLod(`corn wall ${axis}`, [wall], places), diameter: boundingBox(wall).getSize(new THREE.Vector3()).length() };
-  });
+type Axis = "x" | "z";
+
+/** Every block design's canopy, then the walls along x and z. */
+export function covers({ canopies, walls }: CoverBakes, tiles: Tile[], skirt: Skirt): Cover[] {
+  return [
+    ...canopies.map((bake, design) => canopyCover(bake, design, tiles, skirt)),
+    wallCover(walls.x, "x", tiles, skirt),
+    wallCover(walls.z, "z", tiles, skirt),
+  ];
 }
 
-/**
- * `plants` as InstancedLods of the variants with every instance at full detail: a source
- * to bake. A share of them (`TASSELLED`) carries its tassel.
- */
-function plantGroup(variants: { tasselled: THREE.Object3D[]; bare: THREE.Object3D[] }, plants: Plant[]): THREE.Group {
-  const group = new THREE.Group();
-  const matrix = new THREE.Matrix4();
-  const turn = new THREE.Quaternion();
-  const one = new THREE.Vector3(1, 1, 1);
-  for (const [tassel, models] of [[true, variants.tasselled] as const, [false, variants.bare] as const])
-    models.forEach((model, v) => {
-      const mine = plants.filter((p) => p.variant === v && hash(p) < TASSELLED === tassel);
-      const lod = new InstancedLod([{ object: model }], mine.length);
-      mine.forEach((p, i) => lod.setMatrixAt(i, matrix.compose(new THREE.Vector3(p.x, 0, p.z), plantTurn(p, 0, turn), one)));
-      group.add(lod);
-    });
-  return group;
+function canopyCover(bake: THREE.Mesh, design: number, tiles: Tile[], skirt: Skirt): Cover {
+  const material = coverMaterial(bake);
+  const ridged = new THREE.Mesh(bake.geometry, material);
+  // Near the camera it rises in front of the plants' fade; far away the ridges are subpixel.
+  const near = new THREE.Mesh(canopy(BLOCK * 2), rising(material, skirt));
+  const flat = new THREE.Mesh(new THREE.PlaneGeometry(BLOCK, BLOCK).rotateX(-Math.PI / 2).translate(0, TOP, 0), material);
+  const levels = [near, ridged, flat];
+  for (const level of levels) {
+    level.castShadow = false;
+    level.receiveShadow = true;
+  }
+  const places = tiles.filter((tile) => tile.design === design).map((tile) => ({ matrix: tile.matrix, at: tile.centre }));
+  return { kind: "canopy", lod: coverLod(`corn block ${design}`, levels, places), diameter: boundingBox(ridged).getSize(new THREE.Vector3()).length() };
 }
 
-/** A 0–1 number fixed for a plant's place. */
-function hash(p: Plant): number {
-  const s = Math.sin(p.x * 127.1 + p.z * 311.7) * 43758.5453;
-  return s - Math.floor(s);
-}
-
-/** The canopy a block bakes onto: ridged over the rows, `across` quads along them. */
-function canopy(across: number): THREE.BufferGeometry {
-  const g = new THREE.PlaneGeometry(BLOCK, BLOCK, across, ROWS * 4).rotateX(-Math.PI / 2);
-  shape(g, (_, z) => ridge(z));
-  return g;
-}
-
-/**
- * A field's outer wall on a block's +x side (across the rows' ends, its top following
- * the ridges) or +z side (along the outer row, as high as its ridge), from the soil up.
- */
-function side(axis: "x" | "z"): THREE.BufferGeometry {
-  const g = new THREE.PlaneGeometry(BLOCK, 1, ROWS * 4, 1).translate(0, 0.5, BLOCK / 2);
-  if (axis === "x") g.rotateY(Math.PI / 2);
-  shape(g, (y, z) => (y > 0 ? (axis === "x" ? ridge(z) : TOP + RIDGE) : -SINK));
-  return g;
-}
-
-/** Sets every vertex's height of `geometry` by `height(y, z)`, and its normals to match. */
-function shape(geometry: THREE.BufferGeometry, height: (y: number, z: number) => number): void {
-  const position = geometry.getAttribute("position");
-  for (let i = 0; i < position.count; i++) position.setY(i, height(position.getY(i), position.getZ(i)));
-  geometry.computeVertexNormals();
-}
-
-/** The canopy's height across the rows (block frame z): highest over each row, lowest between. */
-function ridge(z: number): number {
-  const row = BLOCK / ROWS;
-  return TOP + RIDGE * Math.cos(((2 * Math.PI) / row) * (z + BLOCK / 2 - row / 2));
-}
-
-/** `source` baked onto `low`. */
-async function bakeCover(source: THREE.Object3D, low: THREE.BufferGeometry): Promise<THREE.Mesh> {
-  return bakeMesh(source, { low: new THREE.Mesh(low), textureSize: 256 });
+function wallCover(bake: THREE.Mesh, axis: Axis, tiles: Tile[], skirt: Skirt): Cover {
+  const wall = new THREE.Mesh(bake.geometry, rising(coverMaterial(bake), skirt));
+  wall.castShadow = wall.receiveShadow = true;
+  const turn = new THREE.Matrix4().makeRotationY(Math.PI);
+  const places = tiles.flatMap((tile) =>
+    tile.walls
+      .filter((side) => side.axis === axis)
+      .map((side) => ({ matrix: side.turned ? tile.matrix.clone().multiply(turn) : tile.matrix, at: tile.centre })),
+  );
+  return { kind: "wall", lod: coverLod(`corn wall ${axis}`, [wall], places), diameter: boundingBox(wall).getSize(new THREE.Vector3()).length() };
 }
 
 function coverMaterial(bake: THREE.Mesh): THREE.MeshStandardNodeMaterial {

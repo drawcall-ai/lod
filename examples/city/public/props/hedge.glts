@@ -1,0 +1,14 @@
+import { loadingManager, onDispose, scene } from "@drawcall/glts";
+import { hedge } from "../content/hedge.ts";
+import { Library } from "../content/materials.ts";
+import { number } from "../content/parameters.ts";
+
+const library = new Library(loadingManager, new URL("../assets/", import.meta.url).href);
+onDispose(() => library.dispose());
+const query = new URL(import.meta.url).searchParams;
+await library.load();
+const variant = number(query, "variant", 0, 0, 0xffffffff, true);
+// Seeds start at 1, which keeps the hedges the variants were first tuned with.
+const object = library.own(hedge(library, number(query, "length", 2.4, 0.1, 100), variant + 1));
+scene.add(object);
+await library.ready(object);

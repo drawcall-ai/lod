@@ -1,4 +1,4 @@
-import { strFromU8, strToU8, unzip, unzipSync, zipSync } from "fflate";
+import { strFromU8, strToU8, unzip, zipSync } from "fflate";
 import {
   Box3,
   BufferAttribute,
@@ -149,15 +149,11 @@ export function encodeBakedMesh(mesh: Mesh): Uint8Array {
   return zipSync(files, { level: 6 });
 }
 
-/** Decode `encodeBakedMesh` bytes into an independently owned mesh, ready for a Lod. */
-export function decodeBakedMesh(input: Uint8Array | ArrayBuffer): Mesh {
-  const files = unzipSync(input instanceof Uint8Array ? input : new Uint8Array(input));
-  return fromFiles(files);
-}
-
-/** Inflate large cached entries in fflate workers before constructing their mesh. */
-export async function decodeBakedMeshAsync(input: Uint8Array | ArrayBuffer): Promise<Mesh> {
-  const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
+/**
+ * Decode `encodeBakedMesh` bytes into an independently owned mesh, ready for a Lod. Large
+ * entries inflate in fflate workers.
+ */
+export async function decodeBakedMeshAsync(bytes: Uint8Array): Promise<Mesh> {
   const files = await new Promise<Files>((resolve, reject) => unzip(bytes, (error, files) => (error ? reject(error) : resolve(files))));
   return fromFiles(files);
 }

@@ -1,23 +1,20 @@
 import * as THREE from "three/webgpu";
-import { InstancedLod, Lod, LodLoader, type LodLevel, type Wind } from "@drawcall/lod";
-import { cornPlant } from "../../content/corn/index.ts";
-import { step } from "../../loading.ts";
-import { heroPlant } from "../hero.ts";
-import { proceduralFiles } from "../cache.ts";
+import { InstancedLod, Lod, type Wind } from "@drawcall/lod";
+import { loader, scripts } from "../../loading.ts";
+import { heroPlant } from "./hero.ts";
 import { sourceBox } from "../bounds.ts";
 import { Patches } from "../patches.ts";
 import type { Plan } from "../plan.ts";
-import { bakeCovers, coverLevels, type Cover, type Skirt, skirt as skirtUniform, TOP } from "./covers.ts";
-import { BLOCK, cut, FieldTiles, heroSpot, layout, VARIANTS } from "./field.ts";
-import { prepare, material, foliage } from "./materials.ts";
-import { cutoff, setCutoff, PLANT_PIXELS, FAR_PIXELS, PLANT_GONE } from "./levels.ts";
+import { covers, type Cover, type Skirt, skirt as skirtUniform } from "./covers.ts";
+import { cut, FieldTiles, heroSpot } from "./field.ts";
+import { cutoff, plantRequest, setCutoff } from "./levels.ts";
+import { BLOCK, DESIGNS, layout, VARIANTS } from "../../../public/content/corn/layout.ts";
+import { TOP } from "../../../public/content/corn/cover/shapes.ts";
 
-const DESIGNS = 4;
 const CHUNKS = 128;
 const RAMP = 2;
 const LEAD = 0.5;
 const FLAT_PIXELS = 60;
-const FIELD_LEAVES: [number, number] = [24, 4];
 const BLOCK_RADIUS = Math.hypot(BLOCK / 2, TOP - 1.2, BLOCK / 2);
 
 /** Every field system exists at startup; the package independently requests each plant level. */
@@ -40,90 +37,51 @@ export class Corn extends THREE.Object3D {
   }
 
   static async build(plan: Plan): Promise<Corn> {
-    const designs = Array.from({ length: DESIGNS }, (_, d) => layout(d + 11));
+    const designs = Array.from({ length: DESIGNS }, (_, d) => layout(d));
     const tiles = cut(plan, DESIGNS, TOP);
     const spot = heroSpot(tiles, designs);
-    const key = {
-      ...proceduralFiles("src/world/corn/index.ts", { designs: DESIGNS, leafSegments: FIELD_LEAVES, variants: VARIANTS }, []),
-      covers: { path: "src/world/corn/covers.ts" },
-      field: { path: "src/world/corn/field.ts" },
-      materials: { path: "src/world/corn/materials.ts" },
-      cutoff: { path: "src/world/corn/levels.ts" },
-    };
-    const loader = new LodLoader();
-    let baking: Promise<THREE.Mesh[]> | undefined;
-    const bake = () =>
-      (baking ??= (async () => {
-        await prepare();
-        const tasselled = Array.from({ length: VARIANTS }, (_, v) => cornPlant(v + 1, { leafSegments: FIELD_LEAVES, detail: "field" }));
-        const bare = Array.from({ length: VARIANTS }, (_, v) => cornPlant(v + 1, { leafSegments: FIELD_LEAVES, detail: "field", tassel: false }));
-        const bakes = await step("corn blocks", () => bakeCovers(designs, { tasselled, bare }));
-        for (const object of [...tasselled, ...bare])
-          object.traverse((node) => {
-            if (node instanceof THREE.Mesh) node.geometry.dispose();
-          });
-        return bakes;
-      })());
-    const bakes = await Promise.all(
-      Array.from({ length: DESIGNS + 2 }, async (_, index) => {
-        const levels = await loader.loadAsync({
-          type: "baked",
-          make: async () => {
-            const cover = (await bake())[index];
-            if (!cover) throw new Error(`Missing corn cover ${index}`);
-            return cover;
-          },
-          key: { ...key, cover: { value: index } },
-          levels: [],
-        });
-        const mesh = levels[0]?.object;
-        if (!(mesh instanceof THREE.Mesh)) throw new Error(`Corn cover ${index} is not a mesh`);
-        return mesh;
-      }),
-    );
+    // Covers have no drawable source as their finest level: plants show through the empty level.
+    const [canopies, x, z] = await Promise.all([
+      Promise.all(Array.from({ length: DESIGNS }, (_, design) => coverBake(`design=${design}`))),
+      coverBake("axis=x"),
+      coverBake("axis=z"),
+    ]);
     const skirt = skirtUniform();
-    const covers = coverLevels(bakes, tiles, skirt);
     const perTile = Array.from({ length: VARIANTS }, (_, variant) =>
       Math.max(...designs.map((design) => design.filter((plant) => plant.variant === variant).length)),
     );
-    const lods: InstancedLod[] = [];
-    const sizes: number[] = [];
-    let far: LodLevel[] = [];
-    for (let variant = 0; variant < VARIANTS; variant++) {
-      const count = perTile[variant];
-      if (count === undefined) throw new Error("Missing corn variant tile capacity");
-      const levels = await loader.loadAsync({
-        make: async () => {
-          await prepare();
-          return cornPlant(variant + 1, { leafSegments: FIELD_LEAVES, detail: "field" });
-        },
-        material,
-        key: { ...key, variant: { value: variant } },
-        levels: [
-          { type: "impostor", layout: "hemi", maxPixels: PLANT_PIXELS, resolution: 256, frames: 8, draw: { parallax: 0 } },
-          { type: "impostor", layout: "hemi", maxPixels: FAR_PIXELS, resolution: 64, frames: 8, draw: { parallax: 0 } },
-        ],
-        restore: (object, index) => {
-          foliage(object);
-          if (index === 1 || index === 2) object.castShadow = false;
-        },
-      });
-      levels.push({ object: new THREE.Group(), maxPixels: PLANT_GONE });
-      if (variant === spot.variant) far = levels.slice(1, 3);
-      const lod = new InstancedLod(levels, CHUNKS * count);
-      lod.name = `corn plant ${variant + 1}`;
-      const box = sourceBox(lod.levels);
-      sizes.push(box.getSize(new THREE.Vector3()).length());
-      lods.push(lod);
-    }
-    if (far.length !== 2) throw new Error("The hero's variant has no impostor levels");
-    const details = await heroPlant({ ...spot, seed: spot.variant + 1 }, far, plan.terrain);
+    const plants = await Promise.all(
+      Array.from({ length: VARIANTS }, async (_, variant) => {
+        const count = perTile[variant];
+        if (count === undefined) throw new Error("Missing corn variant tile capacity");
+        const levels = await loader.loadAsync(plantRequest(`/corn/plant.glts?variant=${variant}`));
+        const lod = new InstancedLod(levels, CHUNKS * count);
+        lod.name = `corn plant ${variant}`;
+        const box = sourceBox(lod.levels);
+        return { lod, size: box.getSize(new THREE.Vector3()).length() };
+      }),
+    );
+    const details = await heroPlant(spot, plan.terrain);
     let corn: Corn | undefined;
-    const patches = new Patches(lods, perTile, CHUNKS, new FieldTiles(tiles, designs, plan.terrain, spot), () => {
-      if (!corn) throw new Error("Corn tiles requested before initialization");
-      return corn.fadeFrom / (1 - Lod.fade) + BLOCK_RADIUS;
-    });
-    corn = new Corn(covers, skirt, patches, details.hero, details.ladybird, details.anchors, Math.max(...sizes));
+    const patches = new Patches(
+      plants.map(({ lod }) => lod),
+      perTile,
+      CHUNKS,
+      new FieldTiles(tiles, designs, plan.terrain, spot),
+      () => {
+        if (!corn) throw new Error("Corn tiles requested before initialization");
+        return corn.fadeFrom / (1 - Lod.fade) + BLOCK_RADIUS;
+      },
+    );
+    corn = new Corn(
+      covers({ canopies, walls: { x, z } }, tiles, skirt),
+      skirt,
+      patches,
+      details.hero,
+      details.ladybird,
+      details.anchors,
+      Math.max(...plants.map(({ size }) => size)),
+    );
     return corn;
   }
 
@@ -141,7 +99,7 @@ export class Corn extends THREE.Object3D {
    * are plant slots, the plants dither out nearer, and back out as slots free up.
    */
   update(camera: THREE.Camera): void {
-    const scale = ((camera.projectionMatrix.elements[5] ?? 1) * Patches.height * Lod.quality) / 2;
+    const scale = (camera.projectionMatrix.elements[5] * Patches.height * Lod.quality) / 2;
     const gone = cutoff(this.squeeze);
     this.fadeFrom = (this.plantSize * scale) / gone;
     this.plants.update(camera);
@@ -150,14 +108,29 @@ export class Corn extends THREE.Object3D {
     for (const lod of this.active) setCutoff(lod.levels, gone);
     const risen = Math.max(this.fadeFrom - LEAD, RAMP);
     this.skirt.value.set(risen - RAMP, risen);
-    for (const { lod, diameter } of this.covers) {
-      const [, near, ridged, flat] = lod.levels;
-      if (!near) throw new Error(`${lod.name} has no baked level`);
+    for (const { kind, lod, diameter } of this.covers) {
+      const [, rising, ridged, flat] = lod.levels;
+      if (!rising) throw new Error(`${lod.name} has no baked level`);
       // the measure is the distance to the cover's centre; a part of it is up to its radius nearer or farther
-      near.maxPixels = (diameter * scale) / ((1 - Lod.fade) * Math.max(risen - RAMP - diameter / 2, 0.5));
-      if (!ridged || !flat) continue;
-      ridged.maxPixels = Math.min((diameter * scale) / (risen + diameter / 2), near.maxPixels * (1 - Lod.fade));
+      rising.maxPixels = (diameter * scale) / ((1 - Lod.fade) * Math.max(risen - RAMP - diameter / 2, 0.5));
+      if (kind === "wall") continue;
+      if (!ridged || !flat) throw new Error(`${lod.name} needs ridged and flat levels`);
+      ridged.maxPixels = Math.min((diameter * scale) / (risen + diameter / 2), rising.maxPixels * (1 - Lod.fade));
       flat.maxPixels = Math.min(FLAT_PIXELS, ridged.maxPixels * (1 - Lod.fade));
     }
+  }
+}
+
+/** A cover's raw bake, `query` selecting it; the scene's resources pass to the returned mesh. */
+async function coverBake(query: string): Promise<THREE.Mesh> {
+  const scene = await scripts.loadAsync(`/corn/cover.glts?${query}`);
+  try {
+    const mesh = scene.children[0];
+    if (!(mesh instanceof THREE.Mesh)) throw new Error(`Corn cover ${query} is not a mesh`);
+    // Transfer the bake's resources to the cover levels before releasing its script execution.
+    scene.remove(mesh);
+    return mesh;
+  } finally {
+    scene.dispose();
   }
 }

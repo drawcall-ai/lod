@@ -20,7 +20,7 @@ import {
   Vector3,
 } from "three/webgpu";
 import { describe, expect, it } from "vitest";
-import { encodeBakedMesh, decodeBakedMesh, decodeBakedMeshAsync } from "../../src/baked/codec.js";
+import { encodeBakedMesh, decodeBakedMeshAsync } from "../../src/baked/codec.js";
 import { bakeMesh } from "../../src/baked/index.js";
 import { InteriorMaterial } from "../../src/baked/interior/material.js";
 import { deviationOf, recordDeviation } from "../../src/levels.js";
@@ -101,7 +101,7 @@ describe("baked mesh codec", () => {
     }
   });
 
-  it("rejects non-baked/modified input and corrupt geometry, texture data or metadata", () => {
+  it("rejects non-baked/modified input and corrupt geometry, texture data or metadata", async () => {
     expect(() => encodeBakedMesh(new Mesh())).toThrow(/bakeMesh result/);
     const source = fixture(false);
     if (!(source.material instanceof MeshStandardNodeMaterial)) throw new Error("expected standard material");
@@ -116,7 +116,7 @@ describe("baked mesh codec", () => {
         if (!meta) throw new Error("missing metadata");
         files.meta = strToU8(strFromU8(meta).replace('"version":2', '"version":999'));
       } else files[corrupt] = new Uint8Array(1);
-      expect(() => decodeBakedMesh(zipSync(files))).toThrow(/Invalid baked mesh/);
+      await expect(decodeBakedMeshAsync(zipSync(files))).rejects.toThrow(/Invalid baked mesh/);
     }
     disposeTree(source);
   });
@@ -138,7 +138,7 @@ describe("baked mesh codec", () => {
       camera.lookAt(0, 0, 0);
       const scene = new Scene().add(new AmbientLight(0xffffff, 2));
       for (const original of [building, cutout]) {
-        const restored = decodeBakedMesh(encodeBakedMesh(original));
+        const restored = await decodeBakedMeshAsync(encodeBakedMesh(original));
         scene.add(original);
         const before = await render(scene, camera);
         scene.remove(original).add(restored);

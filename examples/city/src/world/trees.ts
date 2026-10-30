@@ -1,18 +1,15 @@
-import { LodLoader, type LevelRequest, type Wind } from "@drawcall/lod";
+import { type LevelRequest, type Wind } from "@drawcall/lod";
 import * as THREE from "three/webgpu";
-import { Random } from "../content/random.ts";
-import { step } from "../loading.ts";
-import { foliageLevels, foliageModel } from "../content/foliage.ts";
-import { MODEL_FOLIAGE, variants } from "../content/models.ts";
+import { Random } from "../../public/content/random.ts";
+import { loader } from "../loading.ts";
+import { foliageLevels, foliageModel, MODEL_FOLIAGE } from "../../public/content/foliage.ts";
 import { spread } from "./place.ts";
 import { sourceBox } from "./bounds.ts";
-import { model } from "./cache.ts";
 import type { Plan } from "./plan.ts";
 
 interface Species {
   id: string;
-  groups?: string[][];
-  ratio?: number;
+  variants: string[];
   maxPixels: number;
   resolution?: number;
   frames?: number;
@@ -21,57 +18,48 @@ interface Species {
 
 /**
  * Trees and shrubs (Poly Haven scans, every leaf a card): per species and variant one
- * InstancedLod of the model, then a hemispherical impostor (they always stand upright)
- * out to the horizon. No simplified level between: decimated leaf cards look ragged,
- * while the impostor keeps every leaf's look. The switch heights are set for the frame
- * budget: the broadleaf scan models every leaf in about 60 triangles, two million in all;
- * a quarter of them (`ratio`) still shows each leaf's shape from a step away, and is
- * affordable for the few dozen trees that stand that close in a forest. Its impostor gets
- * twice the resolution to stay sharp up close.
+ * InstancedLod whose ladder is the source model, a detailed hemispherical impostor (they
+ * always stand upright) from the species' maxPixels, a 64 px impostor from 60 px, then,
+ * for small plants, an empty level that culls them below `cull` px. No simplified level:
+ * decimated leaf cards look ragged, while the impostor keeps every leaf's look. The
+ * switch heights are set for the frame budget; the broadleaf scan keeps its full leaf
+ * geometry nearby and a larger impostor.
  */
 const SPECIES: Species[] = [
-  { id: "tree_small_02", ratio: 0.25, maxPixels: 900, resolution: 256, frames: 10 },
-  { id: "searsia_lucida", groups: [["searsia_lucida_a_LOD0"], ["searsia_lucida_e_LOD0"]], maxPixels: 300 },
-  { id: "pine_sapling_small", groups: [["pine_sapling_small_a"], ["pine_sapling_small_b"]], maxPixels: 300 },
-  { id: "shrub_02", groups: [["shrub_02_a"], ["shrub_02_c"]], maxPixels: 300, cull: 2 },
+  { id: "tree_small_02", variants: ["tree_small_02_LOD0"], maxPixels: 900, resolution: 256, frames: 10 },
+  { id: "searsia_lucida", variants: ["searsia_lucida_a_LOD0", "searsia_lucida_e_LOD0"], maxPixels: 300 },
+  { id: "pine_sapling_small", variants: ["pine_sapling_small_a", "pine_sapling_small_b"], maxPixels: 300 },
+  { id: "shrub_02", variants: ["shrub_02_a", "shrub_02_c"], maxPixels: 300, cull: 2 },
   // garden perennials and vegetables
-  { id: "fern_02", groups: [["fern_02_a"], ["fern_02_b"]], maxPixels: 200, cull: 2 },
-  { id: "nettle_plant", groups: [["nettle_plant_medium_a_LOD0"], ["nettle_plant_tall_a_LOD0"]], maxPixels: 200, cull: 2 },
+  { id: "fern_02", variants: ["fern_02_a", "fern_02_b"], maxPixels: 200, cull: 2 },
+  { id: "nettle_plant", variants: ["nettle_plant_medium_a_LOD0", "nettle_plant_tall_a_LOD0"], maxPixels: 200, cull: 2 },
 ];
-
-const loader = new LodLoader();
 
 export async function trees(plan: Plan, wind?: Wind): Promise<THREE.Group> {
   const root = new THREE.Group();
   root.name = "trees";
   const loaded = await Promise.all(
     SPECIES.map(async (species) => {
-      const { id, groups, ratio, maxPixels, resolution, frames, cull } = species;
+      const { id, variants, maxPixels, resolution, frames, cull } = species;
       const spots = plan.models.get(id);
       if (!spots?.length) return [];
-      const models = await step(id, () =>
-        Promise.all(
-          variants(id, groups).map(async (source, index) => {
-            const levels: LevelRequest[] = [
-              { type: "impostor", layout: "hemi", maxPixels, resolution, frames },
-              { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
-            ];
-            if (ratio !== undefined) levels.unshift({ type: "simplify", ratio, maxPixels: 10000 });
-            const loaded = await loader.loadAsync({
-              make: source,
-              reference: true,
-              key: model(id, index, groups, ratio),
-              levels,
-              restore: (object) => {
-                object.traverse((node) => (node.castShadow = node.receiveShadow = true));
-                foliageModel(object, MODEL_FOLIAGE);
-                foliageLevels(object, MODEL_FOLIAGE);
-              },
-            });
-            if (cull !== undefined) loaded.push({ object: new THREE.Group(), maxPixels: cull });
-            return loaded;
-          }),
-        ),
+      const models = await Promise.all(
+        variants.map(async (variant) => {
+          const levels: LevelRequest[] = [
+            { type: "impostor", layout: "hemi", maxPixels, resolution, frames },
+            { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
+          ];
+          if (cull !== undefined) levels.push({ type: "empty", maxPixels: cull });
+          return loader.loadAsync({
+            url: `/assets/models/${id}/${variant}.glb`,
+            levels,
+            onLevel: (object) => {
+              object.traverse((node) => (node.castShadow = node.receiveShadow = true));
+              foliageModel(object, MODEL_FOLIAGE);
+              foliageLevels(object, MODEL_FOLIAGE);
+            },
+          });
+        }),
       );
       const crowds = spread(id, models, spots, foliageTint);
       if (wind)

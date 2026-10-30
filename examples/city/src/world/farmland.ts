@@ -1,7 +1,8 @@
 import * as THREE from "three/webgpu";
-import { Random } from "../content/random.ts";
+import { Random } from "../../public/content/random.ts";
 import { Crop, type Land, Use } from "./land.ts";
-import { type Forest, inForest, type Road, type Spot, spot } from "./plan.ts";
+import { inForest, type Road, type Spot, spot } from "./plan.ts";
+import type { Forest } from "./zones.ts";
 import { EXTENT, type Terrain } from "./terrain.ts";
 
 /** Mean size of the regions fields are laid out in (m). */

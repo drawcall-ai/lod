@@ -3,45 +3,22 @@ import {
   Matrix4,
   MeshStandardNodeMaterial,
   PhysicalLightingModel,
-  StorageInstancedBufferAttribute,
   TSL,
   Vector3,
+  Vector4,
   type Node,
   type NodeBuilder,
   type Object3D,
 } from "three/webgpu";
-import {
-  Fn,
-  diffuseColor,
-  float,
-  instanceIndex,
-  materialColor,
-  metalness,
-  mix,
-  specularColor,
-  specularF90,
-  storage,
-  uniform,
-  varying,
-  varyingProperty,
-  vec3,
-  vec4,
-} from "three/tsl";
-import { castPosition, instanceMatrixOf, tint } from "../../fade.js";
+import { Fn, diffuseColor, float, materialColor, metalness, mix, specularColor, specularF90, uniform, varyingProperty, vec3, vec4 } from "three/tsl";
+import { castPosition, instanceColor, instanceMatrixOf, tint } from "../../fade.js";
 import { isImpostorMesh, isShadowPass } from "../../three.js";
-import { buildKey, instanceGroup, isNodeOf } from "../../tsl.js";
+import { buildKey, isNodeOf } from "../../tsl.js";
 import { boundingRadius, boxCentre, boxExtent, type Impostor } from "../impostor.js";
 import { buildCard, card, type CardInputs } from "./card.js";
 import { buildSurface, cosine, type Lighting, type Surface, type SurfaceInputs } from "./surface.js";
 import { acquireTextures, releaseTextures } from "./textures.js";
 
-const white = new StorageInstancedBufferAttribute(new Float32Array([1, 1, 1, 1]), 4);
-const colors = storage(white, "vec4", 0)
-  .setName("lodCardColors")
-  .setGroup(instanceGroup)
-  .toReadOnly()
-  .onObjectUpdate(({ object }) => (object && isImpostorMesh(object) && object.instanceColor ? object.instanceColor : white));
-const colorIndex = uniform(0, "uint").onObjectUpdate(({ object }) => Number(!!object && isImpostorMesh(object) && object.instanceColor !== null));
 const placement = uniform(new Matrix4()).onObjectUpdate(({ object }, self) =>
   object && isImpostorMesh(object) ? self.value.copy(object.placement) : self.value.identity(),
 );
@@ -50,7 +27,7 @@ const placement = uniform(new Matrix4()).onObjectUpdate(({ object }, self) =>
 function instancesOf(object: Object3D): { matrix: Node<"mat4">; color: Node<"vec3"> } {
   const matrix = instanceMatrixOf(object);
   if (!matrix || !isImpostorMesh(object)) throw new Error(`ImpostorMesh: "${object.name}" is drawn with an impostor's material but is no ImpostorMesh`);
-  return { matrix, color: varying(colors.element(instanceIndex.mul(colorIndex)).xyz).setInterpolation("flat") };
+  return { matrix, color: instanceColor };
 }
 
 /** How an ImpostorMesh draws: see `ImpostorMeshOptions`. */
@@ -76,6 +53,7 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
   readonly mipBias: Node<"float"> & { value: number };
 
   private readonly inputs: CardInputs & SurfaceInputs;
+  private readonly specular: Node<"vec4">;
   /**
    * Per build, one surface for every slot that reads it, made when the fragment stage
    * first reads it: TSL adds a node's variables to the stage being built when the node
@@ -96,6 +74,7 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
     this.name = "impostor";
     const textures = acquireTextures(impostor);
     this.mipBias = uniform(shading.mipBias);
+    this.specular = uniform(new Vector4().fromArray(impostor.specular ?? [0.04, 0.04, 0.04, 1]));
     const layer = (map: Impostor["maps"][number]) => textures[impostor.maps.indexOf(map)] ?? null;
     const base = layer("base");
     const normalDepth = layer("normalDepth");
@@ -204,14 +183,12 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
     return new SpreadLighting(Fn((builder) => this.lit(builder).spread)());
   }
 
-  /** The baked dielectric F0 (RGB) and F90 (A), when the source changes three's defaults. */
+  /** Baked F0 (RGB) and F90 (A) are uniforms so different asset averages share a shader. */
   override setupSpecular(): void {
-    const { specular } = this.impostor;
-    if (!specular) return super.setupSpecular();
-    const f0 = vec3(specular[0], specular[1], specular[2]);
+    const f0 = this.specular.rgb;
     specularColor.assign(f0);
     TSL.specularColorBlended.assign(mix(f0, diffuseColor.rgb, metalness));
-    specularF90.assign(specular[3]);
+    specularF90.assign(this.specular.a);
   }
 
   /**

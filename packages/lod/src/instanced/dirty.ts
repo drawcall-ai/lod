@@ -1,4 +1,5 @@
 import type { BufferAttribute } from "three/webgpu";
+import { at } from "../at.js";
 
 /** Changed indices, drained as ordered runs without scanning unchanged instances. */
 export class Dirty {
@@ -85,10 +86,4 @@ export function upload(attribute: BufferAttribute, start: number, end: number): 
     if (next > low + 1) ranges.splice(low + 1, next - low - 1);
   }
   attribute.needsUpdate = true;
-}
-
-function at<T>(values: ArrayLike<T>, index: number): T {
-  const value = values[index];
-  if (value === undefined) throw new Error(`Dirty: missing index ${index}`);
-  return value;
 }

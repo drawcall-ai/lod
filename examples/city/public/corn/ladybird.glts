@@ -1,0 +1,30 @@
+import { Library } from "../content/materials.ts";
+import * as THREE from "three/webgpu";
+import { loadingManager, onDispose, scene } from "@drawcall/glts";
+import { HERO_VARIANT, VARIANTS } from "../content/corn/layout.ts";
+import { plant } from "../content/corn/plant.ts";
+import { assetEntry } from "../content/cache.ts";
+import { leafSeat } from "../content/corn/seat.ts";
+import { ladybird } from "../content/ladybird/index.ts";
+import { blackMaterial, cachedShell, headMaterial, pronotumMaterial } from "../content/ladybird/materials.ts";
+import { cachedObject } from "../content/object.ts";
+import { number } from "../content/parameters.ts";
+
+const library = new Library(loadingManager, new URL("../assets/", import.meta.url).href);
+onDispose(() => library.dispose());
+const variant = number(new URL(import.meta.url).searchParams, "variant", HERO_VARIANT, 0, VARIANTS - 1, true);
+const materials = [blackMaterial(library), headMaterial(library), pronotumMaterial(library), await cachedShell(scene.source, library)];
+scene.add(
+  await cachedObject(assetEntry(scene.source, "ladybird@3", { variant }), library, materials, async () => {
+    const hero = await plant(scene.source, library, variant, true);
+    const seat = leafSeat(hero);
+    library.release(hero);
+    const holder = library.own(new THREE.Group());
+    holder.position.copy(seat.point);
+    holder.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), seat.normal);
+    const bug = ladybird(library);
+    bug.rotation.y = seat.heading;
+    holder.add(bug);
+    return holder;
+  }),
+);

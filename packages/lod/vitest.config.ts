@@ -15,13 +15,20 @@ export default defineConfig({
   publicDir,
   plugins: [
     vitecache({ basePath: join(publicDir, "_vitecache") }),
-    { name: "test-cache-cleanup", closeBundle: () => rmSync(publicDir, { recursive: true, force: true }) },
+    {
+      name: "test-files",
+      configResolved(config) {
+        config.server.fs.allow.push(publicDir);
+      },
+      closeBundle: () => rmSync(publicDir, { recursive: true, force: true }),
+    },
   ],
   test: {
     include: ["test/**/*.test.ts"],
     browser: {
       enabled: true,
       headless: true,
+      screenshotDirectory: join(publicDir, "screenshots"),
       provider: playwright({
         launchOptions: {
           channel: "chromium",

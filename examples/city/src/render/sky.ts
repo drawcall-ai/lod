@@ -1,8 +1,8 @@
+import { cachedNumber, cachedNumbers, cachedRecord, hostEntry } from "../cache.ts";
+import { type Library, assetUrl } from "../../public/content/materials.ts";
 import * as THREE from "three/webgpu";
 import { HDRLoader } from "three/addons/loaders/HDRLoader.js";
-import { assetUrl, manifest } from "../content/materials.ts";
-import { bundle, file } from "../world/cache.ts";
-import { number, numbers, record } from "../world/data.ts";
+import { bundle, file } from "../../public/content/cache.ts";
 
 /** The HDRI split into image-based light without its sun, and the sun as a direction and irradiance. */
 interface Sky {
@@ -21,18 +21,15 @@ interface Sky {
 }
 
 /** Loads the manifest's HDRI and turns it so the sun stands at `azimuth` (radians, atan2(z, x) of the direction toward it). */
-export async function loadSky(renderer: THREE.Renderer, azimuth: number): Promise<Sky> {
+export async function loadSky(library: Library, renderer: THREE.Renderer, azimuth: number): Promise<Sky> {
   let built: { background: THREE.DataTexture; environment: THREE.Texture } | undefined;
   const files = await bundle(
-    "sky@1",
-    {
-      hdr: { path: `assets/${manifest().hdri.file}` },
-      sky: { path: "src/render/sky.ts" },
-      three: { package: "three" },
+    hostEntry("city-sky@1", {
+      hdr: { path: `public/assets/${library.manifest().hdri.file}` },
       backend: { value: renderer.coordinateSystem },
-    },
+    }),
     async () => {
-      const hdr = await new HDRLoader().setDataType(THREE.FloatType).loadAsync(assetUrl(manifest().hdri.file));
+      const hdr = await new HDRLoader().setDataType(THREE.FloatType).loadAsync(assetUrl(library, library.manifest().hdri.file));
       hdr.mapping = THREE.EquirectangularReflectionMapping;
       const { sky, direction, irradiance, horizon } = removeSun(hdr);
       const pmrem = new THREE.PMREMGenerator(renderer);
@@ -60,16 +57,16 @@ export async function loadSky(renderer: THREE.Renderer, azimuth: number): Promis
       };
     },
   );
-  const data = record(JSON.parse(new TextDecoder().decode(file(files, "metadata"))));
-  const direction = new THREE.Vector3().fromArray(numbers(data.direction, 3));
+  const data = cachedRecord(JSON.parse(new TextDecoder().decode(file(files, "metadata"))));
+  const direction = new THREE.Vector3().fromArray(cachedNumbers(data.direction, 3));
   const turn = Math.atan2(direction.z, direction.x) - azimuth;
   const textures = built ?? (await decode(renderer, files, dimensions(data.background), dimensions(data.environment)));
   return {
     ...textures,
     turn,
     sun: direction.applyAxisAngle(new THREE.Vector3(0, 1, 0), turn),
-    irradiance: number(data.irradiance),
-    horizon: new THREE.Color().fromArray(numbers(data.horizon, 3)),
+    irradiance: cachedNumber(data.irradiance),
+    horizon: new THREE.Color().fromArray(cachedNumbers(data.horizon, 3)),
   };
 }
 
@@ -105,7 +102,7 @@ async function decode(renderer: THREE.Renderer, files: Record<string, Uint8Array
 }
 
 function dimensions(value: unknown): [number, number] {
-  const [width, height] = numbers(value, 2);
+  const [width, height] = cachedNumbers(value, 2);
   if (width === undefined || height === undefined || !Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0)
     throw new Error("Invalid cached sky dimensions");
   return [width, height];

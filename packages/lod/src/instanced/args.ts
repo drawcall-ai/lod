@@ -56,7 +56,7 @@ export class Args {
     if (range.count === 0) page.free.splice(page.free.indexOf(range), 1);
     page.users++;
     // Keep a CPU mirror of the fixed fields, but never upload a live page again:
-    // its instance counts belong to the GPU. Handover writes all words of each slice.
+    // its instance counts belong to the GPU. The arguments pass writes all words of each slice.
     page.attribute.array.set(values, first * 5);
     const owned = page;
     let disposed = false;
@@ -77,7 +77,7 @@ export class Args {
       page.attribute.dispose();
       return;
     }
-    // Earlier submitted draws finish before a later handover overwrites a reused slice.
+    // Earlier submitted draws finish before a later arguments pass overwrites a reused slice.
     page.free.push(range);
     page.free.sort((a, b) => a.first - b.first);
     const merged: Range[] = [];

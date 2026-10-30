@@ -6,7 +6,8 @@ import type { Sun } from "./render/sun/index.ts";
 import type { Patches } from "./world/patches.ts";
 import { countLevels } from "./stats.ts";
 
-interface City {
+/** The running city, as main.ts hands it over. */
+interface App {
   loadMs: number;
   loadStages: Record<string, number>;
   pipeline: Pipeline;
@@ -23,7 +24,7 @@ interface City {
 }
 
 /** The tour scripts can settle and measure a view without changing the live loop. */
-export function diagnostics(view: City) {
+export function diagnostics(view: App) {
   const { pipeline, wind, tour, sun, lods, patches, kinds, playback, frame, resume } = view;
   let arrivals = 0;
   for (const lod of lods) lod.addEventListener("levelschange", () => arrivals++);
@@ -64,7 +65,6 @@ export function diagnostics(view: City) {
   return {
     loadMs: view.loadMs,
     loadStages: view.loadStages,
-    wind,
     keys: tour.keys.map(({ name, time }) => ({ name, time })),
     async seek(time: number) {
       pipeline.renderer.setAnimationLoop(null);
@@ -107,6 +107,8 @@ export function diagnostics(view: City) {
   };
 }
 
+export type City = ReturnType<typeof diagnostics>;
+
 function median(values: number[]): number {
   const value = values.sort((a, b) => a - b)[Math.floor(values.length / 2)];
   if (value === undefined) throw new Error("measure: no frames sampled");
@@ -115,6 +117,6 @@ function median(values: number[]): number {
 
 declare global {
   interface Window {
-    city: ReturnType<typeof diagnostics>;
+    city: City;
   }
 }

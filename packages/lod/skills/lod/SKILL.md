@@ -7,19 +7,26 @@ description: Use @drawcall/lod for cached, progressively loaded levels of detail
 
 ## Start with the loader
 
-Use `LodLoader` for model files and procedural sources. A warm load fetches enough to draw a coarse representation. Finer representations, including the original source, are fetched and decoded as the camera needs them. Keep rendering while they load. A source-only ladder loads its source eagerly. The same returned levels can construct an individual `Lod` or an `InstancedLod` crowd.
+Give the host's `LodLoader` an asset URL and the representations to derive from it. Use `.glb` or `.gltf` for stored models and `.glts` for procedural assets. Put generation parameters in the asset URL's query: each distinct query is a distinct cache identity. Build a `Lod` from the returned levels for an independently placed object, or an `InstancedLod` for repeated objects with per-instance matrices and colours.
 
-Choose levels from the asset's silhouette, materials and expected viewing range. Alpha-tested leaf cards often work best as source → impostor; simplifying the cards can destroy their shape. Dense foliage geometry may benefit from simplification first. Hard-surface props often suit source → simplified → impostor. Detailed structures can use source → baked shell → impostor, with interiors supplied separately for windows. Add an empty final level when the object should disappear at distance.
+`loadAsync` resolves with the coarsest drawable level ready; finer levels load when the camera needs them. Include an impostor or baked mesh as the coarsest drawable when an overview should avoid constructing the source. A simplified coarsest level also loads the source for its original materials; a source-only ladder loads its source eagerly. Prefer baked or impostor middle levels for an expensive `.glts`: a simplified level brings the script run forward to that viewing range.
 
-This example creates a crowd with independent placements and colour variation. `positions` contains positions in the crowd's space, and `scene` is the application's scene.
+Choose levels from the asset's silhouette, materials and expected viewing range. Alpha-tested leaf cards often work best as source → impostor; simplifying the cards can destroy their shape. Hard-surface props often suit source → simplified → impostor. Detailed structures can use source → baked shell → impostor, with interiors supplied separately for windows. Add an empty final level when the object should disappear at distance.
+
+Register the source loaders on the loading manager before loading: a `GLTSLoader` for `.glts` URLs, and for `.glb` or `.gltf` models compressed with Draco or KTX2 a `GLTFLoader` configured with those decoders, since `LodLoader`'s fallback decodes meshopt only. Follow the [GLTS skill](https://github.com/drawcall-ai/glts/blob/main/packages/glts/skills/glts/SKILL.md) for the Vite plugin, script authoring and resource lifetimes.
+
+This example creates a crowd from one procedural asset. `positions` contains placements in the crowd's space, and `scene` is the application's scene.
 
 ```ts
-import { Color, Matrix4 } from "three/webgpu";
-import { InstancedLod, Lod, LodLoader, Wind } from "@drawcall/lod";
+import { LoadingManager, Matrix4 } from "three/webgpu";
+import { GLTSLoader } from "@drawcall/glts";
+import { InstancedLod, LodLoader } from "@drawcall/lod";
 
-const loader = new LodLoader();
+const manager = new LoadingManager();
+manager.addHandler(/\.glts$/, new GLTSLoader(manager));
+const loader = new LodLoader(manager);
 const levels = await loader.loadAsync({
-  url: "/tree.glb",
+  url: "/trees/oak.glts?seed=2",
   levels: [
     { type: "impostor", layout: "hemi", maxPixels: 120, draw: { parallax: 2 } },
     { type: "empty", maxPixels: 4 },
@@ -28,56 +35,33 @@ const levels = await loader.loadAsync({
 const trees = new InstancedLod(levels, positions.length);
 
 const matrix = new Matrix4();
-const color = new Color();
 positions.forEach((position, index) => {
   trees.setMatrixAt(index, matrix.makeTranslation(position));
-  trees.setColorAt(index, color.setHSL(0.25, 0.15, 0.8 + (index % 5) * 0.025));
 });
 scene.add(trees);
-
-const wind = new Wind();
-wind.apply(trees, { amplitude: 0.3 });
-// Set wind.time from the application's clock before rendering each frame.
 ```
 
-Configure a loading manager for asset formats and compression before passing it to `LodLoader`. For GLTS assets, follow the [GLTS skill](https://github.com/drawcall-ai/glts/blob/main/packages/glts/skills/glts/SKILL.md), including contextual loaders and shared package instances.
+Supply authored low shells and baking interiors as asset URLs on a baked level; both resolve relative to the source asset as ordinary URLs, so a query-only value replaces the source's whole query. For a variant of the same script, repeat the source's generation parameters, for example the source URL plus `&part=low`. The source asset should be complete at full detail; a baking interior supplies room structure for the distant windows. Keep all three in the same coordinate system.
 
-Prefer passing a GLTS URL from the host when the full source should stay unloaded in an overview. The loader tracks that script's dependencies without executing the script on warm loads.
+## Put each cache with its computation
 
-When a factory selects nodes or variants from a model file, mark it `reference: true` and include the file and selection in its key. The selected original supplies the source level and the materials shared by simplified levels. Its factory runs when a mesh level loads; an overview can defer it when a self-contained baked or impostor level is the coarsest drawable. Put simplification in a derived mesh level so warm loads reuse the computed geometry.
+Follow the [vitecache skill](https://github.com/drawcall-ai/vitecache/blob/main/packages/vitecache/skills/vitecache/SKILL.md) to configure the host. `LodLoader` writes a URL's derived levels to the cache directory when the app loads that URL with those levels under the Vite dev server with the vitecache plugin; `vite build` does not generate them, so load every deployed URL and level list during development and deploy the cache directory. A deployed miss builds the levels in the browser on every load without persisting them. When the app is deployed under a sub-path, pass that cache location to `LodLoader`. Deploy the original assets with the cache. Edits to the script, its helpers, packages and loaded files invalidate the derived levels; no dependency list is needed. A script that imports packages from the CDN at runtime, rather than from the app's installed or Vite-bundled packages, rebuilds its levels on every load, as does a source or a resource it loads from another origin, a same-origin URL without a project file such as a server route, or a package the app does not install.
 
-## Cache procedural inputs honestly
+Cache expensive generation inside a `.glts` asset, such as geometry, rooms or generated texture data that would otherwise stall the first approach, as the [GLTS skill](https://github.com/drawcall-ai/glts/blob/main/packages/glts/skills/glts/SKILL.md) describes; leave cheap generation uncached. Use the `encodeMesh` / `decodeMeshAsync` codec for asset-owned geometry caches. The GLTS build does not warm `LodLoader`'s derived levels.
 
-Put expensive source construction inside the procedural request's factory. Supply its dependencies without constructing the source: include parameters, generator code, helper packages and textures that can change the result. A cache hit must not need the factory to discover its key.
+## Place, share and dispose levels
 
-In this example, `makeHouse` constructs the full house and `shape` contains its generation parameters.
+Load an asset once and build spatial crowds from its levels, each with its own instance count, placements and colours; clone a `Lod` for further independently placed copies. Reuse descriptors across owners; adjust each owner's resolved thresholds through its `levels` view. Clones and crowds share geometry, materials, textures and deferred loads. Dispose shared resources only after every copy has stopped drawing; disposal does not count references.
 
-```ts
-const house = await loader.loadAsync({
-  make: async () => makeHouse(shape),
-  material: (name, data) => houseMaterial(name, data),
-  key: {
-    generator: { path: "src/assets/house.ts" },
-    shape: { value: shape },
-    wallTexture: { path: "public/textures/wall.png" },
-  },
-  levels: [
-    { type: "simplify", ratio: 0.3, maxPixels: 400 },
-    { type: "impostor", layout: "hemi", maxPixels: 100 },
-  ],
-});
-scene.add(new Lod(house));
-```
+Use `onLevel` for application effects or shadow settings that apply when each level arrives. Keep source generation and its materials in the asset so that the same URL also loads correctly outside the LOD host.
 
-Follow the [vitecache skill](https://github.com/drawcall-ai/vitecache/blob/main/packages/vitecache/skills/vitecache/SKILL.md) to configure the host and include generated cache files in deployment. Match the loader's cache location to the application's URL base independently of asset paths. A cache miss builds the requested representations once. Warm loads fetch cached geometry and baked representations; mesh levels resolve their materials when demanded. Measure those two cases separately.
+Apply a shared `Wind` after assembling a LOD and before rendering; arriving levels inherit the effect. Apply it separately to nested LODs and independently managed batches.
 
-Supply a material resolver for every procedural mesh material. Give each material a stable name and put its reconstruction inputs in `material.userData`; keep shared materials and textures in that resolver. External textures stay original asset inputs. Regenerate cheap generated textures there, or cache their raw pixels separately when generation is expensive. Include material inputs in the request key when they affect baked representations. Use `restore` for effects or shadow settings that apply after loading each level, including lazy arrivals. Keep heavy geometry generation inside source factories.
-
-Use an authored level factory when a generated representation does not suit the asset. For example, a `mesh` level can construct a low-detail grass clump; its factory runs on a cache miss, and subsequent loads decode the saved geometry. Include every factory's inputs in the request key. Keep source, shell and interior geometry in the same coordinate system.
+Seed the camera with `setViewportHeight` before preparing its first view, and refresh that height after resizing views whose levels may all be culled. Compile the initial scene with the actual camera and renderer before revealing it. Continue drawing while finer levels load so preparation can use the same rendering context.
 
 ## Assemble levels you already have
 
-Use `Lod` for independently placed objects and `InstancedLod` for repeated objects with per-instance matrices and colours. Pass levels in finest-to-coarsest order. An empty object can be a deliberate culled level. A ladder needs measurable bounds; when all levels are deferred, it draws nothing until a level is ready.
+Pass levels in finest-to-coarsest order. An empty object can be a deliberate culled level. A ladder needs measurable bounds; when all levels are deferred, it draws nothing until a level is ready.
 
 Describe a deferred representation with a load function, bounds and a transition height. The function returns the object already placed in the owner's space; the bounds cover it in that same space, including its children. For a cached impostor, decode the atlas and return an `ImpostorMesh` with the intended draw settings.
 
@@ -90,15 +74,9 @@ const object = new Lod([{ load: loadDetailedMesh, maxPixels: Infinity, box: sour
 scene.add(object);
 ```
 
-A missing level uses the nearest ready finer representation, or the nearest coarser one if none is finer. Requests follow the visible view and begin ahead of the transition. Clones share loading work. Keep a factory's inputs alive until it finishes.
+A missing level uses the nearest ready finer representation, or the nearest coarser one if none is finer. Requests follow the visible view and begin ahead of the transition. Clones share loading work. Keep the resources used by a deferred load alive until it finishes.
 
 For direct preparation and storage outside `LodLoader`, combine `simplify`, `bakeMesh`, or `bakeImpostor` with the corresponding codecs and drawing objects. Use `ImpostorMesh` directly when copies stay distant throughout their lifetime. For external detail systems, combine an empty near level with a coarse representation and use `levelOf` or level visibility to decide where to supply detail.
-
-Load an asset once and build spatial crowds from its levels, each with its own instance count, placements and colours. Reuse descriptors across owners; adjust each owner's resolved thresholds through its `levels` view. Clones and crowds share geometry, materials, textures and deferred loads. Dispose shared resources only after every copy has stopped drawing; disposal does not count references.
-
-Apply a shared `Wind` after assembling a LOD and before rendering; arriving levels inherit the effect. Apply it separately to nested LODs and independently managed batches. Clone a `Lod` for independently placed copies, or use an `InstancedLod` when many copies make separate objects too expensive. Plan the lifetime of shared geometry, materials and textures together.
-
-Seed the camera with `setViewportHeight` before preparing its first view, and refresh that height after resizing views whose levels may all be culled. Compile the initial scene with the actual camera and renderer before revealing it. Continue drawing while finer levels load so preparation can use the same rendering context.
 
 ## Prepare assets that survive transitions
 
@@ -114,7 +92,7 @@ For dense cover, combine near individuals with a baked distant patch. Jitter pos
 
 Tune transitions in the intended viewport with `Lod.debug`, then inspect motion through them. Use `Lod.quality` for a scene-wide adjustment and individual thresholds for particular assets. Give an impostor bake the intended screen size at its handover, then inspect its coverage and colour from several angles.
 
-Group nearby copies into spatial regions. Broad batches can lose useful culling, while tiny batches spend too much time submitting draws. Reuse instance slots and update changed matrices or colours instead of rebuilding whole crowds. Count material groups as well as triangles; an atlas alone does not combine draws.
+Group nearby copies into spatial regions. Broad batches can lose useful culling, while tiny batches spend too much time submitting draws. Reuse instance slots and update changed matrices or colours instead of rebuilding whole crowds. Count material groups as well as triangles; an atlas alone does not combine draws. Each distinct material structure costs a pipeline compile on the first view, so variants should share material structure.
 
 Judge impostors by covered screen area and overlap as well as triangle count. Compare individual cards with baked patches for dense cover, and inspect parallax and mip quality during transitions.
 

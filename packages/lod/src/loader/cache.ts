@@ -1,77 +1,87 @@
 import { CacheEntry, type CacheEntryOptions, type Dependencies, type JsonValue } from "vitecache";
 import type { LevelRequest } from "../loader.js";
-import type { MaterialResolver } from "./mesh.js";
-import type { Kind } from "./bundle.js";
+import { urlQuery } from "./url.js";
 
-/** Cache location and additional source inputs. Dependency names beginning with lod: are reserved. */
-export interface LodCacheOptions extends Pick<CacheEntryOptions, "basePath" | "root"> {
-  dependencies?: Dependencies;
-}
+/** Persistent cache location. Generator packages are discovered from GLTS source provenance. */
+export type LodCacheOptions = Pick<CacheEntryOptions, "basePath" | "root">;
 
-export interface Recipe {
-  levels: readonly LevelRequest[];
-  material?: MaterialResolver;
-  type?: Exclude<Kind, "empty">;
-  reference?: boolean;
-}
+const version = "lod-levels@18";
 
-export function entryFor(dependencies: Dependencies, recipe: Recipe, options?: LodCacheOptions, level?: number): CacheEntry {
-  const inputs = { ...options?.dependencies, ...dependencies };
-  if (Object.keys(inputs).some((name) => name.startsWith("lod:"))) throw new Error("LodLoader: dependency names beginning with lod: are reserved");
+/**
+ * The index of a ladder: keyed by the requested URLs, levels and bundled modules, and saved with what loading the sources
+ * revealed, so vitecache rechecks those without loading the sources.
+ */
+export function indexEntry(
+  inputs: Dependencies,
+  levels: readonly LevelRequest[],
+  modules: Readonly<Record<string, string>>,
+  options?: LodCacheOptions,
+): CacheEntry {
   // vitecache resolves URLs to file paths; keep generation parameters in the key.
   const queries: Record<string, string> = {};
   for (const [name, dependency] of Object.entries(inputs)) {
-    if (dependency.url !== undefined) queries[name] = new URL(dependency.url, "https://lod.invalid").search;
+    const query = dependency.url === undefined ? "" : urlQuery(dependency.url);
+    if (query) queries[name] = query;
   }
   return new CacheEntry({
     basePath: options?.basePath,
     root: options?.root,
-    version: "lod-levels@8",
+    version,
     dependencies: {
       ...inputs,
-      "lod:levels": { value: recipe.levels.map(parameters) },
-      "lod:role": { value: level === undefined ? "index" : `level:${level}` },
-      "lod:materials": { value: recipe.material !== undefined },
-      "lod:reference": { value: recipe.reference ?? false },
-      "lod:type": { value: recipe.type ?? "mesh" },
+      "lod:levels": { value: levels.map(parameters) },
+      "lod:modules": { value: modules },
       "lod:queries": { value: queries },
+      // Only packages the app installs resolve from its root; this package's own dependencies are covered by its version and `version` above.
       "lod:package": { package: "@drawcall/lod" },
       "lod:three": { package: "three" },
     },
   });
 }
 
+/**
+ * A level payload saved apart from its index, addressed by the index's content: a valid index vouches for its payloads,
+ * and rebuilds write new ones rather than replacing those a live ladder or another build still reads.
+ */
+export function payloadEntry(index: string, level: number, options?: LodCacheOptions): CacheEntry {
+  return new CacheEntry({
+    basePath: options?.basePath,
+    root: options?.root,
+    version,
+    dependencies: { "lod:index": { value: index }, "lod:level": { value: level } },
+  });
+}
+
+export async function sha256(bytes: Uint8Array): Promise<string> {
+  const hash = await crypto.subtle.digest("SHA-256", new Uint8Array(bytes));
+  return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** What derives each level's content. Switch thresholds and impostor draw options apply at decode, so changing one reuses the cache. */
 function parameters(level: LevelRequest): JsonValue {
-  if (level.make) return { type: level.type, maxPixels: level.maxPixels ?? null, make: "factory" };
   switch (level.type) {
     case "empty":
-      return { type: level.type, maxPixels: level.maxPixels };
+      return { type: level.type };
     case "simplify":
-      return { type: level.type, maxPixels: level.maxPixels ?? null, ratio: level.ratio ?? null };
+      return { type: level.type, ratio: level.ratio ?? null };
     case "baked":
       return {
         type: level.type,
-        maxPixels: level.maxPixels ?? null,
         ratio: level.ratio ?? null,
         textureSize: level.textureSize ?? null,
-        low: typeof level.low === "function" ? "factory" : (level.low ?? null),
-        interior: typeof level.interior === "function" ? "factory" : (level.interior ?? null),
+        low: level.low ?? null,
+        interior: level.interior ?? null,
       };
     case "impostor":
       return {
         type: level.type,
+        // The impostor bakes its top mip for this height too.
         maxPixels: level.maxPixels ?? null,
         layout: level.layout ?? null,
         frames: level.frames ?? null,
         resolution: level.resolution ?? null,
         emissive: level.emissive ?? null,
         supersample: level.supersample ?? null,
-        draw: {
-          alphaTest: level.draw?.alphaTest ?? null,
-          parallax: level.draw?.parallax ?? null,
-          tolerance: level.draw?.tolerance ?? null,
-          mipBias: level.draw?.mipBias ?? null,
-        },
       };
   }
 }

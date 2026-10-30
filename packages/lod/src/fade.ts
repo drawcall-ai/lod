@@ -1,4 +1,4 @@
-import { Color, Matrix4, StorageBufferAttribute, StorageInstancedBufferAttribute, type Node, type Object3D } from "three/webgpu";
+import { Color, Matrix4, StorageBufferAttribute, StorageInstancedBufferAttribute, type Node, type NodeBuilder, type Object3D } from "three/webgpu";
 import {
   Fn,
   cameraProjectionMatrix,
@@ -7,6 +7,10 @@ import {
   fract,
   instanceIndex,
   modelWorldMatrix,
+  normalLocal,
+  positionLocal,
+  transformNormal,
+  varyingProperty,
   screenCoordinate,
   screenSize,
   select,
@@ -16,8 +20,8 @@ import {
   vec2,
   vec3,
 } from "three/tsl";
-import { isImpostorMesh, storageMatrices } from "./three.js";
-import { column, instanceFades, instanceGroup, instanceMatrices, isOrthographic, maxScale } from "./tsl.js";
+import { isImpostorMesh, isLodInstances, storageMatrices } from "./three.js";
+import { column, instanceGroup, isOrthographic, maxScale } from "./tsl.js";
 
 // The dithered fade between neighbouring levels of one object.
 //
@@ -83,17 +87,18 @@ export const tint = uniform(new Color(1, 1, 1)).onObjectUpdate(({ object }) => o
 export const dither = (pixel: Node<"vec2">): Node<"float"> => fract(float(52.9829189).mul(fract(dot(pixel, vec2(0.06711056, 0.00583715)))));
 
 const identity = new StorageInstancedBufferAttribute(new Float32Array(new Matrix4().elements), 16);
-const cardMatrices = storage(identity, "mat4", 0)
-  .setName("lodCardMatrices")
+const matrices = storage(identity, "mat4", 0)
+  .setName("lodInstanceMatrices")
   .setGroup(instanceGroup)
   .toReadOnly()
   .onObjectUpdate(({ object }) => {
-    if (!object || !isImpostorMesh(object)) throw new Error("ImpostorMesh: matrix draw has no impostor");
-    return object.instanceMatrix;
+    const attribute = object && storageMatrices(object);
+    if (!attribute) throw new Error("Lod: instance draw has no matrices");
+    return attribute;
   });
 const zero = new StorageBufferAttribute(new Float32Array(1), 1);
-const cardFades = storage(zero, "float", 0)
-  .setName("lodCardFades")
+const fades = storage(zero, "float", 0)
+  .setName("lodInstanceFades")
   .setGroup(instanceGroup)
   .toReadOnly()
   .onObjectUpdate(({ object }) => {
@@ -106,23 +111,42 @@ const fadeIndex = uniform(0, "uint").onObjectUpdate(({ object }) => {
 });
 const instanceCaster = uniform(false).onObjectUpdate(({ object }) => of(object)?.kind === "instances");
 
-/** The instance matrix of this draw, for an InstancedMesh or ImpostorMesh with its matrices in a storage buffer; else null. */
+/** This draw's instance matrix when its matrices live in storage, else null. */
 export function instanceMatrixOf(object: Object3D): Node<"mat4"> | null {
-  if (isImpostorMesh(object)) return cardMatrices.element(instanceIndex);
-  const attribute = storageMatrices(object);
-  return attribute && instanceMatrices(attribute).element(instanceIndex);
+  return storageMatrices(object) ? matrices.element(instanceIndex) : null;
+}
+
+const white = new StorageInstancedBufferAttribute(new Float32Array([1, 1, 1, 1]), 4);
+const colors = storage(white, "vec4", 0)
+  .setName("lodInstanceColors")
+  .setGroup(instanceGroup)
+  .toReadOnly()
+  .onObjectUpdate(({ object }) => (object && (isImpostorMesh(object) || isLodInstances(object)) && object.instanceColor) || white);
+const colorIndex = uniform(0, "uint").onObjectUpdate(({ object }) =>
+  Number(!!object && (isImpostorMesh(object) || isLodInstances(object)) && object.instanceColor !== null),
+);
+
+export const instanceColor = varying(colors.element(instanceIndex.mul(colorIndex)).xyz).setInterpolation("flat");
+
+/** Apply the level's shared instance bindings before its own deformation, as Three does for InstancedMesh. */
+export function placeInstances(builder: NodeBuilder): void {
+  if (!isLodInstances(builder.object)) return;
+  const matrix = matrices.element(instanceIndex);
+  positionLocal.assign(matrix.mul(positionLocal).xyz);
+  if (builder.geometry.hasAttribute("normal")) normalLocal.assign(transformNormal(normalLocal, matrix));
+  if (builder.object.instanceColor) varyingProperty("vec3", "vInstanceColor").assign(instanceColor);
 }
 
 /** This draw's signed fade. */
 export const fade = Fn((builder): Node<"float"> => {
   if (isImpostorMesh(builder.object))
-    return varying(cardFades.element(instanceIndex.mul(fadeIndex)))
+    return varying(fades.element(instanceIndex.mul(fadeIndex)))
       .setInterpolation("flat")
       .add(objectFade);
   const draw = draws.get(builder.object);
   if (draw?.kind !== "instances" || !draw.fades) return objectFade;
   // Constant across the primitive: keep compute-written slots out of fragment bindings.
-  return varying(instanceFades(draw.fades).element(instanceIndex)).setInterpolation("flat");
+  return varying(fades.element(instanceIndex)).setInterpolation("flat");
 });
 
 /** Whether this pixel is this draw's, by its fade: false on the other level's pixels. */

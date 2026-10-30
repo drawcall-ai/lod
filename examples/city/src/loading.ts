@@ -1,17 +1,19 @@
+import * as textureModule from "../public/content/textures.ts";
 import * as THREE from "three/webgpu";
+import { GLTSLoader } from "@drawcall/glts";
+import { LodLoader } from "@drawcall/lod";
 
-/**
- * Load-time progress: downloads go through three's default manager (every loader here
- * uses it), building steps (simplifying, baking) through `building`, one item each.
- */
-export const building = new THREE.LoadingManager();
-
-/** Runs `build` as one item of `building`, named `name`. */
-export async function step<T>(name: string, build: () => Promise<T>): Promise<T> {
-  building.itemStart(name);
-  try {
-    return await build();
-  } finally {
-    building.itemEnd(name);
-  }
-}
+const manager = THREE.DefaultLoadingManager;
+export const textures = new textureModule.Textures();
+export const scripts = new GLTSLoader(manager, {
+  modules: {
+    // Every scene borrows one decoded copy of each texture instead of decoding its own.
+    [new URL("/content/textures.ts", location.href).href]: { ...textureModule, sharedTextures: textures },
+  },
+});
+import.meta.hot?.dispose(() => {
+  scripts.dispose();
+  textures.dispose();
+});
+manager.addHandler(/\.glts$/, scripts);
+export const loader = new LodLoader(manager);

@@ -1,0 +1,22 @@
+import { loadingManager, onDispose, scene } from "@drawcall/glts";
+import { house, type HousePart } from "../content/house/asset.ts";
+import { HOUSE_VARIANTS } from "../content/house/params.ts";
+import { Library } from "../content/materials.ts";
+import { choice, number } from "../content/parameters.ts";
+
+const library = new Library(loadingManager, new URL("../assets/", import.meta.url).href);
+onDispose(() => library.dispose());
+const query = new URL(import.meta.url).searchParams;
+const variant = number(query, "variant", 0, 0, HOUSE_VARIANTS - 1, true);
+const part = choice(query, "part", ["source", "low", "interior"], "source");
+await library.load();
+const object = await house(scene.source, variant, part, library);
+if (part === "interior") scene.add(...object.children);
+else scene.add(object);
+
+// Warm every variant cache on the server before the browser requests individual assets.
+if (import.meta.env.SSR) {
+  for (let v = 0; v < HOUSE_VARIANTS; v++) {
+    for (const p of ["source", "interior"] satisfies HousePart[]) library.release(await house(scene.source, v, p, library));
+  }
+}

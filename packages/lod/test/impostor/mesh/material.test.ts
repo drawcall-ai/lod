@@ -289,3 +289,33 @@ it("keeps shared crowds' compiled main and shadow bindings valid when a deferred
     sun.dispose();
   }
 });
+
+it("shares programs across baked specular values while keeping each asset's colour", { timeout: GPU_TIMEOUT }, async () => {
+  const source = new Mesh(new BoxGeometry(2, 2, 2), new MeshStandardMaterial({ color: 0x000000, roughness: 0.5 }));
+  const impostor = await bakeImpostor(source, { frames: 4, resolution: 16 });
+  const left = new ImpostorMesh(impostor);
+  const right = new ImpostorMesh({ ...impostor, specular: [0.8, 0.02, 0.02, 0.5] });
+  left.position.x = -2;
+  right.position.x = 2;
+  const light = new DirectionalLight(0xffffff, 1);
+  light.position.set(0, 0, 10);
+  const scene = new Scene().add(left, light);
+  const view = camera();
+  try {
+    await render(scene, view);
+    const programs = renderer.info.memory.programs;
+    scene.add(right);
+    const pixels = await render(scene, view);
+    expect(renderer.info.memory.programs).toBe(programs);
+    const neutral = pixel(pixels, -2, 0);
+    const red = pixel(pixels, 2, 0);
+    expect(red[0]).toBeGreaterThan(neutral[0] ?? 0);
+    expect(red[0]).toBeGreaterThan((red[1] ?? 0) * 2);
+    expect(neutral[0]).toEqual(neutral[1]);
+  } finally {
+    left.dispose();
+    right.dispose();
+    source.geometry.dispose();
+    source.material.dispose();
+  }
+});

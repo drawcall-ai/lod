@@ -53,7 +53,7 @@ export class Pipeline {
     renderer.setPixelRatio(pixelRatio);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFShadowMap;
-    // Neutral (Khronos PBR Neutral) keeps hues closest to a photograph here; see viewer.ts
+    // Neutral (Khronos PBR Neutral) keeps hues closest to a photograph here; see viewer/main.ts
     renderer.toneMapping = THREE.NeutralToneMapping;
     renderer.toneMappingExposure = 0.8;
     return new Pipeline(renderer, scene, camera);
@@ -75,7 +75,8 @@ export class Pipeline {
     const previous = renderer.getRenderTarget();
     renderer.setRenderTarget(this.target);
     try {
-      await renderer.compileAsync(this.scene, this.camera);
+      // Each subtree submits its asynchronous pipelines before waiting, so shader compilation overlaps.
+      await Promise.all(this.scene.children.map((object) => renderer.compileAsync(object, this.camera, this.scene)));
     } finally {
       renderer.setRenderTarget(previous);
     }

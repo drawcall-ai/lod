@@ -28,11 +28,10 @@ import {
   uniform,
   vec4,
 } from "three/tsl";
+import { at } from "../at.js";
 import { FADE } from "../levels.js";
 import { maxScale } from "../tsl.js";
 import { ARGS_BYTES, args, type ArgsSlice } from "./args.js";
-
-export { ARGS_BYTES } from "./args.js";
 
 const CURRENT: ComputeNode[] = [];
 
@@ -106,7 +105,7 @@ export class Selection {
     .setName("lodDraws")
     .toReadOnly();
   private readonly arguments = storage(new StorageBufferAttribute(new Uint32Array(5), 1), "uint", 0).setName("lodDrawArgs");
-  // Allocation location must not specialize the handover shader for every crowd.
+  // Allocation location must not specialize the arguments pass for every crowd.
   private readonly argsStart = uniform(0, "uint");
   private kernels: ComputeNode[] | null = null;
   /**
@@ -127,7 +126,7 @@ export class Selection {
     /** Per level, whether it draws anything. */
     drawing: readonly boolean[],
     private draws: readonly IndirectDraw[],
-    fallback: readonly number[] = drawing.map((_, i) => i),
+    fallback: readonly number[],
   ) {
     const count = matrices.length / 16;
     this.count = count;
@@ -150,14 +149,14 @@ export class Selection {
   private allocate(draws: readonly IndirectDraw[]): ArgsSlice {
     const values = new Uint32Array((draws.length * ARGS_BYTES) / 4);
     draws.forEach((draw, k) => {
-      const at = (k * ARGS_BYTES) / 4;
-      const first = this.first[draw.level];
-      if (first === null || first === undefined) throw new Error("InstancedLod: a draw of a level that draws nothing");
+      const base = (k * ARGS_BYTES) / 4;
+      const first = at(this.first, draw.level);
+      if (first === null) throw new Error("InstancedLod: a draw of a level that draws nothing");
       // indexed: count, instances, first index, base vertex, first instance;
       // else: count, instances, first vertex, first instance.
-      values[at] = draw.count;
-      values[at + 2] = draw.start;
-      values[at + (draw.indexed ? 4 : 3)] = first;
+      values[base] = draw.count;
+      values[base + 2] = draw.start;
+      values[base + (draw.indexed ? 4 : 3)] = first;
     });
     return args.take(values);
   }
@@ -178,9 +177,8 @@ export class Selection {
   /** Residency is data, including the previous route for the arrival's dither fade. */
   route(fallback: readonly number[], fade = false): void {
     fallback.forEach((level, i) => {
-      const route = this.routes[i];
-      const previous = this.previous[i];
-      if (!route || !previous) throw new Error("InstancedLod: missing fallback route");
+      const route = at(this.routes, i);
+      const previous = at(this.previous, i);
       previous.value = fade ? route.value : level;
       route.value = level;
     });
@@ -206,7 +204,7 @@ export class Selection {
       this.ortho.value === Number(ortho) &&
       this.fades.value === Number(fades) &&
       this.forced.value === (forced ?? -1) &&
-      levels.every((level, l) => this.maxPixels[l]?.value === Math.min(level.maxPixels, 3.4e38));
+      levels.every((level, l) => at(this.maxPixels, l).value === Math.min(level.maxPixels, 3.4e38));
     // The caller can prove that changed views still produce the same solid slots.
     const reuse = stable !== undefined && stable === this.stable;
     this.stable = stable;
@@ -219,8 +217,7 @@ export class Selection {
     this.forced.value = forced ?? -1;
     // any finite stand-in for level 0's Infinity
     levels.forEach((level, l) => {
-      const uniform = this.maxPixels[l];
-      if (uniform) uniform.value = Math.min(level.maxPixels, 3.4e38);
+      at(this.maxPixels, l).value = Math.min(level.maxPixels, 3.4e38);
     });
   }
 
@@ -272,7 +269,7 @@ export class Selection {
   }
 
   private passes(): ComputeNode[] {
-    this.kernels ??= [this.selectPass(), this.handOverPass()];
+    this.kernels ??= [this.selectPass(), this.argumentsPass()];
     return this.kernels;
   }
 
@@ -360,8 +357,7 @@ export class Selection {
       };
       this.first.forEach((first, level) => {
         if (first === null) return;
-        const start = this.starts[level];
-        if (!start) throw new Error("InstancedLod: missing level slot offset");
+        const start = at(this.starts, level);
         If(selected.equal(level), () => emit(level, start, t));
         // The finer neighbour fading out with it.
         If(finer.equal(level).and(t.greaterThan(0)), () => emit(level, start, t.negate()));
@@ -369,19 +365,19 @@ export class Selection {
     })().compute(count);
   }
 
-  private handOverPass(): ComputeNode {
+  private argumentsPass(): ComputeNode {
     const counts = storage(this.counts, "uint", 0).setName("lodCounts").toAtomic();
     return Fn(() => {
       Loop({ start: uint(0), end: this.drawCount, type: "uint", condition: "<" }, ({ i }) => {
         const draw = this.records.element(i).toVar();
         const first = uint(0).toVar();
         this.starts.forEach((value, level) => If(draw.x.equal(level), () => void first.assign(value)));
-        const at = this.argsStart.add(i.mul(ARGS_BYTES / 4));
-        this.arguments.element(at).assign(draw.y);
-        this.arguments.element(at.add(1)).assign(atomicLoad(counts.element(draw.x)));
-        this.arguments.element(at.add(2)).assign(draw.z);
-        this.arguments.element(at.add(3)).assign(draw.w.equal(1).select(uint(0), first));
-        this.arguments.element(at.add(4)).assign(draw.w.equal(1).select(first, uint(0)));
+        const base = this.argsStart.add(i.mul(ARGS_BYTES / 4));
+        this.arguments.element(base).assign(draw.y);
+        this.arguments.element(base.add(1)).assign(atomicLoad(counts.element(draw.x)));
+        this.arguments.element(base.add(2)).assign(draw.z);
+        this.arguments.element(base.add(3)).assign(draw.w.equal(1).select(uint(0), first));
+        this.arguments.element(base.add(4)).assign(draw.w.equal(1).select(first, uint(0)));
       });
       this.first.forEach((_, l) => atomicStore(counts.element(l), uint(0)));
     })().compute(1);

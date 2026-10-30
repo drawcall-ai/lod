@@ -2,6 +2,7 @@ import { BufferAttribute, BufferGeometry, type InterleavedBufferAttribute, type 
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
 import { MeshoptSimplifier } from "meshoptimizer";
 import { detailed } from "./bounds.js";
+import { borrowMaterials } from "./dispose.js";
 import { recordDeviation } from "./levels.js";
 import { measureDeviation } from "./source/deviation.js";
 import { readSource } from "./source/source.js";
@@ -47,6 +48,7 @@ export async function decimate(object: Object3D, ratio: number): Promise<Object3
   });
   const copy = object.clone(true);
   decimateTree(copy, ratio, new Map());
+  borrowMaterials(copy);
   return copy;
 }
 

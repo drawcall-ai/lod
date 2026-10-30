@@ -2,20 +2,21 @@ import type { Object3D } from "three/webgpu";
 import { isObject3D } from "./three.js";
 
 type Load = () => Promise<Object3D>;
-interface Decoded {
+interface Loading {
   promise: Promise<Object3D>;
   object?: Object3D;
   error?: Error;
 }
-const memo = new WeakMap<Load, Decoded>();
+const started = new WeakMap<Load, Loading>();
 
-export const decoded = (load: Load): Decoded | undefined => memo.get(load);
+/** The load `loadOnce` started for `load`, if any. */
+export const loading = (load: Load): Loading | undefined => started.get(load);
 
-/** Material dependencies and owners share one decode and one resource lifetime. */
-export function decode(load: Load): Decoded {
-  const existing = memo.get(load);
+/** Material dependencies and owners share one load and one resource lifetime. */
+export function loadOnce(load: Load): Loading {
+  const existing = started.get(load);
   if (existing) return existing;
-  const entry: Decoded = {
+  const entry: Loading = {
     promise: Promise.resolve()
       .then(load)
       .then((object) => {
@@ -28,6 +29,6 @@ export function decode(load: Load): Decoded {
         throw entry.error;
       }),
   };
-  memo.set(load, entry);
+  started.set(load, entry);
   return entry;
 }

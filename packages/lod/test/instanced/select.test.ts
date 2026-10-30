@@ -1,7 +1,8 @@
 /// <reference types="@webgpu/types" />
 import { Matrix4, Sphere, Vector3, WebGPURenderer, type Renderer } from "three/webgpu";
 import { expect, it, vi } from "vitest";
-import { ARGS_BYTES, Selection } from "../../src/instanced/select.js";
+import { ARGS_BYTES } from "../../src/instanced/args.js";
+import { Selection } from "../../src/instanced/select.js";
 import { GPU_TIMEOUT, renderer } from "../gpu.js";
 
 const levels = [{ maxPixels: Infinity }, { maxPixels: 10 }];
@@ -17,6 +18,7 @@ function selection(count: number, indexed: boolean, start: number, sphere = new 
       { level: 0, count: 6, start: 0, indexed },
       { level: 1, count: 9, start, indexed },
     ],
+    [0, 1],
   );
   selection.aim(new Vector3(), 1, true, false, 1, levels);
   return selection;

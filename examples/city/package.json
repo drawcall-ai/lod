@@ -14,10 +14,11 @@
     "smooth": "node --experimental-strip-types --no-warnings scripts/smooth.ts"
   },
   "dependencies": {
+    "@drawcall/glts": "^4.0.0",
     "@drawcall/lod": "workspace:*",
     "fflate": "^0.8.3",
     "three": "^0.185.1",
-    "vitecache": "^0.1.2"
+    "vitecache": "^0.2.1"
   },
   "devDependencies": {
     "@gltf-transform/core": "^4.2.1",
@@ -26,9 +27,10 @@
     "@playwright/test": "^1.59.1",
     "@types/node": "^24.13.6",
     "@types/three": "^0.185.0",
+    "@webgpu/types": "^0.1.74",
     "meshoptimizer": "^1.3.0",
     "sharp": "^0.35.5",
     "typescript": "^5.9.3",
-    "vite": "^8.2.1"
+    "vite": "^8.3.5"
   }
 }

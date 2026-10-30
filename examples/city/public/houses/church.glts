@@ -1,0 +1,18 @@
+import { loadingManager, onDispose, scene } from "@drawcall/glts";
+import { church, type HousePart } from "../content/house/asset.ts";
+import { Library } from "../content/materials.ts";
+import { choice } from "../content/parameters.ts";
+
+const library = new Library(loadingManager, new URL("../assets/", import.meta.url).href);
+onDispose(() => library.dispose());
+const query = new URL(import.meta.url).searchParams;
+const part = choice(query, "part", ["source", "low", "interior"], "source");
+await library.load();
+const object = await church(scene.source, part, library);
+if (part === "interior") scene.add(...object.children);
+else scene.add(object);
+
+// Warm every part's cache on the server before the browser requests individual assets.
+if (import.meta.env.SSR) {
+  for (const p of ["source", "interior"] satisfies HousePart[]) library.release(await church(scene.source, p, library));
+}

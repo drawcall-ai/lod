@@ -1,11 +1,12 @@
 import { Object3D, Sphere, type Camera, type Intersection, type Raycaster } from "three/webgpu";
-import { compileLevel } from "./queue.js";
+import { at } from "./at.js";
+import { compileLevel } from "./compile.js";
 import { measureLevels, prepareBounds } from "./bounds.js";
-import { disposeTree } from "./dispose.js";
+import { disposeCopies } from "./dispose.js";
 import { setDraw, type Draw } from "./fade.js";
 import { levelMaterial } from "./material.js";
 import { Residency, handover, type LevelsEventMap } from "./residency.js";
-import { FADE, Level, cloneLevels, estimate, fadeProgress, levelAt, demandLevels, tintLevels, validate, type LodLevel } from "./levels.js";
+import { FADE, Level, cloneLevels, estimate, fadeProgress, levelAt, demandLevels, tintLevels, validate, type LevelView, type LodLevel } from "./levels.js";
 import { inShadowPass, isImpostorMesh, isLOD, isMesh, rejectSkinned } from "./three.js";
 import { TYPICAL_HEIGHT, View, viewportHeight, watchViewport, watchContext, unwatchContext, inView, type RenderContext } from "./view.js";
 import { WIND_BOUNDS } from "./wind/hooks.js";
@@ -45,7 +46,7 @@ export class Lod extends Object3D<LevelsEventMap> {
   autoUpdate = true;
   /** Draw only this level, without fades. */
   forceLevel: number | null = null;
-  readonly levels: readonly Level[];
+  readonly levels: readonly LevelView[];
 
   private readonly entries: Level[] = [];
   /** Per level, how its meshes draw. */
@@ -94,9 +95,7 @@ export class Lod extends Object3D<LevelsEventMap> {
       rejectSkinned(object, "Lod");
       this.add(object);
       this.hook(object, draw, level.nested, object);
-      object.traverseVisible((node) => {
-        drawable ||= isMesh(node);
-      });
+      drawable ||= drawsMesh(object);
     });
     estimate(this.entries, 2 * own.radius);
     this.residency.reset();
@@ -144,14 +143,13 @@ export class Lod extends Object3D<LevelsEventMap> {
     let t = level === finer ? 0 : fade;
     const progress = this.residency.progress;
     if (progress < 1) {
-      const before = at(previous, desired.index),
-        beforeFiner = at(previous, neighbour);
+      const before = at(previous, desired.index);
+      const beforeFiner = at(previous, neighbour);
       [level, finer, t] = handover([before, beforeFiner, before === beforeFiner ? 0 : fade], [level, finer, t], progress);
     }
     const diameter = 2 * this.casterRadius * this.matrixWorld.getMaxScaleOnAxis();
     entries.forEach((each, i) => {
-      const draw = draws[i];
-      if (!draw) throw new Error("Lod: a level has no draw");
+      const draw = at(draws, i);
       draw.fade = i === level ? t : i === finer ? -t : 0;
       draw.diameter = diameter;
       if (each.object) each.object.visible = i === level || (t > 0 && i === finer);
@@ -160,21 +158,30 @@ export class Lod extends Object3D<LevelsEventMap> {
 
   private async install(level: Level, template: Object3D, context: RenderContext): Promise<void> {
     const object = template.clone();
-    level.object = object;
-    level.nested = isLOD(object);
+    const nested = isLOD(object);
     object.visible = false;
     rejectSkinned(object, "Lod");
     if (level.box) prepareBounds(object, level.box);
-    this.hook(object, at(this.draws, level.index), level.nested, object);
+    this.hook(object, at(this.draws, level.index), nested, object);
+    // Parented hidden only for world matrices and wind; the level arrives after compiling.
     this.add(object);
     object.updateWorldMatrix(true, true);
     refreshWind(this, object);
-    await compileLevel(object, context);
-    let drawable = false;
-    object.traverse((node) => {
-      drawable ||= isMesh(node);
-    });
-    if (!this.disposed && drawable) unwatchContext(this);
+    try {
+      await compileLevel(object, context);
+    } catch (error) {
+      this.remove(object);
+      disposeCopies(object);
+      throw error;
+    }
+    if (this.disposed) {
+      this.remove(object);
+      disposeCopies(object);
+      return;
+    }
+    level.object = object;
+    level.nested = nested;
+    if (drawsMesh(object)) unwatchContext(this);
   }
 
   override raycast(raycaster: Raycaster, intersects: Intersection[]): boolean {
@@ -205,13 +212,17 @@ export class Lod extends Object3D<LevelsEventMap> {
     this.disposed = true;
     unwatchContext(this);
     this.residency.dispose(() => {
-      for (const { object } of this.entries) if (object) disposeTree(object);
+      for (const { object } of this.entries) if (object) disposeCopies(object);
     });
   }
 }
 
-function at<T>(values: readonly T[], index: number): T {
-  const value = values[index];
-  if (value === undefined) throw new Error(`Lod: missing index ${index}`);
-  return value;
+/** Whether `level` holds a mesh that draws once Lod shows it: the level's own visibility is Lod's to switch, its descendants' are not. */
+function drawsMesh(level: Object3D): boolean {
+  let found = isMesh(level);
+  for (const child of level.children)
+    child.traverseVisible((node) => {
+      found ||= isMesh(node);
+    });
+  return found;
 }

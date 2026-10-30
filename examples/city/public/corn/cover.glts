@@ -1,0 +1,25 @@
+import { Mesh } from "three/webgpu";
+import { Library } from "../content/materials.ts";
+import { loadingManager, onDispose, scene } from "@drawcall/glts";
+import { cover } from "../content/corn/cover/index.ts";
+import { DESIGNS } from "../content/corn/layout.ts";
+import { choice, number } from "../content/parameters.ts";
+import { dispose } from "../content/dispose.ts";
+
+const library = new Library(loadingManager, new URL("../assets/", import.meta.url).href);
+onDispose(() => {
+  dispose(scene);
+  library.dispose();
+});
+const query = new URL(import.meta.url).searchParams;
+const design = number(query, "design", 0, 0, DESIGNS - 1, true);
+/** No axis: the canopy over the whole block rather than one of its sides. */
+const CANOPY = "";
+const axis = choice(query, "axis", ["x", "z"], CANOPY);
+// Warm every design's and wall's cache on the server before the browser requests individual assets.
+if (import.meta.env.SSR) {
+  for (let index = 0; index < DESIGNS; index++) dispose(await cover(scene.source, library, index, CANOPY));
+  for (const axis of ["x", "z"] as const) dispose(await cover(scene.source, library, 0, axis));
+}
+const mesh: Mesh = await cover(scene.source, library, design, axis);
+scene.add(mesh);

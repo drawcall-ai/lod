@@ -5,7 +5,6 @@ import {
   DirectionalLight,
   Color,
   Group,
-  InstancedMesh,
   Matrix4,
   Mesh,
   MeshBasicMaterial,
@@ -20,10 +19,11 @@ import {
   type BufferAttribute,
   type Intersection,
 } from "three/webgpu";
+import { uniform } from "three/tsl";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { drawOf } from "../../src/fade.js";
+import { Instances } from "../../src/instanced/meshes.js";
 import { InstancedLod } from "../../src/instanced/index.js";
-import { ImpostorMesh } from "../../src/impostor/mesh/index.js";
 import { Lod } from "../../src/lod.js";
 import { Wind } from "../../src/wind/index.js";
 import { isMesh } from "../../src/three.js";
@@ -63,7 +63,7 @@ async function slots(lod: InstancedLod) {
     meshes(lod).map(async (mesh) => {
       const args = mesh.geometry.getIndirect();
       const draw = drawOf(mesh);
-      if (!args || draw?.kind !== "instances" || !draw.fades || !(mesh instanceof InstancedMesh)) throw new Error("not a level mesh");
+      if (!args || draw?.kind !== "instances" || !draw.fades || !(mesh instanceof Instances)) throw new Error("not a level mesh");
       const offset = mesh.geometry.indirectOffset;
       if (typeof offset !== "number") throw new Error("one draw per mesh");
       const words = new Uint32Array(await read(args));
@@ -199,70 +199,6 @@ describe("InstancedLod", { timeout: GPU_TIMEOUT }, () => {
 
 const mesh = () => new Mesh(new BoxGeometry(2, 2, 2), new MeshBasicMaterial());
 
-it("replaces a deferred source's coarse fallback after preparation", { timeout: GPU_TIMEOUT }, async () => {
-  const deferred = { load: async () => mesh(), maxPixels: Infinity, box: new Box3(new Vector3(-1, -1, -1), new Vector3(1, 1, 1)) };
-  const crowd = new InstancedLod([deferred, { object: mesh() }], 3);
-  crowd.forceLevel = 0;
-  for (let i = 0; i < crowd.count; i++) crowd.setMatrixAt(i, new Matrix4().makeTranslation(0, 0, -5));
-  const scene = new Scene().add(crowd);
-  const camera = new PerspectiveCamera(60, 1, 0.1, 100);
-  try {
-    await render(scene, camera);
-    expect(crowd.levelOf(0)).toBe(1);
-    await nextLevel(crowd, camera);
-    crowd.update(camera);
-    expect(crowd.children).toHaveLength(2);
-    expect(crowd.levelOf(0)).toBe(0);
-  } finally {
-    crowd.dispose();
-  }
-});
-
-it("keeps shared instance slots alive when an arriving impostor fails compilation", { timeout: GPU_TIMEOUT }, async () => {
-  const impostor = new ImpostorMesh({
-    version: 3,
-    layout: "full",
-    frames: 4,
-    size: 16,
-    box: [-1, 0, -1, 1, 2, 1],
-    halfSize: 1.5,
-    maps: ["base", "normalDepth", "orm"],
-    layers: [0, 1, 2].map(() => [16, 8, 4].map((size) => new Uint8Array(size * size * 4))),
-  });
-  const deferred = { load: async () => impostor, maxPixels: Infinity, box: new Box3().setFromArray(impostor.impostor.box) };
-  const crowd = new InstancedLod([deferred, { object: mesh() }], 1);
-  crowd.forceLevel = 0;
-  crowd.setMatrixAt(0, new Matrix4().makeTranslation(0, 0, -5));
-  crowd.setColorAt(0, new Color("red"));
-  const scene = new Scene().add(crowd);
-  const camera = new PerspectiveCamera(60, 1, 0.1, 100);
-  const failure = new Error("test compile failure");
-  let matricesDisposed = 0;
-  let colorsDisposed = 0;
-  const report = vi.spyOn(console, "error").mockImplementation(() => {});
-  try {
-    await render(scene, camera);
-    const compile = renderer.compileAsync.bind(renderer);
-    vi.spyOn(renderer, "compileAsync").mockImplementation(async (...args) => {
-      const [object] = args;
-      if (!(object instanceof ImpostorMesh)) return compile(...args);
-      if (!object.instanceColor) throw new Error("Missing prepared impostor slots");
-      object.instanceMatrix.addEventListener("dispose", () => matricesDisposed++);
-      object.instanceColor.addEventListener("dispose", () => colorsDisposed++);
-      throw failure;
-    });
-    await expect(nextLevel(crowd, camera)).rejects.toBe(failure);
-    expect(report).toHaveBeenCalledWith(failure);
-    expect(matricesDisposed).toBe(0);
-    expect(colorsDisposed).toBe(0);
-    expect(crowd.levelOf(0)).toBe(1);
-    expect(crowd.children).toHaveLength(1);
-    expect((await render(scene, camera)).some((byte) => byte > 0)).toBe(true);
-  } finally {
-    crowd.dispose();
-  }
-});
-
 it("installs shared decoded detail only in crowds whose current view demands it", { timeout: GPU_TIMEOUT }, async () => {
   const load = vi.fn(async () => mesh());
   const deferred = { load, maxPixels: Infinity, box: new Box3(new Vector3(-1, -1, -1), new Vector3(1, 1, 1)) };
@@ -341,7 +277,7 @@ function camera(): PerspectiveCamera {
 function contains(lod: InstancedLod, matrix: Matrix4, sway = 0): void {
   const point = new Vector3();
   for (const mesh of lod.children) {
-    if (!(mesh instanceof InstancedMesh) || !mesh.boundingSphere) throw new Error("Missing level mesh bounds");
+    if (!(mesh instanceof Instances) || !mesh.boundingSphere) throw new Error("Missing level mesh bounds");
     const bounds = mesh.boundingSphere.clone().applyMatrix4(lod.matrixWorld);
     const vertices = mesh.geometry.getAttribute("position");
     for (let i = 0; i < vertices.count; i++) {
@@ -366,7 +302,7 @@ it("bounds all placed levels and template shear without changing source-based LO
   coarse.geometry.computeTangents();
   const lod = new InstancedLod([{ object: source }, { object: coarse }], 1);
   const translated = lod.children[1];
-  if (!(translated instanceof InstancedMesh)) throw new Error("Missing translated level mesh");
+  if (!(translated instanceof Instances)) throw new Error("Missing translated level mesh");
   expect(new Vector3().fromBufferAttribute(translated.geometry.getAttribute("position"), 0).toArray()).toEqual([40, 15, 1]);
   expect(new Vector3().fromBufferAttribute(coarse.geometry.getAttribute("position"), 0).toArray()).toEqual([10, 5, 1]);
   for (const name of ["normal", "tangent"]) expect(translated.geometry.getAttribute(name).array).toEqual(coarse.geometry.getAttribute(name).array);
@@ -429,4 +365,39 @@ it("raycasts source faces outside the max-axis sphere of a sheared template", ()
   expect(hits[0]?.instanceId).toBe(0);
   expect(hits[0]?.point.distanceTo(face)).toBeLessThan(1e-6);
   lod.dispose();
+});
+
+it("builds identical vertex WGSL for equal material structures across independently created crowds", { timeout: GPU_TIMEOUT }, async () => {
+  const first = new InstancedLod([{ object: mesh() }], 1);
+  first.setColorAt(0, new Color("red"));
+  const scene = new Scene().add(first);
+  const camera = new PerspectiveCamera(60, 1, 0.1, 100);
+  camera.position.z = 5;
+  const draw = first.children[0];
+  if (!draw) throw new Error("Missing first draw");
+  const before = await renderer.debug.getShaderAsync(scene, camera, draw);
+  // Unrelated asynchronous asset arrivals allocate nodes between equivalent crowds.
+  for (let i = 0; i < 23; i++) uniform(i);
+  const second = new InstancedLod([{ object: mesh() }], 17);
+  second.setColorAt(0, new Color("blue"));
+  scene.add(second);
+  const autoReset = renderer.info.autoReset;
+  try {
+    const next = second.children[0];
+    if (!next) throw new Error("Missing second draw");
+    const after = await renderer.debug.getShaderAsync(scene, camera, next);
+    expect(before.vertexShader).toContain("lodInstanceMatrices");
+    expect(after.vertexShader).toBe(before.vertexShader);
+    expect(after.fragmentShader).toBe(before.fragmentShader);
+    // Pixel readback can cross a frame, when Three otherwise resets the statistics.
+    renderer.info.autoReset = false;
+    renderer.info.reset();
+    await render(scene, camera);
+    // Indirect draws report capacity, even though the GPU chooses each level's actual count.
+    expect(renderer.info.render.triangles).toBe((first.count + second.count) * 12);
+  } finally {
+    renderer.info.autoReset = autoReset;
+    first.dispose();
+    second.dispose();
+  }
 });

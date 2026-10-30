@@ -1,6 +1,7 @@
 import { Color, type Box3, type Object3D } from "three/webgpu";
 import { texelPixels } from "./impostor/impostor.js";
 import { isImpostorMesh, isLOD } from "./three.js";
+import { at } from "./at.js";
 
 /** Share of each level's range over which its finer neighbour fades out. */
 export const FADE = 0.1;
@@ -9,8 +10,30 @@ export const FADE = 0.1;
 export type LodLevel =
   { object: Object3D; maxPixels?: number; load?: never; box?: never } | { load: () => Promise<Object3D>; maxPixels: number; box: Box3; object?: never };
 
+/** One level of an owner, as `Lod.levels` and `InstancedLod.levels` show it. */
+export interface LevelView {
+  /** Level 0 is the source. */
+  readonly index: number;
+  /**
+   * The level's object, undefined until a deferred level has arrived. For a Lod it is
+   * drawn, and its visibility is the Lod's switch. For an InstancedLod it is the template
+   * the level's instanced meshes are made from: never in the scene, so `levelOf` tells
+   * what draws.
+   */
+  readonly object: Object3D | undefined;
+  /** A deferred level's bounds in the owner's space. */
+  readonly box: Box3 | undefined;
+  /**
+   * Largest on-screen height, in CSS pixels × Lod.quality, at which this level draws.
+   * Level 0 is Infinity. Every later threshold must be at most 0.9 of its predecessor.
+   * Defaults use measured surface deviation, impostor texels, or half the previous
+   * threshold (512 for level 1), raised where needed to leave room for fades.
+   */
+  maxPixels: number;
+}
+
 /** One owner's resolved threshold and drawable, separate from its reusable description. */
-export class Level {
+export class Level implements LevelView {
   readonly tint = new Color(1, 1, 1);
   readonly box: Box3 | undefined;
   object: Object3D | undefined;
@@ -30,17 +53,9 @@ export class Level {
     if (this.box && !this.box.isEmpty() && ![...this.box.min.toArray(), ...this.box.max.toArray()].every(Number.isFinite))
       throw new Error("Lod: a deferred level's box must be finite");
     this.object = input.object?.clone();
-    const deviation = input.object && deviationOf(input.object);
-    if (this.object && deviation !== undefined) recordDeviation(this.object, deviation);
     this.nested = this.object ? isLOD(this.object) : false;
   }
 
-  /**
-   * Largest on-screen height, in CSS pixels × Lod.quality, at which this level draws.
-   * Level 0 is Infinity. Every later threshold must be at most 0.9 of its predecessor.
-   * Defaults use measured surface deviation, impostor texels, or half the previous
-   * threshold (512 for level 1), raised where needed to leave room for fades.
-   */
   get maxPixels(): number {
     return this.value;
   }
@@ -64,10 +79,9 @@ export const deviationOf = (level: Object3D): number | undefined => deviations.g
 /** Descriptions for a new owner, retaining threshold edits and sharing deferred decode. */
 export function cloneLevels(levels: readonly Level[]): LodLevel[] {
   return levels.map((level) => {
-    const { input, object, explicit } = level;
+    const { input, explicit } = level;
     if (input.load) return { ...input, maxPixels: level.maxPixels };
-    if (!object) throw new Error("Lod: an eager level has no object");
-    return { object, ...(explicit === null ? {} : { maxPixels: explicit }) };
+    return { object: input.object, ...(explicit === null ? {} : { maxPixels: explicit }) };
   });
 }
 
@@ -78,26 +92,39 @@ interface Threshold {
   value: number;
 }
 
-function bases(levels: readonly LodLevel[], diameter: number): number[] {
+/** What a level's default threshold is measured from: surface deviation, else impostor texels. */
+interface Measured {
+  deviation?: number;
+  texels?: number;
+}
+
+export function measure(object: Object3D): Measured {
+  return { deviation: deviationOf(object), texels: isImpostorMesh(object) ? texelPixels(object.impostor) : undefined };
+}
+
+/** A level to resolve: `measured` is absent for a deferred level, whose own maxPixels stands in. */
+interface Measurable {
+  maxPixels?: number;
+  measured?: Measured;
+}
+
+function bases(levels: readonly Measurable[], diameter: number): number[] {
   let finer = 1024;
-  return levels.map(({ object, maxPixels }, index) => {
+  return levels.map(({ maxPixels, measured }, index) => {
     if (index === 0) return Infinity;
-    const deviation = object && deviationOf(object);
-    const base = !object
+    const base = !measured
       ? maxPixels
-      : deviation !== undefined
-        ? diameter / Math.max(deviation, diameter * 1e-4)
-        : isImpostorMesh(object)
-          ? texelPixels(object.impostor)
-          : finer / 2;
+      : measured.deviation !== undefined
+        ? diameter / Math.max(measured.deviation, diameter * 1e-4)
+        : (measured.texels ?? finer / 2);
     if (base === undefined) throw new Error("Lod: a deferred level needs maxPixels");
     finer = base;
     return base;
   });
 }
 
-/** Resolve thresholds from metadata without constructing renderer state. */
-export function resolveThresholds(levels: readonly LodLevel[], diameter: number): number[] {
+/** Resolve thresholds from measurements without constructing renderer state. */
+export function resolveThresholds(levels: readonly Measurable[], diameter: number): number[] {
   const defaults = bases(levels, diameter);
   const thresholds = levels.map((level, index) => {
     if (level.maxPixels !== undefined) checkThreshold(level.maxPixels, index);
@@ -111,7 +138,7 @@ export function resolveThresholds(levels: readonly LodLevel[], diameter: number)
 /** Resolve defaults once, retaining writable owner thresholds. */
 export function estimate(levels: readonly Level[], diameter: number): void {
   const defaults = bases(
-    levels.map(({ input }) => input),
+    levels.map(({ input }) => ({ maxPixels: input.maxPixels, measured: input.object && measure(input.object) })),
     diameter,
   );
   levels.forEach((level, index) => {
@@ -123,8 +150,7 @@ export function estimate(levels: readonly Level[], diameter: number): void {
 function resolve(levels: readonly Threshold[]): void {
   let next = 0;
   for (let i = levels.length - 1; i >= 0; i--) {
-    const level = levels[i];
-    if (!level) continue;
+    const level = at(levels, i);
     level.value = level.index === 0 ? Infinity : (level.explicit ?? Math.max(level.base, 2 * next));
     next = level.value;
   }
@@ -148,11 +174,9 @@ export function levelAt(levels: readonly Level[], height: number, forceLevel: nu
   return level;
 }
 
-function lastFitting(levels: readonly Level[], height: number): number {
-  for (let i = levels.length - 1; i > 0; i--) {
-    const level = levels[i];
-    if (level && height <= level.maxPixels) return i;
-  }
+/** The coarsest level whose maxPixels `height` still fits; level 0 fits any height. */
+export function lastFitting(levels: readonly { maxPixels: number }[], height: number): number {
+  for (let i = levels.length - 1; i > 0; i--) if (height <= at(levels, i).maxPixels) return i;
   return 0;
 }
 
@@ -191,14 +215,8 @@ export function demandLevels(levels: readonly Level[], height: number, forced: n
 /** Nearest ready finer level, else nearest coarser; -1 draws nothing until one is ready. */
 export function fallbacks(levels: readonly Level[], ready: ReadonlySet<Level>): number[] {
   return levels.map((_, index) => {
-    for (let finer = index; finer >= 0; finer--) {
-      const level = levels[finer];
-      if (level && ready.has(level)) return finer;
-    }
-    for (let coarser = index + 1; coarser < levels.length; coarser++) {
-      const level = levels[coarser];
-      if (level && ready.has(level)) return coarser;
-    }
+    for (let finer = index; finer >= 0; finer--) if (ready.has(at(levels, finer))) return finer;
+    for (let coarser = index + 1; coarser < levels.length; coarser++) if (ready.has(at(levels, coarser))) return coarser;
     return -1;
   });
 }

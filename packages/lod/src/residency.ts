@@ -1,7 +1,9 @@
 import type { Camera, Object3D, Object3DEventMap } from "three/webgpu";
-import { compileLevel, enqueue } from "./queue.js";
+import { at } from "./at.js";
+import { compileLevel } from "./compile.js";
+import { enqueue } from "./queue.js";
 import { disposeTree } from "./dispose.js";
-import { decode, decoded } from "./deferred.js";
+import { loadOnce, loading } from "./deferred.js";
 import { fallbacks, type Level } from "./levels.js";
 import { renderContext, type RenderContext } from "./view.js";
 
@@ -11,10 +13,17 @@ export interface LevelsEventMap extends Object3DEventMap {
   /** A compiled level has joined this LOD's draws. */
   levelschange: {};
   /** Fetch, decode, or GPU preparation failed; ready fallbacks remain drawable. */
-  levelserror: { error: unknown };
+  levelserror: { error: Error };
 }
 
-const compiled = new WeakMap<RenderContext, WeakSet<Object3D>>();
+const compiledMeshes = new WeakMap<RenderContext, WeakSet<Object3D>>();
+
+/** The meshes already compiled for `context`. */
+function compiledIn(context: RenderContext): WeakSet<Object3D> {
+  let compiled = compiledMeshes.get(context);
+  if (!compiled) compiledMeshes.set(context, (compiled = new WeakSet()));
+  return compiled;
+}
 
 /** Decode is shared by load function; readiness and handover belong to each owner. */
 export class Residency {
@@ -26,17 +35,14 @@ export class Residency {
   private readonly demanded = new Set<Level>();
   private readonly requested = new Set<() => Promise<Object3D>>();
   private disposed = false;
-  private failure: Error | undefined;
-
-  get error(): Error | undefined {
-    return this.failure;
-  }
+  /** The first failure; it stops further demand. */
+  error: Error | undefined;
 
   constructor(
     private readonly levels: readonly Level[],
     private readonly install: (level: Level, object: Object3D, context: RenderContext) => Promise<void>,
     private readonly changed: () => void,
-    private readonly failed: (error: unknown) => void,
+    private readonly failed: (error: Error) => void,
   ) {}
 
   reset(): void {
@@ -60,17 +66,16 @@ export class Residency {
 
   demand(camera: Camera, indices: Iterable<number>): void {
     this.demanded.clear();
-    if (this.disposed || this.failure || !renderContext(camera)) return;
+    if (this.disposed || this.error || !renderContext(camera)) return;
     for (const index of indices) {
-      const level = this.levels[index];
-      if (!level) throw new Error(`Lod: missing level ${index}`);
+      const level = at(this.levels, index);
       this.demanded.add(level);
-      const fallback = this.levels[this.fallback[index] ?? -1];
-      if (fallback) this.demanded.add(fallback);
+      const fallback = at(this.fallback, index);
+      if (fallback >= 0) this.demanded.add(at(this.levels, fallback));
       const load = level.input.load;
       if (!load || this.requested.has(load)) continue;
       this.requested.add(load);
-      void decode(load).promise.catch((error: unknown) => this.report(error));
+      void loadOnce(load).promise.catch((error: unknown) => this.report(error));
     }
   }
 
@@ -78,8 +83,8 @@ export class Residency {
     if (this.ready.size < this.levels.length || this.progress < 1) return true;
     const context = renderContext(camera);
     if (!context) return false;
-    const warmed = compiled.get(context);
-    return this.levels.some(({ input }, index) => !input.load && meshes[index]?.some((draw) => !warmed?.has(draw)));
+    const compiled = compiledMeshes.get(context);
+    return this.levels.some(({ input }, index) => !input.load && meshes[index]?.some((mesh) => !compiled?.has(mesh)));
   }
 
   drawn(camera: Camera, object: Object3D): void {
@@ -87,25 +92,24 @@ export class Residency {
     if (this.task) return;
     const context = renderContext(camera);
     if (!context) return;
-    let warmed = compiled.get(context);
-    if (!warmed) compiled.set(context, (warmed = new WeakSet()));
-    warmed.add(object);
+    compiledIn(context).add(object);
   }
 
   update(camera: Camera, meshes?: readonly (readonly Object3D[])[]): void {
     const context = renderContext(camera);
     if (!context || this.disposed || this.task || this.error || this.progress < 1) return;
-    let warmed = compiled.get(context);
-    if (!warmed) compiled.set(context, (warmed = new WeakSet()));
-    const eager = this.levels.findIndex((level, index) => !level.input.load && this.demanded.has(level) && meshes?.[index]?.some((draw) => !warmed.has(draw)));
-    const draws = meshes?.[eager];
-    if (draws) {
+    const compiled = compiledIn(context);
+    const eager = this.levels.findIndex(
+      (level, index) => !level.input.load && this.demanded.has(level) && meshes?.[index]?.some((mesh) => !compiled.has(mesh)),
+    );
+    const pending = meshes?.[eager];
+    if (pending) {
       this.run(async () => {
         const results = await Promise.allSettled(
-          draws.map(async (draw) => {
-            if (warmed.has(draw)) return;
-            await compileLevel(draw, context);
-            warmed.add(draw);
+          pending.map(async (mesh) => {
+            if (compiled.has(mesh)) return;
+            await compileLevel(mesh, context);
+            compiled.add(mesh);
           }),
         );
         for (const result of results) if (result.status === "rejected") throw result.reason;
@@ -113,7 +117,7 @@ export class Residency {
       return;
     }
     for (const level of this.levels) {
-      const object = level.input.load && decoded(level.input.load)?.object;
+      const object = level.input.load && loading(level.input.load)?.object;
       if (!object || !this.demanded.has(level) || this.ready.has(level)) continue;
       this.run(async () => {
         await this.install(level, object, context);
@@ -145,10 +149,10 @@ export class Residency {
   }
 
   private report(error: unknown): void {
-    if (this.disposed || this.failure) return;
-    this.failure = error instanceof Error ? error : new Error("Lod: level failed", { cause: error });
-    this.failed(this.failure);
-    console.error(this.failure);
+    if (this.disposed || this.error) return;
+    this.error = error instanceof Error ? error : new Error("Lod: level failed", { cause: error });
+    this.failed(this.error);
+    console.error(this.error);
   }
 
   dispose(release: () => void): void {
@@ -157,14 +161,14 @@ export class Residency {
       release();
       const templates = new Set<Object3D>();
       for (const { input } of this.levels) {
-        const object = input.object ?? decoded(input.load)?.object;
+        const object = input.object ?? loading(input.load)?.object;
         if (object) templates.add(object);
       }
       for (const template of templates) disposeTree(template);
     };
     const finish = () => {
       const pending = this.levels.flatMap(({ input }) => {
-        const entry = input.load && decoded(input.load);
+        const entry = input.load && loading(input.load);
         return entry && !entry.object && !entry.error ? [entry.promise] : [];
       });
       // A mesh decode can begin its source-material dependency after disposal starts.

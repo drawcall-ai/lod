@@ -18,8 +18,8 @@ const levels = await loader.loadAsync("/models/tree.glb");
 scene.add(new Lod(levels));
 ```
 
-Configure [vitecache](https://github.com/drawcall-ai/vitecache) in the host and ship its generated cache files. A cache miss builds the levels once; warm loads fetch and decode them. Procedural sources and named custom materials use the same loader.
+Add the [vitecache](https://github.com/drawcall-ai/vitecache) Vite plugin to the host. Loading each asset in the dev server writes its levels as cache files; `vite build` does not generate them, so deploy the cache directory with the app. For procedural assets, register a GLTSLoader on the loading manager and pass a `.glts` URL; the LOD skill below covers caching their expensive generation.
 
-Choose generated or authored levels to suit your assets. The [LOD skill](https://github.com/drawcall-ai/lod/blob/main/packages/lod/skills/lod/SKILL.md) covers asset choices, caching, lazy loading, wind, and scene integration. It also ships with the package at `skills/lod/SKILL.md`.
+Choose derived levels to suit your assets. The [LOD skill](https://github.com/drawcall-ai/lod/blob/main/packages/lod/skills/lod/SKILL.md) covers asset choices, caching, lazy loading, wind, and scene integration. It also ships with the package at `skills/lod/SKILL.md`.
 
 The [city example](https://github.com/drawcall-ai/lod/tree/main/examples/city) demonstrates a large scene with buildings, vegetation, and small props.

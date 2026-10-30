@@ -109,7 +109,10 @@ export function buildCard(inputs: CardInputs, instance: Node<"mat4">, deform: No
   // whole surface, and a square frame is mostly empty for a tall plant.
   const box = vec2(dot(tangent.abs(), extent), dot(bitangent.abs(), extent)).add(halfSize.mul(0.06));
   const size = min(box, vec2(halfSize, halfSize)).mul(grow.mul(2));
-  const point = centre.add(tangent.mul(positionGeometry.x.mul(size.x))).add(bitangent.mul(positionGeometry.y.mul(size.y))).toVar();
+  const point = centre
+    .add(tangent.mul(positionGeometry.x.mul(size.x)))
+    .add(bitangent.mul(positionGeometry.y.mul(size.y)))
+    .toVar();
 
   const last = frames.sub(1);
   // Clamped: rounding can put a horizon view a hair outside the grid.

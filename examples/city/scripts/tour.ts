@@ -4,41 +4,22 @@
 // .artifacts/<out>/.
 //
 //   pnpm --filter @drawcall/lod-example-city tour [--size=1512x982] [--dpr=2] [--no-terrain]
-//     [--query=debug] [--keys=1,5] [--out=tour] [--cold]
+//     [--query=debug] [--keys=1,5] [--out=tour] [--cold] [--browser-profile=<dir>]
 //
 // `ms` is the median of five runs' summed GPU pass durations per frame, sampled
 // at stationary keys and while moving. Passes can overlap, so this is not elapsed
 // frame time or FPS; `cpu` measures one frame's CPU work.
 // Draw calls and triangles are three's counts, which take every indirect draw
 // (an InstancedLod's levels) at its full instance count. --no-terrain leaves the ground mesh out, --query adds page URL parameters,
-// --keys shoots only those keys, --cold empties the browser profile (and with it the
-// page's bake cache) first.
+// --keys shoots only those keys; --cold and --browser-profile are in browser.ts.
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import { chromium } from "@playwright/test";
-import { createServer } from "vite";
+import { args, flag, open, root } from "./browser.ts";
+import type { City } from "../src/diagnostics.ts";
 
-interface Measure {
-  ms: number;
-  cpu: number;
-  calls: number;
-  triangles: number;
-  kinds: { name: string; levels: { instances: number; triangles: number }[] }[];
-  /** Per shadow cascade, finest first: its texel (m) and the casters it drew. */
-  cascades: { texel: number; casters: number }[];
-}
-interface City {
-  loadMs: number;
-  keys: { name: string; time: number }[];
-  seek(time: number): Promise<void>;
-  measure(frames: number, runs: number, move?: number): Promise<Measure>;
-}
+type Measure = Awaited<ReturnType<City["measure"]>>;
 declare const window: { city: City };
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const args = process.argv.slice(2);
-const flag = (name: string) => args.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
 const out = resolve(root, ".artifacts", flag("out") ?? "tour") + "/";
 const [width, height] = (flag("size") ?? "1512x982").split("x").map(Number);
 const dpr = Number(flag("dpr") ?? 2);
@@ -49,29 +30,14 @@ const only = flag("keys")?.split(",").map(Number);
 if (!only) await rm(out, { recursive: true, force: true });
 await mkdir(out, { recursive: true });
 
-const server = await createServer({ root, logLevel: "error", server: { port: 5192, strictPort: false } });
-await server.listen();
-const url = server.resolvedUrls?.local[0];
-if (!url) throw new Error("vite did not report a local URL");
-// a profile of its own keeps the page's bake cache between runs; --cold starts it empty
-const profile = resolve(root, args.find((arg) => arg.startsWith("--browser-profile="))?.slice(18) ?? ".artifacts/browser");
-if (args.includes("--cold")) await rm(profile, { recursive: true, force: true });
-const browser = await chromium.launchPersistentContext(profile, {
-  // new headless: the old headless shell loses every WebGPU device once a page asks for a
-  // second adapter, as the package's bakes do
-  channel: "chromium",
-  headless: true,
-  viewport: { width, height },
-  deviceScaleFactor: dpr,
-  args: ["--enable-unsafe-webgpu", "--enable-webgpu-developer-features", "--enable-gpu", "--ignore-gpu-blocklist"],
-});
-const page = await browser.newPage();
+const session = await open(5192, { width, height }, dpr);
+const page = await session.browser.newPage();
 page.on("console", (m) => console.error(`[page ${m.type()}]`, m.text()));
 // an error while loading ends the run instead of waiting out the timeout
 const failed = new Promise<never>((_, reject) => page.on("pageerror", reject));
 
 try {
-  await page.goto(`${url}?shot&${query}`);
+  await page.goto(`${session.url}?shot&${query}`);
   await Promise.race([page.waitForFunction(() => "city" in window, null, { timeout: 600_000 }), failed]);
   const loadMs = await page.evaluate(() => window.city.loadMs);
   const keys = await page.evaluate(() => window.city.keys);
@@ -101,6 +67,5 @@ try {
   await writeFile(`${out}tour.json`, JSON.stringify({ width, height, dpr, query, loadMs, rows }, null, 2));
   console.log(`load ${(loadMs / 1000).toFixed(1)} s; results in ${out}`);
 } finally {
-  await browser.close();
-  await server.close();
+  await session.close();
 }

@@ -5,14 +5,15 @@
 // mesh out (everything still stands where the ground would be; roads and the creek stay).
 // ?wind=0 builds vegetation without wind, for a static performance baseline.
 // window.city exposes the tour and frame measurements to scripts/tour.ts.
+import { textures } from "./loading.ts";
 import * as THREE from "three/webgpu";
 import { InstancedLod, Lod, Wind, setViewportHeight } from "@drawcall/lod";
-import { loadManifest, texturesReady } from "./content/materials.ts";
-import { terrainMaterial } from "./content/terrain.ts";
+import { Library } from "../public/content/materials.ts";
+import { number } from "../public/content/parameters.ts";
+import { terrainMaterial } from "./render/ground/material.ts";
 import { Fly } from "./flight/fly.ts";
 import { route } from "./flight/route.ts";
 import { Tour } from "./flight/tour.ts";
-import { building } from "./loading.ts";
 import { haze } from "./render/haze.ts";
 import { Pipeline } from "./render/pipeline.ts";
 import { Sun } from "./render/sun/index.ts";
@@ -20,7 +21,7 @@ import { loadSky } from "./render/sky.ts";
 import { diagnostics } from "./diagnostics.ts";
 import { Ui } from "./ui.ts";
 import { Corn } from "./world/corn/index.ts";
-import { cover } from "./world/cover.ts";
+import { groundCover } from "./world/ground-cover.ts";
 import { water } from "./world/creek.ts";
 import { houses } from "./world/houses.ts";
 import { Patches } from "./world/patches.ts";
@@ -35,17 +36,20 @@ const params = new URLSearchParams(location.search);
 const shot = params.has("shot");
 const terrain = params.get("terrain") !== "0";
 Lod.debug = params.has("debug");
-Lod.quality = Number(params.get("quality") ?? 1);
+Lod.quality = number(params, "quality", 1, 0.01, 100);
 if (shot) document.body.classList.add("shot");
 const started = performance.now();
 const loadStages: Record<string, number> = {};
-const loaded = (name: string) => (loadStages[name] = performance.now() - started);
+const loaded = (name: string) => {
+  loadStages[name] = performance.now() - started;
+  performance.mark(`city:${name}`);
+};
 
 const ui = new Ui();
-THREE.DefaultLoadingManager.onProgress = (url, loaded, total) => ui.progress(`Downloading ${url.split("/").pop()} (${loaded}/${total})`, loaded / total / 4);
-building.onProgress = (name, loaded, total) => ui.progress(`Building ${name}…`, 0.25 + (0.6 * loaded) / Math.max(total, 14));
+THREE.DefaultLoadingManager.onProgress = (url, loaded, total) => ui.progress(`Loading ${url.split("/").pop()} (${loaded}/${total})`, (0.85 * loaded) / total);
 
-await loadManifest();
+const library = new Library(THREE.DefaultLoadingManager, new URL("/assets/", location.href).href, textures);
+await library.load();
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.5, 60000);
 const scene = new THREE.Scene();
 const pipeline = await Pipeline.create(scene, camera, Math.min(devicePixelRatio, 2));
@@ -55,7 +59,7 @@ pipeline.canvas.style.visibility = "hidden";
 document.body.prepend(pipeline.canvas);
 
 // late afternoon: the sun low in the south-west, raking across the town
-const [world, sky] = await Promise.all([loadPlan(Number(params.get("seed") ?? 7)), loadSky(pipeline.renderer, 2.4)]);
+const [world, sky] = await Promise.all([loadPlan(number(params, "seed", 7, 0, 2 ** 32 - 1, true)), loadSky(library, pipeline.renderer, 2.4)]);
 loaded("plan and sky");
 scene.background = sky.background;
 scene.environment = sky.environment;
@@ -76,21 +80,21 @@ scene.fogNode = haze(
 
 const zones = { fields: world.fields, forests: world.forests, parcels: { texture: world.land.texture(), extent: EXTENT }, town: TOWN };
 const wind = params.get("wind") === "0" ? undefined : new Wind({ direction: [1, 0.35], speed: 0.22 });
-const content = Promise.all([houses(world), trees(world, wind), props(world), Corn.build(world), cover(world, zones, wind)]);
+const content = Promise.all([houses(world), trees(world, wind), props(world), Corn.build(world), groundCover(library, world, zones, wind)]);
 // Let cache discovery start before constructing the ground on this thread.
 await new Promise<void>((resolve) => setTimeout(resolve, 0));
 if (terrain) {
-  const ground = world.terrain.mesh(terrainMaterial(zones));
+  const ground = world.terrain.mesh(terrainMaterial(library, zones));
   // the ground's shader is the costliest per pixel and much of it ends up under corn, grass
   // and houses: drawn last of the opaque objects, depth testing skips what they cover
   ground.renderOrder = 1;
   scene.add(ground);
 }
-scene.add(roads(world), water(world.terrain));
+scene.add(roads(library, world), water(world.terrain));
 
-const [buildings, forest, objects, corn, groundCover] = await content;
+const [buildings, forest, objects, corn, herbage] = await content;
 loaded("content");
-scene.add(buildings, forest, objects, corn, groundCover);
+scene.add(buildings, forest, objects, corn, herbage);
 if (wind) corn.applyWind(wind);
 scene.updateMatrixWorld(true);
 scene.matrixWorldAutoUpdate = false;
@@ -112,7 +116,7 @@ const kinds = [
   { name: "corn covers", roots: corn.covers.map((cover) => cover.lod) },
   { name: "corn plants", roots: [corn.plants, corn.hero] },
   { name: "ladybird", roots: [corn.ladybird] },
-  { name: "ground cover", roots: [groundCover] },
+  { name: "ground cover", roots: [herbage] },
 ];
 
 const tour = new Tour(route(world, corn.anchors));
@@ -151,9 +155,13 @@ resize();
 let focus = tour.pose(playback.time, camera);
 function fitCamera(value: number): void {
   camera.near = THREE.MathUtils.clamp(value * 0.02, 0.0002, 2);
-  camera.far = 60000;
   camera.updateProjectionMatrix();
   camera.updateMatrixWorld();
+}
+
+/** How far the nearest surface is at least: the camera's height above the ground, less 80 m for what stands on it. */
+function clearance(): number {
+  return camera.position.y - world.terrain.height(camera.position.x, camera.position.z) - 80;
 }
 
 /** Every live frame advances and renders; resident coarse levels cover deferred detail. */
@@ -164,8 +172,7 @@ function frame(dt: number): void {
   playback.playing &&= playback.time < tour.duration;
   focus = fly.touched ? fly.update(dt) : tour.pose(playback.time, camera);
   fitCamera(focus);
-  const clear = camera.position.y - world.terrain.height(camera.position.x, camera.position.z) - 80;
-  sun.update(camera, focus, clear);
+  sun.update(camera, focus, clearance());
   Patches.beginFrame();
   corn.update(camera);
   for (const patch of patches) if (patch !== corn.plants) patch.update(camera);
@@ -173,9 +180,9 @@ function frame(dt: number): void {
 }
 
 fitCamera(focus);
-sun.update(camera, focus, camera.position.y - world.terrain.height(camera.position.x, camera.position.z) - 80);
+sun.update(camera, focus, clearance());
 ui.progress("Preparing the first view…", 0.85);
-await texturesReady(scene);
+await library.ready(scene);
 loaded("textures");
 // Select resident levels before compiling the first view.
 for (const lod of lods) {

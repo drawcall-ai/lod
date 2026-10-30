@@ -1,10 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { read, write, VK_FORMAT_R8G8B8A8_SRGB, KHR_DF_MODEL_RGBSDA, KHR_SUPERCOMPRESSION_ZLIB } from "ktx-parse";
-import { decodeImpostor, decodeImpostorAsync, encodeImpostor } from "../../src/impostor/codec.js";
+import { decodeImpostorAsync, encodeImpostor } from "../../src/impostor/codec.js";
 import type { Impostor, ImpostorMap } from "../../src/impostor/impostor.js";
 import { must } from "../must.js";
 
-const toBase64 = (bytes: Uint8Array) => btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(""));
 const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((byte, i) => byte === b[i]);
 
 function random(length: number, seed = 1): Uint8Array {
@@ -33,7 +32,7 @@ function make(maps: ImpostorMap[], size = 32, frames = 8): Impostor {
 }
 
 describe("codec", () => {
-  it("synchronous and asynchronous decode preserve all metadata and bytes for every input form", async () => {
+  it("decoding preserves all metadata and bytes, also from a view into a larger buffer", async () => {
     const sets: ImpostorMap[][] = [
       ["base", "normalDepth", "orm"],
       ["base", "normalDepth", "orm", "emissive"],
@@ -45,15 +44,12 @@ describe("codec", () => {
       const file = encodeImpostor(source),
         padded = new Uint8Array(file.length + 17);
       padded.set(file, 17);
-      for (const input of [file, file.slice().buffer, padded.subarray(17), toBase64(file)]) {
+      for (const input of [file, padded.subarray(17)]) {
         const actual = await decodeImpostorAsync(input);
-        const sync = decodeImpostor(input);
-        for (const decoded of [sync, actual]) {
-          const { layers, ...meta } = decoded;
-          expect(meta).toEqual(expectedMeta);
-          expect(layers.map((layer) => layer.length)).toEqual(expectedLayers.map((layer) => layer.length));
-          layers.forEach((layer, i) => layer.forEach((mip, m) => expect(sameBytes(mip, must(expectedLayers[i]?.[m]))).toBe(true)));
-        }
+        const { layers, ...meta } = actual;
+        expect(meta).toEqual(expectedMeta);
+        expect(layers.map((layer) => layer.length)).toEqual(expectedLayers.map((layer) => layer.length));
+        layers.forEach((layer, i) => layer.forEach((mip, m) => expect(sameBytes(mip, must(expectedLayers[i]?.[m]))).toBe(true)));
         // Each mip has one owner buffer, shared by every map's view.
         expect(actual.layers[0]?.[0]?.buffer).toBe(actual.layers[1]?.[0]?.buffer);
       }
@@ -97,14 +93,10 @@ describe("codec", () => {
   it("rejects corrupt files with clear errors", async () => {
     const file = encodeImpostor(make(["base", "normalDepth", "orm"]));
     const pending: Promise<unknown>[] = [];
-    const bad = (input: Uint8Array | string, pattern: RegExp) => {
-      expect(() => decodeImpostor(input)).toThrow(pattern);
-      pending.push(expect(decodeImpostorAsync(input)).rejects.toThrow(pattern));
-    };
+    const bad = (input: Uint8Array, pattern: RegExp) => pending.push(expect(decodeImpostorAsync(input)).rejects.toThrow(pattern));
     bad(new Uint8Array(64), /Invalid impostor file: not a KTX2 container/);
     bad(file.subarray(0, 40), /Invalid impostor file: not a KTX2 container/);
-    bad("not base64!", /Invalid impostor file: not base64/);
-    bad(toBase64(file.subarray(0, file.length - 200)), /Invalid impostor file/);
+    bad(file.subarray(0, file.length - 200), /Invalid impostor file/);
 
     const edit = (change: (ktx: ReturnType<typeof read>) => void) => {
       const ktx = read(file.slice());

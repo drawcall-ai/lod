@@ -1,8 +1,26 @@
-import { Lod } from "@drawcall/lod";
+import { Lod, type LodRequest } from "@drawcall/lod";
+import { foliageLevels } from "../../../public/content/foliage.ts";
+import { LEAF_FOLIAGE } from "../../../public/content/corn/leaf.ts";
 
-export const PLANT_PIXELS = 1000;
-export const FAR_PIXELS = 350;
-export const PLANT_GONE = 215;
+const PLANT_PIXELS = 1000;
+const FAR_PIXELS = 350;
+const PLANT_GONE = 215;
+
+/** A corn plant's ladder: source, detailed impostor, coarse impostor, empty — the shape setCutoff moves. Only the source casts shadows. */
+export function plantRequest(url: string): LodRequest {
+  return {
+    url,
+    levels: [
+      { type: "impostor", layout: "hemi", maxPixels: PLANT_PIXELS, resolution: 256, frames: 8, draw: { parallax: 0 } },
+      { type: "impostor", layout: "hemi", maxPixels: FAR_PIXELS, resolution: 64, frames: 8, draw: { parallax: 0 } },
+      { type: "empty", maxPixels: PLANT_GONE },
+    ],
+    onLevel: (object, index) => {
+      foliageLevels(object, LEAF_FOLIAGE);
+      if (index > 0) object.castShadow = false;
+    },
+  };
+}
 
 /** Leave two complete fades between full geometry and an empty crowded field tile. */
 export function cutoff(squeeze: number): number {
