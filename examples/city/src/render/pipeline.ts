@@ -1,5 +1,5 @@
 import * as THREE from "three/webgpu";
-import { pass } from "three/tsl";
+import { texture } from "three/tsl";
 
 /**
  * The renderer and its frame: the scene is drawn into a multisampled half-float target
@@ -19,18 +19,21 @@ export class Pipeline {
   gpuMs: number | null = null;
   private reading: Promise<number | null> | null = null;
   private readonly output: THREE.RenderPipeline;
-  private readonly scene: THREE.PassNode;
+  private readonly target = new THREE.RenderTarget(1, 1, {
+    samples: 4,
+    type: THREE.HalfFloatType,
+    depthTexture: new THREE.DepthTexture(1, 1, THREE.FloatType),
+  });
   private readonly timed: boolean;
 
   private constructor(
     readonly renderer: THREE.WebGPURenderer,
-    scene: THREE.Scene,
-    camera: THREE.Camera,
+    private readonly scene: THREE.Scene,
+    private readonly camera: THREE.Camera,
   ) {
     // 4 samples: WebGPU offers 1 or 4. They keep thin twigs and grass blades whole in
     // motion (without, they break into crawling dashes).
-    this.scene = pass(scene, camera, { samples: 4 });
-    this.output = new THREE.RenderPipeline(renderer, this.scene);
+    this.output = new THREE.RenderPipeline(renderer, texture(this.target.texture));
     this.timed = renderer.hasFeature("timestamp-query");
     // counted over the whole frame: three counts each render call on its own otherwise
     renderer.info.autoReset = false;
@@ -50,7 +53,7 @@ export class Pipeline {
     renderer.setPixelRatio(pixelRatio);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFShadowMap;
-    // Neutral (Khronos PBR Neutral) keeps hues closest to a photograph here; see viewer.ts
+    // Neutral (Khronos PBR Neutral) keeps hues closest to a photograph here; see viewer/main.ts
     renderer.toneMapping = THREE.NeutralToneMapping;
     renderer.toneMappingExposure = 0.8;
     return new Pipeline(renderer, scene, camera);
@@ -62,16 +65,50 @@ export class Pipeline {
 
   setSize(width: number, height: number): void {
     this.renderer.setSize(width, height);
+    const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
+    this.target.setSize(size.x, size.y);
+  }
+
+  /** Prepare the resident first view with the same target and colour state as a live pass. */
+  async compile(): Promise<void> {
+    const { renderer } = this;
+    const previous = renderer.getRenderTarget();
+    renderer.setRenderTarget(this.target);
+    try {
+      // Each subtree submits its asynchronous pipelines before waiting, so shader compilation overlaps.
+      await Promise.all(this.scene.children.map((object) => renderer.compileAsync(object, this.camera, this.scene)));
+    } finally {
+      renderer.setRenderTarget(previous);
+    }
+  }
+
+  /** Run one frame in Three's animation loop, then leave it paused. */
+  step<T>(draw: () => T): Promise<T> {
+    return new Promise((resolve, reject) =>
+      this.renderer.setAnimationLoop(() => {
+        this.renderer.setAnimationLoop(null);
+        try {
+          resolve(draw());
+        } catch (error) {
+          reject(error);
+        }
+      }),
+    );
   }
 
   /** Waits for the submitted frame without reading the whole HDR target. */
   async wait(): Promise<void> {
-    await this.renderer.readRenderTargetPixelsAsync(this.scene.renderTarget, 0, 0, 1, 1);
+    await this.renderer.readRenderTargetPixelsAsync(this.target, 0, 0, 1, 1);
   }
 
   render(): void {
     const { renderer } = this;
     renderer.info.reset();
+    // A separate scene draw keeps compileAsync and rendering at the same call depth.
+    // Nesting it inside PassNode gives Three different render-context cache keys.
+    renderer.setRenderTarget(this.target);
+    renderer.render(this.scene, this.camera);
+    renderer.setRenderTarget(null);
     this.output.render();
     this.drawn.calls = renderer.info.render.drawCalls;
     this.drawn.triangles = renderer.info.render.triangles;

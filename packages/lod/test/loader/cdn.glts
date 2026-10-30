@@ -1,0 +1,4 @@
+import { scene } from "@drawcall/glts";
+import { value } from "cdn-only@1";
+
+scene.name = value;

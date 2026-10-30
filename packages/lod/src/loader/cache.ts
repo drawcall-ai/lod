@@ -1,55 +1,87 @@
-import type { GLTSSource } from "@drawcall/glts";
-import type { Object3D } from "three/webgpu";
-import type { Dependencies } from "vitecache";
-import { bake, bakeImpostor, type BakeImpostorOptions } from "../impostor/bake/index.js";
-import { cached, type ImpostorCacheOptions } from "../impostor/cache.js";
-import type { Impostor } from "../impostor/impostor.js";
+import { CacheEntry, type CacheEntryOptions, type Dependencies, type JsonValue } from "vitecache";
+import type { LevelRequest } from "../loader.js";
+import { urlQuery } from "./url.js";
 
-/** Cache location and additional inputs that GLTS does not track, such as generator packages. */
-export interface LodCacheOptions extends ImpostorCacheOptions {
-  /** Extra vitecache dependencies. Names beginning with glts: or lod: are reserved. */
-  dependencies?: Dependencies;
-}
+/** Persistent cache location. Generator packages are discovered from GLTS source provenance. */
+export type LodCacheOptions = Pick<CacheEntryOptions, "basePath" | "root">;
 
-/** Loaded GLTS scenes expose their run's source even outside an active script. */
-export function originOf(object: Object3D): GLTSSource | undefined {
-  const source: unknown = Reflect.get(object, "source");
-  if (source === undefined) return undefined;
-  if (!isSource(source)) throw new Error("LodLoader: invalid GLTS source metadata");
-  return source;
-}
+const version = "lod-levels@18";
 
-function isSource(source: unknown): source is GLTSSource {
-  if (typeof source !== "object" || source === null) return false;
-  const url: unknown = Reflect.get(source, "url");
-  const dependencies: unknown = Reflect.get(source, "dependencyUrls");
-  return typeof url === "string" && Array.isArray(dependencies) && dependencies.every((url: unknown) => typeof url === "string");
-}
-
-/** Capture dependencies when the bake starts, including files loaded since its request. */
-export async function impostor(
-  source: Object3D,
-  options: BakeImpostorOptions,
-  origin?: GLTSSource,
-  excluded: readonly Object3D[] = [],
-  cacheOptions?: LodCacheOptions,
-): Promise<Impostor> {
-  const make = (settings: BakeImpostorOptions) => (excluded.length > 0 ? bake(source, settings, excluded) : bakeImpostor(source, settings));
-  if (!origin) return make(options);
-  const urls = origin.dependencyUrls;
-  const { dependencies = {}, ...location } = cacheOptions ?? {};
-  if (Object.keys(dependencies).some((name) => name.startsWith("glts:"))) throw new Error("LodLoader: dependency names beginning with glts: are reserved");
-  return cached(
-    options,
-    {
-      ...dependencies,
-      "glts:source": { url: origin.url },
-      // URL resolution tracks the file; retain its query parameters as inputs too.
-      "glts:query": { value: new URL(origin.url).search },
-      ...Object.fromEntries(urls.map((url, index) => [`glts:dependency:${index}`, { url }])),
-      "glts:dependencyQueries": { value: urls.map((url) => new URL(url).search) },
+/**
+ * The index of a ladder: keyed by the requested URLs, levels and bundled modules, and saved with what loading the sources
+ * revealed, so vitecache rechecks those without loading the sources.
+ */
+export function indexEntry(
+  inputs: Dependencies,
+  levels: readonly LevelRequest[],
+  modules: Readonly<Record<string, string>>,
+  options?: LodCacheOptions,
+): CacheEntry {
+  // vitecache resolves URLs to file paths; keep generation parameters in the key.
+  const queries: Record<string, string> = {};
+  for (const [name, dependency] of Object.entries(inputs)) {
+    const query = dependency.url === undefined ? "" : urlQuery(dependency.url);
+    if (query) queries[name] = query;
+  }
+  return new CacheEntry({
+    basePath: options?.basePath,
+    root: options?.root,
+    version,
+    dependencies: {
+      ...inputs,
+      "lod:levels": { value: levels.map(parameters) },
+      "lod:modules": { value: modules },
+      "lod:queries": { value: queries },
+      // Only packages the app installs resolve from its root; this package's own dependencies are covered by its version and `version` above.
+      "lod:package": { package: "@drawcall/lod" },
+      "lod:three": { package: "three" },
     },
-    make,
-    location,
-  );
+  });
+}
+
+/**
+ * A level payload saved apart from its index, addressed by the index's content: a valid index vouches for its payloads,
+ * and rebuilds write new ones rather than replacing those a live ladder or another build still reads.
+ */
+export function payloadEntry(index: string, level: number, options?: LodCacheOptions): CacheEntry {
+  return new CacheEntry({
+    basePath: options?.basePath,
+    root: options?.root,
+    version,
+    dependencies: { "lod:index": { value: index }, "lod:level": { value: level } },
+  });
+}
+
+export async function sha256(bytes: Uint8Array): Promise<string> {
+  const hash = await crypto.subtle.digest("SHA-256", new Uint8Array(bytes));
+  return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** What derives each level's content. Switch thresholds and impostor draw options apply at decode, so changing one reuses the cache. */
+function parameters(level: LevelRequest): JsonValue {
+  switch (level.type) {
+    case "empty":
+      return { type: level.type };
+    case "simplify":
+      return { type: level.type, ratio: level.ratio ?? null };
+    case "baked":
+      return {
+        type: level.type,
+        ratio: level.ratio ?? null,
+        textureSize: level.textureSize ?? null,
+        low: level.low ?? null,
+        interior: level.interior ?? null,
+      };
+    case "impostor":
+      return {
+        type: level.type,
+        // The impostor bakes its top mip for this height too.
+        maxPixels: level.maxPixels ?? null,
+        layout: level.layout ?? null,
+        frames: level.frames ?? null,
+        resolution: level.resolution ?? null,
+        emissive: level.emissive ?? null,
+        supersample: level.supersample ?? null,
+      };
+  }
 }

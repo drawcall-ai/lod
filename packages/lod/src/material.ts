@@ -1,6 +1,6 @@
 import type { Material, Node, NodeBuilder, NodeMaterial } from "three/webgpu";
 import { Fn, output, positionLocal, vec4 } from "three/tsl";
-import { castPosition, keepsPixel, tint } from "./fade.js";
+import { castPosition, keepsPixel, placeInstances, tint } from "./fade.js";
 import { toNodeMaterial } from "./three.js";
 import { isNodeOf } from "./tsl.js";
 import { sway } from "./wind/sway.js";
@@ -37,11 +37,16 @@ export function levelMaterial(material: Material, swaying = false): NodeMaterial
   // The tint goes on what the material outputs: its colour slot is left as it is.
   copy.outputNode = Fn((builder) => (outputNode ? slot(outputNode, "vec4", builder) : output).mul(vec4(tint, 1)))();
   const position = (builder: NodeBuilder) => {
+    placeInstances(builder);
     const own = positionNode ? slot(positionNode, "vec3", builder) : positionLocal;
     return swaying ? sway(own) : own;
   };
-  if (swaying || positionNode) copy.positionNode = Fn(position)();
-  copy.castShadowPositionNode = Fn((builder) => castPosition(castShadowPositionNode ? slot(castShadowPositionNode, "vec3", builder) : position(builder)))();
+  copy.positionNode = Fn(position)();
+  copy.castShadowPositionNode = Fn((builder) => {
+    if (!castShadowPositionNode) return castPosition(position(builder));
+    placeInstances(builder);
+    return castPosition(slot(castShadowPositionNode, "vec3", builder));
+  })();
   known[kind] = copy;
   originals.set(copy, original);
   original.addEventListener("dispose", () => copy.dispose());

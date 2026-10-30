@@ -1,5 +1,6 @@
 import type { BufferAttribute, ContextNode, Node, NodeBuilder, StorageBufferNode, TextureNode } from "three/webgpu";
-import { context, cross, dFdx, dFdy, dot, length, log2, max, storage, uniform, uv, vec2, vec3, vec4 } from "three/tsl";
+import { NodeUpdateType, context, cross, dFdx, dFdy, dot, length, log2, max, storage, uniform, uniformGroup, uv, vec2, vec3, vec4 } from "three/tsl";
+import { isNode } from "./three.js";
 
 // Matrix access for the shaders, in operations three's typings know: they type no
 // columns, inverses or transposes of matrix nodes. A product with a unit vector picks a
@@ -15,7 +16,7 @@ export const maxScale = (m: Node<"mat4">): Node<"float"> => max(column(m, 0).xyz
 export const isOrthographic = (m: Node<"mat4">): Node<"bool"> => column(m, 3).w.equal(1);
 
 /** An affine matrix `m` and the inverse of its linear part, as cofactor columns over the determinant. */
-export interface Affine {
+interface Affine {
   /** `m`'s linear part applied to direction `v` */
   apply(v: Node<"vec3">): Node<"vec3">;
   /** the inverse of the linear part applied to direction `v` */
@@ -46,8 +47,6 @@ export function affine(m: Node<"mat4">): Affine {
   };
 }
 
-const isNode = (value: unknown): value is Node => typeof value === "object" && value !== null && Reflect.get(value, "isNode") === true;
-
 /** The node at `path` in the context `builder` builds with, which three's typings leave open. */
 export function contextNode(builder: NodeBuilder, ...path: string[]): Node {
   const value = path.reduce<unknown>((at, key) => (typeof at === "object" && at !== null ? Reflect.get(at, key) : undefined), builder.context);
@@ -75,24 +74,18 @@ export function isNodeOf<T extends "bool" | "float" | "vec3" | "vec4" | "color">
   return node.getNodeType(builder) === type;
 }
 
-/**
- * One node per buffer and role: a stage has few storage bindings. Each library material
- * reads one buffer per role. Stable, distinct names let equal shaders share programs;
- * Three's default storage names contain global node IDs, even for otherwise equal code.
- */
-function storageCache<T extends "float" | "vec4" | "mat4">(type: T, name: string): (attribute: BufferAttribute) => StorageBufferNode<T> {
-  const nodes = new WeakMap<BufferAttribute, StorageBufferNode<T>>();
-  return (attribute) => {
-    let node = nodes.get(attribute);
-    if (!node) nodes.set(attribute, (node = storage(attribute, type, attribute.count).setName(name)));
-    return node;
-  };
+const bounds = new WeakMap<BufferAttribute, StorageBufferNode<"vec4">>();
+
+/** One room-bounds node per buffer; a stable name lets equal shaders share programs. */
+export function roomBounds(attribute: BufferAttribute): StorageBufferNode<"vec4"> {
+  let node = bounds.get(attribute);
+  if (!node) bounds.set(attribute, (node = storage(attribute, "vec4", 0).setName("lodRoomBounds")));
+  return node;
 }
 
-export const instanceFades = storageCache("float", "lodInstanceFades");
-export const instanceColors = storageCache("vec4", "lodInstanceColors");
-export const instanceMatrices = storageCache("mat4", "lodInstanceMatrices");
-export const roomBounds = storageCache("vec4", "lodRoomBounds");
+// Keep replaceable draw buffers out of texture-keyed binding caches. Each render
+// object owns this group's bindings while its shader reads the shared nodes below.
+export const instanceGroup = uniformGroup("lodInstances", 2, NodeUpdateType.OBJECT);
 
 /** The size in texels of a texture's image, or null when it has none to read. */
 function texelsOf(image: unknown): [number, number] | null {

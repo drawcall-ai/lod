@@ -2,8 +2,9 @@ import { BufferAttribute, BufferGeometry, type InterleavedBufferAttribute, type 
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
 import { MeshoptSimplifier } from "meshoptimizer";
 import { detailed } from "./bounds.js";
-import { recordError } from "./levels.js";
-import { measureError } from "./source/error.js";
+import { borrowMaterials } from "./dispose.js";
+import { recordDeviation } from "./levels.js";
+import { measureDeviation } from "./source/deviation.js";
 import { readSource } from "./source/source.js";
 import { merge } from "./source/surface.js";
 import { isImpostorMesh, isInstancedLod, isMesh, isSkinnedMesh } from "./three.js";
@@ -31,7 +32,7 @@ export interface SimplifyOptions {
  */
 export async function simplify(object: Object3D, options: SimplifyOptions = {}): Promise<Object3D> {
   const copy = await decimate(object, options.ratio ?? 0.5);
-  recordError(copy, measureError(readSource(object, "simplify", "measure"), merge(copy, "simplify")).error);
+  recordDeviation(copy, measureDeviation(readSource(object, "simplify", "measure"), merge(copy, "simplify")).deviation);
   return copy;
 }
 
@@ -47,6 +48,7 @@ export async function decimate(object: Object3D, ratio: number): Promise<Object3
   });
   const copy = object.clone(true);
   decimateTree(copy, ratio, new Map());
+  borrowMaterials(copy);
   return copy;
 }
 

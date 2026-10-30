@@ -1,4 +1,4 @@
-import { unzlibSync, zlibSync } from "fflate";
+import { unzlib, zlibSync } from "fflate";
 import {
   KHR_DF_CHANNEL_RGBSDA_ALPHA,
   KHR_DF_CHANNEL_RGBSDA_BLUE,
@@ -63,28 +63,26 @@ export function encodeImpostor(impostor: Impostor): Uint8Array {
   return write(ktx);
 }
 
-type Input = Uint8Array | ArrayBuffer | string;
-
 interface Parsed {
   meta: object;
   layerCount: number;
   levels: { data: Uint8Array; length: number }[];
 }
 
-/** Parses a file written by `encodeImpostor`, given as bytes or base64. */
-export function decodeImpostor(input: Input): Impostor {
-  const file = parse(input);
-  const levels = file.levels.map(({ data, length }, m) => attempt(`level ${m} does not inflate`, () => unzlibSync(data, { out: new Uint8Array(length) })));
-  return decoded(file, levels);
-}
-
-/** Inflate cache files asynchronously with the runtime's native zlib decoder. */
-export async function decodeImpostorAsync(input: Input): Promise<Impostor> {
-  if (typeof DecompressionStream === "undefined") return decodeImpostor(input);
-  const file = parse(input);
+/** Parses a file written by `encodeImpostor`, inflating its mips off the main thread. */
+export async function decodeImpostorAsync(bytes: Uint8Array): Promise<Impostor> {
+  const file = parse(bytes);
   const levels = await Promise.all(
-    file.levels.map(async ({ data }, m) => {
+    file.levels.map(async ({ data, length }, m) => {
       try {
+        // Move large mips off the main thread; small mips avoid worker startup cost.
+        if (length >= 8 * 1024 * 1024)
+          return await new Promise<Uint8Array>((resolve, reject) => {
+            unzlib(data.slice(), { consume: true }, (error, raw) => {
+              if (error) reject(error);
+              else resolve(raw);
+            });
+          });
         const stream = new Blob([data.slice()]).stream().pipeThrough(new DecompressionStream("deflate"));
         return new Uint8Array(await new Response(stream).arrayBuffer());
       } catch (error) {
@@ -95,8 +93,7 @@ export async function decodeImpostorAsync(input: Input): Promise<Impostor> {
   return decoded(file, levels);
 }
 
-function parse(input: Input): Parsed {
-  const bytes = typeof input === "string" ? attempt("not base64", () => fromBase64(input)) : input instanceof Uint8Array ? input : new Uint8Array(input);
+function parse(bytes: Uint8Array): Parsed {
   // ktx-parse reads through `bytes.buffer` without checking the view's end, so a truncated
   // view would read past it; give it a buffer of exactly the file instead.
   const file = bytes.byteLength === bytes.buffer.byteLength ? bytes : bytes.slice();
@@ -145,15 +142,4 @@ function attempt<T>(why: string, run: () => T): T {
 
 function invalid(why: string, error: unknown): Error {
   return new Error(`Invalid impostor file: ${why} (${error instanceof Error ? error.message : String(error)})`, { cause: error });
-}
-
-export function fromBase64(text: string): Uint8Array {
-  // Native where available (Node 25+, current browsers); the fallback covers the rest.
-  const native: unknown = Reflect.get(Uint8Array, "fromBase64");
-  const decoded: unknown = typeof native === "function" ? Reflect.apply(native, Uint8Array, [text]) : undefined;
-  if (decoded instanceof Uint8Array) return decoded;
-  const binary = atob(text);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
 }

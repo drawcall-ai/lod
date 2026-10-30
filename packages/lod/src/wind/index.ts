@@ -1,5 +1,5 @@
 import { Box3, Matrix4, ObjectSpaceNormalMap, Vector2, type Mesh, type Object3D } from "three/webgpu";
-import { boundingBox } from "../bounds.js";
+import { boundingBox, levelBox } from "../bounds.js";
 import { levelMaterial } from "../material.js";
 import { isBatchedMesh, isImpostorMesh, isInstancedLod, isInstancedMesh, isLOD, isMesh, isSkinnedMesh, isStorageInstanced } from "../three.js";
 import { WIND_BOUNDS, type WindBounds } from "./hooks.js";
@@ -22,9 +22,12 @@ export interface SwayOptions {
   height?: number;
 }
 
-const bindings = new WeakMap<Object3D, { wind: Wind; options: SwayOptions; refresh: () => void }>();
+const bindings = new WeakMap<Object3D, { wind: Wind; options: SwayOptions; refresh: (added: Object3D) => void }>();
 const attached = new WeakSet<Mesh>();
 const identity = new Matrix4();
+// Every wind's values are read per object. Sharing this node keeps attachments from
+// invalidating the same material when another region starts drawing its impostor.
+const impostorSway = swayMatrix();
 
 /**
  * A shared GPU breeze: an affine sway, fixed at the base and linear with height.
@@ -99,18 +102,11 @@ export class Wind {
     this.attach(root, { amplitude, baseY, height }, false);
   }
 
-  /** Attach meshes installed by a lazy level; existing meshes retain their bounds. */
-  private attach(root: Object3D, { amplitude, baseY, height }: SwayOptions, refreshing: boolean): void {
+  /** Attach meshes arriving with a deferred level; existing meshes retain their bounds. */
+  private attach(root: Object3D, { amplitude, baseY, height }: SwayOptions, refreshing: boolean, added = root, knownBox?: Box3): void {
     nonnegative(amplitude, "amplitude");
-    const box = sourceBox(root);
-    if (box.isEmpty()) throw new Error("Wind: object has no geometry");
-    const base = baseY ?? box.min.y;
-    const size = height ?? box.max.y - base;
-    finite(base, "baseY");
-    finite(size, "height");
-    if (size <= 0) throw new Error("Wind: height must be positive");
     const meshes: Mesh[] = [];
-    root.traverse((node) => {
+    added.traverse((node) => {
       if (node !== root && isLOD(node)) throw new Error("Wind: apply to nested LODs individually");
       if (!isMesh(node)) return;
       if (refreshing && attached.has(node)) return;
@@ -130,9 +126,9 @@ export class Wind {
     });
     if (meshes.length === 0) {
       if (refreshing) return;
-      throw new Error("Wind: object has no meshes");
+      if (!isLOD(root)) throw new Error("Wind: object has no meshes");
     }
-    root.updateWorldMatrix(true, true);
+    added.updateWorldMatrix(true, true);
     invertible(root.matrixWorld);
     const inverse = root.matrixWorld.clone().invert();
     const placed = meshes.map((mesh) => {
@@ -142,20 +138,29 @@ export class Wind {
       invertible(placement);
       return { mesh, placement };
     });
+    const box = knownBox ?? sourceBox(root);
+    if (box.isEmpty()) throw new Error("Wind: object has no geometry");
+    const base = baseY ?? box.min.y;
+    const size = height ?? box.max.y - base;
+    finite(base, "baseY");
+    finite(size, "height");
+    if (size <= 0) throw new Error("Wind: height must be positive");
     const shape = new Vector2(amplitude / size, base);
     const padding = (amplitude * Math.max(Math.abs(box.min.y - base), Math.abs(box.max.y - base))) / size;
-    if (hasBounds(root) && (!refreshing || isInstancedLod(root))) root[WIND_BOUNDS](padding, amplitude / size, base);
+    if (hasBounds(root) && !refreshing) root[WIND_BOUNDS](padding, amplitude / size, base);
     for (const { mesh, placement } of placed) {
       if (!isInstancedLod(root)) windBounds(mesh, placement, amplitude, base, size);
       setSway(mesh, { breeze: this.breeze, shape, placement, fromRoot: placement.clone().invert() });
       if (isImpostorMesh(mesh)) {
-        mesh.material.deformNode = swayMatrix();
-        mesh.material.needsUpdate = true;
+        if (mesh.material.deformNode !== impostorSway) {
+          mesh.material.deformNode = impostorSway;
+          mesh.material.needsUpdate = true;
+        }
       } else mesh.material = Array.isArray(mesh.material) ? mesh.material.map((m) => levelMaterial(m, true)) : levelMaterial(mesh.material, true);
       attached.add(mesh);
     }
     const options = { amplitude, baseY: base, height: size };
-    bindings.set(root, { wind: this, options, refresh: () => this.attach(root, options, true) });
+    bindings.set(root, { wind: this, options, refresh: (next) => this.attach(root, options, true, next, box) });
   }
 }
 
@@ -165,11 +170,9 @@ function hasBounds(root: Object3D): root is Object3D & WindBounds {
 
 function sourceBox(root: Object3D): Box3 {
   if (isLOD(root)) {
-    for (const { object } of root.levels) {
-      const box = boundingBox(object);
-      if (box.isEmpty()) continue;
-      if (object.matrixAutoUpdate) object.updateMatrix();
-      return box.applyMatrix4(object.matrix);
+    for (const level of root.levels) {
+      const box = levelBox(level);
+      if (!box.isEmpty()) return box;
     }
     return new Box3();
   }
@@ -201,7 +204,7 @@ export function copyWind(source: Object3D, target: Object3D): void {
   if (binding) binding.wind.apply(target, binding.options);
 }
 
-export function refreshWind(root: Object3D): void {
+export function refreshWind(root: Object3D, added: Object3D = root): void {
   const binding = bindings.get(root);
-  binding?.refresh();
+  binding?.refresh(added);
 }

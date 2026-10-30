@@ -32,7 +32,7 @@ describe("levelMaterial", { timeout: GPU_TIMEOUT }, () => {
     expect(await coverage()).toBe(true);
     mask.value = false;
     expect(await coverage()).toBe(false);
-    // three's own clone drops it: a baked level's cut-outs drew solid.
+    // Three's node-material copy omits alphaTest, which controls baked cutouts.
     expect(copy.alphaTest).toBe(0.5);
     let freed = false;
     copy.addEventListener("dispose", () => void (freed = true));

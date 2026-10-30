@@ -69,11 +69,13 @@ export class ImpostorMesh extends Mesh<PlaneGeometry, ImpostorMaterial> {
   options: ImpostorMeshOptions;
   /** Instances drawn. */
   count: number;
-  /** 16 floats per instance; drawn from a storage buffer when there is more than one. */
+  /** 16 floats per instance, read from its storage buffer for every draw. */
   instanceMatrix: StorageInstancedBufferAttribute;
   /** RGB (and a pad) per instance, once `setColorAt` was called. */
   instanceColor: StorageInstancedBufferAttribute | null = null;
   boundingSphere: Sphere | null = null;
+  /** Where the card sits within an instance's space (InstancedLod places it). */
+  readonly placement = new Matrix4();
   private disposed = false;
 
   constructor(impostor: Impostor, count = 1, options: ImpostorMeshOptions = {}, material?: ImpostorMaterial) {
@@ -93,11 +95,6 @@ export class ImpostorMesh extends Mesh<PlaneGeometry, ImpostorMaterial> {
     setDraw(this, { kind: "instances", fades: null, radius: boundingRadius(impostor.box), tint: new Color(1, 1, 1) });
   }
 
-  /** Where the card sits within an instance's space (InstancedLod places it). */
-  get placement(): Matrix4 {
-    return this.material.placement;
-  }
-
   setMatrixAt(index: number, matrix: Matrix4): void {
     matrix.toArray(this.instanceMatrix.array, index * 16);
     this.instanceMatrix.needsUpdate = true;
@@ -110,8 +107,6 @@ export class ImpostorMesh extends Mesh<PlaneGeometry, ImpostorMaterial> {
   setColorAt(index: number, color: Color): void {
     if (!this.instanceColor) {
       this.instanceColor = new StorageInstancedBufferAttribute(new Float32Array(this.count * 4).fill(1), 4);
-      // Instance colours change the shader.
-      this.material.needsUpdate = true;
     }
     color.toArray(this.instanceColor.array, index * 4);
     this.instanceColor.needsUpdate = true;
@@ -142,11 +137,11 @@ export class ImpostorMesh extends Mesh<PlaneGeometry, ImpostorMaterial> {
     }
     this.count = source.count;
     this.options = source.options;
+    this.placement.copy(source.placement);
     this.instanceMatrix.dispose();
     this.instanceColor?.dispose();
     this.instanceMatrix = new StorageInstancedBufferAttribute(source.instanceMatrix.array.slice(), 16);
     this.instanceColor = source.instanceColor ? new StorageInstancedBufferAttribute(source.instanceColor.array.slice(), 4) : null;
-    this.material.needsUpdate = true;
     this.boundingSphere = source.boundingSphere?.clone() ?? null;
     copyWind(source, this);
     return this;
@@ -195,10 +190,10 @@ const point = new Vector3();
 /**
  * An ImpostorMesh like `template` for `count` instances, its card placed by `placement`
  * within each instance's space (instance matrix × placement), as InstancedLod draws it.
- * It has a material of its own: its placement is its own.
+ * Materials and runtime shading are shared; placement is per draw.
  */
 export function impostorInstances(template: ImpostorMesh, count: number, placement: Matrix4): ImpostorMesh {
-  const mesh = new ImpostorMesh(template.impostor, count, template.options);
+  const mesh = new ImpostorMesh(template.impostor, count, template.options, template.material);
   mesh.placement.copy(placement);
   // A tint and mip bias set on the template, as for a level drawn by a Lod.
   mesh.material.color.copy(template.material.color);

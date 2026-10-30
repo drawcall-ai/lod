@@ -1,78 +1,66 @@
-import { Loader, LoaderUtils, type LoadingManager, type Object3D } from "three/webgpu";
+import { Group, Loader, LoadingManager, type Object3D } from "three/webgpu";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { getGLTSSource, type GLTSSource } from "@drawcall/glts";
+import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
+import { MissingDependencyError, type CacheEntry } from "vitecache";
 import { bakeMesh } from "./baked/index.js";
-import { measureLevels } from "./bounds.js";
-import { disposeTree } from "./dispose.js";
-import type { BakeImpostorOptions } from "./impostor/bake/index.js";
-import type { Impostor } from "./impostor/impostor.js";
-import { ImpostorMesh } from "./impostor/mesh/index.js";
-import { InstancedLod } from "./instanced/index.js";
-import { estimate, Level, validate } from "./levels.js";
-import { Lod } from "./lod.js";
-import { LazyImpostor } from "./lazy.js";
-import { impostor, originOf, type LodCacheOptions } from "./loader/cache.js";
-import { disposeSimplified } from "./loader/dispose.js";
-export type { LodCacheOptions } from "./loader/cache.js";
+import { loadOnce } from "./deferred.js";
+import { disposeRejected, disposeTree } from "./dispose.js";
+import { bakeImpostor, type BakeImpostorOptions } from "./impostor/bake/index.js";
+import { ImpostorMesh, type ImpostorMeshOptions } from "./impostor/mesh/index.js";
+import type { LodLevel } from "./levels.js";
+import { decode, encode, separateLevels, type Kind } from "./loader/bundle.js";
+import { indexEntry, payloadEntry, sha256, type LodCacheOptions } from "./loader/cache.js";
+import { bundledModules, Provenance } from "./loader/provenance.js";
+import { assetPath, isLocal, loaderPathURL, sourceRelativeURL } from "./loader/url.js";
 import { simplify, type SimplifyOptions } from "./simplify.js";
-import { isLOD, isObject3D, placeLike, rejectSkinned } from "./three.js";
+import { isObject3D, placeLike, rejectSkinned } from "./three.js";
 
-/** A level the loader builds from the source, cheapest last; `maxPixels` overrides its default (see `LodLevel.maxPixels`). */
+/**
+ * Levels derived from the source, finest first. Computed geometry and baked results are persisted.
+ * Changing `maxPixels` or an impostor's `draw` reuses them, except an impostor's `maxPixels`, which also sizes its bake.
+ */
 export type LevelRequest =
-  | ({ type: "simplified"; maxPixels?: number } & SimplifyOptions)
+  | ({ type: "simplify"; maxPixels?: number } & SimplifyOptions)
   | ({
       type: "baked";
       maxPixels?: number;
       textureSize?: number;
-      /**
-       * URL of the rooms to show through the model's glass (see `BakeMeshOptions.interior`),
-       * loaded like the model and relative to it. It is added to the model after every
-       * level is built, so up close the real rooms show through the real glass. Only one
-       * baked level of a model may have one.
-       */
+      /** Room geometry for window baking, as an asset URL relative to the source. */
       interior?: string;
     } & (
       | {
-          /**
-           * URL of the mesh to bake onto (.glts, .glb or .gltf), loaded like the model. A
-           * relative URL is relative to the model's: a model and its low mesh live together.
-           */
+          /** Authored low shell to bake onto, as an asset URL relative to the source. */
           low: string;
           ratio?: never;
         }
       | { low?: never; ratio?: number }
     ))
-  | ({
-      type: "impostor";
-      /** Build only when needed; requires an explicit positive maxPixels. Default false. */
-      lazy?: boolean;
-    } & BakeImpostorOptions);
+  | ({ type: "impostor"; draw?: ImpostorMeshOptions } & BakeImpostorOptions)
+  | { type: "empty"; maxPixels: number };
 
-/**
- * A model URL (.glb, .gltf or .glts), or the complete asset passed from its active GLTS
- * script. The whole GLTS asset is the cache unit, not individual parts of its scene.
- * GLTS impostors persist through vitecache; its Vite plugin tracks the script and its
- * dependency files. Pass an object only after its dependency loads have finished;
- * deferred impostors read retained dependencies when loading begins.
- */
-export type LodRequest = string | Object3D | { url: string; levels?: readonly LevelRequest[] } | { source: Object3D; levels?: readonly LevelRequest[] };
-
+/** A .glb, .gltf or .glts asset URL. Source and simplified levels load the original asset on demand. */
+export type LodRequest =
+  | string
+  | {
+      url: string;
+      levels?: readonly LevelRequest[];
+      /**
+       * Apply runtime effects when a level arrives, before draws compile. Does not change baked content or bounds.
+       * `index` is the returned ladder's: 0 is the source, and `levels[i]` arrives as `i + 1`.
+       */
+      onLevel?: (object: Object3D, index: number) => void | Promise<void>;
+    };
 const DEFAULT_LEVELS: readonly LevelRequest[] = [{ type: "impostor" }];
+let meshoptWorkers = false;
+/** A level request with the meshes its URLs name, loaded before building. */
+interface LevelJob {
+  request: LevelRequest;
+  low?: Object3D;
+  interior?: Object3D;
+}
 
-/**
- * Loads a model and builds a `Lod` of it: the model as level 0, then the requested
- * levels (default: an impostor). Unless explicitly lazy, building runs at load time; impostors bake on a
- * renderer this package keeps for that. Each level's maxPixels is its default (see
- * `LodLevel.maxPixels`) unless the request sets it; a failed load frees what it built.
- *
- * Models load through the manager's handler for the URL if one is registered: a
- * GLTFLoader with Draco or meshopt decoders, or for .glts a GLTSLoader from
- * @drawcall/glts (inside a .glts script, the contextual `gltsLoader`, registered on the
- * contextual `loadingManager`). Without one, .glb/.gltf load with a plain GLTFLoader and
- * .glts fails. URLs resolve against `path` as GLTFLoader's do; a baked level's `low` and
- * `interior` URLs load the same way, relative to the model's URL.
- */
-export class LodLoader extends Loader<Lod, LodRequest> {
+/** Loads asset URLs through manager handlers, falling back to GLTFLoader. Register a GLTSLoader for .glts sources. */
+export class LodLoader extends Loader<LodLevel[], LodRequest> {
   private gltf: GLTFLoader | undefined;
 
   constructor(
@@ -82,204 +70,215 @@ export class LodLoader extends Loader<Lod, LodRequest> {
     super(manager);
   }
 
-  override load(request: LodRequest, onLoad: (lod: Lod) => void, _onProgress?: (event: ProgressEvent) => void, onError?: (error: unknown) => void): void {
-    // As three's loaders: without onError, the failure goes to the console.
+  override load(
+    request: LodRequest,
+    onLoad: (levels: LodLevel[]) => void,
+    _onProgress?: (event: ProgressEvent) => void,
+    onError?: (error: unknown) => void,
+  ): void {
     this.loadAsync(request).then(onLoad, onError ?? ((error: unknown) => console.error(error)));
   }
 
-  override async loadAsync(request: LodRequest): Promise<Lod> {
-    return this.loading(request, (object, levels, base, origin) => this.build(object, levels, base, (objects) => new Lod(objects), origin));
-  }
-
-  /** Load `request` as `count` instances: an `InstancedLod`. */
-  async loadInstancesAsync(request: LodRequest, count: number): Promise<InstancedLod> {
-    return this.loading(request, (object, levels, base, origin) => this.build(object, levels, base, (objects) => new InstancedLod(objects, count), origin));
-  }
-
-  /** Build a `Lod` of the complete `object` inside GLTS. Relative low/interior URLs use the script's directory. */
-  async parseAsync(object: Object3D, levels: readonly LevelRequest[] = DEFAULT_LEVELS): Promise<Lod> {
-    return this.loadAsync({ source: object, levels });
-  }
-
-  /** Build an `InstancedLod` of the complete `object` inside GLTS. */
-  async parseInstancesAsync(object: Object3D, count: number, levels: readonly LevelRequest[] = DEFAULT_LEVELS): Promise<InstancedLod> {
-    return this.loadInstancesAsync({ source: object, levels }, count);
-  }
-
-  /**
-   * `make` of `object` and its requested levels, with the maxPixels requested; `low` and
-   * `interior` URLs resolve against `base`. On failure, the levels built and interiors
-   * loaded are freed and `object` is left out of any Lod.
-   */
-  private async build<T extends Lod | InstancedLod>(
-    object: Object3D,
-    requests: readonly LevelRequest[],
-    base: string,
-    make: (objects: Object3D[]) => T,
-    origin?: GLTSSource,
-  ): Promise<T> {
-    rejectSkinned(object, "LodLoader");
-    if (requests.filter((request) => request.type === "baked" && request.interior !== undefined).length > 1)
-      throw new Error("LodLoader: give an interior to one baked level only: the source shows one");
-    const built: Object3D[] = [];
-    const interiors: Object3D[] = [];
+  /** Load empty levels and the coarsest drawable eagerly; finer drawables load on demand. */
+  override async loadAsync(request: LodRequest): Promise<LodLevel[]> {
+    const input = normalize(request, this.path);
+    const { url, levels } = input;
+    const provenance = new Provenance(input.urls, this.manager);
+    let source: Object3D | undefined;
+    let preloading = true;
+    const owned = new Set<Object3D>();
+    const release = (object: Object3D) => {
+      owned.delete(object);
+      disposeRejected(object);
+    };
+    const loadSource = async () => {
+      source ??= await this.loadAsset(url, provenance);
+      if (preloading) owned.add(source);
+      return source;
+    };
+    this.manager.itemStart(url);
     try {
-      // One at a time: bakes share one renderer.
-      for (const request of requests) {
-        const { level, interior } = await this.buildLevel(object, request, base, origin, interiors);
-        built.push(level);
-        if (interior) interiors.push(interior);
-      }
-      // Eager bakes have finished; deferred bakes exclude these attached children.
-      if (interiors.length > 0) object.add(...interiors);
-      const objects = [object, ...built];
-      // Reject bad overrides before a constructor hooks the caller's source or
-      // allocates a crowd's pooled indirect arguments and selection buffers.
-      const preview: Level[] = [];
-      objects.forEach((object, i) => preview.push(new Level(object, i, isLOD(object), preview)));
-      estimate(preview, 2 * measureLevels(objects, "LodLoader").own.radius);
-      requests.forEach(({ maxPixels }, i) => {
-        const level = preview[i + 1];
-        if (level && maxPixels !== undefined) level.maxPixels = maxPixels;
-      });
-      validate(preview);
-      const lod = make(objects);
-      for (const [i, { maxPixels }] of requests.entries()) {
-        const level = lod.levels[i + 1];
-        if (!level) throw new Error("LodLoader: a built level is missing");
-        if (maxPixels !== undefined) level.maxPixels = maxPixels;
-      }
-      return lod;
+      // vitecache resolves only same-origin paths to project files, so other sources build uncached.
+      const entry = provenance.requested.every(isLocal)
+        ? indexEntry(provenance.inputs, levels, await bundledModules(input.urls, this.manager), this.cacheOptions)
+        : undefined;
+      const cached = await entry?.load();
+      // A cold build hands over the payloads it encoded instead of reading back saves that may have been skipped.
+      // Each is handed over once, since loadOnce decodes each level once per ladder; a later call reads the cache.
+      let payloads: Map<number, Uint8Array> | undefined;
+      let index: Uint8Array;
+      if (cached === undefined) {
+        ({ index, levels: payloads } = await this.persist(await loadSource(), input, provenance, entry));
+      } else index = cached;
+      let hash: Promise<string> | undefined;
+      const result = decode(
+        index,
+        [{}, ...levels],
+        loadSource,
+        async (level) => {
+          const handed = payloads?.get(level);
+          payloads?.delete(level);
+          if (handed) return handed;
+          const payload = await payloadEntry(await (hash ??= sha256(index)), level, this.cacheOptions).load();
+          if (payload === undefined) throw new Error(`LodLoader: cached level ${level} is missing`);
+          return payload;
+        },
+        async (object, level) => {
+          if (preloading) owned.add(object);
+          await input.onLevel?.(object, level);
+        },
+        release,
+      );
+      await preload(result, source !== undefined);
+      preloading = false;
+      owned.clear();
+      return result;
     } catch (error) {
-      built.forEach((level, i) => {
-        if (requests[i]?.type === "simplified") disposeSimplified(level, object);
-        else disposeTree(level);
-      });
-      for (const interior of interiors) {
-        object.remove(interior);
-        disposeTree(interior);
-      }
+      for (const object of owned) release(object);
+      this.manager.itemError(url);
       throw error;
+    } finally {
+      this.manager.itemEnd(url);
     }
   }
 
-  /** The level `request` asks for, and the interior a baked level loaded for the source. */
-  private async buildLevel(
+  private async persist(
     source: Object3D,
-    request: LevelRequest,
-    base: string,
-    origin?: GLTSSource,
-    interiors: readonly Object3D[] = [],
-  ): Promise<{ level: Object3D; interior?: Object3D }> {
+    { url, levels: requests, urls }: { url: string; levels: readonly LevelRequest[]; urls: Readonly<Record<string, string>> },
+    provenance: Provenance,
+    entry: CacheEntry | undefined,
+  ): Promise<Awaited<ReturnType<typeof encode>>> {
+    const built = [source];
+    const jobs: LevelJob[] = requests.map((request) => ({ request }));
+    try {
+      rejectSkinned(source, "LodLoader");
+      const load = (key: string) => {
+        const asset = urls[key];
+        return asset === undefined ? undefined : this.loadAsset(asset, provenance);
+      };
+      for (const [position, job] of jobs.entries()) {
+        job.low = await load(auxiliary(position, "low"));
+        job.interior = await load(auxiliary(position, "interior"));
+      }
+      const kinds: Kind[] = ["source", ...requests.map((request) => request.type)];
+      for (const job of jobs) built.push(await this.build(source, job));
+      const encoded = await encode(built, kinds);
+      if (!entry) {
+        warnUncached(url, "it is not a same-origin path");
+        return encoded;
+      }
+      // Read now: GLTS sources keep reporting what they observe while levels are built.
+      const saved = provenance.dependencies();
+      if ("reason" in saved) {
+        warnUncached(url, saved.reason);
+        return encoded;
+      }
+      if (uncached.has(url)) return encoded;
+      const { dependencies } = saved;
+      // A warm load reads the index, then payloads on demand, so publish in reverse.
+      const hash = await sha256(encoded.index);
+      for (const level of separateLevels(kinds)) {
+        const bytes = encoded.levels.get(level);
+        if (!bytes) throw new Error(`LodLoader: level ${level} was not encoded`);
+        await payloadEntry(hash, level, this.cacheOptions).save(bytes);
+      }
+      try {
+        await entry.save(encoded.index, { dependencies });
+      } catch (error) {
+        // A dependency without a backing file, such as a middleware URL or a package the app does not install, cannot be validated.
+        if (!(error instanceof MissingDependencyError)) throw error;
+        warnUncached(url, error.message);
+      }
+      return encoded;
+    } finally {
+      for (const object of [...jobs.map((job) => job.interior), ...built.slice(1), ...jobs.map((job) => job.low)]) if (object) disposeTree(object);
+    }
+  }
+
+  private async build(source: Object3D, { request, low, interior }: LevelJob): Promise<Object3D> {
     switch (request.type) {
-      case "simplified": {
-        const { type: _, maxPixels: __, ...options } = request;
-        return { level: await simplify(source, options) };
+      case "empty":
+        return new Group();
+      case "simplify":
+        return simplify(source, { ratio: request.ratio });
+      case "impostor": {
+        const { type: _, draw: __, ...options } = request;
+        const object = new ImpostorMesh(await bakeImpostor(source, options));
+        object.name = `${source.name || "object"} impostor`;
+        placeLike(object, source);
+        return object;
       }
       case "baked":
-        return this.bake(source, request, base);
-      case "impostor": {
-        const { type: _, lazy, ...options } = request;
-        if (lazy) {
-          const { maxPixels } = options;
-          if (maxPixels === undefined || !Number.isFinite(maxPixels) || maxPixels <= 0)
-            throw new Error("LodLoader: a lazy impostor needs an explicit positive maxPixels");
-          const level = new LazyImpostor(() => impostor(source, options, origin, interiors, this.cacheOptions), { maxPixels });
-          level.name = `${source.name || "object"} impostor`;
-          placeLike(level, source);
-          return { level };
-        }
-        return { level: impostorOf(source, await impostor(source, options, origin, [], this.cacheOptions)) };
+        return bakeMesh(
+          source,
+          low ? { low, interior, textureSize: request.textureSize } : { ratio: request.ratio, interior, textureSize: request.textureSize },
+        );
+    }
+  }
+
+  private async loadAsset(url: string, provenance: Provenance): Promise<Object3D> {
+    const { path, extension } = assetPath(url);
+    const handler = this.manager.getHandler(path);
+    if (!handler && extension === "glts") throw new Error(`LodLoader: cannot load "${url}": register a GLTSLoader for .glts on the loading manager`);
+    let result: unknown;
+    if (handler) result = await handler.loadAsync(url);
+    else {
+      if (!meshoptWorkers && MeshoptDecoder.supported) {
+        MeshoptDecoder.useWorkers(2);
+        meshoptWorkers = true;
       }
-      default: {
-        const unknown: never = request;
-        throw new Error(`LodLoader: unknown level type in ${JSON.stringify(unknown)}`);
-      }
+      this.gltf ??= new GLTFLoader(this.manager).setMeshoptDecoder(MeshoptDecoder);
+      const decoder = this.gltf.setCrossOrigin(this.crossOrigin).setWithCredentials(this.withCredentials).setRequestHeader(this.requestHeader);
+      result = await decoder.loadAsync(url);
     }
-  }
-
-  /**
-   * Bake `source` as `request` asks, loading its low mesh and interior relative to `base`.
-   * The low mesh is freed after: only the bake keeps it. The interior is returned for the
-   * source, or freed if the bake fails.
-   */
-  private async bake(source: Object3D, request: Extract<LevelRequest, { type: "baked" }>, base: string): Promise<{ level: Object3D; interior?: Object3D }> {
-    const { textureSize } = request;
-    const load = (url: string | undefined) => (url === undefined ? undefined : this.loadSource(LoaderUtils.resolveURL(url, base)));
-    const low = await load(request.low);
-    let interior: Object3D | undefined;
+    const object = sceneOf(result, url);
     try {
-      interior = await load(request.interior);
-      const level = await bakeMesh(source, low ? { low, textureSize, interior } : { ratio: request.ratio, textureSize, interior });
-      return { level, interior };
+      provenance.capture(url, object, result);
+      return object;
     } catch (error) {
-      if (interior) disposeTree(interior);
+      disposeRejected(object);
       throw error;
-    } finally {
-      if (low) disposeTree(low);
     }
-  }
-
-  /**
-   * Load `request`'s model and `build` it, reporting to the manager as one item; `build`
-   * gets the model's directory. On failure, the model is freed.
-   */
-  private async loading<T>(
-    request: LodRequest,
-    build: (object: Object3D, levels: readonly LevelRequest[], base: string, origin?: GLTSSource) => Promise<T>,
-  ): Promise<T> {
-    const input = typeof request === "string" ? { url: request } : isObject3D(request) ? { source: request } : request;
-    const { levels = DEFAULT_LEVELS } = input;
-    if ("source" in input) {
-      // Native async code loses the GLTS execution after its first await.
-      const source = getGLTSSource();
-      return build(input.source, levels, LoaderUtils.extractUrlBase(source.url), source);
-    }
-    const { url } = input;
-    const full = LoaderUtils.resolveURL(url, this.path);
-    this.manager.itemStart(full);
-    let object: Object3D | undefined;
-    try {
-      object = await this.loadSource(full);
-      const origin = originOf(object);
-      return await build(object, levels, LoaderUtils.extractUrlBase(origin?.url ?? full), origin);
-    } catch (error) {
-      if (object) disposeTree(object);
-      this.manager.itemError(full);
-      throw error;
-    } finally {
-      this.manager.itemEnd(full);
-    }
-  }
-
-  private async loadSource(url: string): Promise<Object3D> {
-    const extension = /\.(glb|gltf|glts)$/i.exec(url.split(/[?#]/)[0] ?? "")?.[1]?.toLowerCase();
-    if (!extension) throw new Error(`LodLoader: cannot load "${url}": expected a .glb, .gltf or .glts file`);
-    const handler = this.manager.getHandler(url);
-    if (handler) return sceneOf(await handler.loadAsync(url), url);
-    // No GLTSLoader of our own: inside a .glts script only the contextual one may load,
-    // so the app registers the one to use.
-    if (extension === "glts") throw new Error(`LodLoader: cannot load "${url}": register a GLTSLoader for .glts on the loading manager`);
-    this.gltf ??= new GLTFLoader(this.manager);
-    return (await this.configure(this.gltf).loadAsync(url)).scene;
-  }
-
-  /** `loader` with this loader's request settings. */
-  private configure(loader: GLTFLoader): GLTFLoader {
-    loader.setCrossOrigin(this.crossOrigin).setWithCredentials(this.withCredentials).setRequestHeader(this.requestHeader);
-    return loader;
   }
 }
 
-/** An ImpostorMesh placed and shadowed like `source`. */
-function impostorOf(source: Object3D, impostor: Impostor): ImpostorMesh {
-  const mesh = new ImpostorMesh(impostor);
-  mesh.name = `${source.name || "object"} impostor`;
-  placeLike(mesh, source);
-  return mesh;
+function normalize(request: LodRequest, path: string) {
+  const input = typeof request === "string" ? { url: request } : request;
+  const url = loaderPathURL(input.url, path);
+  const levels = structuredClone(input.levels ?? DEFAULT_LEVELS);
+  const urls: Record<string, string> = { source: url };
+  levels.forEach((level, index) => {
+    if (level.type !== "baked") return;
+    for (const name of ["low", "interior"] as const) {
+      const value = level[name];
+      if (value !== undefined) urls[auxiliary(index, name)] = sourceRelativeURL(value, url);
+    }
+  });
+  return { ...input, url, levels, urls };
 }
 
-/** The object a handler loaded: an Object3D, or a glTF result's scene. */
+const uncached = new Set<string>();
+
+/** Builds of `url` are served without saving from now on, after one warning naming why. */
+function warnUncached(url: string, reason: string): void {
+  if (uncached.has(url)) return;
+  uncached.add(url);
+  console.warn(`LodLoader: "${url}" is not cached until the page reloads: ${reason}`);
+}
+
+/** Provenance name of a baked level's low or interior asset. */
+const auxiliary = (level: number, name: "low" | "interior") => `auxiliary:${level}:${name}`;
+
+async function preload(levels: LodLevel[], hasSource: boolean): Promise<void> {
+  // A cold build hands its source to the same shared lifetime as a deferred source arrival.
+  if (hasSource && levels[0]?.load) await loadOnce(levels[0].load).promise;
+  const coarse = [...levels].reverse().find((level) => level.box && !level.box.isEmpty());
+  if (!coarse?.load) throw new Error("LodLoader: ladder has no drawable level");
+  for (const [index, level] of levels.entries()) {
+    if (level.load && (level === coarse || level.box.isEmpty())) levels[index] = { object: await loadOnce(level.load).promise, maxPixels: level.maxPixels };
+  }
+}
+
 function sceneOf(result: unknown, url: string): Object3D {
   if (isObject3D(result)) return result;
   const scene: unknown = typeof result === "object" && result !== null ? Reflect.get(result, "scene") : undefined;

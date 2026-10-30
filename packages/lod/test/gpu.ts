@@ -21,3 +21,30 @@ export async function render(scene: Scene, camera: Camera, size = 64): Promise<U
   target.dispose();
   return pixels;
 }
+
+/** Follow normal frame updates until this owner reports the actual installation. */
+export function nextLevel(owner: import("../src/lod.js").Lod | import("../src/instanced/index.js").InstancedLod, camera: Camera): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let frame = 0;
+    const clear = () => {
+      cancelAnimationFrame(frame);
+      owner.removeEventListener("levelschange", changed);
+      owner.removeEventListener("levelserror", failed);
+    };
+    const changed = () => {
+      clear();
+      resolve();
+    };
+    const failed = ({ error }: { error: unknown }) => {
+      clear();
+      reject(error);
+    };
+    const update = () => {
+      owner.update(camera);
+      frame = requestAnimationFrame(update);
+    };
+    owner.addEventListener("levelschange", changed);
+    owner.addEventListener("levelserror", failed);
+    frame = requestAnimationFrame(update);
+  });
+}

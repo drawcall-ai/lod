@@ -35,8 +35,8 @@ function walk(node: Object3D, placement: Matrix4, visit: (mesh: Mesh, placement:
 /** The children of `node` drawn at full detail: of a LOD its level 0, whatever it shows, else the visible ones. */
 export function detailed(node: Object3D): Object3D[] {
   if (!isLOD(node)) return node.children.filter((child) => child.visible);
-  const source = node.levels[0];
-  return source ? [source.object] : [];
+  const source = node.levels[0]?.object;
+  return source ? [source] : [];
 }
 
 /** `node`'s matrix in its parent's space, up to date. */
@@ -53,7 +53,9 @@ export function showDetail(root: Object3D): void {
   }
   if (isLOD(root)) {
     root.autoUpdate = false;
-    root.levels.forEach((level, i) => (level.object.visible = i === 0));
+    root.levels.forEach((level, i) => {
+      if (level.object) level.object.visible = i === 0;
+    });
   }
   for (const child of detailed(root)) showDetail(child);
 }
@@ -87,11 +89,41 @@ export function forEachVertex(root: Object3D, visit: (p: Vector3) => void): void
   });
 }
 
-/** Bounds of every vertex that draws at full detail, in `root`'s own space. */
+/** Conservative full-detail bounds from cached geometry boxes and deferred metadata, in the root's space. */
 export function boundingBox(root: Object3D): Box3 {
   const box = new Box3();
-  forEachVertex(root, (p) => box.expandByPoint(p));
+  boxes(root, new Matrix4(), box);
   return box;
+}
+
+function boxes(node: Object3D, placement: Matrix4, box: Box3): void {
+  if (isInstancedLod(node)) {
+    const source = node.levels[0];
+    if (!source) return;
+    const own = levelBox(source);
+    const instance = new Matrix4();
+    for (let i = 0; i < node.count; i++) box.union(own.clone().applyMatrix4(node.getMatrixAt(i, instance).premultiply(placement)));
+    return;
+  }
+  if (isLOD(node) && !node.levels[0]?.object) {
+    const metadata = node.levels[0]?.box;
+    if (metadata) box.union(metadata.clone().applyMatrix4(placement));
+    return;
+  }
+  if (isMesh(node) && [node.material].flat().some((material) => material.visible && material.colorWrite)) {
+    if (isBatchedMesh(node)) {
+      if (!node.boundingBox) node.computeBoundingBox();
+      if (node.boundingBox) box.union(node.boundingBox.clone().applyMatrix4(placement));
+    } else {
+      if (!node.geometry.boundingBox) node.geometry.computeBoundingBox();
+      const own = node.geometry.boundingBox;
+      if (own && (isInstancedMesh(node) || isImpostorMesh(node))) {
+        const instance = new Matrix4();
+        for (let i = 0; i < node.count; i++) box.union(own.clone().applyMatrix4(node.getMatrixAt(i, instance).premultiply(placement)));
+      } else if (own) box.union(own.clone().applyMatrix4(placement));
+    }
+  }
+  for (const child of detailed(node)) boxes(child, local(child).premultiply(placement), box);
 }
 
 /** The centre and half diagonal of `boundingBox(root)`: an impostor baked from `root` has the same box. */
@@ -108,12 +140,31 @@ const sphereOf = (box: Box3): Sphere | null => (box.isEmpty() ? null : new Spher
  * first level's that draws anything when level 0 draws nothing; `own` in that level's
  * own space, `placed` in its parent's (the Lod's). `who` names the caller in the error.
  */
-export function measureLevels(levels: readonly Object3D[], who: string): { own: Sphere; placed: Sphere } {
-  for (const level of levels) {
-    const own = sphereOf(boundingBox(level));
+export function measureLevels(levels: readonly { object?: Object3D; box?: Box3 }[], who: string): { own: Sphere; placed: Sphere } {
+  for (const { object, box } of levels) {
+    const own = sphereOf(object ? boundingBox(object) : (box ?? new Box3()));
     if (!own) continue;
-    if (level.matrixAutoUpdate) level.updateMatrix();
-    return { own, placed: own.clone().applyMatrix4(level.matrix) };
+    return { own, placed: object ? own.clone().applyMatrix4(local(object)) : own.clone() };
   }
   throw new Error(`${who}: no level has visible geometry to measure`);
+}
+
+/** A level's bounds in its owner's space, including an eager object's transform. */
+export function levelBox(level: { object?: Object3D; box?: Box3 }): Box3 {
+  if (level.box) return level.box.clone();
+  return level.object ? boundingBox(level.object).applyMatrix4(local(level.object)) : new Box3();
+}
+
+/** Fill absent mesh bounds conservatively from a deferred level's declared box, without reading vertices. */
+export function prepareBounds(root: Object3D, box: Box3): void {
+  const visit = (node: Object3D, placement: Matrix4): void => {
+    if (isMesh(node)) {
+      if (placement.determinant() === 0) throw new Error("Lod: mesh placement must be invertible");
+      const geometry = node.geometry;
+      geometry.boundingBox ??= box.clone().applyMatrix4(placement.clone().invert());
+      geometry.boundingSphere ??= geometry.boundingBox.getBoundingSphere(new Sphere());
+    }
+    for (const child of node.children) visit(child, local(child).premultiply(placement));
+  };
+  visit(root, local(root));
 }

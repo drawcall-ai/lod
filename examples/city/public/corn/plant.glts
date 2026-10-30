@@ -1,0 +1,18 @@
+import { HERO_VARIANT, VARIANTS } from "../content/corn/layout.ts";
+import { Library } from "../content/materials.ts";
+import { loadingManager, onDispose, scene } from "@drawcall/glts";
+import { plant } from "../content/corn/plant.ts";
+import { choice, number } from "../content/parameters.ts";
+
+const library = new Library(loadingManager, new URL("../assets/", import.meta.url).href);
+onDispose(() => library.dispose());
+const query = new URL(import.meta.url).searchParams;
+const variant = number(query, "variant", 0, 0, VARIANTS - 1, true);
+const hero = choice(query, "hero", ["0", "1"], "0") === "1";
+// Warm every variant cache on the server before the browser requests individual assets.
+if (import.meta.env.SSR)
+  for (let warm = 0; warm < VARIANTS; warm++) {
+    library.release(await plant(scene.source, library, warm));
+    if (warm === HERO_VARIANT) library.release(await plant(scene.source, library, warm, true));
+  }
+scene.add(await plant(scene.source, library, variant, hero));

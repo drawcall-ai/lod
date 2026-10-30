@@ -1,3 +1,6 @@
+import type { BufferAttribute } from "three/webgpu";
+import { at } from "../at.js";
+
 /** Changed indices, drained as ordered runs without scanning unchanged instances. */
 export class Dirty {
   private readonly bits: Uint32Array;
@@ -51,8 +54,36 @@ export class Dirty {
   }
 }
 
-function at(values: Uint32Array, index: number): number {
-  const value = values[index];
-  if (value === undefined) throw new Error(`Dirty: index ${index} out of range`);
-  return value;
+/** Union pending uploads, including repeated edits while a crowd is not drawn. */
+export function upload(attribute: BufferAttribute, start: number, end: number): void {
+  start *= attribute.itemSize;
+  end *= attribute.itemSize;
+  const ranges = attribute.updateRanges;
+  let low = 0;
+  let high = ranges.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    const range = at(ranges, middle);
+    if (range.start + range.count < start) low = middle + 1;
+    else high = middle;
+  }
+  const first = ranges[low];
+  if (!first || first.start > end) {
+    const range = { start, count: end - start };
+    if (low === ranges.length) ranges.push(range);
+    else ranges.splice(low, 0, range);
+  } else {
+    end = Math.max(end, first.start + first.count);
+    first.start = Math.min(start, first.start);
+    let next = low + 1;
+    while (next < ranges.length) {
+      const range = at(ranges, next);
+      if (range.start > end) break;
+      end = Math.max(end, range.start + range.count);
+      next++;
+    }
+    first.count = end - first.start;
+    if (next > low + 1) ranges.splice(low + 1, next - low - 1);
+  }
+  attribute.needsUpdate = true;
 }

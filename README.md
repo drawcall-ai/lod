@@ -8,16 +8,18 @@ Requires Three.js `WebGPURenderer` (`three/webgpu`).
 npm install @drawcall/lod three
 ```
 
-Load a model into an existing Three.js scene:
+Load a model into an existing Three.js scene. With a warm cache, the coarse level draws first and finer levels load as the camera approaches:
 
 ```ts
-import { LodLoader } from "@drawcall/lod";
+import { Lod, LodLoader } from "@drawcall/lod";
 
 const loader = new LodLoader();
-const tree = await loader.loadAsync("/models/tree.glb");
-scene.add(tree);
+const levels = await loader.loadAsync("/models/tree.glb");
+scene.add(new Lod(levels));
 ```
 
-Choose generated or authored levels to suit your assets. The [LOD skill](https://github.com/drawcall-ai/lod/blob/main/packages/lod/skills/lod/SKILL.md) covers asset choices, caching, lazy loading, wind, and scene integration. It also ships with the package at `skills/lod/SKILL.md`.
+Add the [vitecache](https://github.com/drawcall-ai/vitecache) Vite plugin to the host. Loading each asset in the dev server writes its levels as cache files; `vite build` does not generate them, so deploy the cache directory with the app. For procedural assets, register a GLTSLoader on the loading manager and pass a `.glts` URL; the LOD skill below covers caching their expensive generation.
+
+Choose derived levels to suit your assets. The [LOD skill](https://github.com/drawcall-ai/lod/blob/main/packages/lod/skills/lod/SKILL.md) covers asset choices, caching, lazy loading, wind, and scene integration. It also ships with the package at `skills/lod/SKILL.md`.
 
 The [city example](https://github.com/drawcall-ai/lod/tree/main/examples/city) demonstrates a large scene with buildings, vegetation, and small props.

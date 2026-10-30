@@ -49,12 +49,6 @@ export class Ui {
     this.bar.style.width = `${Math.round(done * 100)}%`;
   }
 
-  waiting(text: string): void {
-    this.loading.hidden = false;
-    this.status.textContent = text;
-    this.bar.style.width = "100%";
-  }
-
   ready(): void {
     this.loading.hidden = true;
     this.controls.hidden = false;
@@ -66,14 +60,13 @@ export class Ui {
     this.play.textContent = playing ? "Pause" : "Play";
   }
 
-  showStats(frame: { ms: number; gpu: number | null; calls: number; triangles: number }, kinds: { name: string; levels: LevelCount[] }[]): void {
+  showStats(frame: { ms: number; gpu: number | null; calls: number; triangles: number }, kinds: { name: string; levels: LevelCount[] }[] = []): void {
     const k = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n));
     const lines = [
       `frame ${frame.ms.toFixed(1)} ms${frame.gpu === null ? "" : `  gpu pass sum ${frame.gpu.toFixed(1)} ms`}`,
       `${k(frame.triangles)} triangles  ${frame.calls} draws`,
-      "",
-      "instances per level   0 · 1 · 2 · 3",
     ];
+    if (kinds.length) lines.push("", "instances per level   0 · 1 · 2 · 3");
     for (const { name, levels } of kinds) lines.push(`${name.padEnd(13)} ${levels.map((l) => k(l.instances).padStart(5)).join(" ")}`);
     this.stats.textContent = lines.join("\n");
   }

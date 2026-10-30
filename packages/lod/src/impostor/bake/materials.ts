@@ -16,6 +16,7 @@ import {
   normalView,
   normalize,
   positionView,
+  positionLocal,
   specularColor,
   specularF90,
   step,
@@ -23,6 +24,7 @@ import {
 } from "three/tsl";
 import { isMesh, isNodeMaterial, isPhysical, isStandard, isStandardNode, toNodeMaterial } from "../../three.js";
 import { affine, biasedTextures, isNodeOf } from "../../tsl.js";
+import { placeInstances } from "../../fade.js";
 import { originalOf } from "../../material.js";
 
 /** What every bake material reads, shared by all of them and set per bake. */
@@ -123,6 +125,13 @@ const scalar = (node: Node, builder: NodeBuilder): Node<"float"> => {
 
 function bakeMaterial(source: Material, settings: BakeSettings): { material: NodeMaterial; emits: boolean; specular: boolean } {
   const material = toStandard(source);
+  const position = material.positionNode;
+  material.positionNode = Fn((builder) => {
+    placeInstances(builder);
+    if (!position) return positionLocal;
+    if (!isNodeOf(position, "vec3", builder)) throw new Error("bakeImpostor: position must build to vec3");
+    return position;
+  })();
   // A material that draws no colour has no surface to bake.
   material.visible = source.visible && source.colorWrite;
   const emits = material.visible && emitsLight(material);
