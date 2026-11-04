@@ -105,14 +105,11 @@ export class Residency {
     const pending = meshes?.[eager];
     if (pending) {
       this.run(async () => {
-        const results = await Promise.allSettled(
-          pending.map(async (mesh) => {
-            if (compiled.has(mesh)) return;
-            await compileLevel(mesh, context);
-            compiled.add(mesh);
-          }),
-        );
-        for (const result of results) if (result.status === "rejected") throw result.reason;
+        for (const mesh of pending) {
+          if (compiled.has(mesh)) continue;
+          await compileLevel(mesh, context);
+          compiled.add(mesh);
+        }
       });
       return;
     }

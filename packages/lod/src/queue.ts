@@ -1,5 +1,3 @@
-import { pause } from "./pause.js";
-
 interface Job {
   run: () => Promise<void>;
   resolve: () => void;
@@ -7,11 +5,12 @@ interface Job {
   priority: number;
 }
 
+import { pause } from "./pause.js";
+
 const queue: Job[] = [];
 let running = false;
-const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
-/** Run at most one installation per animation frame across all LODs. */
+/** Run one installation at a time across all LODs, by priority; compileLevel paces its uploads to one per frame. */
 export function enqueue(run: () => Promise<void>, priority = 0): Promise<void> {
   const promise = new Promise<void>((resolve, reject) => {
     queue.push({ run, resolve, reject, priority });
@@ -24,7 +23,7 @@ export function enqueue(run: () => Promise<void>, priority = 0): Promise<void> {
 async function drain(): Promise<void> {
   running = true;
   while (queue.length) {
-    await frame();
+    // Start outside the render that enqueued it, which may still be walking the scene.
     await pause();
     const job = queue.shift();
     if (!job) break;

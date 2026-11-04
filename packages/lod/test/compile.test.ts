@@ -10,7 +10,7 @@ import { GPU_TIMEOUT, renderer } from "./gpu.js";
 vi.mock("../src/impostor/mesh/surface.js", { spy: true });
 
 it(
-  "waits for the upload queue to drain and compiles each material group",
+  "uploads one texture or material group per frame, each after submitted work",
   async () => {
     const map = new DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
     map.needsUpdate = true;
@@ -28,10 +28,23 @@ it(
       resume = () => resolve(undefined);
     });
     vi.spyOn(GPUQueue.prototype, "onSubmittedWorkDone").mockImplementationOnce(() => gate);
-    const upload = vi.spyOn(renderer, "initTexture");
+    let frame = 0;
+    let counting = true;
+    const count = () => {
+      frame++;
+      if (counting) requestAnimationFrame(count);
+    };
+    requestAnimationFrame(count);
+    const frames: number[] = [];
+    const uploadTexture = renderer.initTexture.bind(renderer);
+    const upload = vi.spyOn(renderer, "initTexture").mockImplementation((texture) => {
+      frames.push(frame);
+      uploadTexture(texture);
+    });
     const original = renderer.compileAsync.bind(renderer);
     const compiled: number[][] = [];
     const compile = vi.spyOn(renderer, "compileAsync").mockImplementation((...args) => {
+      frames.push(frame);
       compiled.push(geometry.groups.map(({ start }) => start));
       return original(...args);
     });
@@ -43,7 +56,10 @@ it(
       resume();
       await pending;
       expect(compiled).toEqual([[0], [18]]);
+      expect(frames).toHaveLength(3);
+      expect(new Set(frames).size).toBe(3);
     } finally {
+      counting = false;
       resume();
       await pending;
       vi.restoreAllMocks();

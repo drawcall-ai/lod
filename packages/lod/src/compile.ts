@@ -1,31 +1,36 @@
 import type { Mesh, Node, Object3D, Texture } from "three/webgpu";
 import { gpuQueue, isMesh, isNode, isTexture } from "./three.js";
 import type { RenderContext } from "./view.js";
-import { pause } from "./pause.js";
 
-/** Prepare the same target and MRT as the viewing draw, even if normal rendering has since restored the canvas. */
+/**
+ * Prepare the same target and MRT as the viewing draw, even if normal rendering has since restored the canvas.
+ * r185 uploads a texture or a draw's geometry synchronously inside initTexture or compileAsync, and only creates
+ * pipelines asynchronously, so each such step waits for submitted work and then for a frame of its own: one upload
+ * per frame, however large the level. Callers run one level at a time (see queue.ts).
+ */
 export async function compileLevel(object: Object3D, context: RenderContext): Promise<void> {
-  // Throttle new uploads behind submitted work instead of blocking inside writeTexture.
   const queue = gpuQueue(context.renderer);
-  for (const texture of textures(object)) {
+  const step = async () => {
     await queue.onSubmittedWorkDone();
+    await frame();
+  };
+  for (const texture of textures(object)) {
+    await step();
     context.renderer.initTexture(texture);
-    await pause();
   }
   const meshes: Mesh[] = [];
-  const collect = (node: Object3D) => {
+  object.traverse((node) => {
     if (isMesh(node)) meshes.push(node);
-  };
-  object.traverse(collect);
+  });
   for (const mesh of meshes) {
     const groups = mesh.geometry.groups;
     if (!Array.isArray(mesh.material)) {
-      await queue.onSubmittedWorkDone();
+      await step();
       await compileMesh(mesh, context);
       continue;
     }
     for (const group of groups) {
-      await queue.onSubmittedWorkDone();
+      await step();
       let pending: Promise<void>;
       try {
         mesh.geometry.groups = [group];
@@ -37,6 +42,8 @@ export async function compileLevel(object: Object3D, context: RenderContext): Pr
     }
   }
 }
+
+const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
 function compileMesh(mesh: Mesh, context: RenderContext): Promise<void> {
   const { renderer, camera, scene } = context;
