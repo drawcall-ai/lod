@@ -62,13 +62,15 @@ function encodeLevel(module: Basis, data: Uint8Array, width: number, srgb: boole
   }
 }
 
-/** The encoder's Emscripten module (see scripts/basis.ts), started on its binary. */
+/**
+ * The encoder's Emscripten module (see scripts/basis.ts), started on its binary. Imported from a data: URL, which
+ * browsers and Node both import, unlike a blob: URL.
+ */
 async function load(): Promise<Basis> {
-  const url = URL.createObjectURL(new Blob([inflate(ENCODER_JS)], { type: "text/javascript" }));
+  const url = `data:text/javascript,${encodeURIComponent(new TextDecoder().decode(inflate(ENCODER_JS)))}`;
   const factory: unknown = (await import(/* @vite-ignore */ url)).default;
-  URL.revokeObjectURL(url);
   if (typeof factory !== "function") throw new Error("the Basis encoder module has no factory");
-  // the module names its binary relative to its own URL, which a blob's is not: named, then given
+  // the module names its binary relative to its own URL, which a data: URL's is not: named, then given
   const basis: unknown = await factory({ wasmBinary: inflate(ENCODER_WASM), locateFile: (name: string) => name });
   if (!isBasis(basis)) throw new Error("the Basis encoder module lacks its bindings");
   basis.initializeBasis();
@@ -76,7 +78,12 @@ async function load(): Promise<Basis> {
 }
 
 function isBasis(value: unknown): value is Basis {
-  return typeof value === "object" && value !== null && typeof Reflect.get(value, "BasisEncoder") === "function" && typeof Reflect.get(value, "initializeBasis") === "function";
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof Reflect.get(value, "BasisEncoder") === "function" &&
+    typeof Reflect.get(value, "initializeBasis") === "function"
+  );
 }
 
 const inflate = (base64: string) => inflateSync(Uint8Array.from(atob(base64), (c) => c.charCodeAt(0)));

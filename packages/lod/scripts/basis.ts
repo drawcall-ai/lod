@@ -23,7 +23,15 @@ const NOTICE = `// Basis Universal, https://github.com/BinomialLLC/basis_univers
 //   Copyright © 2016–2026 Binomial LLC. Licensed under the Apache License 2.0,
 //   https://www.apache.org/licenses/LICENSE-2.0. "Basis Universal" is a trademark of Binomial LLC.`;
 
-const inline = async (path: string) => Buffer.from(deflateSync(await readFile(path), { level: 9 })).toString("base64");
+const deflate = (bytes: Uint8Array) => Buffer.from(deflateSync(bytes, { level: 9 })).toString("base64");
+const inline = async (path: string) => deflate(await readFile(path));
+
+// The encoder imports from a data: URL, in browsers and in Node, as a `vite build` warmup runs it. Emscripten's Node
+// path needs a file: URL for createRequire, so the module takes its browser path everywhere: given its binary, it
+// needs nothing else.
+const NODE = `var ENVIRONMENT_IS_NODE=typeof process=="object"&&process.versions?.node&&process.type!="renderer";`;
+const emscripten = await readFile(join(encoder, "basis_encoder.js"), "utf8");
+if (!emscripten.includes(NODE)) throw new Error("basis_encoder.js no longer detects Node as scripts/basis.ts expects");
 
 await write(
   "encoder.ts",
@@ -31,9 +39,9 @@ await write(
 //
 ${NOTICE}
 
-/** Basis Universal's encoder as ktx2-encoder builds it: the Emscripten module (ES, its default export the factory)
- *  and the WebAssembly binary, deflated, as base64. */
-export const ENCODER_JS = "${await inline(join(encoder, "basis_encoder.js"))}";
+/** Basis Universal's encoder as ktx2-encoder builds it: the Emscripten module (ES, its default export the factory,
+ *  never taking its Node path) and the WebAssembly binary, deflated, as base64. */
+export const ENCODER_JS = "${deflate(Buffer.from(emscripten.replace(NODE, "var ENVIRONMENT_IS_NODE=false;")))}";
 export const ENCODER_WASM = "${await inline(join(encoder, "basis_encoder.wasm"))}";
 `,
 );
