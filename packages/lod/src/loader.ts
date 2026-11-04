@@ -103,6 +103,7 @@ export class LodLoader extends Loader<LodLevel[], LodRequest> {
       const eager = requests.flatMap((level, index) =>
         level.type !== "empty" && (index + 1 === coarsest || level.maxPixels === undefined) ? [index + 1] : [],
       );
+      // The eager builds share one source and provenance, so each saves what all of them revealed: a superset of its own.
       const entries = eager.map((index) => this.entry(ladder, index, provenance));
       const cached = await Promise.all(entries.map((entry) => entry?.load()));
       // Bytes of the eager levels, each handed over once: loadOnce decodes each level once per ladder, and a later call reads the cache.
@@ -160,8 +161,8 @@ export class LodLoader extends Loader<LodLevel[], LodRequest> {
 
   /** The cache entry of level `index`, keyed by the inputs it is built from; undefined when the ladder is not cacheable. */
   private entry({ levels, modules }: Ladder, index: number, provenance: Provenance): CacheEntry | undefined {
-    const request = derived(levels, index);
     if (!modules) return undefined;
+    const request = derived(levels, index);
     const names = ["source", auxiliary(index, "low"), auxiliary(index, "interior")];
     const pick = <T>(values: Readonly<Record<string, T>>): Record<string, T> =>
       Object.fromEntries(
