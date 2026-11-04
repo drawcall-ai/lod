@@ -1,4 +1,4 @@
-import { Color, Matrix4, Raycaster, Vector3 } from "three/webgpu";
+import { Color, Matrix4, Raycaster, RGBAFormat, Vector3 } from "three/webgpu";
 import { describe, expect, it } from "vitest";
 import type { Impostor } from "../../../src/impostor/impostor.js";
 import { ImpostorMesh } from "../../../src/impostor/mesh/index.js";
@@ -6,14 +6,14 @@ import { acquireTextures, releaseTextures } from "../../../src/impostor/mesh/tex
 import { GPU_TIMEOUT } from "../../gpu.js";
 
 const make = (): Impostor => ({
-  version: 3,
+  version: 4,
   layout: "full",
   frames: 4,
   size: 16,
   box: [-1, 0, -1, 1, 2, 1],
   halfSize: 1.5,
   maps: ["base", "normalDepth", "orm"],
-  layers: [0, 1, 2].map(() => [16, 8, 4].map((size) => new Uint8Array(size * size * 4))),
+  layers: [0, 1, 2].map(() => ({ format: RGBAFormat, mipmaps: [16, 8, 4].map((size) => new Uint8Array(size * size * 4)) })),
 });
 
 /** The textures `impostor`'s meshes share, without holding them. */

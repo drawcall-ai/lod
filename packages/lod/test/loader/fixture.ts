@@ -1,4 +1,4 @@
-import { Loader, LoadingManager, Mesh, Scene, type Object3D } from "three/webgpu";
+import { Loader, LoadingManager, Mesh, RGBAFormat, Scene, type Object3D } from "three/webgpu";
 import { beforeEach, vi } from "vitest";
 import type { CacheEntryOptions, Dependencies, SaveOptions } from "vitecache";
 import { boundingBox } from "../../src/bounds.js";
@@ -78,14 +78,14 @@ export class CacheEntry {
 export function impostorOf(source: Object3D): Impostor {
   const box = boundingBox(source);
   return {
-    version: 3,
+    version: 4,
     layout: "full",
     frames: 2,
-    size: 2,
+    size: 8,
     box: [...box.min.toArray(), ...box.max.toArray()],
     halfSize: 2,
     maps: ["base", "normalDepth", "orm"],
-    layers: Array.from({ length: 3 }, () => [new Uint8Array(16)]),
+    layers: Array.from({ length: 3 }, () => ({ format: RGBAFormat, mipmaps: [8, 4, 2].map((size) => new Uint8Array(size * size * 4)) })),
   };
 }
 

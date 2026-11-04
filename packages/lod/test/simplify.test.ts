@@ -6,6 +6,7 @@ import {
   Matrix4,
   Mesh,
   MeshStandardMaterial,
+  RGBAFormat,
   SphereGeometry,
   type BufferGeometry,
   type Object3D,
@@ -61,14 +62,14 @@ describe("simplify", () => {
 
   it("simplifies an InstancedMesh's geometry, keeps ImpostorMeshes and refuses an InstancedLod", async () => {
     const impostor: Impostor = {
-      version: 3,
+      version: 4,
       layout: "full",
       frames: 4,
       size: 16,
       box: [-1, 0, -1, 1, 2, 1],
       halfSize: 1.5,
       maps: ["base", "normalDepth", "orm"],
-      layers: [0, 1, 2].map(() => [16, 8, 4].map((size) => new Uint8Array(size * size * 4))),
+      layers: [0, 1, 2].map(() => ({ format: RGBAFormat, mipmaps: [16, 8, 4].map((size) => new Uint8Array(size * size * 4)) })),
     };
     const instanced = new InstancedMesh(new SphereGeometry(1, 64, 32), new MeshStandardMaterial(), 2);
     instanced.setMatrixAt(1, new Matrix4().makeTranslation(3, 0, 0));

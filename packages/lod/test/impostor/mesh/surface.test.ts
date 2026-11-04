@@ -5,6 +5,7 @@ import {
   MeshStandardMaterial,
   PerspectiveCamera,
   RenderTarget,
+  RGBAFormat,
   Scene,
   TorusKnotGeometry,
   Vector3,
@@ -19,7 +20,7 @@ import { GPU_TIMEOUT, render, renderer } from "../../gpu.js";
 
 function atlas(): Impostor {
   return {
-    version: 3,
+    version: 4,
     layout: "full",
     frames: 4,
     size: 16,
@@ -30,13 +31,14 @@ function atlas(): Impostor {
       [32, 200, 64, 255],
       [128, 128, 255, 128],
       [255, 191, 0, 255],
-    ].map((pixel) =>
-      [16, 8, 4].map((size) => {
+    ].map((pixel) => ({
+      format: RGBAFormat,
+      mipmaps: [16, 8, 4].map((size) => {
         const data = new Uint8Array(size * size * 4);
         for (let index = 0; index < data.length; index += 4) data.set(pixel, index);
         return data;
       }),
-    ),
+    })),
   };
 }
 

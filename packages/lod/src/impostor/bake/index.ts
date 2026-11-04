@@ -1,4 +1,15 @@
-import { HalfFloatType, Matrix4, NearestFilter, OrthographicCamera, RenderTarget, Scene, Vector3, type Object3D, type Renderer } from "three/webgpu";
+import {
+  HalfFloatType,
+  Matrix4,
+  NearestFilter,
+  OrthographicCamera,
+  RenderTarget,
+  RGBAFormat,
+  Scene,
+  Vector3,
+  type Object3D,
+  type Renderer,
+} from "three/webgpu";
 import { uniform } from "three/tsl";
 import { MAPS, boundingRadius, texelPixels, validateImpostor, type Impostor, type ImpostorLayout, type ImpostorMap } from "../impostor.js";
 import { frameBasis, frameDirection, type Vec3 } from "../octahedral.js";
@@ -150,14 +161,15 @@ export async function bake(object: Object3D, options: BakeImpostorOptions, exclu
   const sum = (way: "own" | "turned") => atlases.reduce((total, atlas) => total + atlas.agreement[way], 0);
   if (sum("turned") > sum("own")) for (const atlas of atlases) atlas.useTurned();
 
-  const layers = maps.map((map, i) =>
-    atlases.map((atlas) => {
+  const layers = maps.map((map, i) => ({
+    format: RGBAFormat,
+    mipmaps: atlases.map((atlas) => {
       const layer = atlas.layers[i];
       if (!layer) throw new Error(`bakeImpostor: no ${map} layer`);
       return layer;
     }),
-  );
-  const impostor: Impostor = { version: 3, layout, frames, size: cell * frames, box, halfSize, maps, layers };
+  }));
+  const impostor: Impostor = { version: 4, layout, frames, size: cell * frames, box, halfSize, maps, layers };
   const [top] = atlases;
   if (!top) throw new Error("bakeImpostor: no mip levels");
   if (swapped.specular) impostor.specular = top.meanSpecular();

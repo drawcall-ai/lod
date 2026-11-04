@@ -35,7 +35,7 @@ const bake = (object: Object3D, layout: Impostor["layout"] = "full") => bakeImpo
 
 /** Mip level `m` of the base layer. */
 const base = (impostor: Impostor, m = 0) => {
-  const level = impostor.layers[0]?.[m];
+  const level = impostor.layers[0]?.mipmaps[m];
   if (!level) throw new Error(`no base level ${m}`);
   return level;
 };
@@ -62,7 +62,7 @@ const red = (impostor: Impostor, m: number) => {
  * the frame's direction, its coverage, decoded normal and front share.
  */
 const centres = (impostor: Impostor, m: number) => {
-  const [colour, normalDepth, orm] = [0, 1, 2].map((i) => impostor.layers[i]?.[m]);
+  const [colour, normalDepth, orm] = [0, 1, 2].map((i) => impostor.layers[i]?.mipmaps[m]);
   if (!colour || !normalDepth || !orm) throw new Error(`no level ${m}`);
   const size = impostor.size >> m;
   const cell = size / impostor.frames;
@@ -166,7 +166,7 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
     const length = (c: { normal: number[] }) => Math.hypot(...c.normal);
     // Up close a texel sees one facet; one texel per frame sees half the ball.
     for (const c of centres(facets, 0)) expect(length(c)).toBeGreaterThan(0.95);
-    const last = (facets.layers[0]?.length ?? 1) - 1;
+    const last = (facets.layers[0]?.mipmaps.length ?? 1) - 1;
     for (const c of centres(facets, last)) expect(length(c)).toBeLessThan(0.85);
   });
 
@@ -175,7 +175,7 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
       new Mesh(new SphereGeometry(1, 16, 8), new MeshStandardMaterial({ color: 0x3080c0, ...(blending ? { blending } : {}) }));
     const [normal, additive] = await Promise.all([bake(make()), bake(make(AdditiveBlending))]);
     const same = (a: Uint8Array, b: Uint8Array | undefined) => a.length === b?.length && a.every((byte, i) => byte === b[i]);
-    normal.layers.forEach((layer, i) => layer.forEach((level, m) => expect(same(level, additive.layers[i]?.[m])).toBe(true)));
+    normal.layers.forEach((layer, i) => layer.mipmaps.forEach((level, m) => expect(same(level, additive.layers[i]?.mipmaps[m])).toBe(true)));
   });
 
   it("renders every mip level at its own size, where the source may look different, and the top one at maxPixels", async () => {

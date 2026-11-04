@@ -1,2 +1,3 @@
 pnpm-lock.yaml
 packages/lod/src/baked/xatlas.ts
+packages/lod/src/impostor/ktx2/wasm/

@@ -138,14 +138,14 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
 
   it("refuses ImpostorMeshes, which have no surface to read", async () => {
     const impostor: Impostor = {
-      version: 3,
+      version: 4,
       layout: "full",
       frames: 4,
       size: 16,
       box: [-1, 0, -1, 1, 2, 1],
       halfSize: 1.5,
       maps: ["base", "normalDepth", "orm"],
-      layers: [0, 1, 2].map(() => [16, 8, 4].map((size) => new Uint8Array(size * size * 4))),
+      layers: [0, 1, 2].map(() => ({ format: RGBAFormat, mipmaps: [16, 8, 4].map((size) => new Uint8Array(size * size * 4)) })),
     };
     await expect(bakeMesh(new Group().add(textured(new BoxGeometry()), new ImpostorMesh(impostor)))).rejects.toThrow(/ImpostorMesh/);
   });

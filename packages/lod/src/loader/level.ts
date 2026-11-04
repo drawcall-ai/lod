@@ -1,7 +1,7 @@
 import { Box3, Matrix4, type Material, type Object3D } from "three/webgpu";
 import { decodeBakedMeshAsync, encodeBakedMeshAsync } from "../baked/codec.js";
 import { boundingBox } from "../bounds.js";
-import { decodeImpostorAsync, encodeImpostor } from "../impostor/codec.js";
+import { decodeImpostorAsync, encodeImpostorAsync } from "../impostor/codec.js";
 import { ImpostorMesh, type ImpostorMeshOptions } from "../impostor/mesh/index.js";
 import { measure, recordDeviation } from "../levels.js";
 import { isImpostorMesh, isMesh } from "../three.js";
@@ -93,7 +93,7 @@ async function encodePayload(object: Object3D, kind: Kind, materials: readonly M
       return encodeBakedMeshAsync(object);
     case "impostor":
       if (!isImpostorMesh(object)) throw new Error("LodLoader: impostor level is not an ImpostorMesh");
-      return encodeImpostor(object.impostor);
+      return encodeImpostorAsync(object.impostor);
   }
 }
 

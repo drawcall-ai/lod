@@ -11,6 +11,7 @@ import {
   PerspectiveCamera,
   PlaneGeometry,
   RenderTarget,
+  RGBAFormat,
   Scene,
 } from "three/webgpu";
 import { mrt, output, texture, vec3, vec4 } from "three/tsl";
@@ -154,14 +155,14 @@ it.each(["texture", "node"])(
   "keeps the impostor MSAA variant with a %s background across async shader-stage yields",
   async (kind) => {
     const card = new ImpostorMesh({
-      version: 3,
+      version: 4,
       layout: "full",
       frames: 4,
       size: 16,
       box: [-1, -1, -1, 1, 1, 1],
       halfSize: 1.5,
       maps: ["base", "normalDepth", "orm"],
-      layers: [0, 1, 2].map(() => [16, 8, 4].map((size) => new Uint8Array(size * size * 4))),
+      layers: [0, 1, 2].map(() => ({ format: RGBAFormat, mipmaps: [16, 8, 4].map((size) => new Uint8Array(size * size * 4)) })),
     });
     const target = new RenderTarget(32, 32, { samples: 4 });
     const camera = new PerspectiveCamera(60, 1, 0.1, 100);
