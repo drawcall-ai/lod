@@ -1,0 +1,13 @@
+// Builds every level of every ladder the city requests into the cache `vite build` deploys, so that the deployed
+// city builds none in the browser.
+import { gltsLoader, loadingManager, scene } from "@drawcall/glts";
+import { LodLoader } from "@drawcall/lod";
+import { LADDERS } from "./content/ladders.ts";
+
+loadingManager.addHandler(/\.glts$/i, gltsLoader);
+const loader = new LodLoader(loadingManager);
+await Promise.all(
+  LADDERS.map(async (ladder) => {
+    for (const level of await loader.loadAsync(ladder)) scene.add(level.object ?? (await level.load()));
+  }),
+);

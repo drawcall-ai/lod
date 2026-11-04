@@ -8,6 +8,7 @@ import type { Plan } from "../plan.ts";
 import { covers, type Cover, type Skirt, skirt as skirtUniform } from "./covers.ts";
 import { cut, FieldTiles, heroSpot } from "./field.ts";
 import { cutoff, plantRequest, setCutoff } from "./levels.ts";
+import { cornLadder } from "../../../public/content/ladders.ts";
 import { BLOCK, DESIGNS, layout, VARIANTS } from "../../../public/content/corn/layout.ts";
 import { TOP } from "../../../public/content/corn/cover/shapes.ts";
 
@@ -54,7 +55,7 @@ export class Corn extends THREE.Object3D {
       Array.from({ length: VARIANTS }, async (_, variant) => {
         const count = perTile[variant];
         if (count === undefined) throw new Error("Missing corn variant tile capacity");
-        const levels = await loader.loadAsync(plantRequest(`/corn/plant.glts?variant=${variant}`));
+        const levels = await loader.loadAsync(plantRequest(cornLadder(variant)));
         const lod = new InstancedLod(levels, CHUNKS * count);
         lod.name = `corn plant ${variant}`;
         const box = sourceBox(lod.levels);

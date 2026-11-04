@@ -2,6 +2,7 @@ import * as THREE from "three/webgpu";
 import { cameraPosition, distance, float, positionWorld, vec4 } from "three/tsl";
 import { InstancedLod, Lod, type LodLevel, type Wind } from "@drawcall/lod";
 import { sourceBox } from "./bounds.ts";
+import { GROUND_COVER, grassLadder, groundPlantLadder, type GroundKind, type Habitat } from "../../public/content/ladders.ts";
 import { Random } from "../../public/content/random.ts";
 import { loader } from "../loading.ts";
 import { foliageLevels, foliageModel, MODEL_FOLIAGE } from "../../public/content/foliage.ts";
@@ -15,64 +16,6 @@ import { type Plan, TOWN } from "./plan.ts";
 /** Edge of a ground-cover tile (m). */
 const TILE = 6;
 
-/** Where a kind grows: town gardens, the open country's grassland, or the forest floor. */
-type Habitat = "garden" | "meadow" | "forest";
-
-/** A kind of ground cover: patches of generated grass blades, or a fetched plant model. */
-type Kind = { name: string; ground: Habitat; density: number; reach: number; scale: [number, number] } & (
-  { grass: true; variants: number } | { id: string; variants: string[] }
-);
-
-/**
- * Ground cover near the camera: grass blade by blade, wild flowers on the meadows, ferns
- * and nettles on the forest floor. A kilometre of meadow holds far too many blades to
- * list, and from a few dozen metres on the ground texture shows the same green (the
- * blades take their colour from it), so each kind lives in `Patches` of 6 m tiles filled
- * only within the distance where it still stands taller than its cull size on screen;
- * there it dithers out into the empty level. The cull size is set so that happens `reach`
- * metres away on an 800 px tall view (a 50° field of view). Every kind switches directly
- * from its original geometry to an impostor, then disappears into the ground.
- */
-const KINDS: Kind[] = [
-  {
-    name: "lawn",
-    ground: "garden",
-    grass: true,
-    variants: 2,
-    density: 4,
-    reach: 18,
-    scale: [0.9, 1.1],
-  },
-  {
-    name: "meadow",
-    ground: "meadow",
-    grass: true,
-    variants: 2,
-    density: 4,
-    reach: 22,
-    scale: [0.8, 1.25],
-  },
-  {
-    name: "dandelions",
-    ground: "meadow",
-    id: "dandelion_01",
-    variants: ["dandelion_01_a_LOD0", "dandelion_01_c_LOD0"],
-    density: 0.35,
-    reach: 45,
-    scale: [0.8, 1.2],
-  },
-  { name: "ferns", ground: "forest", id: "fern_02", variants: ["fern_02_a", "fern_02_b"], density: 0.3, reach: 40, scale: [0.8, 1.4] },
-  {
-    name: "nettles",
-    ground: "forest",
-    id: "nettle_plant",
-    variants: ["nettle_plant_medium_a_LOD0", "nettle_plant_tall_a_LOD0"],
-    density: 0.12,
-    reach: 40,
-    scale: [0.9, 1.3],
-  },
-];
-
 export async function groundCover(library: Library, plan: Plan, zones: Zones, wind?: Wind): Promise<THREE.Group> {
   // Grass samples ground in the vertex stage, where pixel derivatives are unavailable.
   const ground = groundShading(library, zones, float(0));
@@ -80,7 +23,7 @@ export async function groundCover(library: Library, plan: Plan, zones: Zones, wi
   root.name = "ground cover";
   const reference = new THREE.PerspectiveCamera(50);
   const loaded = await Promise.all(
-    KINDS.map(async (kind) => {
+    GROUND_COVER.map(async (kind) => {
       const models = await ("grass" in kind ? grassModels(kind, ground) : plantModels(kind));
       const boxes = models.map(sourceBox);
       const size = Math.max(...boxes.map((box) => box.getSize(new THREE.Vector3()).length())) * kind.scale[1];
@@ -116,15 +59,11 @@ export async function groundCover(library: Library, plan: Plan, zones: Zones, wi
   return root;
 }
 
-async function plantModels(kind: Kind & { id: string; variants: string[] }): Promise<LodLevel[][]> {
+async function plantModels(kind: GroundKind & { id: string; variants: string[] }): Promise<LodLevel[][]> {
   return Promise.all(
     kind.variants.map(async (variant) => {
       const levels = await loader.loadAsync({
-        url: `/assets/models/${kind.id}/${variant}.glb`,
-        levels: [
-          { type: "impostor", layout: "hemi", resolution: 64, maxPixels: 64 },
-          { type: "empty", maxPixels: 1 },
-        ],
+        ...groundPlantLadder(kind.id, variant),
         onLevel: (object) => {
           foliageModel(object, MODEL_FOLIAGE);
           foliageLevels(object, MODEL_FOLIAGE);
@@ -139,16 +78,12 @@ async function plantModels(kind: Kind & { id: string; variants: string[] }): Pro
   );
 }
 
-async function grassModels(kind: Kind & { grass: true; variants: number }, ground: Ground): Promise<LodLevel[][]> {
+async function grassModels(kind: GroundKind & { grass: true; variants: number }, ground: Ground): Promise<LodLevel[][]> {
   const base = ground(positionWorld.xz, distance(cameraPosition.xz, positionWorld.xz)).toVarying("vGrassGround");
   return Promise.all(
     Array.from({ length: kind.variants }, async (_, variant) => {
       const levels = await loader.loadAsync({
-        url: `/props/grass.glts?kind=${kind.name}&variant=${variant}`,
-        levels: [
-          { type: "impostor", layout: "hemi", resolution: 64 },
-          { type: "empty", maxPixels: 1 },
-        ],
+        ...grassLadder(kind.name, variant),
         onLevel: (object) => {
           foliageLevels(object, { translucency: 0.5 });
           object.traverse((node) => {
