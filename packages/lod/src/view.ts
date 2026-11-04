@@ -15,7 +15,7 @@ import {
   type Renderer,
   type Scene,
 } from "three/webgpu";
-import { gpuRenderer, inShadowPass } from "./three.js";
+import { gpuRenderer, inShadowPass, isOutputPass } from "./three.js";
 
 const scratch = new Vector3();
 
@@ -70,6 +70,7 @@ export interface RenderContext {
   renderer: Renderer;
   camera: Camera;
   scene: Scene;
+  /** The target the draw was asked for: null for the output, also while three draws it through its output pass. */
   target: ReturnType<Renderer["getRenderTarget"]>;
   mrt: Parameters<Renderer["setMRT"]>[0];
   cubeFace: number;
@@ -123,7 +124,8 @@ export function watchViewport(mesh: Mesh): void {
     const gpu = gpuRenderer(renderer);
     // A shadow map's camera measures in its texels (an InstancedLod selects for it); a Lod draws its view's choice.
     if (inShadowPass(scene)) return recordShadowPass(gpu, scene, camera);
-    const target = gpu.getRenderTarget();
+    const active = gpu.getRenderTarget();
+    const target = isOutputPass(active) ? null : active;
     const mrt = gpu.getMRT();
     const cubeFace = gpu.getActiveCubeFace();
     const mipLevel = gpu.getActiveMipmapLevel();
@@ -138,9 +140,9 @@ export function watchViewport(mesh: Mesh): void {
       context.mipLevel !== mipLevel
     )
       contexts.set(camera, { renderer: gpu, camera, scene, target, mrt, cubeFace, mipLevel });
-    if (!target) return void heights.set(camera, gpu.getViewport(viewport).w);
-    const ratio = target.height === gpu.getDrawingBufferSize(canvas).y ? gpu.getPixelRatio() : 1;
-    heights.set(camera, target.viewport.w / ratio);
+    if (!active) return void heights.set(camera, gpu.getViewport(viewport).w);
+    const ratio = active.height === gpu.getDrawingBufferSize(canvas).y ? gpu.getPixelRatio() : 1;
+    heights.set(camera, active.viewport.w / ratio);
   };
 }
 

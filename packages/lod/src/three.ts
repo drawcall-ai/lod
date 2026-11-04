@@ -123,6 +123,13 @@ export function inShadowPass(node: Object3D): boolean {
 /** Whether `material` is the one three draws shadow maps with (a node material building for a shadow pass has it). */
 export const isShadowPass = (material: unknown): boolean => flag(material, "isShadowPassMaterial");
 
+/**
+ * Whether `target` is the framebuffer target r185 draws the canvas (or output target) through when tone mapping or
+ * the output colour space needs a final pass. A draw meant for the output sees it as the active target; a compile for
+ * the output leaves the target unset and lets three resolve it.
+ */
+export const isOutputPass = (target: unknown): boolean => flag(target, "isPostProcessingRenderTarget");
+
 /** The storage matrices of a level draw, an ImpostorMesh, or a storage-backed InstancedMesh; else null. */
 export function storageMatrices(object: Object3D): StorageInstancedBufferAttribute | null {
   if (isImpostorMesh(object) || isLodInstances(object)) return object.instanceMatrix;
