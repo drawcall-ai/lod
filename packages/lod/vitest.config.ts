@@ -22,6 +22,14 @@ export default defineConfig({
       },
       closeBundle: () => rmSync(publicDir, { recursive: true, force: true }),
     },
+    {
+      // Vitest wraps every dynamic import in a call to its browser runner, which it defines only in workers Vite
+      // bundles (`?worker_file`); the impostor encoder's worker starts at its module's own URL and imports its encoder.
+      name: "encoder-worker-imports",
+      transform(code, id) {
+        if (id.endsWith("/src/impostor/ktx2/worker.ts")) return `globalThis.__vitest_browser_runner__ ??= { wrapDynamicImport: (f) => f() };\n${code}`;
+      },
+    },
   ],
   test: {
     include: ["test/**/*.test.ts"],
