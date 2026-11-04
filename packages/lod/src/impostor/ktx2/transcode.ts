@@ -14,12 +14,13 @@ let shared: Promise<KTX2Loader> | undefined;
 function loader(): Promise<KTX2Loader> {
   shared ??= (async () => {
     const [has, { TRANSCODER_JS, TRANSCODER_WASM }] = await Promise.all([adapterFeatures(), import("./wasm/transcoder.js")]);
-    const files = { "basis_transcoder.js": blob(TRANSCODER_JS, "text/javascript"), "basis_transcoder.wasm": blob(TRANSCODER_WASM, "application/wasm") };
-    const manager = new LoadingManager().setURLModifier((url) => {
-      const name = url.slice(url.lastIndexOf("/") + 1);
-      return name === "basis_transcoder.js" || name === "basis_transcoder.wasm" ? files[name] : url;
-    });
-    const loader = new KTX2Loader(manager);
+    const files = new Map([
+      [`${BASIS}basis_transcoder.js`, blob(TRANSCODER_JS, "text/javascript")],
+      [`${BASIS}basis_transcoder.wasm`, blob(TRANSCODER_WASM, "application/wasm")],
+    ]);
+    const manager = new LoadingManager().setURLModifier((url) => files.get(url) ?? url);
+    // given no path, the loader reads files next to its own module, which a build emits under hashed names
+    const loader = new KTX2Loader(manager).setTranscoderPath(BASIS);
     // What detectSupport finds on a WebGPURenderer; WebGPU has no ETC1, S3TC or PVRTC features.
     loader.workerConfig = {
       astcSupported: has("texture-compression-astc"),
@@ -46,6 +47,9 @@ export async function transcode(file: Uint8Array): Promise<ImpostorLayer> {
   });
   return { format: texture.format, mipmaps };
 }
+
+/** Where the loader is told its transcoder lies: the URLs it then asks for map to the carried copy. */
+const BASIS = "lod-basis:/";
 
 /** A URL of `base64`'s deflated bytes. */
 const blob = (base64: string, type: string) => URL.createObjectURL(new Blob([inflateSync(Uint8Array.from(atob(base64), (c) => c.charCodeAt(0)))], { type }));
