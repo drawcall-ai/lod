@@ -64,7 +64,10 @@ page.on("request", (r) => {
 try {
   if (profiler)
     await profiler.send("Tracing.start", {
-      traceConfig: { recordMode: "recordAsMuchAsPossible", includedCategories: ["blink.user_timing", "devtools.timeline", "gpu"] },
+      traceConfig: {
+        recordMode: "recordAsMuchAsPossible",
+        includedCategories: ["blink.user_timing", "devtools.timeline", "gpu", "gpu.dawn", "disabled-by-default-gpu.dawn"],
+      },
     });
   await page.goto(session.url);
   await Promise.race([page.waitForFunction(() => "city" in window, null, { timeout: 600_000 }), failed]);
