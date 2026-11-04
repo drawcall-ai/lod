@@ -356,11 +356,11 @@ export class Selection {
     return Fn(() => {
       const m = matrices.element(instanceIndex).toVar();
       const r = this.bounds.w.mul(maxScale(m)).toVar();
-      If(r.equal(0), () => Return());
+      If(r.equal(0), () => void Return());
       const centre = m.mul(vec4(this.bounds.xyz, 1)).xyz.toVar();
       // Outside the view: wholly behind one of its planes, with every level and its sway.
       const extent = this.reach.mul(stretch(m)).mul(1 + 1e-4).negate();
-      for (const plane of this.planes) If(dot(plane.xyz, centre).add(plane.w).lessThan(extent), () => Return());
+      for (const plane of this.planes) If(dot(plane.xyz, centre).add(plane.w).lessThan(extent), () => void Return());
       const size = r.mul(2).mul(this.scale);
       const height = this.ortho
         .equal(uint(1))
