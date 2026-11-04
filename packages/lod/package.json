@@ -42,11 +42,12 @@
     "vitecache": "^0.2.1"
   },
   "peerDependencies": {
-    "three": ">=0.185.0 <0.186.0",
-    "@drawcall/glts": "^4.0.0"
+    "@drawcall/glts": "^4.0.0",
+    "three": ">=0.185.0 <0.186.0"
   },
   "devDependencies": {
     "@drawcall/glts": "^4.0.0",
+    "@drawcall/lod": "link:",
     "@types/node": "^24.13.6",
     "@types/three": "^0.185.0",
     "@vitest/browser-playwright": "4.1.11",
