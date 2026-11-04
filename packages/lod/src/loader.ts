@@ -18,7 +18,8 @@ import { isMesh, isObject3D, placeLike, rejectSkinned } from "./three.js";
 
 /**
  * Levels derived from the source, finest first. Each derived level is built and persisted when it first loads; a level
- * without `maxPixels` is built with the ladder, since its default threshold is measured from it. Changing `maxPixels`
+ * without `maxPixels` is built with the ladder, since its default threshold is measured from it, and so is every level
+ * in a `vite build` warmup. Changing `maxPixels`
  * or an impostor's `draw` reuses them, except an impostor's `maxPixels`, which also sizes its bake.
  */
 export type LevelRequest =
@@ -53,6 +54,13 @@ export type LodRequest =
       onLevel?: (object: Object3D, index: number) => void | Promise<void>;
     };
 const DEFAULT_LEVELS: readonly LevelRequest[] = [{ type: "impostor" }];
+
+/**
+ * Whether this runs in the warmup of a `vite build`, which runs public .glts scripts in Node: what they load is
+ * precomputed into the deployed cache, so every level is built and saved, and a level that cannot be saved fails the
+ * build. Vite defines `import.meta.env` for the app's packages; glts's warmup gives Node imports the same.
+ */
+const warmup = import.meta.env?.PROD === true && import.meta.env?.SSR === true;
 /** Loads asset URLs through manager handlers, falling back to GLTFLoader. Register a GLTSLoader for .glts sources. */
 export class LodLoader extends Loader<LodLevel[], LodRequest> {
   private gltf: GLTFLoader | undefined;
@@ -75,7 +83,8 @@ export class LodLoader extends Loader<LodLevel[], LodRequest> {
 
   /**
    * Load empty levels and the coarsest drawable eagerly; finer drawables load on demand. Each derived level is cached on
-   * its own and built when first loaded, except a level whose default threshold is measured from it, which is built eagerly.
+   * its own and built when first loaded, except a level whose default threshold is measured from it, which is built
+   * eagerly, as is every level in a `vite build` warmup.
    */
   override async loadAsync(request: LodRequest): Promise<LodLevel[]> {
     const input = normalize(request, this.path);
@@ -100,7 +109,7 @@ export class LodLoader extends Loader<LodLevel[], LodRequest> {
       const ladder: Ladder = { ...input, modules };
       const coarsest = requests.reduce((last, level, index) => (level.type === "empty" ? last : index + 1), 0);
       const eager = requests.flatMap((level, index) =>
-        level.type !== "empty" && (index + 1 === coarsest || level.maxPixels === undefined) ? [index + 1] : [],
+        level.type !== "empty" && (warmup || index + 1 === coarsest || level.maxPixels === undefined) ? [index + 1] : [],
       );
       // The eager builds share one source and provenance, so each saves what all of them revealed: a superset of its own.
       const entries = eager.map((index) => this.entry(ladder, index, provenance));
@@ -302,8 +311,9 @@ function normalize(request: LodRequest, path: string) {
 
 const uncached = new Set<string>();
 
-/** Builds of `url` are served without saving from now on, after one warning naming why. */
+/** Builds of `url` are served without saving from now on, after one warning naming why; a build warmup fails instead. */
 function warnUncached(url: string, reason: string): void {
+  if (warmup) throw new Error(`LodLoader: cannot precompute "${url}": ${reason}`);
   if (uncached.has(url)) return;
   uncached.add(url);
   console.warn(`LodLoader: "${url}" is not cached until the page reloads: ${reason}`);

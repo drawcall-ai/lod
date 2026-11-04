@@ -91,6 +91,13 @@ describe("asset cache provenance", () => {
     });
   });
 
+  it("keeps file: resources, as a build warmup reports public files", () => {
+    const file = "file:///app/public/models/helper.bin";
+    const provenance = new Provenance({ source: script }, new LoadingManager());
+    provenance.capture(script, gltsScene({ url: script, dependencyUrls: [file], packages: [], runtimeModules: [] }), undefined);
+    expect(provenance.dependencies()).toEqual({ dependencies: { "resource:0": { url: file } } });
+  });
+
   it("ignores the query a script's source URL carries", async () => {
     const key = async (query: string) => {
       cache.saved.length = 0;

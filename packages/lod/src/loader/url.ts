@@ -24,8 +24,11 @@ export function sourceRelativeURL(value: string, source: string): string {
   return url.origin === base.origin && !absolute.test(source) ? url.pathname + url.search + url.hash : url.href;
 }
 
-/** A same-origin path, as localURL leaves it: vitecache can resolve only these to project files. */
-export const isLocal = (url: string): boolean => url.startsWith("/") && !url.startsWith("//");
+/**
+ * A same-origin path, as localURL leaves it, or a `file:` URL, as a `vite build` warmup sees public files: vitecache
+ * can resolve only these to project files.
+ */
+export const isLocal = (url: string): boolean => (url.startsWith("/") && !url.startsWith("//")) || url.startsWith("file:");
 
 /** Keep same-origin dependencies portable between development and deployment. */
 export function localURL(url: string): string {

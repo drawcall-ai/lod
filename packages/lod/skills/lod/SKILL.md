@@ -45,11 +45,26 @@ Supply authored low shells and baking interiors as asset URLs on a baked level; 
 
 ## Put each cache with its computation
 
-Follow the [vitecache skill](https://github.com/drawcall-ai/vitecache/blob/main/packages/vitecache/skills/vitecache/SKILL.md) to configure the host. `LodLoader` writes each derived level to the cache directory when the app first loads that level under the Vite dev server with the vitecache plugin; `vite build` does not generate them. Before deploying, load every deployed URL and level list in development and bring each level into view, or call the `load` of every deferred level `loadAsync` returns; then deploy the cache directory together with the original assets. A deployed miss builds the missing level in the browser each time it loads, without persisting it. When the app is deployed under a sub-path, pass that cache location to `LodLoader`.
+Follow the [vitecache skill](https://github.com/drawcall-ai/vitecache/blob/main/packages/vitecache/skills/vitecache/SKILL.md) to configure the host. `LodLoader` writes each derived level to the cache directory when the app first loads that level under the Vite dev server with the vitecache plugin. A deployed miss builds the missing level in the browser each time it loads, without persisting it. When the app is deployed under a sub-path, pass that cache location to `LodLoader`.
 
-Edits to the script, its helpers, packages and loaded files invalidate the derived levels; no dependency list is needed. A level rebuilds on every load when its source or anything the script loads cannot be tied to a project file: packages imported from a CDN at runtime or not installed by the app, resources from another origin, and same-origin URLs without a file, such as server routes.
+To deploy every level prebuilt, load the ladders in a public `.glts` script, which `vite build` runs in Node as the [GLTS skill](https://github.com/drawcall-ai/glts/blob/main/packages/glts/skills/glts/SKILL.md#precomputing-into-the-build) describes. There `LodLoader` builds and saves every level of each ladder it loads, deferred ones included. Request the same URLs and levels as the app, from a helper beside the script that the app imports too; `onLevel` changes nothing cached, so the app adds its effects to the shared requests. Register the contextual `gltsLoader` for `.glts` sources, as the app registers its `GLTSLoader`, and add every level to `scene`, which disposes them: the ladder holds the source it built from until its first level loads.
 
-Cache expensive generation inside a `.glts` asset, such as geometry, rooms or generated texture data that would otherwise stall the first approach, as the GLTS skill describes; leave cheap generation uncached. Use the `encodeMeshAsync` / `decodeMeshAsync` codec for asset-owned geometry caches. The GLTS build does not warm `LodLoader`'s derived levels.
+```ts
+// public/precompute.glts
+import { gltsLoader, loadingManager, scene } from "@drawcall/glts";
+import { LodLoader } from "@drawcall/lod";
+import { ladders } from "./ladders.ts";
+
+loadingManager.addHandler(/\.glts$/i, gltsLoader);
+const loader = new LodLoader(loadingManager);
+for (const ladder of ladders) {
+  for (const level of await loader.loadAsync(ladder)) scene.add(level.object ?? (await level.load()));
+}
+```
+
+Edits to the script, its helpers, packages and loaded files invalidate the derived levels; no dependency list is needed. A level rebuilds on every load when its source or anything the script loads cannot be tied to a project file: packages imported from a CDN at runtime or not installed by the app, resources from another origin, and same-origin URLs without a file, such as server routes. Precomputing such a level fails the build, so install every package the precomputed sources import.
+
+Cache expensive generation inside a `.glts` asset, such as geometry, rooms or generated texture data that would otherwise stall the first approach, as the GLTS skill describes; leave cheap generation uncached. Use the `encodeMeshAsync` / `decodeMeshAsync` codec for asset-owned geometry caches.
 
 ## Place, share and dispose levels
 
