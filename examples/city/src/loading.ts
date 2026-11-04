@@ -1,7 +1,8 @@
 import * as textureModule from "../public/content/textures.ts";
 import * as THREE from "three/webgpu";
 import { GLTSLoader } from "@drawcall/glts";
-import { LodLoader } from "@drawcall/lod";
+import { LodLoader, type LodLevel, type LodRequest } from "@drawcall/lod";
+import { castBothSides } from "./render/sun/casters.ts";
 
 const manager = THREE.DefaultLoadingManager;
 export const textures = new textureModule.Textures();
@@ -16,4 +17,17 @@ import.meta.hot?.dispose(() => {
   textures.dispose();
 });
 manager.addHandler(/\.glts$/, scripts);
-export const loader = new LodLoader(manager);
+/** Levels arrive with the shadow sides the sun's casters draw with. */
+class Loader extends LodLoader {
+  override loadAsync(request: LodRequest): Promise<LodLevel[]> {
+    const input = typeof request === "string" ? { url: request } : request;
+    return super.loadAsync({
+      ...input,
+      onLevel: async (object, index) => {
+        castBothSides(object);
+        await input.onLevel?.(object, index);
+      },
+    });
+  }
+}
+export const loader = new Loader(manager);

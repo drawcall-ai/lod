@@ -8,9 +8,7 @@ import * as THREE from "three/webgpu";
  * its walls are large, and an InstancedLod's mesh measures one instance (at scale 1), not
  * the whole crowd its bounds cover.
  *
- * Casters draw both sides of their faces into the maps. three's default, back faces
- * only, leaks light wherever a model is open: under eaves, through window reveals into
- * the rooms, as thin lit lines across the shadows of houses.
+ * Casters draw both sides of their faces into the maps (see castBothSides).
  */
 export class Casters {
   /** Meshes that cast, with their size in metres. */
@@ -30,7 +28,7 @@ export class Casters {
       if (!(node instanceof THREE.Mesh) || this.seen.has(node)) return;
       this.seen.add(node);
       if (!node.castShadow) return;
-      for (const material of [node.material].flat()) material.shadowSide = THREE.DoubleSide;
+      castBothSides(node);
       const geometry: THREE.BufferGeometry = node.geometry;
       const scale = node.matrixWorld.getMaxScaleOnAxis();
       if (!geometry.boundingSphere) geometry.computeBoundingSphere();
@@ -56,4 +54,16 @@ function shown(mesh: THREE.Mesh): boolean {
   if (mesh instanceof THREE.InstancedMesh && mesh.count === 0) return false;
   for (let node: THREE.Object3D | null = mesh; node; node = node.parent) if (!node.visible) return false;
   return true;
+}
+
+/**
+ * Draw both sides of `root`'s faces into the shadow maps. three's default, back faces
+ * only, leaks light wherever a model is open: under eaves, through window reveals into
+ * the rooms, as thin lit lines across the shadows of houses. A LOD level gets it as it
+ * arrives (see loading.ts), before its shadow draws compile: they depend on it.
+ */
+export function castBothSides(root: THREE.Object3D): void {
+  root.traverse((node) => {
+    if (node instanceof THREE.Mesh) for (const material of [node.material].flat()) material.shadowSide = THREE.DoubleSide;
+  });
 }
