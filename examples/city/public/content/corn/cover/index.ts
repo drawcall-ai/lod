@@ -10,7 +10,7 @@ import { BLOCK, layout, VARIANTS } from "../layout.ts";
 
 /** The field's reusable canopy and walls own their bake, independent of the display ladder. */
 export async function cover(source: GLTSSource, library: Library, design: number, axis: "" | "x" | "z"): Promise<Mesh> {
-  const entry = assetEntry(source, "corn-cover@1", { design, axis });
+  const entry = assetEntry(source, "corn-cover@2", { design, axis });
   const bytes = await entry.load();
   if (bytes !== undefined) return decodeBakedMeshAsync(bytes);
   const [tasselled, bare] = await Promise.all([

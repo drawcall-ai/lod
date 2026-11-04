@@ -15,6 +15,7 @@ import {
   NoColorSpace,
   RGBAFormat,
   RGFormat,
+  Sphere,
   SRGBColorSpace,
   UnsignedByteType,
   UVMapping,
@@ -123,9 +124,14 @@ export function encodeBakedMesh(mesh: Mesh): Uint8Array {
   if (!index || !(index.array instanceof Uint32Array) || index.itemSize !== 1) fail("expected Uint32 indices");
   files.index = new Uint8Array(index.array.buffer, index.array.byteOffset, index.array.byteLength);
   const rooms = material instanceof InteriorMaterial ? (material.rooms ?? fail("unfurnished interior")) : null;
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+  const { boundingBox: box, boundingSphere: sphere } = geometry;
+  if (!box || !sphere) fail("missing bounds");
   const meta = {
-    version: 2,
+    version: 3,
     name: mesh.name,
+    bounds: [...box.min.toArray(), ...box.max.toArray(), ...sphere.center.toArray(), sphere.radius],
     deviation,
     position: mesh.position.toArray(),
     quaternion: mesh.quaternion.toArray(),
@@ -161,18 +167,18 @@ export async function decodeBakedMeshAsync(bytes: Uint8Array): Promise<Mesh> {
 function fromFiles(files: Files): Mesh {
   const parsed: unknown = JSON.parse(strFromU8(file(files, "meta")));
   const meta = object(parsed);
-  if (meta.version !== 2) fail("unsupported version");
+  if (meta.version !== 3) fail("unsupported version; bake it again");
   if (typeof meta.name !== "string") fail("missing name");
   const deviation = number(meta.deviation);
   if (deviation < 0) fail("negative LOD deviation");
-  const position = floats(file(files, "position"));
-  const normal = floats(file(files, "normal"));
-  const uv = floats(file(files, "uv"));
-  const indices = file(files, "index");
-  if (!position.length || position.length % 3 || normal.length !== position.length || uv.length * 3 !== position.length * 2 || indices.byteLength % 12)
+  // Lengths are the cheap check; the archive's inflate already rejects most corruption, so values are not walked.
+  const position = view(file(files, "position"), Float32Array);
+  const normal = view(file(files, "normal"), Float32Array);
+  const uv = view(file(files, "uv"), Float32Array);
+  const index = view(file(files, "index"), Uint32Array);
+  if (!position.length || position.length % 3 || normal.length !== position.length || uv.length * 3 !== position.length * 2 || index.length % 3)
     fail("invalid geometry lengths");
-  const index = new Uint32Array(indices.slice().buffer);
-  if (index.some((i) => i >= position.length / 3)) fail("index outside geometry");
+  const bounds = numbers(meta.bounds, 10);
   const side = meta.side === FrontSide ? FrontSide : meta.side === DoubleSide ? DoubleSide : fail("unsupported side");
   const alphaTest = meta.alphaTest === 0 ? 0 : meta.alphaTest === 0.5 ? 0.5 : fail("unsupported alpha test");
   const map = readTexture(files, "map", meta.map, false);
@@ -202,8 +208,8 @@ function fromFiles(files: Files): Mesh {
   geometry.setAttribute("normal", new BufferAttribute(normal, 3));
   geometry.setAttribute("uv", new BufferAttribute(uv, 2));
   geometry.setIndex(new BufferAttribute(index, 1));
-  geometry.computeBoundingBox();
-  geometry.computeBoundingSphere();
+  geometry.boundingBox = new Box3().setFromArray(bounds.slice(0, 6));
+  geometry.boundingSphere = new Sphere(new Vector3().fromArray(bounds, 6), bounds[9]);
   const mesh = new Mesh(geometry, material);
   mesh.name = meta.name;
   mesh.position.fromArray(numbers(meta.position, 3));
@@ -215,11 +221,12 @@ function fromFiles(files: Files): Mesh {
   return mesh;
 }
 
-function floats(bytes: Uint8Array): Float32Array {
-  if (bytes.byteLength % 4) fail("invalid float data length");
-  const values = new Float32Array(bytes.slice().buffer);
-  if (values.some((value) => !Number.isFinite(value))) fail("non-finite geometry");
-  return values;
+/** `bytes` as 32-bit values, in place when aligned, as inflated files are. */
+function view<T extends Float32Array | Uint32Array>(bytes: Uint8Array, Type: { new (buffer: ArrayBuffer, offset: number, length: number): T }): T {
+  if (bytes.byteLength % 4) fail("invalid geometry data length");
+  const { buffer, byteOffset, byteLength } = bytes.byteOffset % 4 ? bytes.slice() : bytes;
+  if (!(buffer instanceof ArrayBuffer)) fail("shared geometry data");
+  return new Type(buffer, byteOffset, byteLength / 4);
 }
 
 function writeTexture(files: Files, name: string, texture: Texture | null) {

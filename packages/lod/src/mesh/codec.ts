@@ -1,5 +1,6 @@
 import { gzipSync, strFromU8, strToU8 } from "fflate";
 import {
+  Box3,
   BufferAttribute,
   BufferGeometry,
   Float16BufferAttribute,
@@ -9,6 +10,8 @@ import {
   Mesh,
   Object3D,
   Scene,
+  Sphere,
+  Vector3,
   type InterleavedBufferAttribute,
   type Material,
   type TypedArrayConstructor,
@@ -42,9 +45,10 @@ export function encodeMesh(object: Object3D, materials: readonly Material[]): Ui
         const offset = i * value.data.stride + value.offset;
         packed.set(value.array.subarray(offset, offset + value.itemSize), i * value.itemSize);
       }
-    const offset = length;
-    chunks.push(new Uint8Array(packed.buffer, packed.byteOffset, packed.byteLength));
-    length += packed.byteLength;
+    // Aligned for every element type, so decode can view the bytes in place.
+    const offset = align(length);
+    chunks.push(new Uint8Array(offset - length), new Uint8Array(packed.buffer, packed.byteOffset, packed.byteLength));
+    length = offset + packed.byteLength;
     return {
       offset,
       length: packed.byteLength,
@@ -87,6 +91,7 @@ export function encodeMesh(object: Object3D, materials: readonly Material[]): Ui
   const geometry = geometries.map((value) => {
     if (Object.keys(value.morphAttributes).length) fail("cannot persist morph targets");
     return {
+      bounds: bounds(value),
       name: value.name,
       data: value.userData,
       groups: value.groups.map((group) => [group.start, group.count, group.materialIndex ?? 0]),
@@ -95,11 +100,12 @@ export function encodeMesh(object: Object3D, materials: readonly Material[]): Ui
       index: value.index && attribute(value.index),
     };
   });
-  const header = strToU8(JSON.stringify({ version: 1, root, geometry }));
-  const bytes = new Uint8Array(4 + header.length + length);
+  const header = strToU8(JSON.stringify({ version: 2, root, geometry }));
+  const start = align(4 + header.length);
+  const bytes = new Uint8Array(start + length);
   new DataView(bytes.buffer).setUint32(0, header.length, true);
   bytes.set(header, 4);
-  let offset = 4 + header.length;
+  let offset = start;
   for (const chunk of chunks) {
     bytes.set(chunk, offset);
     offset += chunk.length;
@@ -110,10 +116,11 @@ export function encodeMesh(object: Object3D, materials: readonly Material[]): Ui
 export async function decodeMeshAsync(input: Uint8Array, materials: readonly Material[]): Promise<Object3D> {
   const bytes = new Uint8Array(await new Response(new Blob([input.slice().buffer]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer());
   if (bytes.length < 4) fail("missing metadata");
-  const start = 4 + new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0, true);
-  if (start > bytes.length) fail("invalid metadata length");
-  const meta = record(JSON.parse(strFromU8(bytes.subarray(4, start))));
-  if (meta.version !== 1) fail("unsupported version");
+  const end = 4 + new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0, true);
+  if (end > bytes.length) fail("invalid metadata length");
+  const meta = record(JSON.parse(strFromU8(bytes.subarray(4, end))));
+  if (meta.version !== 2) fail("unsupported version; encode it again");
+  const start = align(end);
   function attribute(value: unknown): BufferAttribute {
     const meta = record(value);
     const Type = arrays[string(meta.type)] ?? fail("unsupported attribute type");
@@ -121,7 +128,9 @@ export async function decodeMeshAsync(input: Uint8Array, materials: readonly Mat
     const length = integer(meta.length);
     const size = integer(meta.size);
     if (!size || length % (Type.BYTES_PER_ELEMENT * size) || offset + length > bytes.length) fail("invalid attribute length");
-    const result = new BufferAttribute(new Type(bytes.slice(offset, offset + length).buffer), size, boolean(meta.normalized));
+    if ((bytes.byteOffset + offset) % Type.BYTES_PER_ELEMENT) fail("misaligned attribute");
+    const array = new Type(bytes.buffer, bytes.byteOffset + offset, length / Type.BYTES_PER_ELEMENT);
+    const result = new BufferAttribute(array, size, boolean(meta.normalized));
     if (meta.gpuType !== FloatType && meta.gpuType !== IntType) fail("invalid attribute gpuType");
     result.gpuType = meta.gpuType;
     return result;
@@ -139,8 +148,12 @@ export async function decodeMeshAsync(input: Uint8Array, materials: readonly Mat
     }
     const range = list(meta.range);
     geometry.setDrawRange(integer(range[0]), range[1] === null ? Infinity : integer(range[1]));
-    geometry.computeBoundingBox();
-    geometry.computeBoundingSphere();
+    if (meta.bounds !== null) {
+      const values = list(meta.bounds).map(number);
+      if (values.length !== 10) fail("invalid bounds");
+      geometry.boundingBox = new Box3().setFromArray(values.slice(0, 6));
+      geometry.boundingSphere = new Sphere(new Vector3().fromArray(values, 6), values[9]);
+    }
     return geometry;
   });
   const material = (value: unknown): Material => materials[integer(value)] ?? fail("missing source material");
@@ -166,6 +179,19 @@ export async function decodeMeshAsync(input: Uint8Array, materials: readonly Mat
   const root = node(meta.root);
   borrowMaterials(root);
   return root;
+}
+
+/** The next multiple of 8, the largest element size. */
+const align = (offset: number): number => Math.ceil(offset / 8) * 8;
+
+/** The box and sphere three computes from the positions, stored so decode does not walk them; null without positions. */
+function bounds(geometry: BufferGeometry): number[] | null {
+  if (!geometry.getAttribute("position")) return null;
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+  const { boundingBox: box, boundingSphere: sphere } = geometry;
+  if (!box || !sphere) fail("missing bounds");
+  return [...box.min.toArray(), ...box.max.toArray(), ...sphere.center.toArray(), sphere.radius];
 }
 
 function fail(reason: string): never {

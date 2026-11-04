@@ -114,7 +114,7 @@ describe("baked mesh codec", () => {
       if (corrupt === "meta") {
         const meta = files.meta;
         if (!meta) throw new Error("missing metadata");
-        files.meta = strToU8(strFromU8(meta).replace('"version":2', '"version":999'));
+        files.meta = strToU8(strFromU8(meta).replace('"version":3', '"version":999'));
       } else files[corrupt] = new Uint8Array(1);
       await expect(decodeBakedMeshAsync(zipSync(files))).rejects.toThrow(/Invalid baked mesh/);
     }
