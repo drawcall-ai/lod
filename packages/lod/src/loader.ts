@@ -162,16 +162,16 @@ export class LodLoader extends Loader<LodLevel[], LodRequest> {
   /** The cache entry of level `index`, keyed by the inputs it is built from; undefined when the ladder is not cacheable. */
   private entry({ levels, modules }: Ladder, index: number, provenance: Provenance): CacheEntry | undefined {
     if (!modules) return undefined;
-    const request = derived(levels, index);
-    const names = ["source", auxiliary(index, "low"), auxiliary(index, "interior")];
+    // Keyed by role rather than ladder position, so adding or removing another level keeps this one's entry.
+    const roles = { source: "source", low: auxiliary(index, "low"), interior: auxiliary(index, "interior") };
     const pick = <T>(values: Readonly<Record<string, T>>): Record<string, T> =>
       Object.fromEntries(
-        names.flatMap((name) => {
+        Object.entries(roles).flatMap(([role, name]) => {
           const value = values[name];
-          return value === undefined ? [] : [[name, value] as const];
+          return value === undefined ? [] : [[role, value] as const];
         }),
       );
-    return levelEntry(pick(provenance.inputs), request, pick(modules), this.cacheOptions);
+    return levelEntry(pick(provenance.inputs), derived(levels, index), pick(modules), this.cacheOptions);
   }
 
   /** A deferred level's bytes from its entry, else built from a source of its own: the ladder's source carries onLevel effects. */

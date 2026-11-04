@@ -52,8 +52,8 @@ describe("LodLoader", () => {
     await loader.loadAsync(request);
     expect(cache.saved[0]?.options.dependencies).toMatchObject({
       source: { url: "/resolved/house.glts?variant=2" },
-      "auxiliary:1:low": { url: "/resolved/house.glts?part=low" },
-      "auxiliary:1:interior": { url: "/resolved/rooms.glts#bake" },
+      low: { url: "/resolved/house.glts?part=low" },
+      interior: { url: "/resolved/rooms.glts#bake" },
     });
     const dependencies = cache.saved[0]?.dependencies ?? {};
     expect(Object.values(dependencies).filter((value) => value.url === helper)).toHaveLength(1);
