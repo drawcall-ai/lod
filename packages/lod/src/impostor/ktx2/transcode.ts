@@ -7,8 +7,8 @@ let shared: Promise<KTX2Loader> | undefined;
 
 /**
  * One KTX2Loader for every impostor, as three asks. It transcodes to the formats the GPU adapter takes, which are those
- * of any WebGPURenderer device on it: three's WebGPURenderer requests every feature the adapter has. Without WebGPU it
- * transcodes to RGBA. The loader would fetch the Basis transcoder from three's `libs/basis` folder; it reads the copy
+ * of any WebGPURenderer device on it: three's WebGPURenderer requests every feature the adapter has, unless it is given
+ * a `device`, which then needs the same texture-compression features. Without WebGPU it transcodes to RGBA. The loader would fetch the Basis transcoder from three's `libs/basis` folder; it reads the copy
  * this package carries instead (see scripts/basis.ts).
  */
 function loader(): Promise<KTX2Loader> {
