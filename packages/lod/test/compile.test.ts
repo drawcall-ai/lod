@@ -25,11 +25,16 @@ import { GPU_TIMEOUT, renderer } from "./gpu.js";
 vi.mock("../src/impostor/mesh/surface.js", { spy: true });
 
 it(
-  "uploads one texture or material group per frame, each after submitted work",
+  "waits a frame only after 16 MiB of uploads, not for draws that upload nothing",
   async () => {
-    const map = new DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
-    map.needsUpdate = true;
-    const materials = [new MeshBasicNodeMaterial({ map }), new MeshBasicNodeMaterial({ map })];
+    // 2048² RGBA bytes: 16 MiB each.
+    const big = () => {
+      const map = new DataTexture(new Uint8Array(2048 * 2048 * 4), 2048, 2048);
+      map.needsUpdate = true;
+      return map;
+    };
+    const maps = [big(), big()];
+    const materials = maps.map((map) => new MeshBasicNodeMaterial({ map }));
     const geometry = new BoxGeometry();
     geometry.clearGroups();
     geometry.addGroup(0, 18, 0);
@@ -38,49 +43,30 @@ it(
     const scene = new Scene();
     const target = new RenderTarget(32, 32);
     const context = { renderer, camera: new PerspectiveCamera(), scene, target, mrt: renderer.getMRT(), cubeFace: 0, mipLevel: 0 };
-    let resume = () => {};
-    const gate = new Promise<undefined>((resolve) => {
-      resume = () => resolve(undefined);
-    });
-    vi.spyOn(GPUQueue.prototype, "onSubmittedWorkDone").mockImplementationOnce(() => gate);
-    let frame = 0;
-    let counting = true;
-    const count = () => {
-      frame++;
-      if (counting) requestAnimationFrame(count);
-    };
-    requestAnimationFrame(count);
-    const frames: number[] = [];
-    const uploadTexture = renderer.initTexture.bind(renderer);
-    const upload = vi.spyOn(renderer, "initTexture").mockImplementation((texture) => {
-      frames.push(frame);
-      uploadTexture(texture);
-    });
     const original = renderer.compileAsync.bind(renderer);
     const compiled: number[][] = [];
-    const compile = vi.spyOn(renderer, "compileAsync").mockImplementation((...args) => {
-      frames.push(frame);
+    vi.spyOn(renderer, "compileAsync").mockImplementation((...args) => {
       compiled.push(geometry.groups.map(({ start }) => start));
       return original(...args);
     });
-    const pending = compileLevel(object, context);
+    // Chromium's compile yields by scheduler.yield, so each frame requested without arguments is a wait; three's own
+    // animation loop asks with (time, xrFrame).
+    const frames = vi.spyOn(window, "requestAnimationFrame");
+    const waits = () => frames.mock.calls.filter(([callback]) => callback.length === 0).length;
     try {
-      await Promise.resolve();
-      expect(upload).not.toHaveBeenCalled();
-      expect(compile).not.toHaveBeenCalled();
-      resume();
-      await pending;
+      await compileLevel(object, context);
       expect(compiled).toEqual([[0], [18]]);
-      expect(frames).toHaveLength(3);
-      expect(new Set(frames).size).toBe(3);
+      // Before the second texture and before the first draw: each texture filled the frame.
+      expect(waits()).toBe(2);
+      frames.mockClear();
+      await compileLevel(object, context);
+      expect(compiled).toHaveLength(4);
+      expect(waits()).toBe(0);
     } finally {
-      counting = false;
-      resume();
-      await pending;
       vi.restoreAllMocks();
       geometry.dispose();
       for (const material of materials) material.dispose();
-      map.dispose();
+      for (const map of maps) map.dispose();
       target.dispose();
     }
   },

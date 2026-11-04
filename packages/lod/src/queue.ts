@@ -10,7 +10,7 @@ interface Job {
 const queue: Job[] = [];
 let running = false;
 
-/** Run one installation at a time across all LODs, by priority; compileLevel paces its uploads to one per frame. */
+/** Run one installation at a time across all LODs, by priority; compileLevel paces its uploads per frame. */
 export function enqueue(run: () => Promise<void>, priority = 0): Promise<void> {
   const promise = new Promise<void>((resolve, reject) => {
     queue.push({ run, resolve, reject, priority });

@@ -7,11 +7,11 @@ import {
   MeshPhysicalNodeMaterial,
   MeshStandardNodeMaterial,
   MeshToonNodeMaterial,
-  type Backend,
   type BatchedMesh,
   type Box3,
   type BufferAttribute,
   type Color,
+  type CompressedTexture,
   type InstancedMesh,
   type Loader,
   type Material,
@@ -26,7 +26,6 @@ import {
   type SkinnedMesh,
   type StorageInstancedBufferAttribute,
   type Texture,
-  type WebGPUBackend,
 } from "three/webgpu";
 import type { GLTSLoader, GLTSScene } from "@drawcall/glts";
 import type { Instances } from "./instanced/meshes.js";
@@ -96,6 +95,7 @@ export function toNodeMaterial(material: Material): NodeMaterial {
   return Object.assign(new Type(), values);
 }
 export const isTexture = (value: unknown): value is Texture => flag(value, "isTexture");
+export const isCompressedTexture = (value: unknown): value is CompressedTexture => flag(value, "isCompressedTexture");
 export const isColor = (value: unknown): value is Color => flag(value, "isColor");
 
 /**
@@ -108,26 +108,6 @@ export function gpuRenderer(renderer: unknown): Renderer {
 }
 const isRenderer = (value: unknown): value is Renderer => flag(value, "isRenderer");
 
-/** The queue of `renderer`'s WebGPU device; throws until the backend has one. */
-export function gpuQueue(renderer: Renderer): GPUQueueLike {
-  const { backend } = renderer;
-  // three's typings declare WebGPUBackend but not its device.
-  const device = isWebGPUBackend(backend) && "device" in backend ? backend.device : undefined;
-  if (!hasQueue(device)) throw new Error("@drawcall/lod: level preparation requires an initialized WebGPU device");
-  return device.queue;
-}
-interface GPUQueueLike {
-  onSubmittedWorkDone(): Promise<void>;
-}
-const hasQueue = (value: unknown): value is { queue: GPUQueueLike } =>
-  typeof value === "object" &&
-  value !== null &&
-  "queue" in value &&
-  typeof value.queue === "object" &&
-  value.queue !== null &&
-  "onSubmittedWorkDone" in value.queue &&
-  typeof value.queue.onSubmittedWorkDone === "function";
-const isWebGPUBackend = (backend: Backend): backend is WebGPUBackend => flag(backend, "isWebGPUBackend");
 
 /**
  * Whether the scene `node` is in is being drawn into a shadow map: three's shadow pass

@@ -104,7 +104,7 @@ await Promise.all(lods.map((lod) => lod.ready()));
 // the frame loop keeps rendering; capture the next frame
 ```
 
-Levels install one draw preparation per frame, so the wait for a close view of many distinct assets takes many frames; a slow frame makes it longer.
+Levels upload about 16 MB of new textures and geometry per frame, so the wait for a close view of many distinct uncompressed textures takes many frames; a slow frame makes it longer. Draws that reuse uploaded data and compiled pipelines, such as crowds sharing a model's materials, cost no frame.
 
 ## Tune the complete scene
 
