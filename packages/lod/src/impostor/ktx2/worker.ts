@@ -1,6 +1,6 @@
 // The worker an impostor map encodes in. The page imports this module only for its URL, at which it then starts it as
 // a worker: unlike `new URL("./file", import.meta.url)`, a module's own URL holds wherever a bundler moves it.
-import type { Job } from "./encode.js";
+import type { Job, Reply } from "./encode.js";
 import { encode } from "./uastc.js";
 
 export const url = import.meta.url;
@@ -11,8 +11,10 @@ if (typeof scope === "function" && globalThis instanceof scope) {
   console.log = () => {};
   addEventListener("message", (event: MessageEvent<Job>) => {
     encode(event.data).then(
-      (file) => postMessage({ file }, { transfer: [file.buffer] }),
-      (error: unknown) => postMessage({ error: error instanceof Error ? error.message : String(error) }),
+      (file) => reply({ file }, [file.buffer]),
+      (error: unknown) => reply({ error: error instanceof Error ? error.message : String(error) }),
     );
   });
 }
+
+const reply = (message: Reply, transfer: Transferable[] = []) => postMessage(message, { transfer });
