@@ -15,7 +15,7 @@ onDispose(() => library.dispose());
 const variant = number(new URL(import.meta.url).searchParams, "variant", HERO_VARIANT, 0, VARIANTS - 1, true);
 const materials = [blackMaterial(library), headMaterial(library), pronotumMaterial(library), await cachedShell(scene.source, library)];
 scene.add(
-  await cachedObject(assetEntry(scene.source, "ladybird@4", { variant }), library, materials, async () => {
+  await cachedObject(assetEntry(scene.source, "ladybird@5", { variant }), library, materials, async () => {
     const hero = await plant(scene.source, library, variant, true);
     const seat = leafSeat(hero);
     library.release(hero);

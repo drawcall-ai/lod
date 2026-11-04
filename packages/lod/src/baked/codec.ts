@@ -1,4 +1,3 @@
-import { strFromU8, strToU8, unzip, zipSync } from "fflate";
 import {
   Box3,
   BufferAttribute,
@@ -22,12 +21,13 @@ import {
   Vector3,
   type Texture,
 } from "three/webgpu";
+import { pack, unpack } from "../container.js";
 import { deviationOf, recordDeviation } from "../levels.js";
 import { InteriorMaterial } from "./interior/material.js";
 
 type Files = Record<string, Uint8Array>;
-function fail(why: string): never {
-  throw new Error(`Invalid baked mesh: ${why}`);
+function fail(why: string, cause?: unknown): never {
+  throw new Error(`Invalid baked mesh: ${why}`, { cause });
 }
 const object = (value: unknown): Record<string, unknown> => {
   if (typeof value !== "object" || value === null || Array.isArray(value)) fail("expected metadata object");
@@ -51,7 +51,7 @@ const file = (files: Files, name: string): Uint8Array => files[name] ?? fail(`mi
  * Geometry, map bytes (including cutout mips), rooms, placement and LOD deviation survive
  * exactly. Decoding owns fresh resources; the input mesh remains owned by its caller.
  */
-export function encodeBakedMesh(mesh: Mesh): Uint8Array {
+export async function encodeBakedMeshAsync(mesh: Mesh): Promise<Uint8Array> {
   const deviation = deviationOf(mesh);
   const { geometry, material } = mesh;
   if (deviation === undefined || !(deviation >= 0) || !Number.isFinite(deviation)) fail("expected a bakeMesh result with its LOD deviation");
@@ -129,7 +129,7 @@ export function encodeBakedMesh(mesh: Mesh): Uint8Array {
   const { boundingBox: box, boundingSphere: sphere } = geometry;
   if (!box || !sphere) fail("missing bounds");
   const meta = {
-    version: 3,
+    version: 4,
     name: mesh.name,
     bounds: [...box.min.toArray(), ...box.max.toArray(), ...sphere.center.toArray(), sphere.radius],
     deviation,
@@ -151,27 +151,23 @@ export function encodeBakedMesh(mesh: Mesh): Uint8Array {
       glow: rooms.glow && writeTexture(files, "glow", rooms.glow),
     },
   };
-  files.meta = strToU8(JSON.stringify(meta));
-  return zipSync(files, { level: 6 });
+  return pack({ ...meta, files: Object.keys(files) }, Object.values(files));
 }
 
-/**
- * Decode `encodeBakedMesh` bytes into an independently owned mesh, ready for a Lod. Large
- * entries inflate in fflate workers.
- */
+/** Decode `encodeBakedMeshAsync` bytes into an independently owned mesh, ready for a Lod. */
 export async function decodeBakedMeshAsync(bytes: Uint8Array): Promise<Mesh> {
-  const files = await new Promise<Files>((resolve, reject) => unzip(bytes, (error, files) => (error ? reject(error) : resolve(files))));
-  return fromFiles(files);
-}
-
-function fromFiles(files: Files): Mesh {
-  const parsed: unknown = JSON.parse(strFromU8(file(files, "meta")));
-  const meta = object(parsed);
-  if (meta.version !== 3) fail("unsupported version; bake it again");
+  const contents = await unpack(bytes, fail);
+  const meta = object(contents.header);
+  if (meta.version !== 4) fail("unsupported version; bake it again");
+  const names = meta.files;
+  if (!Array.isArray(names) || names.length !== contents.files.length) fail("file names do not match the files");
+  const files: Files = Object.fromEntries(
+    names.map((name: unknown, i) => [typeof name === "string" ? name : fail("invalid file name"), contents.files[i] ?? fail("missing file")]),
+  );
   if (typeof meta.name !== "string") fail("missing name");
   const deviation = number(meta.deviation);
   if (deviation < 0) fail("negative LOD deviation");
-  // Lengths are the cheap check; the archive's inflate already rejects most corruption, so values are not walked.
+  // The container's CRC rejects corrupt bytes, so lengths are checked but values are not walked.
   const position = view(file(files, "position"), Float32Array);
   const normal = view(file(files, "normal"), Float32Array);
   const uv = view(file(files, "uv"), Float32Array);
@@ -221,10 +217,10 @@ function fromFiles(files: Files): Mesh {
   return mesh;
 }
 
-/** `bytes` as 32-bit values, in place when aligned, as inflated files are. */
+/** `bytes` as 32-bit values, in place: the container aligns its files. */
 function view<T extends Float32Array | Uint32Array>(bytes: Uint8Array, Type: { new (buffer: ArrayBuffer, offset: number, length: number): T }): T {
   if (bytes.byteLength % 4) fail("invalid geometry data length");
-  const { buffer, byteOffset, byteLength } = bytes.byteOffset % 4 ? bytes.slice() : bytes;
+  const { buffer, byteOffset, byteLength } = bytes;
   if (!(buffer instanceof ArrayBuffer)) fail("shared geometry data");
   return new Type(buffer, byteOffset, byteLength / 4);
 }

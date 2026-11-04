@@ -1,11 +1,11 @@
 import { Box3, Matrix4, type Material, type Object3D } from "three/webgpu";
-import { decodeBakedMeshAsync, encodeBakedMesh } from "../baked/codec.js";
+import { decodeBakedMeshAsync, encodeBakedMeshAsync } from "../baked/codec.js";
 import { boundingBox } from "../bounds.js";
 import { decodeImpostorAsync, encodeImpostor } from "../impostor/codec.js";
 import { ImpostorMesh, type ImpostorMeshOptions } from "../impostor/mesh/index.js";
 import { measure, recordDeviation } from "../levels.js";
 import { isImpostorMesh, isMesh } from "../three.js";
-import { decodeMeshAsync, encodeMesh } from "../mesh/codec.js";
+import { decodeMeshAsync, encodeMeshAsync } from "../mesh/codec.js";
 import type { LevelRequest } from "../loader.js";
 
 // A cached level: the source's shape, what places the level and measures its default threshold, then its payload.
@@ -87,10 +87,10 @@ export async function encodeLevel(object: Object3D, kind: Kind, shape: Shape, ma
 async function encodePayload(object: Object3D, kind: Kind, materials: readonly Material[]): Promise<Uint8Array> {
   switch (kind) {
     case "simplify":
-      return encodeMesh(object, materials);
+      return encodeMeshAsync(object, materials);
     case "baked":
       if (!isMesh(object)) throw new Error("LodLoader: baked level is not a mesh");
-      return encodeBakedMesh(object);
+      return encodeBakedMeshAsync(object);
     case "impostor":
       if (!isImpostorMesh(object)) throw new Error("LodLoader: impostor level is not an ImpostorMesh");
       return encodeImpostor(object.impostor);

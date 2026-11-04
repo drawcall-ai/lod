@@ -1,6 +1,6 @@
 export { type LevelRequest, type LodRequest, LodLoader } from "./loader.js";
 export { type LodCacheOptions } from "./loader/cache.js";
-export { encodeMesh, decodeMeshAsync } from "./mesh/codec.js";
+export { encodeMeshAsync, decodeMeshAsync } from "./mesh/codec.js";
 export { setViewportHeight } from "./view.js";
 export { Lod } from "./lod.js";
 export { Wind, type WindOptions, type SwayOptions } from "./wind/index.js";
@@ -8,7 +8,7 @@ export { InstancedLod } from "./instanced/index.js";
 export { type LevelView, type LodLevel } from "./levels.js";
 export { type SimplifyOptions, simplify } from "./simplify.js";
 export { type BakeMeshOptions, bakeMesh } from "./baked/index.js";
-export { encodeBakedMesh, decodeBakedMeshAsync } from "./baked/codec.js";
+export { encodeBakedMeshAsync, decodeBakedMeshAsync } from "./baked/codec.js";
 export { type BakeImpostorOptions, bakeImpostor } from "./impostor/bake/index.js";
 export { type ImpostorMeshOptions, ImpostorMesh } from "./impostor/mesh/index.js";
 export { type Impostor, type ImpostorLayout, type ImpostorMap } from "./impostor/impostor.js";

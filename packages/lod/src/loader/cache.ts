@@ -5,7 +5,7 @@ import { urlQuery } from "./url.js";
 /** Persistent cache location. Generator packages are discovered from GLTS source provenance. */
 export type LodCacheOptions = Pick<CacheEntryOptions, "basePath" | "root">;
 
-const version = "lod-level@19";
+const version = "lod-level@20";
 
 /**
  * One derived level: keyed by the URLs it is built from, its request and their bundled modules, and saved with what

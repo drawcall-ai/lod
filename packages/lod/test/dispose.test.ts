@@ -2,7 +2,7 @@ import { GLTSLoader } from "@drawcall/glts";
 import { LoadingManager, Mesh, Texture } from "three/webgpu";
 import { expect, it, vi } from "vitest";
 import { InstancedLod } from "../src/instanced/index.js";
-import { decodeMeshAsync, encodeMesh } from "../src/mesh/codec.js";
+import { decodeMeshAsync, encodeMeshAsync } from "../src/mesh/codec.js";
 import { Lod } from "../src/lod.js";
 
 it.each([Lod, InstancedLod])("lets the GLTS source release its resources while preserving shared host textures (%s)", async (Type) => {
@@ -29,7 +29,7 @@ it.each([Lod, InstancedLod])("lets the GLTS source release its resources while p
     const materialDisposed = vi.fn();
     mesh.geometry.addEventListener("dispose", geometryDisposed);
     mesh.material.addEventListener("dispose", materialDisposed);
-    const coarse = await decodeMeshAsync(encodeMesh(source, [mesh.material]), [mesh.material]);
+    const coarse = await decodeMeshAsync(await encodeMeshAsync(source, [mesh.material]), [mesh.material]);
     const owner = new Type([{ object: source }, { object: coarse }], 2);
     const clone = owner.clone();
     owner.dispose();

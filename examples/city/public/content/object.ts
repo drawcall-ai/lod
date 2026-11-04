@@ -1,4 +1,4 @@
-import { decodeMeshAsync, encodeMesh } from "@drawcall/lod";
+import { decodeMeshAsync, encodeMeshAsync } from "@drawcall/lod";
 import type { CacheEntry } from "vitecache";
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import { Mesh, type Material, type Object3D } from "three/webgpu";
@@ -32,6 +32,6 @@ export async function cachedObject(
   });
   const keys = materials.map((material) => library.key(material));
   for (const key of keys) requireMaterial(key);
-  await entry.save(zipSync({ keys: strToU8(JSON.stringify(keys)), geometry: encodeMesh(object, materials) }, { level: 0 }));
+  await entry.save(zipSync({ keys: strToU8(JSON.stringify(keys)), geometry: await encodeMeshAsync(object, materials) }, { level: 0 }));
   return object;
 }

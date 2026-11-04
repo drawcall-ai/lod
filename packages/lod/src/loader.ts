@@ -1,6 +1,5 @@
 import { Box3, Group, Loader, LoadingManager, Vector3, type Material, type Object3D } from "three/webgpu";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
 import { MissingDependencyError, type CacheEntry } from "vitecache";
 import { at } from "./at.js";
 import { bakeMesh } from "./baked/index.js";
@@ -14,6 +13,7 @@ import { decodeLevel, encodeLevel, placedBox, readLevel, shapeOf, type Derived }
 import { bundledModules, Provenance } from "./loader/provenance.js";
 import { assetPath, isLocal, loaderPathURL, sourceRelativeURL } from "./loader/url.js";
 import { simplify, type SimplifyOptions } from "./simplify.js";
+import { meshoptDecoder } from "./meshopt.js";
 import { isMesh, isObject3D, placeLike, rejectSkinned } from "./three.js";
 
 /**
@@ -53,7 +53,6 @@ export type LodRequest =
       onLevel?: (object: Object3D, index: number) => void | Promise<void>;
     };
 const DEFAULT_LEVELS: readonly LevelRequest[] = [{ type: "impostor" }];
-let meshoptWorkers = false;
 /** Loads asset URLs through manager handlers, falling back to GLTFLoader. Register a GLTSLoader for .glts sources. */
 export class LodLoader extends Loader<LodLevel[], LodRequest> {
   private gltf: GLTFLoader | undefined;
@@ -253,11 +252,7 @@ export class LodLoader extends Loader<LodLevel[], LodRequest> {
     let result: unknown;
     if (handler) result = await handler.loadAsync(url);
     else {
-      if (!meshoptWorkers && MeshoptDecoder.supported) {
-        MeshoptDecoder.useWorkers(2);
-        meshoptWorkers = true;
-      }
-      this.gltf ??= new GLTFLoader(this.manager).setMeshoptDecoder(MeshoptDecoder);
+      this.gltf ??= new GLTFLoader(this.manager).setMeshoptDecoder(meshoptDecoder());
       const decoder = this.gltf.setCrossOrigin(this.crossOrigin).setWithCredentials(this.withCredentials).setRequestHeader(this.requestHeader);
       result = await decoder.loadAsync(url);
     }

@@ -11,13 +11,13 @@ import {
 } from "three/webgpu";
 import { expect, it } from "vitest";
 import { disposeTree } from "../../src/dispose.js";
-import { decodeMeshAsync, encodeMesh } from "../../src/mesh/codec.js";
+import { decodeMeshAsync, encodeMeshAsync } from "../../src/mesh/codec.js";
 
 it("preserves a Scene root and placement when decoding a mesh cache subarray", async () => {
   const materials = [new MeshStandardMaterial(), new MeshStandardMaterial()];
   const source = new Scene().add(new Mesh(new BoxGeometry(2, 3, 4), materials[0]), new Mesh(new BoxGeometry(), materials[1]));
   source.position.set(5, 6, 7);
-  const encoded = encodeMesh(source, materials);
+  const encoded = await encodeMeshAsync(source, materials);
   const storage = new Uint8Array(encoded.byteLength + 19);
   storage.fill(255);
   const bytes = storage.subarray(7, 7 + encoded.byteLength);
@@ -45,7 +45,7 @@ it("shares original materials and transparent texture colours while restoring sh
   material.map = new DataTexture(new Uint8Array([86, 98, 43, 0]), 1, 1);
   material.userData.surface = { texture: "brick", repeat: [2, 4] };
   const mesh = new Mesh(geometry, material);
-  const bytes = encodeMesh(mesh, [material]);
+  const bytes = await encodeMeshAsync(mesh, [material]);
   const restored = await decodeMeshAsync(bytes, [material]);
   if (!(restored instanceof Mesh)) throw new Error("Expected decoded mesh");
   expect(restored.material).toBe(material);
@@ -60,4 +60,30 @@ it("shares original materials and transparent texture colours while restoring sh
   restored.geometry.dispose();
   material.map.dispose();
   material.dispose();
+});
+
+it("keeps floats within 2^-17 of their magnitude and indices exactly, and rejects a corrupt file", async () => {
+  const material = new MeshStandardMaterial();
+  const geometry = new BoxGeometry(1.2345678, 2, 3, 4, 4, 4);
+  const source = new Mesh(geometry, material);
+  const bytes = await encodeMeshAsync(source, [material]);
+  const restored = await decodeMeshAsync(bytes, [material]);
+  if (!(restored instanceof Mesh)) throw new Error("Expected a decoded mesh");
+  const before = geometry.getAttribute("position").array;
+  const after = restored.geometry.getAttribute("position").array;
+  expect(after.length).toBe(before.length);
+  for (let i = 0; i < before.length; i++) expect(Math.abs((after[i] ?? 0) - (before[i] ?? 0))).toBeLessThanOrEqual(Math.abs(before[i] ?? 0) * 2 ** -17);
+  // The index codec may rotate a triangle's corners, keeping its winding.
+  const triangles = (index: ArrayLike<number>) =>
+    Array.from({ length: index.length / 3 }, (_, t) => {
+      const corners = [index[3 * t] ?? 0, index[3 * t + 1] ?? 0, index[3 * t + 2] ?? 0];
+      const first = corners.indexOf(Math.min(...corners));
+      return [0, 1, 2].map((k) => corners[(first + k) % 3]).join();
+    });
+  expect(triangles(restored.geometry.index?.array ?? [])).toEqual(triangles(geometry.index?.array ?? []));
+  const corrupt = bytes.slice();
+  corrupt[bytes.length >> 1] = (corrupt[bytes.length >> 1] ?? 0) ^ 0x10;
+  await expect(decodeMeshAsync(corrupt, [material])).rejects.toThrow(/Invalid mesh cache/);
+  geometry.dispose();
+  restored.geometry.dispose();
 });

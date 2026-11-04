@@ -1,6 +1,6 @@
 import type { GLTSSource } from "@drawcall/glts";
 import { InstancedMesh, Mesh } from "three/webgpu";
-import { bakeMesh, decodeBakedMeshAsync, encodeBakedMesh } from "@drawcall/lod";
+import { bakeMesh, decodeBakedMeshAsync, encodeBakedMeshAsync } from "@drawcall/lod";
 import type { Library } from "../../materials.ts";
 import { assetEntry } from "../../cache.ts";
 import { dispose } from "../../dispose.ts";
@@ -10,7 +10,7 @@ import { BLOCK, layout, VARIANTS } from "../layout.ts";
 
 /** The field's reusable canopy and walls own their bake, independent of the display ladder. */
 export async function cover(source: GLTSSource, library: Library, design: number, axis: "" | "x" | "z"): Promise<Mesh> {
-  const entry = assetEntry(source, "corn-cover@2", { design, axis });
+  const entry = assetEntry(source, "corn-cover@3", { design, axis });
   const bytes = await entry.load();
   if (bytes !== undefined) return decodeBakedMeshAsync(bytes);
   const [tasselled, bare] = await Promise.all([
@@ -22,7 +22,7 @@ export async function cover(source: GLTSSource, library: Library, design: number
   const low = new Mesh(axis ? side(axis) : canopy(1));
   try {
     const baked = await bakeMesh(plants, { low, textureSize: 256 });
-    await entry.save(encodeBakedMesh(baked));
+    await entry.save(await encodeBakedMeshAsync(baked));
     return baked;
   } finally {
     plants.traverse((object) => {
