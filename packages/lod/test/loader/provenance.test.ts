@@ -1,4 +1,4 @@
-import { baked, cache, gltsScene, sourceFixture } from "./fixture.js";
+import { cache, impostorOf, gltsScene, sourceFixture } from "./fixture.js";
 import { GLTSLoader } from "@drawcall/glts";
 import { LoadingManager } from "three/webgpu";
 import { describe, expect, it, vi } from "vitest";
@@ -80,9 +80,9 @@ describe("asset cache provenance", () => {
       packages: [],
       runtimeModules: [],
     }));
-    vi.mocked(bakeImpostor).mockImplementationOnce(async () => {
+    vi.mocked(bakeImpostor).mockImplementationOnce(async (source) => {
       urls.push("/models/late.bin");
-      return baked;
+      return impostorOf(source);
     });
     await loader.loadAsync(script);
     expect(cache.saved.find((entry) => entry.options.dependencies?.source)?.dependencies).toEqual({
@@ -106,13 +106,13 @@ describe("asset cache provenance", () => {
     expect(await key("?seed=1")).toEqual(requested);
   });
 
-  it.each([helper, "terrain-generator"])("invalidates a derived index when dependency %s changes", async (dependency) => {
+  it.each([helper, "terrain-generator"])("invalidates a derived level when dependency %s changes", async (dependency) => {
     const { manager, load } = fixture((url) => ({ url, dependencyUrls: [helper], packages: ["terrain-generator"], runtimeModules: [] }));
     const loader = new LodLoader(manager);
     await loader.loadAsync(script);
     cache.loaded.length = 0;
     await loader.loadAsync(script);
-    expect(cache.loaded).toEqual([{ role: "index", hit: true }]);
+    expect(cache.loaded).toEqual([true]);
     expect(load).toHaveBeenCalledOnce();
     cache.versions.set(dependency, "changed");
     await loader.loadAsync(script);
@@ -120,7 +120,7 @@ describe("asset cache provenance", () => {
     expect(bakeImpostor).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["changed", "unavailable"])("rejects a warm index when its remote generator identity is %s", async (identity) => {
+  it.each(["changed", "unavailable"])("rejects a warm level when its remote generator identity is %s", async (identity) => {
     const modules: Record<string, string> = { "https://cdn.test/generator@1": "first" };
     const { loader, handler, load } = fixture((url) => ({ url, dependencyUrls: [], packages: [], runtimeModules: [] }));
     Object.assign(handler, { moduleSources: { "generator@1": { moduleHashes: modules } } });

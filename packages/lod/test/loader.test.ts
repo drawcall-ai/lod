@@ -52,8 +52,8 @@ describe("LodLoader", () => {
     await loader.loadAsync(request);
     expect(cache.saved[0]?.options.dependencies).toMatchObject({
       source: { url: "/resolved/house.glts?variant=2" },
-      "auxiliary:0:low": { url: "/resolved/house.glts?part=low" },
-      "auxiliary:0:interior": { url: "/resolved/rooms.glts#bake" },
+      "auxiliary:1:low": { url: "/resolved/house.glts?part=low" },
+      "auxiliary:1:interior": { url: "/resolved/rooms.glts#bake" },
     });
     const dependencies = cache.saved[0]?.dependencies ?? {};
     expect(Object.values(dependencies).filter((value) => value.url === helper)).toHaveLength(1);
@@ -70,7 +70,7 @@ describe("LodLoader", () => {
     expect(load).toHaveBeenCalledTimes(4);
   }, 120_000);
 
-  it("loads original textures only on mesh demand and shares them with cached simplified levels", async () => {
+  it("builds a deferred level only on demand, from a source of its own, sharing the ladder source's textures", async () => {
     const { manager, load } = sourceFixture(() => {
       const map = new DataTexture(new Uint8Array([86, 98, 43, 0, 86, 98, 43, 255]), 2, 1);
       map.needsUpdate = true;
@@ -94,14 +94,18 @@ describe("LodLoader", () => {
     };
     await loader.loadAsync(request);
     expect(load).toHaveBeenCalledExactlyOnceWith("/models/tree.glb?seed=2");
+    expect(cache.saved).toHaveLength(1);
     const warm = await loader.loadAsync(request);
     expect(load).toHaveBeenCalledOnce();
     const source = warm[0];
     const detail = warm[1];
     if (!source?.load || !detail?.load) throw new Error("Expected deferred mesh levels");
+    // The simplified level is built from a source without onLevel effects, then draws with the ladder source's materials.
     const simplified = await detail.load();
+    expect(load).toHaveBeenCalledTimes(3);
+    expect(cache.saved).toHaveLength(2);
     const original = await loadOnce(source.load).promise;
-    expect(load).toHaveBeenCalledTimes(2);
+    expect(load).toHaveBeenCalledTimes(3);
     const released = vi.fn();
     for (let index = 0; index < 2; index++) {
       const sourceMesh = original.children[index];
@@ -115,11 +119,40 @@ describe("LodLoader", () => {
     }
     new Lod(warm).dispose();
     expect(released).toHaveBeenCalledTimes(2);
-    for (const [key] of cache.files) if (key.includes('"lod:level":{"value":1}')) cache.files.delete(key);
-    const missing = (await loader.loadAsync(request))[1];
-    if (!missing?.load) throw new Error("Expected lazy simplified level");
-    await expect(missing.load()).rejects.toThrow("cached level 1 is missing");
-    expect(load).toHaveBeenCalledTimes(2);
+    const rewarmed = (await loader.loadAsync(request))[1];
+    if (!rewarmed?.load) throw new Error("Expected lazy simplified level");
+    await rewarmed.load();
+    expect(load).toHaveBeenCalledTimes(4);
+    expect(cache.saved).toHaveLength(2);
+  });
+
+  it("builds a level without maxPixels eagerly, since its default threshold is measured from it", async () => {
+    const { manager, load } = sourceFixture(() => new Mesh(new SphereGeometry(1, 24, 16), new MeshStandardMaterial()), /\.glb$/);
+    const loader = new LodLoader(manager);
+    const request: LodRequest = {
+      url: "/measured.glb",
+      levels: [
+        { type: "simplify", ratio: 0.2 },
+        { type: "impostor", maxPixels: 20 },
+      ],
+    };
+    const cold = await loader.loadAsync(request);
+    expect(cache.saved).toHaveLength(2);
+    cache.loaded.length = 0;
+    const warm = await loader.loadAsync(request);
+    expect(cache.loaded).toEqual([true, true]);
+    expect(load).toHaveBeenCalledOnce();
+    expect(warm.map((level) => level.maxPixels)).toEqual(cold.map((level) => level.maxPixels));
+  });
+
+  it("rejects a derived level that extends beyond the source's bounds, which every level declares", async () => {
+    const { manager } = sourceFixture(
+      (url) => new Mesh(url.includes("part=low") ? new BoxGeometry(3, 3, 3) : new BoxGeometry(), new MeshStandardMaterial()),
+      /\.glb$/,
+    );
+    const request: LodRequest = { url: "/shell.glb", levels: [{ type: "baked", low: "?part=low", textureSize: 32, maxPixels: 100 }] };
+    await expect(new LodLoader(manager).loadAsync(request)).rejects.toThrow("extends beyond the source's bounds");
+    expect(cache.saved).toHaveLength(0);
   });
 
   it("preloads a placed source when it is the only drawable, on cold and warm loads", async () => {
@@ -156,7 +189,7 @@ describe("LodLoader", () => {
     expect([cold, warm].map((ladder) => (ladder[1]?.object instanceof ImpostorMesh ? ladder[1].object.options.parallax : undefined))).toEqual([1, 0]);
   });
 
-  it("serves a cold build's levels when the cache skips saving", async () => {
+  it("builds a deferred level again when the cache skips saving", async () => {
     const save = vi.spyOn(CacheEntry.prototype, "save").mockResolvedValue();
     try {
       const { manager, load } = sourceFixture(() => new Mesh(new SphereGeometry(1, 12, 8), new MeshStandardMaterial()), /\.glb$/);
@@ -169,7 +202,7 @@ describe("LodLoader", () => {
       const simplified = levels[1];
       if (!simplified?.load) throw new Error("Expected lazy simplified level");
       expect(await simplified.load()).toBeInstanceOf(Mesh);
-      expect(load).toHaveBeenCalledOnce();
+      expect(load).toHaveBeenCalledTimes(2);
     } finally {
       save.mockRestore();
     }

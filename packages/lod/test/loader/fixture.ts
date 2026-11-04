@@ -1,6 +1,7 @@
 import { Loader, LoadingManager, Mesh, Scene, type Object3D } from "three/webgpu";
 import { beforeEach, vi } from "vitest";
 import type { CacheEntryOptions, Dependencies, SaveOptions } from "vitecache";
+import { boundingBox } from "../../src/bounds.js";
 import type { Impostor } from "../../src/impostor/impostor.js";
 
 export const cache = {
@@ -8,7 +9,8 @@ export const cache = {
   versions: new Map<string, string>(),
   /** Locators with no backing file, which vitecache refuses to save as dependencies. */
   missing: new Set<string>(),
-  loaded: new Array<{ role: unknown; hit: boolean }>(),
+  /** Whether each load() hit. */
+  loaded: new Array<boolean>(),
   /** Every save() call, including those that throw. */
   attempts: 0,
   saved: new Array<{ options: CacheEntryOptions; dependencies: Dependencies }>(),
@@ -56,7 +58,7 @@ export class CacheEntry {
     const stored = cache.files.get(this.key);
     const valid = stored && !absent(this.options.dependencies) && stored.hashes === this.baseline + hashes(stored.dependencies);
     const bytes = valid ? stored.bytes : undefined;
-    cache.loaded.push({ role: this.options.dependencies?.["lod:level"]?.value ?? "index", hit: bytes !== undefined });
+    cache.loaded.push(bytes !== undefined);
     return bytes;
   }
   async save(bytes: Uint8Array, { dependencies = {} }: SaveOptions = {}) {
@@ -72,25 +74,29 @@ export class CacheEntry {
   }
 }
 
-export const baked: Impostor = {
-  version: 3,
-  layout: "full",
-  frames: 2,
-  size: 2,
-  box: [-1, -1, -1, 1, 1, 1],
-  halfSize: 2,
-  maps: ["base", "normalDepth", "orm"],
-  layers: Array.from({ length: 3 }, () => [new Uint8Array(16)]),
-};
+/** A minimal impostor with the box a real bake of `source` has. */
+export function impostorOf(source: Object3D): Impostor {
+  const box = boundingBox(source);
+  return {
+    version: 3,
+    layout: "full",
+    frames: 2,
+    size: 2,
+    box: [...box.min.toArray(), ...box.max.toArray()],
+    halfSize: 2,
+    maps: ["base", "normalDepth", "orm"],
+    layers: Array.from({ length: 3 }, () => [new Uint8Array(16)]),
+  };
+}
 
-export const bakeImpostor = vi.fn(async () => baked);
+export const bakeImpostor = vi.fn(async (source: Object3D) => impostorOf(source));
 
 beforeEach(() => {
   cache.loaded.length = cache.saved.length = cache.attempts = 0;
   cache.files.clear();
   cache.versions.clear();
   cache.missing.clear();
-  bakeImpostor.mockReset().mockResolvedValue(baked);
+  bakeImpostor.mockReset().mockImplementation(async (source) => impostorOf(source));
 });
 
 export function sourceFixture(make: (url: string) => unknown, extension = /\.(glts|gltf|glb)$/) {

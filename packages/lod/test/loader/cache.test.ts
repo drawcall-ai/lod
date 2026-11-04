@@ -25,22 +25,27 @@ it("resolves an alias for cache identity while loading each URL through its mana
   try {
     const loader = new LodLoader(manager);
     await loader.loadAsync(request);
-    expect(writes()).toHaveLength(2);
-    const [middleWrite, indexWrite] = writes();
-    if (!middleWrite || !indexWrite) throw new Error("Expected middle and index writes");
+    // Only the coarsest level is built before the ladder resolves.
+    const [coarseWrite, ...others] = writes();
+    if (!coarseWrite) throw new Error("Expected the coarsest level's write");
+    expect(others).toHaveLength(0);
+    const sourceLoads = source.mock.calls.length;
     fetches.mockClear();
     const warm = await loader.loadAsync(request);
-    expect(source).toHaveBeenCalledTimes(2);
-    expect(reads()).toEqual([String(indexWrite[0])]);
+    // The simplified coarsest level draws with the source's materials.
+    expect(source).toHaveBeenCalledTimes(sourceLoads + 1);
+    expect(reads()).toEqual([String(coarseWrite[0])]);
     const first = warm[0],
       middle = warm[1];
     if (!first?.load || !middle?.load) throw new Error("Expected two lazy levels");
     expect(warm.map((level) => level.maxPixels)).toEqual([Infinity, 300, 100]);
     await loadOnce(first.load).promise;
     await middle.load();
-    expect(reads()).toEqual([String(indexWrite[0]), String(middleWrite[0])]);
-    expect(source).toHaveBeenCalledTimes(2);
-    expect(writes()).toHaveLength(0);
+    const [middleWrite, ...rest] = writes();
+    if (!middleWrite) throw new Error("Expected the middle level's write on demand");
+    expect(rest).toHaveLength(0);
+    expect(reads()).toEqual([String(coarseWrite[0]), String(middleWrite[0])]);
+    expect(source).toHaveBeenCalledTimes(sourceLoads + 2);
   } finally {
     fetches.mockRestore();
     source.mockRestore();
@@ -70,7 +75,6 @@ it("resolves a warm impostor without source-graph fetches", async () => {
     expect(writes).toHaveLength(1);
     fetches.mockClear();
     const warm = await new LodLoader(freshManager).loadAsync(request);
-    // The impostor is the coarsest level, so the index embeds it.
     expect(
       fetches.mock.calls.filter(([url, options]) => /\/_vitecache\/[^/]+\.bin$/.test(String(url)) && !options?.method).map(([url]) => String(url)),
     ).toEqual(writes.map(([url]) => String(url)));
