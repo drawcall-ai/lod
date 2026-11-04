@@ -33,6 +33,28 @@ describe("instance blocks", () => {
     expect(s.reaches.map((sphere) => !sphere.isEmpty())).toEqual([false, false, true]);
   });
 
+  it("bounds an orthographic view's levels by its scale wherever it looks from, and follows changed instances", () => {
+    // Two blocks of 64. 2 units across: 200 pixels at scale 100, level 0; 0.2 units: 20 pixels, level 1.
+    const s = setup(128);
+    Object.assign(s.view, { ortho: true, fades: false });
+    for (let i = 0; i < 128; i++) s.set(i, i < 64 ? new Matrix4().makeTranslation(-50, 0, 0) : new Matrix4().makeScale(0.1, 0.1, 0.1).setPosition(50, 0, 0));
+    s.refit();
+    const drawn = () => s.reaches.map((sphere) => (sphere.isEmpty() ? null : Math.round(sphere.center.x) + 0));
+    s.select();
+    expect(drawn()).toEqual([-50, 50, null]);
+    s.view.eye.set(1000, 0, 0);
+    s.select();
+    expect(drawn()).toEqual([-50, 50, null]);
+    s.view.scale = 1000;
+    s.select();
+    expect(drawn()).toEqual([0, null, null]);
+    s.view.scale = 100;
+    for (let i = 64; i < 128; i++) s.set(i, new Matrix4().makeTranslation(50, 0, 0));
+    s.refit(64, 128);
+    s.select();
+    expect(drawn()).toEqual([0, null, null]);
+  });
+
   it("keeps both fade neighbours near float32 switch boundaries", () => {
     const s = setup(1);
     for (const height of [36, 36 + 1e-7, 38, 40 - 1e-7, 40, 40 + 1e-7]) {

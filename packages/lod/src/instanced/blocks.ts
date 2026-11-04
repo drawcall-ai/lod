@@ -20,6 +20,16 @@ interface Branch {
   unsafe: boolean;
 }
 
+/** An orthographic view's level boxes, which depend on its scale but not on where it looks from. */
+interface Kept {
+  scale: number;
+  forced: number | null;
+  maxPixels: number[];
+  boxes: Box3[];
+}
+/** Orthographic scales kept per crowd: a shadow map's cascades. */
+const KEPT = 8;
+
 export interface BlockView {
   eye: Vector3;
   scale: number;
@@ -38,6 +48,8 @@ export class Blocks {
   private readonly roundoff: Float64Array;
   private readonly unsafe: Uint8Array;
   private readonly levelBoxes: Box3[] = [];
+  /** Level boxes of recent orthographic views, until the instances change. */
+  private readonly kept: Kept[] = [];
   private low = 0;
   private high = 0;
   private padding = 0;
@@ -110,6 +122,7 @@ export class Blocks {
   /** Refit only edited leaves and their ancestors. No instance scan on view changes. */
   refit(): void {
     if (this.dirty.empty) return;
+    this.kept.length = 0;
     this.dirty.drain((start, end) => {
       for (let block = start; block < end; block++) {
         this.leaf(at(this.tree, this.leaves + block), block);
@@ -167,10 +180,35 @@ export class Blocks {
   select(levels: readonly { maxPixels: number }[], view: BlockView, reaches: Sphere[], measured: boolean, root: Matrix4): void {
     this.resetBoxes(levels);
     if (!this.bounds.isEmpty()) {
-      if (measured) this.visit(1, levels, view);
-      else for (const box of this.levelBoxes) box.copy(at(this.tree, 1).geometry);
+      if (!measured) for (const box of this.levelBoxes) box.copy(at(this.tree, 1).geometry);
+      else if (view.ortho && this.nearby(view)) this.keep(levels, view);
+      else this.visit(1, levels, view);
     }
     this.enclose(levels, view, reaches, root, measured, 1);
+  }
+
+  /** Whether every node is near enough to `view` that only its scale decides an orthographic interval (see `interval`). */
+  private nearby(view: BlockView): boolean {
+    const { sphere } = at(this.tree, 1);
+    return view.eye.length() <= 1e15 && sphere.center.distanceTo(view.eye) + sphere.radius <= 1e15;
+  }
+
+  /** Visit for an orthographic view only at a scale not seen since the instances changed: each cascade of a moving shadow map keeps its scale. */
+  private keep(levels: readonly { maxPixels: number }[], view: BlockView): void {
+    let kept = this.kept.find(
+      (kept) =>
+        kept.scale === view.scale &&
+        kept.forced === view.forced &&
+        kept.maxPixels.length === levels.length &&
+        kept.maxPixels.every((value, level) => value === at(levels, level).maxPixels),
+    );
+    if (!kept) {
+      this.visit(1, levels, view);
+      kept = { scale: view.scale, forced: view.forced, maxPixels: levels.map((level) => level.maxPixels), boxes: this.levelBoxes.map((box) => box.clone()) };
+      if (this.kept.unshift(kept) > KEPT) this.kept.pop();
+      return;
+    }
+    kept.boxes.forEach((box, level) => at(this.levelBoxes, level).copy(box));
   }
 
   /** Ahead-of-view demand, widened by the demand margin. */
