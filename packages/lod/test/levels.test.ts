@@ -1,4 +1,4 @@
-import { Box3, BoxGeometry, Mesh, MeshStandardMaterial, PerspectiveCamera, RGBAFormat, SphereGeometry } from "three/webgpu";
+import { Box3, BoxGeometry, Mesh, MeshStandardMaterial, Object3D, PerspectiveCamera, RGBAFormat, SphereGeometry } from "three/webgpu";
 import { describe, expect, it } from "vitest";
 import type { Impostor } from "../src/impostor/impostor.js";
 import { ImpostorMesh } from "../src/impostor/mesh/index.js";
@@ -51,15 +51,21 @@ describe("default maxPixels", () => {
   });
 });
 
-it("uses the nearest ready finer level before any coarser fallback", () => {
+it("stands in the nearest ready coarser level that draws for a missing one, else the nearest finer", () => {
   const deferred = (maxPixels: number) => ({ load: async () => box(), maxPixels, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) });
-  const input: LodLevel[] = [deferred(Infinity), { object: box() }, deferred(100), { object: box() }];
-  const lod = new Lod(input);
-  for (const force of [0, 2]) {
+  const drawn = (lod: Lod, force: number) => {
     lod.forceLevel = force;
     lod.update(new PerspectiveCamera());
-    expect(lod.levels.map(({ object }) => object?.visible)).toEqual([undefined, true, undefined, false]);
-  }
+    return lod.levels.flatMap(({ object }, i) => (object?.visible ? [i] : []));
+  };
+  const input: LodLevel[] = [deferred(Infinity), { object: box() }, deferred(100), { object: box() }];
+  const lod = new Lod(input);
+  expect(drawn(lod, 0)).toEqual([1]);
+  expect(drawn(lod, 2)).toEqual([3]);
+  // An empty coarser level culls; it never stands in.
+  const culled = new Lod([{ object: box() }, deferred(100), { object: new Object3D(), maxPixels: 10 }]);
+  expect(drawn(culled, 1)).toEqual([0]);
+  culled.dispose();
   must(lod.levels[2]).maxPixels = 50;
   const crowd = new InstancedLod(input, 1);
   expect(crowd.levels[2]?.maxPixels).toBe(100);

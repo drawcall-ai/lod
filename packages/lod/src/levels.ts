@@ -2,6 +2,7 @@ import { Color, type Box3, type Object3D } from "three/webgpu";
 import { texelPixels } from "./impostor/impostor.js";
 import { isImpostorMesh, isLOD } from "./three.js";
 import { at } from "./at.js";
+import { levelBox } from "./bounds.js";
 
 /** Share of each level's range over which its finer neighbour fades out. */
 export const FADE = 0.1;
@@ -36,6 +37,8 @@ export interface LevelView {
 export class Level implements LevelView {
   readonly tint = new Color(1, 1, 1);
   readonly box: Box3 | undefined;
+  /** Draws nothing: a culled level, never a stand-in for a missing one. */
+  readonly empty: boolean;
   object: Object3D | undefined;
   nested: boolean;
   explicit: number | null;
@@ -52,6 +55,7 @@ export class Level implements LevelView {
     this.box = input.box;
     if (this.box && !this.box.isEmpty() && ![...this.box.min.toArray(), ...this.box.max.toArray()].every(Number.isFinite))
       throw new Error("Lod: a deferred level's box must be finite");
+    this.empty = levelBox(input).isEmpty();
     this.object = input.object?.clone();
     this.nested = this.object ? isLOD(this.object) : false;
   }
@@ -212,11 +216,20 @@ export function demandLevels(levels: readonly Level[], height: number, forced: n
   return finer && height >= DEMAND * desired.maxPixels * (1 - FADE) ? [desired, finer] : [desired];
 }
 
-/** Nearest ready finer level, else nearest coarser; -1 draws nothing until one is ready. */
+/**
+ * The level each level draws as: itself once ready, else the nearest ready coarser level
+ * that draws, else the nearest ready finer one; -1 draws nothing until one is ready.
+ * Coarser first, so a missing level never costs more than it would: a crowd standing in
+ * its source for a missing impostor draws thousands of full meshes.
+ */
 export function fallbacks(levels: readonly Level[], ready: ReadonlySet<Level>): number[] {
-  return levels.map((_, index) => {
-    for (let finer = index; finer >= 0; finer--) if (ready.has(at(levels, finer))) return finer;
-    for (let coarser = index + 1; coarser < levels.length; coarser++) if (ready.has(at(levels, coarser))) return coarser;
+  return levels.map((level, index) => {
+    if (ready.has(level)) return index;
+    for (let coarser = index + 1; coarser < levels.length; coarser++) {
+      const candidate = at(levels, coarser);
+      if (ready.has(candidate) && !candidate.empty) return coarser;
+    }
+    for (let finer = index - 1; finer >= 0; finer--) if (ready.has(at(levels, finer))) return finer;
     return -1;
   });
 }
