@@ -1,11 +1,11 @@
+import { pause } from "./pause.js";
+
 interface Job {
   run: () => Promise<void>;
   resolve: () => void;
   reject: (error: unknown) => void;
   priority: number;
 }
-
-import { pause } from "./pause.js";
 
 const queue: Job[] = [];
 let running = false;
