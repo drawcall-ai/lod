@@ -8,6 +8,7 @@ import {
   Vector3,
   Vector4,
   type Camera,
+  type Material,
   Matrix4,
   Frustum,
   Sphere,
@@ -70,13 +71,35 @@ export interface RenderContext {
   camera: Camera;
   scene: Scene;
   target: ReturnType<Renderer["getRenderTarget"]>;
-  mrt: ReturnType<Renderer["getMRT"]>;
+  mrt: Parameters<Renderer["setMRT"]>[0];
   cubeFace: number;
   mipLevel: number;
 }
 
 const contexts = new WeakMap<Camera, RenderContext>();
 export const renderContext = (camera: Camera): RenderContext | undefined => contexts.get(camera);
+
+/** A shadow map a level mesh drew into, with the camera and override material three drew it with. */
+export interface ShadowPass {
+  renderer: Renderer;
+  camera: Camera;
+  target: NonNullable<RenderContext["target"]>;
+  material: Material;
+}
+
+const shadowPasses = new WeakMap<Scene, Map<ShadowPass["target"], ShadowPass>>();
+
+/** The shadow maps level meshes of `scene` have drawn into, which an arriving caster's draws are prepared for too. */
+export const shadowPassesOf = (scene: Scene): ShadowPass[] => [...(shadowPasses.get(scene)?.values() ?? [])];
+
+function recordShadowPass(renderer: Renderer, scene: Scene, camera: Camera): void {
+  const target = renderer.getRenderTarget();
+  const material = scene.overrideMaterial;
+  if (!target || !material) return;
+  let passes = shadowPasses.get(scene);
+  if (!passes) shadowPasses.set(scene, (passes = new Map()));
+  passes.set(target, { renderer, camera, target, material });
+}
 
 /**
  * Set the view height before the first LOD update, or after a resize while no level
@@ -96,9 +119,9 @@ export function watchViewport(mesh: Mesh): void {
   const previous = mesh.onBeforeRender;
   mesh.onBeforeRender = (renderer, scene, camera, geometry, material, group) => {
     previous.call(mesh, renderer, scene, camera, geometry, material, group);
-    // Shadow maps are drawn for the viewing camera's choice, not measured.
-    if (inShadowPass(scene)) return;
     const gpu = gpuRenderer(renderer);
+    // Shadow maps are drawn for the viewing camera's choice, not measured.
+    if (inShadowPass(scene)) return recordShadowPass(gpu, scene, camera);
     const target = gpu.getRenderTarget();
     const mrt = gpu.getMRT();
     const cubeFace = gpu.getActiveCubeFace();

@@ -53,7 +53,7 @@ Cache expensive generation inside a `.glts` asset, such as geometry, rooms or ge
 
 Load an asset once and build spatial crowds from its levels, each with its own instance count, placements and colours; clone a `Lod` for further independently placed copies. Reuse descriptors across owners; adjust each owner's resolved thresholds through its `levels` view. Clones and crowds share geometry, materials, textures and deferred loads. Dispose shared resources only after every copy has stopped drawing; disposal does not count references.
 
-Use `onLevel` for application effects or shadow settings that apply when each level arrives. Keep source generation and its materials in the asset so that the same URL also loads correctly outside the LOD host.
+Use `onLevel` for application effects or shadow settings that apply when each level arrives. Set `castShadow` and `shadowSide` there rather than after `levelschange`: a level prepares its draws, including those into the shadow maps the scene's levels already draw into, before it arrives, and a setting changed afterwards compiles its shadow pipeline in the middle of a frame. Keep source generation and its materials in the asset so that the same URL also loads correctly outside the LOD host.
 
 Apply a shared `Wind` after assembling a LOD and before rendering; arriving levels inherit the effect. Apply it separately to nested LODs and independently managed batches.
 

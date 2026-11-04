@@ -1,10 +1,24 @@
 /// <reference types="@webgpu/types" />
-import { BoxGeometry, DataTexture, Group, Mesh, MeshBasicNodeMaterial, MeshStandardNodeMaterial, PerspectiveCamera, RenderTarget, Scene } from "three/webgpu";
+import {
+  BoxGeometry,
+  DataTexture,
+  DirectionalLight,
+  DoubleSide,
+  Group,
+  Mesh,
+  MeshBasicNodeMaterial,
+  MeshStandardNodeMaterial,
+  PerspectiveCamera,
+  PlaneGeometry,
+  RenderTarget,
+  Scene,
+} from "three/webgpu";
 import { mrt, output, texture, vec3, vec4 } from "three/tsl";
 import { expect, it, vi } from "vitest";
 import { ImpostorMesh } from "../src/impostor/mesh/index.js";
 import * as surface from "../src/impostor/mesh/surface.js";
 import { compileLevel } from "../src/compile.js";
+import { renderContext, watchViewport } from "../src/view.js";
 import { GPU_TIMEOUT, renderer } from "./gpu.js";
 
 vi.mock("../src/impostor/mesh/surface.js", { spy: true });
@@ -171,6 +185,55 @@ it.each(["texture", "node"])(
     } finally {
       card.dispose();
       background.dispose();
+      target.dispose();
+    }
+  },
+  GPU_TIMEOUT,
+);
+
+it(
+  "precompiles an arriving caster's draws into the shadow maps the scene's level meshes draw into",
+  async () => {
+    renderer.shadowMap.enabled = true;
+    const light = new DirectionalLight();
+    light.position.set(1, 3, 2);
+    light.castShadow = true;
+    const ground = new Mesh(new PlaneGeometry(10, 10).rotateX(-Math.PI / 2), new MeshStandardNodeMaterial());
+    ground.receiveShadow = true;
+    const resident = new Mesh(new BoxGeometry(), new MeshStandardNodeMaterial());
+    resident.castShadow = true;
+    watchViewport(resident);
+    const scene = new Scene().add(light, ground, resident);
+    const camera = new PerspectiveCamera(60, 1, 0.1, 100);
+    camera.position.set(0, 2, 5);
+    camera.lookAt(0, 0, 0);
+    camera.updateMatrixWorld();
+    const target = new RenderTarget(32, 32);
+    const map = new DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+    map.needsUpdate = true;
+    // The caster's own shadow nodes (an alpha-tested map) and side select its shadow pipeline.
+    const material = new MeshStandardNodeMaterial({ map, alphaTest: 0.5, shadowSide: DoubleSide });
+    const arriving = new Mesh(new BoxGeometry(), material);
+    arriving.castShadow = true;
+    arriving.position.x = 1.5;
+    const synchronous = vi.spyOn(GPUDevice.prototype, "createRenderPipeline");
+    try {
+      renderer.setRenderTarget(target);
+      renderer.render(scene, camera);
+      const context = renderContext(camera);
+      if (!context) throw new Error("Expected the resident's render context");
+      await compileLevel(arriving, context);
+      synchronous.mockClear();
+      renderer.setRenderTarget(target);
+      light.shadow.needsUpdate = true;
+      renderer.render(scene.add(arriving), camera);
+      expect(synchronous).not.toHaveBeenCalled();
+    } finally {
+      synchronous.mockRestore();
+      renderer.setRenderTarget(null);
+      renderer.shadowMap.enabled = false;
+      for (const mesh of [ground, resident, arriving]) mesh.geometry.dispose();
+      map.dispose();
       target.dispose();
     }
   },
