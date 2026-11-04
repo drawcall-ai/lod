@@ -12,6 +12,16 @@ export const column = (m: Node<"mat4">, i: 0 | 1 | 2 | 3): Node<"vec4"> => m.mul
 /** The largest scale `m` applies along an axis. */
 export const maxScale = (m: Node<"mat4">): Node<"float"> => max(column(m, 0).xyz.length(), max(column(m, 1).xyz.length(), column(m, 2).xyz.length()));
 
+/** An upper bound on the largest stretch `m` applies to any direction, exact for orthogonal axes (as `stretch` in instanced/blocks.ts). */
+export function stretch(m: Node<"mat4">): Node<"float"> {
+  const [a, b, c] = ([0, 1, 2] as const).map((i) => column(m, i).xyz);
+  if (!a || !b || !c) throw new Error("unreachable");
+  const ab = dot(a, b).abs();
+  const ac = dot(a, c).abs();
+  const bc = dot(b, c).abs();
+  return max(dot(a, a).add(ab).add(ac), max(dot(b, b).add(ab).add(bc), dot(c, c).add(ac).add(bc))).sqrt();
+}
+
 /** Whether projection `m` is orthographic: its bottom-right element is 1. */
 export const isOrthographic = (m: Node<"mat4">): Node<"bool"> => column(m, 3).w.equal(1);
 

@@ -1,4 +1,4 @@
-import { Box3, type Color, Matrix4, Object3D, Sphere, Vector3, type Camera, type Intersection, type Raycaster } from "three/webgpu";
+import { Box3, type Color, Frustum, Matrix4, Object3D, Sphere, Vector3, type Camera, type Intersection, type Raycaster } from "three/webgpu";
 import { at } from "../at.js";
 import { levelBox, measureLevels, prepareBounds } from "../bounds.js";
 import { disposeCopies } from "../dispose.js";
@@ -20,6 +20,8 @@ import { Store } from "./store.js";
 
 const view = new View();
 const inverse = new Matrix4();
+const local = new Matrix4();
+const frustum = new Frustum();
 
 /** The last view `update` selected for, in the InstancedLod's space, for `levelOf`. */
 interface Selected extends BlockView {
@@ -29,8 +31,11 @@ interface Selected extends BlockView {
 
 /**
  * Independently selected copies of one object, batched into indirect draws per view.
- * Thresholds, fades, global settings and shadows follow Lod. Each level's bounds tighten
- * to the region where its instances can draw. Instance matrices may scale arbitrarily;
+ * Thresholds, fades and global settings follow Lod. Each view draws only the instances in
+ * its frustum, and each shadow map is a view of its own: it draws the casters in its
+ * frustum, each at the level its texels resolve, as an orthographic view would (an
+ * instance smaller than a texel casts nothing). Each level's bounds tighten to the region
+ * where its instances can draw. Instance matrices may scale arbitrarily;
  * the crowd's own transform and its parents should scale uniformly. Scale 0 draws nothing.
  *
  * Level templates are cloned, then their meshes are instanced. Skinned meshes,
@@ -80,6 +85,8 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
   private padding = 0;
   private blocks: Blocks;
   private readonly last: Selected = { selected: false, eye: new Vector3(), scale: 0, ortho: false, fades: false, forced: null };
+  /** The shadow map `update` last selected for. */
+  private readonly cast: BlockView = { eye: new Vector3(), scale: 0, ortho: true, fades: false, forced: null };
 
   get pending(): boolean {
     return this.residency.pending;
@@ -123,6 +130,7 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
       draws,
       this.residency.fallback,
     );
+    selection.reach.value = this.rest.radius;
     this.selection = selection;
     this.store.attach(selection);
     const meshes = new Meshes(selection, this.reaches, this.drawRadius, {
@@ -150,8 +158,6 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     if (level.box) prepareBounds(object, level.box);
     const found = parts(object, level.index);
     const offset = selection.append(found.map((part) => part.draw));
-    // A deferred level has no upfront mesh count, so its indirect draw table can relocate.
-    meshes.relocate();
     const made = meshes.make(level, found, offset);
     for (const mesh of made) staged.add(mesh);
     const abandon = () => {
@@ -247,37 +253,56 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     this.meshes?.setRadius(this.drawRadius);
     // The wind shape comes from the source, but taller/offset levels can sway farther.
     const reach = slope * Math.max(Math.abs(this.envelope.min.y - baseY), Math.abs(this.envelope.max.y - baseY));
-    this.blocks.pad(this.rest.radius > 0 ? reach / this.rest.radius : 0);
+    const sway = this.rest.radius > 0 ? reach / this.rest.radius : 0;
+    this.blocks.pad(sway);
     this.blocks.refit();
+    if (this.selection) this.selection.reach.value = this.rest.radius * (1 + sway);
   }
 
-  /** Sort instances for `camera`; demand begins after its first drawing context exists. */
+  /**
+   * Sort instances for `camera`, a view or a shadow map's; a view's demand begins after
+   * its first drawing context exists.
+   */
   update(camera: Camera): void {
-    if (this.disposed || inShadowPass(this)) return;
-    const { entries, selection, meshes } = this;
+    if (this.disposed) return;
+    const { entries, selection, meshes, residency } = this;
     if (!selection || !meshes) return;
     validate(entries);
     if (this.forceLevel !== null && !entries[this.forceLevel]) throw new Error(`Lod: forceLevel ${this.forceLevel} is not a level`);
     this.store.measure(this.blocks);
     const height = viewportHeight(camera);
     view.begin(camera, height ?? TYPICAL_HEIGHT, this.forceLevel);
-    tintLevels(entries, Lod.debug);
+    const shadow = inShadowPass(this);
+    const seen = shadow ? this.cast : this.last;
     const worldScale = this.matrixWorld.getMaxScaleOnAxis();
-    const scale = view.scale * Lod.quality * (view.ortho ? worldScale : 1);
-    const { last } = this;
-    last.eye.copy(view.eye).applyMatrix4(inverse.copy(this.matrixWorld).invert());
-    last.selected = true;
-    last.scale = scale;
-    last.ortho = view.ortho;
-    last.fades = view.fades;
-    last.forced = this.forceLevel;
-    const stable = this.blocks.select(entries, last, this.reaches, height !== null, this.matrixWorld);
-    const { residency } = this;
+    seen.eye.copy(view.eye).applyMatrix4(inverse.copy(this.matrixWorld).invert());
+    seen.scale = view.scale * Lod.quality * (view.ortho ? worldScale : 1);
+    seen.ortho = view.ortho;
+    seen.fades = view.fades;
+    seen.forced = this.forceLevel;
+    this.blocks.select(entries, seen, this.reaches, height !== null, this.matrixWorld);
     const progress = residency.progress;
     if (selection.progress.value !== progress) {
       selection.progress.value = progress;
       selection.changed();
     }
+    if (!shadow) this.demandLevels(camera);
+    this.reroute(progress);
+    local.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).multiply(this.matrixWorld);
+    frustum.setFromProjectionMatrix(local, camera.coordinateSystem, camera.reversedDepth);
+    selection.aim(camera, { ...seen, frustum }, entries);
+    // Selected only when something may draw: an InstancedLod with every level hidden
+    // keeps its last selection.
+    meshes.schedule(meshes.show(camera, this.matrixWorld));
+    if (!shadow) residency.settle();
+  }
+
+  /** Ask for the levels the view of `camera` needs, and install them as they arrive. */
+  private demandLevels(camera: Camera): void {
+    const { entries, meshes, residency, last } = this;
+    if (!meshes) return;
+    tintLevels(entries, Lod.debug);
+    last.selected = true;
     const needed: number[] = [];
     if (this.bounds.isEmpty()) {
       // Reusable crowds can be populated and drawn in the same frame.
@@ -286,15 +311,9 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
       this.blocks.demand(entries, last, this.demand, this.matrixWorld);
       // Coarsest first, so its load starts first.
       for (let i = this.demand.length - 1; i >= 0; i--) if (inView(camera, this.matrixWorld, at(this.demand, i))) needed.push(i);
-      this.reroute(progress);
     }
     residency.demand(camera, needed);
     residency.update(camera, meshes.byLevel);
-    selection.aim(last.eye, scale, view.ortho, view.fades, this.forceLevel, entries, stable);
-    // Selected only when something may draw: an InstancedLod with every level hidden
-    // keeps its last selection.
-    meshes.schedule(meshes.show(camera, this.matrixWorld));
-    residency.settle();
   }
 
   /** As `Lod.ready`: resolves once an update finds every level its instances select in view installed and faded in. */

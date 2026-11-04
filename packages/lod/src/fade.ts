@@ -1,4 +1,4 @@
-import { Color, Matrix4, StorageBufferAttribute, StorageInstancedBufferAttribute, type Node, type NodeBuilder, type Object3D } from "three/webgpu";
+import { type Camera, Color, Matrix4, StorageBufferAttribute, StorageInstancedBufferAttribute, type Node, type NodeBuilder, type Object3D } from "three/webgpu";
 import {
   Fn,
   cameraProjectionMatrix,
@@ -20,6 +20,7 @@ import {
   vec2,
   vec3,
 } from "three/tsl";
+import type { Slots } from "./instanced/select.js";
 import { isImpostorMesh, isLodInstances, storageMatrices } from "./three.js";
 import { column, instanceGroup, isOrthographic, maxScale } from "./tsl.js";
 
@@ -32,9 +33,10 @@ import { column, instanceGroup, isOrthographic, maxScale } from "./tsl.js";
 // their own pixels: a fading object casts one shadow, a dithered mix of both levels'.
 //
 // Where the fade comes from depends on how the level is drawn (see `Draw`): one value
-// per mesh for a Lod, set by the CPU; one per instance for an InstancedLod, written by
-// its selection pass. Materials read it per object while it renders, so the copies of
-// one material every level draws with share one compiled shader (see material.ts).
+// per mesh for a Lod, set by the CPU; one per slot for an InstancedLod, written by its
+// selection pass for each view with the index of the instance the slot draws. Materials
+// read it per object while it renders, so the copies of one material every level draws
+// with share one compiled shader (see material.ts).
 
 /** How a mesh of a level is drawn, which says where its fade and shadow size come from. */
 export type Draw =
@@ -49,8 +51,8 @@ export type Draw =
     }
   | {
       kind: "instances";
-      /** one signed fade per instance slot; null for none (an ImpostorMesh of its own) */
-      fades: StorageBufferAttribute | null;
+      /** per view, the instance and signed fade of each slot; null for none (an ImpostorMesh of its own, drawing every instance) */
+      slots: ((camera: Camera) => Slots) | null;
       /** one instance's bounding radius in its own space */
       radius: number;
       tint: Color;
@@ -96,24 +98,36 @@ const matrices = storage(identity, "mat4", 0)
     if (!attribute) throw new Error("Lod: instance draw has no matrices");
     return attribute;
   });
+/** `object`'s slots in the view `camera` draws, when it draws slots. */
+function slotsOf(object: Object3D | null, camera: Camera | null) {
+  const draw = of(object);
+  return draw?.kind === "instances" && draw.slots && camera ? draw.slots(camera) : null;
+}
 const zero = new StorageBufferAttribute(new Float32Array(1), 1);
 const fades = storage(zero, "float", 0)
   .setName("lodInstanceFades")
   .setGroup(instanceGroup)
   .toReadOnly()
-  .onObjectUpdate(({ object }) => {
-    const draw = of(object);
-    return draw?.kind === "instances" && draw.fades ? draw.fades : zero;
-  });
-const fadeIndex = uniform(0, "uint").onObjectUpdate(({ object }) => {
+  .onObjectUpdate(({ object, camera }) => slotsOf(object, camera)?.fades ?? zero);
+const none = new StorageBufferAttribute(new Uint32Array(1), 1);
+const indices = storage(none, "uint", 0)
+  .setName("lodInstanceSlots")
+  .setGroup(instanceGroup)
+  .toReadOnly()
+  .onObjectUpdate(({ object, camera }) => slotsOf(object, camera)?.indices ?? none);
+/** 1 when the draw's instances are slots of a selection, else 0. */
+const slotted = uniform(0, "uint").onObjectUpdate(({ object }) => {
   const draw = of(object);
-  return Number(draw?.kind === "instances" && draw.fades !== null);
+  return Number(draw?.kind === "instances" && draw.slots !== null);
 });
 const instanceCaster = uniform(false).onObjectUpdate(({ object }) => of(object)?.kind === "instances");
 
+/** The instance this draw's instance index stands for: the one in its slot, or itself. */
+const instance = Fn(() => slotted.equal(1).select(indices.element(instanceIndex), instanceIndex));
+
 /** This draw's instance matrix when its matrices live in storage, else null. */
 export function instanceMatrixOf(object: Object3D): Node<"mat4"> | null {
-  return storageMatrices(object) ? matrices.element(instanceIndex) : null;
+  return storageMatrices(object) ? matrices.element(instance()) : null;
 }
 
 const white = new StorageInstancedBufferAttribute(new Float32Array([1, 1, 1, 1]), 4);
@@ -126,12 +140,12 @@ const colorIndex = uniform(0, "uint").onObjectUpdate(({ object }) =>
   Number(!!object && (isImpostorMesh(object) || isLodInstances(object)) && object.instanceColor !== null),
 );
 
-export const instanceColor = varying(colors.element(instanceIndex.mul(colorIndex)).xyz).setInterpolation("flat");
+export const instanceColor = varying(colors.element(instance().mul(colorIndex)).xyz).setInterpolation("flat");
 
 /** Apply the level's shared instance bindings before its own deformation, as Three does for InstancedMesh. */
 export function placeInstances(builder: NodeBuilder): void {
   if (!isLodInstances(builder.object)) return;
-  const matrix = matrices.element(instanceIndex);
+  const matrix = matrices.element(instance());
   positionLocal.assign(matrix.mul(positionLocal).xyz);
   if (builder.geometry.hasAttribute("normal")) normalLocal.assign(transformNormal(normalLocal, matrix));
   if (builder.object.instanceColor) varyingProperty("vec3", "vInstanceColor").assign(instanceColor);
@@ -140,11 +154,11 @@ export function placeInstances(builder: NodeBuilder): void {
 /** This draw's signed fade. */
 export const fade = Fn((builder): Node<"float"> => {
   if (isImpostorMesh(builder.object))
-    return varying(fades.element(instanceIndex.mul(fadeIndex)))
+    return varying(fades.element(instanceIndex.mul(slotted)))
       .setInterpolation("flat")
       .add(objectFade);
   const draw = draws.get(builder.object);
-  if (draw?.kind !== "instances" || !draw.fades) return objectFade;
+  if (draw?.kind !== "instances" || !draw.slots) return objectFade;
   // Constant across the primitive: keep compute-written slots out of fragment bindings.
   return varying(fades.element(instanceIndex)).setInterpolation("flat");
 });

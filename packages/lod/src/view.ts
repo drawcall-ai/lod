@@ -99,6 +99,7 @@ function recordShadowPass(renderer: Renderer, scene: Scene, camera: Camera): voi
   let passes = shadowPasses.get(scene);
   if (!passes) shadowPasses.set(scene, (passes = new Map()));
   passes.set(target, { renderer, camera, target, material });
+  heights.set(camera, target.height);
 }
 
 /**
@@ -120,7 +121,7 @@ export function watchViewport(mesh: Mesh): void {
   mesh.onBeforeRender = (renderer, scene, camera, geometry, material, group) => {
     previous.call(mesh, renderer, scene, camera, geometry, material, group);
     const gpu = gpuRenderer(renderer);
-    // Shadow maps are drawn for the viewing camera's choice, not measured.
+    // A shadow map's camera measures in its texels (an InstancedLod selects for it); a Lod draws its view's choice.
     if (inShadowPass(scene)) return recordShadowPass(gpu, scene, camera);
     const target = gpu.getRenderTarget();
     const mrt = gpu.getMRT();

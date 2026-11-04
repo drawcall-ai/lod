@@ -35,6 +35,7 @@ export class Instances extends Mesh<BufferGeometry, NodeMaterial> {
   readonly isLodInstances = true;
   // Capacity is in the indirect draw; a stable count keeps Three's shader key shared.
   readonly count = 1;
+  /** Every instance's matrix: a draw reads those of the instances in its view's slots. */
   instanceMatrix: StorageInstancedBufferAttribute;
   instanceColor: StorageInstancedBufferAttribute | null;
   // The owner installs the aggregate bounds instead of scanning the instance slots.
@@ -42,8 +43,8 @@ export class Instances extends Mesh<BufferGeometry, NodeMaterial> {
 
   constructor(geometry: BufferGeometry, material: NodeMaterial, selection: Selection) {
     super(geometry, material);
-    this.instanceMatrix = selection.slots.matrices;
-    this.instanceColor = selection.slots.colors;
+    this.instanceMatrix = selection.matrices;
+    this.instanceColor = selection.colors;
   }
 }
 
@@ -62,8 +63,6 @@ export interface Owner {
 export class Meshes {
   /** Per level, the meshes drawing it. */
   readonly byLevel: LevelMesh[][] = [];
-  /** Each mesh's byte offset in the indirect argument table. */
-  private readonly offsets = new Map<LevelMesh, number>();
 
   /**
    * `reaches` are the per-level spheres the meshes are culled by; `radius` is the source
@@ -89,15 +88,8 @@ export class Meshes {
     return parts.map((part, i) => this.mesh(level, part, offset + i * ARGS_BYTES));
   }
 
-  /** Re-point every mesh at the indirect argument table, which moves as deferred levels append to it. */
-  relocate(): void {
-    const { args, argsOffset } = this.selection;
-    for (const [mesh, offset] of this.offsets) mesh.geometry.setIndirect(args, argsOffset + offset);
-  }
-
   /** Release `mesh`, which may never have been added. */
   free(mesh: LevelMesh): void {
-    this.offsets.delete(mesh);
     // ImpostorMesh.dispose also destroys instance buffers; the Selection owns ours.
     if (isImpostorMesh(mesh)) mesh.material.release();
     mesh.geometry.dispose();
@@ -106,7 +98,7 @@ export class Meshes {
   /** Every level's meshes draw the instance colours the selection has begun to carry. */
   recolor(): void {
     for (const mesh of this.byLevel.flat()) {
-      mesh.instanceColor = this.selection.slots.colors;
+      mesh.instanceColor = this.selection.colors;
       // Instance colours change the shader.
       if (!isImpostorMesh(mesh)) for (const material of [mesh.material].flat()) material.needsUpdate = true;
     }
@@ -140,7 +132,6 @@ export class Meshes {
     }
     due.delete(this.selection);
     this.byLevel.length = 0;
-    this.offsets.clear();
   }
 
   /** Material group `part.group` of `part.template` drawn for every instance in `level`'s slots. */
@@ -151,9 +142,8 @@ export class Meshes {
     const mesh = isImpostorMesh(template)
       ? card(template, placement, selection)
       : new Instances(placed(template.geometry, placement), groupMaterial(template, group), selection);
-    mesh.geometry = indirect(mesh.geometry, selection, offset);
-    this.offsets.set(mesh, offset);
-    setDraw(mesh, { kind: "instances", fades: selection.slots.fades, radius: this.radius, tint: level.tint });
+    mesh.geometry = instanced(mesh.geometry, selection);
+    setDraw(mesh, { kind: "instances", slots: (camera) => selection.view(camera), radius: this.radius, tint: level.tint });
     if (!isImpostorMesh(template)) placeInterior(mesh, placement);
     mesh.name = template.name;
     mesh.castShadow = template.castShadow;
@@ -161,20 +151,21 @@ export class Meshes {
     mesh.boundingSphere = at(this.reaches, level.index);
     watchViewport(mesh);
     const previous = mesh.onBeforeRender;
-    // Selected once per view, before the first level mesh draws: in the view, or in a
-    // shadow pass that comes first. The GPU runs it before anything drawn after it.
+    // Selected once per view, before the first level mesh draws in it: the GPU runs the
+    // selection before the pass, which is submitted when it ends.
     mesh.onBeforeRender = (renderer, scene, camera, geometry, material, group) => {
       if (!owner.live()) return;
       previous.call(mesh, renderer, scene, camera, geometry, material, group);
       const gpu = gpuRenderer(renderer);
-      // A caster outside the viewing frustum still needs its selection in a shadow draw.
       due.add(selection);
       // Each level's draws start at its slots (see select.ts).
       if (!gpu.hasFeature("indirect-first-instance")) throw new Error("InstancedLod: needs the GPU feature indirect-first-instance, which this device lacks");
       passes.length = 0;
-      for (const each of due) passes.push(...each.take(gpu));
+      for (const each of due) passes.push(...each.take(gpu, camera));
       due.clear();
       if (passes.length > 0) gpu.compute(passes);
+      const { args } = selection.view(camera);
+      mesh.geometry.setIndirect(args.attribute, args.offset + offset);
     };
     const after = mesh.onAfterRender;
     mesh.onAfterRender = (renderer, scene, camera, geometry, material, group) => {
@@ -191,13 +182,13 @@ function card(template: ImpostorMesh, placement: Matrix4, selection: Selection):
   // Indirect arguments supply the actual count. A card's public count is otherwise
   // used by Three to specialize its shader for one object's storage bindings.
   mesh.count = 1;
-  mesh.instanceMatrix = selection.slots.matrices;
-  mesh.instanceColor = selection.slots.colors;
+  mesh.instanceMatrix = selection.matrices;
+  mesh.instanceColor = selection.colors;
   return mesh;
 }
 
-/** A geometry drawing `geometry`'s buffers from the indirect arguments at byte `offset`. */
-function indirect(geometry: BufferGeometry, selection: Selection, offset: number): BufferGeometry {
+/** A geometry drawing `geometry`'s buffers for `selection`'s instances; each view's draw points it at its indirect arguments. */
+function instanced(geometry: BufferGeometry, selection: Selection): BufferGeometry {
   const view = new InstancedBufferGeometry();
   // Capacity belongs to the geometry's statistics, not the object's shader cache key.
   view.instanceCount = selection.count;
@@ -206,6 +197,5 @@ function indirect(geometry: BufferGeometry, selection: Selection, offset: number
   view.morphAttributes = geometry.morphAttributes;
   view.boundingBox = geometry.boundingBox;
   view.boundingSphere = geometry.boundingSphere;
-  view.setIndirect(selection.args, selection.argsOffset + offset);
   return view;
 }

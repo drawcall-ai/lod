@@ -1,5 +1,6 @@
 import {
-  type IndirectStorageBufferAttribute,
+  type Camera,
+  type Frustum,
   StorageBufferAttribute,
   StorageInstancedBufferAttribute,
   Vector3,
@@ -18,6 +19,7 @@ import {
   atomicLoad,
   atomicStore,
   distance,
+  dot,
   float,
   instanceIndex,
   int,
@@ -30,29 +32,61 @@ import {
 } from "three/tsl";
 import { at } from "../at.js";
 import { FADE } from "../levels.js";
-import { maxScale } from "../tsl.js";
+import { maxScale, stretch } from "../tsl.js";
 import { ARGS_BYTES, args, type ArgsSlice } from "./args.js";
 
 const CURRENT: ComputeNode[] = [];
 
 // Sorting the instances of an InstancedLod into its levels, on the GPU, once per view.
 //
-// One thread per instance measures its height on screen from its matrix, the same way a
-// Lod does on the CPU (see View: 2 r q / d, q pixels per unit of subtense times
-// Lod.quality), picks its level and, near a switch, the finer level fading out with it
-// (see fade.ts), and appends itself to each level it draws: its matrix, colour and signed
-// fade go to that level's next free slot. Every level has `count` slots of one buffer,
-// from its `first`; its draws start there (their first instance), so all levels share
-// one pass, within WebGPU's default limit of 8 storage buffers per stage. A second pass hands each level's
-// count to the indirect draws of its meshes and clears the counts for the next view.
-// Instances at scale 0 draw in no level.
+// One thread per instance skips it outside the view's frustum, measures its height on
+// screen from its matrix, the same way a Lod does on the CPU (see View: 2 r q / d, q
+// pixels per unit of subtense times Lod.quality), picks its level and, near a switch, the
+// finer level fading out with it (see fade.ts), and appends itself to each level it draws:
+// its index and signed fade go to that level's next free slot. A shadow map is a view of
+// its own, measured in its texels: each one draws only its casters, each at the level its
+// texels resolve. Every level has `count` slots of one buffer, from its `first`; its draws
+// start there (their first instance), so all levels share one pass, within WebGPU's
+// default limit of 8 storage buffers per stage. A second pass hands each level's count to
+// the indirect draws of its meshes and clears the counts for the next view. Instances at
+// scale 0 draw in no level.
 
-/** The slots every level draws from, `count` per level that draws, from its `first`. */
-interface Slots {
-  readonly matrices: StorageInstancedBufferAttribute;
+/** One view's selection: per level, the instances it draws and their fades, from `first`, and its indirect draws. */
+export interface Slots {
+  /** the index of the instance each slot draws */
+  readonly indices: StorageBufferAttribute;
+  /** its signed fade */
   readonly fades: StorageBufferAttribute;
-  /** RGB and a pad per slot, once the instances have colours */
-  colors: StorageInstancedBufferAttribute | null;
+  /** this view's draws, `ARGS_BYTES` apart */
+  args: ArgsSlice;
+}
+
+/** What a view selects with: see `Selection.aim`. */
+export interface Aim {
+  eye: Vector3;
+  /** pixels per unit of subtense (perspective) or of size (orthographic), × Lod.quality */
+  scale: number;
+  ortho: boolean;
+  fades: boolean;
+  forced: number | null;
+  /** the view's frustum in the crowd's space */
+  frustum: Frustum;
+}
+
+/** A view's slots and the aim they were last selected with. */
+interface Selected extends Slots {
+  aimed: boolean;
+  readonly eye: Vector3;
+  scale: number;
+  ortho: boolean;
+  fading: boolean;
+  forced: number;
+  readonly planes: Vector4[];
+  readonly maxPixels: number[];
+  /** Bumped whenever the slots stop matching the aim or the instances. */
+  revision: number;
+  /** Per renderer, the revision its buffers hold. */
+  readonly current: WeakMap<Renderer, number>;
 }
 
 /** One indirect draw: a level's mesh, drawing `count` indices (or vertices) from `start`. */
@@ -64,57 +98,49 @@ export interface IndirectDraw {
 }
 
 export class Selection {
-  /** The instances' matrices, as `setMatrixAt` writes them. */
-  readonly matrices: StorageBufferAttribute;
+  /** The instances' matrices, as `setMatrixAt` writes them; level draws read them through their slots. */
+  readonly matrices: StorageInstancedBufferAttribute;
   /** The instances' colours (RGB, padded to four floats), once there are any. */
-  colors: StorageBufferAttribute | null = null;
+  colors: StorageInstancedBufferAttribute | null = null;
   readonly count: number;
-  readonly slots: Slots;
   /** Per level, its first slot, or null for a level that draws nothing. */
   readonly first: Array<number | null>;
-  /** Shared page containing this selection's draws, `ARGS_BYTES` apart. */
-  get args(): IndirectStorageBufferAttribute {
-    return this.slice.attribute;
-  }
-  /** Byte offset of this selection's first draw in its page. */
-  get argsOffset(): number {
-    return this.slice.offset;
-  }
-
-  // What the view sets before each selection (see InstancedLod.update).
-  readonly eye = uniform(new Vector3());
-  /** Pixels per unit of subtense (perspective) or of size (orthographic), × Lod.quality. */
-  readonly scale = uniform(0);
-  readonly ortho = uniform(0, "uint");
-  readonly fades = uniform(0, "uint");
-  /** The level every instance draws, or -1. */
-  readonly forced = uniform(-1, "int");
   /** Per level, its maxPixels (any finite stand-in for level 0's Infinity). */
   readonly maxPixels: Array<{ value: number } & Node<"float">>;
+  readonly progress = uniform(1);
+  /** The radius around an instance's centre, in its own space, that every level and its sway stay within. */
+  readonly reach = uniform(0);
 
+  // What the view being selected sets (see `load`).
+  private readonly eye = uniform(new Vector3());
+  private readonly scale = uniform(0);
+  private readonly ortho = uniform(0, "uint");
+  private readonly fades = uniform(0, "uint");
+  /** The level every instance draws, or -1. */
+  private readonly forced = uniform(-1, "int");
+  private readonly planes = Array.from({ length: 6 }, () => uniform(new Vector4(0, 0, 0, 1)));
+  private readonly views = new Map<Camera, Selected>();
+  private readonly slotCount: number;
   private readonly counts: StorageBufferAttribute;
-  private slice: ArgsSlice;
   private readonly routes: Array<{ value: number } & Node<"int">>;
   private readonly previous: Array<{ value: number } & Node<"int">>;
   // Crowd dimensions are data; equal ladders share shader modules regardless of capacity.
   private readonly starts: Array<{ value: number } & Node<"uint">>;
   private readonly bounds = uniform(new Vector4());
-  readonly progress = uniform(1);
   private readonly drawCount = uniform(0, "uint");
   private readonly records = storage(new StorageBufferAttribute(new Uint32Array(4), 4), "uvec4", 0)
     .setName("lodDraws")
     .toReadOnly();
-  private readonly arguments = storage(new StorageBufferAttribute(new Uint32Array(5), 1), "uint", 0).setName("lodDrawArgs");
+  private readonly out = {
+    indices: storage(new StorageBufferAttribute(new Uint32Array(1), 1), "uint", 0).setName("lodSlotIndices"),
+    fades: storage(new StorageBufferAttribute(new Float32Array(1), 1), "float", 0).setName("lodSlotFades"),
+    arguments: storage(new StorageBufferAttribute(new Uint32Array(5), 1), "uint", 0).setName("lodDrawArgs"),
+  };
   // Allocation location must not specialize the arguments pass for every crowd.
   private readonly argsStart = uniform(0, "uint");
   private kernels: ComputeNode[] | null = null;
-  /**
-   * The renderers whose buffers hold the selection for the view and instances as they are
-   * (each renderer keeps its own copy of the buffers): see `aim` and `changed`.
-   */
-  private readonly current = new WeakMap<Renderer, number>();
-  private revision = 0;
-  private stable: object | undefined;
+  /** Renderers that have taken a selection: each keeps its own copy of the buffers. */
+  private readonly renderers = new WeakSet<Renderer>();
   private readonly colorRenderers = new WeakSet<Renderer>();
   private rendererCount = 0;
 
@@ -130,17 +156,15 @@ export class Selection {
   ) {
     const count = matrices.length / 16;
     this.count = count;
-    this.matrices = new StorageBufferAttribute(matrices, 16);
+    this.matrices = new StorageInstancedBufferAttribute(matrices, 16);
     let next = 0;
     this.first = drawing.map((draws) => (draws ? next++ * count : null));
     this.starts = this.first.map((first) => uniform(first ?? 0, "uint"));
     this.bounds.value.set(sphere.center.x, sphere.center.y, sphere.center.z, sphere.radius);
-    const slots = Math.max(next * count, 1);
-    this.slots = { matrices: new StorageInstancedBufferAttribute(slots, 16), fades: new StorageBufferAttribute(slots, 1), colors: null };
+    this.reach.value = sphere.radius;
+    this.slotCount = Math.max(next * count, 1);
     this.maxPixels = drawing.map(() => uniform(0));
     this.counts = new StorageBufferAttribute(new Uint32Array(drawing.length), 1);
-    this.slice = this.allocate(draws);
-    this.argsStart.value = this.argsOffset / 4;
     this.routes = fallback.map((level) => uniform(level, "int"));
     this.previous = fallback.map((level) => uniform(level, "int"));
     this.writeDraws(draws);
@@ -161,15 +185,43 @@ export class Selection {
     return args.take(values);
   }
 
-  /** Slots and kernels survive arrivals; only the variable-size draw table is replaced. */
+  /** `camera`'s slots, made when first asked for: until it is aimed, its draws draw nothing. */
+  view(camera: Camera): Slots {
+    return this.selected(camera);
+  }
+
+  private selected(camera: Camera): Selected {
+    let view = this.views.get(camera);
+    if (view) return view;
+    view = {
+      indices: new StorageBufferAttribute(new Uint32Array(this.slotCount), 1),
+      fades: new StorageBufferAttribute(new Float32Array(this.slotCount), 1),
+      args: this.allocate(this.draws),
+      aimed: false,
+      eye: new Vector3(),
+      scale: 0,
+      ortho: false,
+      fading: false,
+      forced: -1,
+      planes: this.planes.map(() => new Vector4()),
+      maxPixels: this.maxPixels.map(() => 0),
+      revision: 0,
+      current: new WeakMap(),
+    };
+    this.views.set(camera, view);
+    return view;
+  }
+
+  /** Slots and kernels survive arrivals; only the variable-size draw tables are replaced. */
   append(draws: readonly IndirectDraw[]): number {
     const offset = this.draws.length * ARGS_BYTES;
-    const previous = this.slice;
     this.draws = [...this.draws, ...draws];
-    this.slice = this.allocate(this.draws);
-    this.argsStart.value = this.argsOffset / 4;
+    for (const view of this.views.values()) {
+      const previous = view.args;
+      view.args = this.allocate(this.draws);
+      previous.dispose();
+    }
     this.writeDraws(this.draws);
-    previous.dispose();
     this.changed();
     return offset;
   }
@@ -191,47 +243,53 @@ export class Selection {
     draws.forEach((draw, i) => values.set([draw.level, draw.count, draw.start, Number(draw.indexed)], i * 4));
     const previous = this.records.value;
     this.records.value = new StorageBufferAttribute(values, 4);
-    this.arguments.value = this.args;
     this.drawCount.value = draws.length;
     previous.dispose();
   }
 
-  /** Select for this view next; the uniforms are set and compared here. */
-  aim(eye: Vector3, scale: number, ortho: boolean, fades: boolean, forced: number | null, levels: readonly { maxPixels: number }[], stable?: object): void {
-    const same =
-      this.eye.value.equals(eye) &&
-      this.scale.value === scale &&
-      this.ortho.value === Number(ortho) &&
-      this.fades.value === Number(fades) &&
-      this.forced.value === (forced ?? -1) &&
-      levels.every((level, l) => at(this.maxPixels, l).value === Math.min(level.maxPixels, 3.4e38));
-    // The caller can prove that changed views still produce the same solid slots.
-    const reuse = stable !== undefined && stable === this.stable;
-    this.stable = stable;
-    if (same) return;
-    if (!reuse) this.revision++;
-    this.eye.value.copy(eye);
-    this.scale.value = scale;
-    this.ortho.value = Number(ortho);
-    this.fades.value = Number(fades);
-    this.forced.value = forced ?? -1;
+  /** Select for `camera` as `aim` says next time it draws; nothing runs while the aim stays the same. */
+  aim(camera: Camera, aim: Aim, levels: readonly { maxPixels: number }[]): void {
+    const view = this.selected(camera);
+    const forced = aim.forced ?? -1;
     // any finite stand-in for level 0's Infinity
-    levels.forEach((level, l) => {
-      at(this.maxPixels, l).value = Math.min(level.maxPixels, 3.4e38);
+    const maxPixels = levels.map((level) => Math.min(level.maxPixels, 3.4e38));
+    const { planes } = aim.frustum;
+    const same =
+      view.aimed &&
+      view.eye.equals(aim.eye) &&
+      view.scale === aim.scale &&
+      view.ortho === aim.ortho &&
+      view.fading === aim.fades &&
+      view.forced === forced &&
+      maxPixels.every((value, l) => view.maxPixels[l] === value) &&
+      view.planes.every((plane, i) => plane.x === planes[i]?.normal.x && plane.y === planes[i].normal.y && plane.z === planes[i].normal.z && plane.w === planes[i].constant);
+    if (same) return;
+    view.aimed = true;
+    view.eye.copy(aim.eye);
+    view.scale = aim.scale;
+    view.ortho = aim.ortho;
+    view.fading = aim.fades;
+    view.forced = forced;
+    maxPixels.forEach((value, l) => (view.maxPixels[l] = value));
+    view.planes.forEach((plane, i) => {
+      const { normal, constant } = at(planes, i);
+      plane.set(normal.x, normal.y, normal.z, constant);
     });
+    view.revision++;
   }
 
-  /** The instances changed since the last selection. */
+  /** The instances, their routes or their handover changed since the last selection of every view. */
   changed(): void {
-    this.revision++;
-    this.stable = undefined;
+    for (const view of this.views.values()) view.revision++;
   }
 
-  /** The passes `renderer` has to run for the selection to be current in its buffers, or none. */
-  take(renderer: Renderer): ComputeNode[] {
-    if (this.current.get(renderer) === this.revision) return CURRENT;
-    const first = !this.current.has(renderer);
+  /** The passes `renderer` has to run for `camera`'s slots to be current in its buffers, or none. */
+  take(renderer: Renderer, camera: Camera): ComputeNode[] {
+    const view = this.views.get(camera);
+    if (!view?.aimed || view.current.get(renderer) === view.revision) return CURRENT;
+    const first = !this.renderers.has(renderer);
     if (first) {
+      this.renderers.add(renderer);
       this.rendererCount = Math.min(2, this.rendererCount + 1);
     }
     // Three clears updateRanges globally after one backend uploads them. A second,
@@ -244,27 +302,44 @@ export class Selection {
       this.colorRenderers.add(renderer);
       this.colors.clearUpdateRanges();
     }
-    this.current.set(renderer, this.revision);
+    view.current.set(renderer, view.revision);
+    this.load(view);
     return this.passes();
   }
 
-  /** Carry `colors` (4 floats per instance) with the instances from now on, into the slots. */
+  /** Point the passes at `view`: its aim in the uniforms, its slots and draws in the storage. */
+  private load(view: Selected): void {
+    this.eye.value.copy(view.eye);
+    this.scale.value = view.scale;
+    this.ortho.value = Number(view.ortho);
+    this.fades.value = Number(view.fading);
+    this.forced.value = view.forced;
+    view.maxPixels.forEach((value, l) => (at(this.maxPixels, l).value = value));
+    view.planes.forEach((plane, i) => at(this.planes, i).value.copy(plane));
+    this.out.indices.value = view.indices;
+    this.out.fades.value = view.fades;
+    this.out.arguments.value = view.args.attribute;
+    this.argsStart.value = view.args.offset / 4;
+  }
+
+  /** Carry `colors` (4 floats per instance) with the instances from now on. */
   useColors(colors: Float32Array): void {
     if (this.colors) return;
-    this.colors = new StorageBufferAttribute(colors, 4);
-    this.slots.colors = new StorageInstancedBufferAttribute(this.slots.matrices.count, 4);
-    for (const kernel of this.kernels ?? []) kernel.dispose();
-    this.kernels = null;
+    this.colors = new StorageInstancedBufferAttribute(colors, 4);
     this.changed();
   }
 
   /** Frees its buffers and passes. */
   dispose(): void {
-    const { slots } = this;
-    for (const attribute of [this.matrices, this.colors, this.counts, slots.matrices, slots.fades, slots.colors]) attribute?.dispose();
+    for (const attribute of [this.matrices, this.colors, this.counts]) attribute?.dispose();
+    for (const view of this.views.values()) {
+      view.indices.dispose();
+      view.fades.dispose();
+      view.args.dispose();
+    }
+    this.views.clear();
     for (const kernel of this.kernels ?? []) kernel.dispose();
     this.kernels = null;
-    this.slice.dispose();
     this.records.value.dispose();
   }
 
@@ -275,20 +350,17 @@ export class Selection {
 
   /** The pass that fills the slots. */
   private selectPass(): ComputeNode {
-    const { count, colors, slots } = this;
-    const matrices = storage(this.matrices, "mat4", 0).setName("lodSourceMatrices");
-    const sources = colors ? storage(colors, "vec4", 0).setName("lodSourceColors") : null;
+    const { count, out } = this;
+    const matrices = storage(this.matrices, "mat4", 0).setName("lodSourceMatrices").toReadOnly();
     const counts = storage(this.counts, "uint", 0).setName("lodCounts").toAtomic();
-    const out = {
-      matrices: storage(slots.matrices, "mat4", 0).setName("lodSlotMatrices"),
-      fades: storage(slots.fades, "float", 0).setName("lodSlotFades"),
-      colors: slots.colors && storage(slots.colors, "vec4", 0).setName("lodSlotColors"),
-    };
     return Fn(() => {
       const m = matrices.element(instanceIndex).toVar();
       const r = this.bounds.w.mul(maxScale(m)).toVar();
       If(r.equal(0), () => Return());
-      const centre = m.mul(vec4(this.bounds.xyz, 1)).xyz;
+      const centre = m.mul(vec4(this.bounds.xyz, 1)).xyz.toVar();
+      // Outside the view: wholly behind one of its planes, with every level and its sway.
+      const extent = this.reach.mul(stretch(m)).mul(1 + 1e-4).negate();
+      for (const plane of this.planes) If(dot(plane.xyz, centre).add(plane.w).lessThan(extent), () => Return());
       const size = r.mul(2).mul(this.scale);
       const height = this.ortho
         .equal(uint(1))
@@ -351,9 +423,8 @@ export class Selection {
       });
       const emit = (level: number, first: Node<"uint">, fade: Node<"float">) => {
         const slot = atomicAdd(counts.element(level), uint(1)).add(first).toVar();
-        out.matrices.element(slot).assign(m);
+        out.indices.element(slot).assign(instanceIndex);
         out.fades.element(slot).assign(fade);
-        if (out.colors && sources) out.colors.element(slot).assign(sources.element(instanceIndex));
       };
       this.first.forEach((first, level) => {
         if (first === null) return;
@@ -373,11 +444,12 @@ export class Selection {
         const first = uint(0).toVar();
         this.starts.forEach((value, level) => If(draw.x.equal(level), () => void first.assign(value)));
         const base = this.argsStart.add(i.mul(ARGS_BYTES / 4));
-        this.arguments.element(base).assign(draw.y);
-        this.arguments.element(base.add(1)).assign(atomicLoad(counts.element(draw.x)));
-        this.arguments.element(base.add(2)).assign(draw.z);
-        this.arguments.element(base.add(3)).assign(draw.w.equal(1).select(uint(0), first));
-        this.arguments.element(base.add(4)).assign(draw.w.equal(1).select(first, uint(0)));
+        const words = this.out.arguments;
+        words.element(base).assign(draw.y);
+        words.element(base.add(1)).assign(atomicLoad(counts.element(draw.x)));
+        words.element(base.add(2)).assign(draw.z);
+        words.element(base.add(3)).assign(draw.w.equal(1).select(uint(0), first));
+        words.element(base.add(4)).assign(draw.w.equal(1).select(first, uint(0)));
       });
       this.first.forEach((_, l) => atomicStore(counts.element(l), uint(0)));
     })().compute(1);

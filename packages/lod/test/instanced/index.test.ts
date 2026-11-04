@@ -17,11 +17,13 @@ import {
   Sphere,
   Vector3,
   type BufferAttribute,
+  type Camera,
   type Intersection,
 } from "three/webgpu";
 import { uniform } from "three/tsl";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { drawOf } from "../../src/fade.js";
+import { ARGS_BYTES } from "../../src/instanced/args.js";
 import { Instances } from "../../src/instanced/meshes.js";
 import { InstancedLod } from "../../src/instanced/index.js";
 import { Lod } from "../../src/lod.js";
@@ -57,36 +59,37 @@ async function select(lod: InstancedLod, camera: PerspectiveCamera): Promise<voi
 const read = async (attribute: BufferAttribute) => renderer.getArrayBufferAsync(attribute);
 const meshes = (lod: InstancedLod) => lod.children.filter(isMesh);
 
-/** Per level mesh, what the GPU put in its slots: each instance's distance, colour and signed fade, in slot order. */
-async function slots(lod: InstancedLod) {
+/** Per level mesh, what the GPU put in its slots for `camera`: each instance's distance, colour and signed fade, in slot order. */
+async function slots(lod: InstancedLod, camera: Camera) {
   return Promise.all(
-    meshes(lod).map(async (mesh) => {
-      const args = mesh.geometry.getIndirect();
+    meshes(lod).map(async (mesh, index) => {
       const draw = drawOf(mesh);
-      if (!args || draw?.kind !== "instances" || !draw.fades || !(mesh instanceof Instances)) throw new Error("not a level mesh");
-      const offset = mesh.geometry.indirectOffset;
-      if (typeof offset !== "number") throw new Error("one draw per mesh");
-      const words = new Uint32Array(await read(args));
+      if (draw?.kind !== "instances" || !draw.slots || !(mesh instanceof Instances)) throw new Error("not a level mesh");
+      const { indices, fades, args } = draw.slots(camera);
+      // One draw per mesh, in the order of the meshes.
+      const offset = args.offset + index * ARGS_BYTES;
+      const words = new Uint32Array(await read(args.attribute));
       const count = words[offset / 4 + 1] ?? 0;
       // The level's first slot: the draw's first instance (after its base vertex, indexed).
       const first = words[offset / 4 + (mesh.geometry.index ? 4 : 3)] ?? 0;
+      const instances = new Uint32Array(await read(indices));
       const matrices = new Float32Array(await read(mesh.instanceMatrix));
-      const fades = new Float32Array(await read(draw.fades));
+      const signed = new Float32Array(await read(fades));
       const colors = mesh.instanceColor && new Float32Array(await read(mesh.instanceColor));
       return Array.from({ length: count }, (_, k) => {
-        const j = first + k;
+        const i = instances[first + k] ?? 0;
         return {
-          distance: Math.round(-(matrices[j * 16 + 14] ?? 0)),
-          fade: fades[j] ?? 0,
-          color: colors ? new Color().fromArray(colors, j * 4).getHex() : null,
+          distance: Math.round(-(matrices[i * 16 + 14] ?? 0)),
+          fade: signed[first + k] ?? 0,
+          color: colors ? new Color().fromArray(colors, i * 4).getHex() : null,
         };
       });
     }),
   );
 }
 
-/** Per level, the distances of the instances it draws, nearest first. */
-const distances = async (lod: InstancedLod) => (await slots(lod)).map((level) => level.map((slot) => slot.distance).sort((a, b) => a - b));
+/** Per level, the distances of the instances it draws for `camera`, nearest first. */
+const distances = async (lod: InstancedLod, camera: Camera) => (await slots(lod, camera)).map((level) => level.map((slot) => slot.distance).sort((a, b) => a - b));
 
 afterEach(() => {
   Lod.quality = 1;
@@ -121,13 +124,13 @@ describe("InstancedLod", { timeout: GPU_TIMEOUT }, () => {
     const { lod, camera } = setup(heights);
     await select(lod, camera);
     const d = heights.map((h) => Math.round(at(h)));
-    expect(await distances(lod)).toEqual([
+    expect(await distances(lod, camera)).toEqual([
       [d[0], d[1]],
       [d[1], d[2], d[3]],
       [d[3], d[4]],
     ]);
     // Half way through the fade: the finer side keeps the dither below 0.5, the coarser the rest.
-    const [source, simplified] = await slots(lod);
+    const [source, simplified] = await slots(lod, camera);
     expect(source?.find((slot) => slot.distance === d[1])?.fade).toBeCloseTo(-0.5, 2);
     expect(simplified?.find((slot) => slot.distance === d[1])?.fade).toBeCloseTo(0.5, 2);
     expect(simplified?.find((slot) => slot.distance === d[2])?.fade).toBe(0);
@@ -140,13 +143,13 @@ describe("InstancedLod", { timeout: GPU_TIMEOUT }, () => {
     await select(lod, camera);
     expect([0, 1, 2].map((i) => lod.levelOf(i))).toEqual([0, 0, 2]);
     const byValue = (a: number | null, b: number | null) => (a ?? 0) - (b ?? 0);
-    const colours = (await slots(lod)).map((level) => level.map((slot) => slot.color).sort(byValue));
+    const colours = (await slots(lod, camera)).map((level) => level.map((slot) => slot.color).sort(byValue));
     expect(colours).toEqual([[0xffffff, 0xffffff], [0xffffff], [0xff0000]]);
     // A colour set later follows its instance into the level it moves to.
     lod.setColorAt(1, new Color(0, 0, 1));
     lod.forceLevel = 2;
     await select(lod, camera);
-    expect((await slots(lod))[2]?.map((slot) => slot.color).sort(byValue)).toEqual([0x0000ff, 0xff0000, 0xffffff]);
+    expect((await slots(lod, camera))[2]?.map((slot) => slot.color).sort(byValue)).toEqual([0x0000ff, 0xff0000, 0xffffff]);
   });
 
   it("measures an empty level 0 by the first level that draws, and draws nothing of it", async () => {
@@ -157,7 +160,7 @@ describe("InstancedLod", { timeout: GPU_TIMEOUT }, () => {
     const camera = new PerspectiveCamera(60, 1, 0.1, 1e5);
     await select(lod, camera);
     expect([lod.levelOf(0), lod.levelOf(1)]).toEqual([0, 1]);
-    expect(await distances(lod)).toEqual([[Math.round(at(20))]]);
+    expect(await distances(lod, camera)).toEqual([[Math.round(at(20))]]);
     expect(() => new InstancedLod([{ object: new Group() }], 1)).toThrow(/no level has visible geometry/);
   });
 
@@ -165,11 +168,11 @@ describe("InstancedLod", { timeout: GPU_TIMEOUT }, () => {
     const { lod, camera } = setup([14, 100]);
     Lod.quality = 0.5;
     await select(lod, camera);
-    expect((await distances(lod)).map((list) => list.length)).toEqual([1, 0, 1]);
+    expect((await distances(lod, camera)).map((list) => list.length)).toEqual([1, 0, 1]);
     lod.forceLevel = 1;
     lod.setMatrixAt(1, new Matrix4().makeScale(0, 0, 0));
     await select(lod, camera);
-    expect((await distances(lod)).map((list) => list.length)).toEqual([0, 1, 0]);
+    expect((await distances(lod, camera)).map((list) => list.length)).toEqual([0, 1, 0]);
     expect(lod.levelOf(1)).toBe(null);
   });
 
@@ -177,13 +180,43 @@ describe("InstancedLod", { timeout: GPU_TIMEOUT }, () => {
     const { lod, camera } = setup([100]);
     const parent = new Group().add(lod);
     await select(lod, camera);
-    expect((await distances(lod)).map((list) => list.length)).toEqual([1, 0, 0]);
+    expect((await distances(lod, camera)).map((list) => list.length)).toEqual([1, 0, 0]);
     parent.position.z = -at(5) + at(100);
     await select(lod, camera);
-    expect((await distances(lod)).map((list) => list.length)).toEqual([0, 0, 1]);
+    expect((await distances(lod, camera)).map((list) => list.length)).toEqual([0, 0, 1]);
     camera.position.z = -at(5) + at(100);
     await select(lod, camera);
-    expect((await distances(lod)).map((list) => list.length)).toEqual([1, 0, 0]);
+    expect((await distances(lod, camera)).map((list) => list.length)).toEqual([1, 0, 0]);
+  });
+
+  it("draws only the instances in each view, and into a shadow map each at the level its texels resolve", async () => {
+    // 50 px tall in view: the source. Behind the camera, it is in the shadow map only; far aside, in neither.
+    const { lod, camera } = setup([50, 50, 50]);
+    lod.setMatrixAt(1, new Matrix4().makeTranslation(0, 0, at(50)));
+    lod.setMatrixAt(2, new Matrix4().makeTranslation(200, 0, -at(50)));
+    lod.traverse((node) => (node.castShadow = true));
+    const sun = new DirectionalLight();
+    sun.position.set(0, 50, -at(50));
+    sun.target.position.set(0, 0, -at(50));
+    sun.castShadow = true;
+    // 64 texels over 32 units: the box, about 3.5 units across, is 7 texels: the coarsest level.
+    sun.shadow.mapSize.set(64, 64);
+    Object.assign(sun.shadow.camera, { left: -16, right: 16, top: 16, bottom: -16, near: 1, far: 100 });
+    // A receiver, so that the shadow map is drawn.
+    const ground = new Mesh(new PlaneGeometry(40, 40).rotateX(-Math.PI / 2), new MeshStandardMaterial());
+    ground.position.set(0, -2, -at(50));
+    ground.receiveShadow = true;
+    const scene = new Scene().add(lod, ground, sun, sun.target);
+    const enabled = renderer.shadowMap.enabled;
+    renderer.shadowMap.enabled = true;
+    try {
+      for (let i = 0; i < 2; i++) await render(scene, camera, SIZE);
+      expect(await distances(lod, camera)).toEqual([[Math.round(at(50))], [], []]);
+      expect((await distances(lod, sun.shadow.camera)).map((list) => list.length)).toEqual([0, 0, 2]);
+    } finally {
+      renderer.shadowMap.enabled = enabled;
+      lod.dispose();
+    }
   });
 
   it("uploads every instance moved since the last frame, levelOf read in between", async () => {
@@ -193,7 +226,7 @@ describe("InstancedLod", { timeout: GPU_TIMEOUT }, () => {
     lod.levelOf(0);
     lod.setMatrixAt(1, new Matrix4().makeTranslation(0, 0, -at(25)));
     await select(lod, camera);
-    expect(await distances(lod)).toEqual([[], [Math.round(at(25))], [Math.round(at(5))]]);
+    expect(await distances(lod, camera)).toEqual([[], [Math.round(at(25))], [Math.round(at(5))]]);
   });
 });
 

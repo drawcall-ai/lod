@@ -112,6 +112,8 @@ Tune transitions in the intended viewport with `Lod.debug`, then inspect motion 
 
 Group nearby copies into spatial regions. Broad batches can lose useful culling, while tiny batches spend too much time submitting draws. Reuse instance slots and update changed matrices or colours instead of rebuilding whole crowds. Count material groups as well as triangles; an atlas alone does not combine draws. Each distinct material structure costs a pipeline compile on the first view, so variants should share material structure.
 
+An `InstancedLod` draws into each view, shadow maps included, only the instances inside that view, and into a shadow map at the level its texels resolve. Shadow casting then costs about what the map can show; when it still dominates, turn `castShadow` off on the levels that matter least to the shadow, such as small plants, in `onLevel`.
+
 Judge impostors by covered screen area and overlap as well as triangle count. Compare individual cards with baked patches for dense cover, and inspect parallax and mip quality during transitions.
 
 Compare cold startup, warm startup and first traversal under the same camera movement, viewport, shadows, wind and thresholds. Keep expensive diagnostic overlays outside measurements. A warm repeat does not reveal first-use work, and fewer draws can still lose to worse culling, shading or memory costs.

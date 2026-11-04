@@ -15,6 +15,7 @@ import {
 } from "three/webgpu";
 import { expect, it, vi } from "vitest";
 import { drawOf, setDraw } from "../../../src/fade.js";
+import { args } from "../../../src/instanced/args.js";
 import { bakeImpostor } from "../../../src/impostor/bake/index.js";
 import { ImpostorMesh, impostorInstances } from "../../../src/impostor/mesh/index.js";
 import { InstancedLod } from "../../../src/instanced/index.js";
@@ -66,6 +67,7 @@ it.each([false, true])("shares one impostor shader across crowd/single bindings 
   const view = camera();
   const setup = vi.spyOn(template.material, "setup");
   const fades = new StorageBufferAttribute(new Float32Array([0, 1]), 1);
+  const indices = new StorageBufferAttribute(new Uint32Array([0, 1]), 1);
   try {
     let pixels = await render(scene, view);
     const first = left.children[0];
@@ -102,7 +104,7 @@ it.each([false, true])("shares one impostor shader across crowd/single bindings 
 
     const draw = drawOf(first);
     if (draw?.kind !== "instances") throw new Error("missing crowd fade");
-    setDraw(first, { ...draw, fades });
+    setDraw(first, { ...draw, slots: () => ({ indices, fades, args: args.take(new Uint32Array(5)) }) });
     pixels = await render(scene, view);
     color(pixels, -2, 1, "red");
     color(pixels, -2, -1, "empty");
@@ -153,6 +155,7 @@ it("shares shadow shader builds while each crowd and single card keeps its own m
   const shadow = vi.spyOn(NodeMaterial.prototype, "setup");
   const builds = () => shadow.mock.calls.filter(([builder]) => builder.material.name === "ShadowMaterial" && builder.object instanceof ImpostorMesh);
   const fades = new StorageBufferAttribute(new Float32Array([1, 0]), 1);
+  const indices = new StorageBufferAttribute(new Uint32Array([0, 1]), 1);
   const enabled = renderer.shadowMap.enabled;
   renderer.shadowMap.enabled = true;
   try {
@@ -164,7 +167,7 @@ it("shares shadow shader builds while each crowd and single card keeps its own m
     if (!first) throw new Error("missing crowd card");
     const draw = drawOf(first);
     if (draw?.kind !== "instances") throw new Error("missing crowd fade");
-    setDraw(first, { ...draw, fades });
+    setDraw(first, { ...draw, slots: () => ({ indices, fades, args: args.take(new Uint32Array(5)) }) });
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     pixels = await render(scene, view);
     expect(pixel(pixels, -3, 0)[0]).toBeGreaterThan(lit * 0.9);

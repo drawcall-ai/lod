@@ -3,8 +3,8 @@ import { FADE, DEMAND, lastFitting } from "../levels.js";
 import { at } from "../at.js";
 import { Dirty } from "./dirty.js";
 
-// Cover float32 matrix products, distances and threshold arithmetic. Near a switch,
-// uncertain blocks keep both levels and cannot reuse a previous GPU selection.
+// Cover float32 matrix products, distances and threshold arithmetic: near a switch,
+// uncertain blocks keep both levels.
 const ROUND = 1e-5;
 const matrix = new Matrix4();
 const point = new Vector3();
@@ -17,7 +17,6 @@ interface Branch {
   smallest: number;
   largest: number;
   reach: number;
-  solid: number;
   unsafe: boolean;
 }
 
@@ -39,9 +38,6 @@ export class Blocks {
   private readonly roundoff: Float64Array;
   private readonly unsafe: Uint8Array;
   private readonly levelBoxes: Box3[] = [];
-  private token: object = {};
-  private changed = false;
-  private complete = true;
   private low = 0;
   private high = 0;
   private padding = 0;
@@ -68,7 +64,6 @@ export class Blocks {
       smallest: Infinity,
       largest: 0,
       reach: 0,
-      solid: -1,
       unsafe: false,
     }));
     this.dirty = new Dirty(Math.ceil(count / this.block));
@@ -137,7 +132,6 @@ export class Blocks {
     node.centers.makeEmpty();
     node.smallest = Infinity;
     node.largest = node.reach = 0;
-    node.solid = -1;
     node.unsafe = false;
     const end = Math.min((block + 1) * this.block, this.radii.length);
     for (let i = block * this.block; i < end; i++) {
@@ -167,25 +161,19 @@ export class Blocks {
     node.largest = Math.max(a.largest, b.largest);
     node.reach = Math.max(a.reach, b.reach);
     node.unsafe = a.unsafe || b.unsafe;
-    node.solid = -1;
   }
 
-  /** Level bounds plus a token only when every block has an unchanged solid choice. */
-  select(levels: readonly { maxPixels: number }[], view: BlockView, reaches: Sphere[], measured: boolean, root: Matrix4): object | undefined {
+  /** Each level's bounds: where its instances may draw for `view`. */
+  select(levels: readonly { maxPixels: number }[], view: BlockView, reaches: Sphere[], measured: boolean, root: Matrix4): void {
     this.resetBoxes(levels);
-    this.complete = measured;
-    this.changed = false;
     if (!this.bounds.isEmpty()) {
       if (measured) this.visit(1, levels, view);
       else for (const box of this.levelBoxes) box.copy(at(this.tree, 1).geometry);
     }
     this.enclose(levels, view, reaches, root, measured, 1);
-    if (!this.complete) return undefined;
-    if (this.changed) this.token = {};
-    return this.token;
   }
 
-  /** Ahead-of-view demand without changing solid selections or their reuse token. */
+  /** Ahead-of-view demand, widened by the demand margin. */
   demand(levels: readonly { maxPixels: number }[], view: BlockView, reaches: Sphere[], root: Matrix4): void {
     this.resetBoxes(levels);
     this.gather(1, levels, view);
@@ -225,22 +213,11 @@ export class Blocks {
     const node = at(this.tree, index);
     if (node.geometry.isEmpty()) return;
     const [finest, coarsest] = this.span(node, levels, view, 1);
-    if (finest === coarsest) {
-      this.changed ||= node.solid !== finest;
-      node.solid = finest;
-      at(this.levelBoxes, finest).union(node.geometry);
-      return;
-    }
-    // Descendants may hold a proof from an older split; never reuse that after the
-    // whole branch was last selected as one solid level.
-    this.changed ||= node.solid !== -1;
-    node.solid = -1;
-    if (index < this.leaves) {
+    if (finest !== coarsest && index < this.leaves) {
       this.visit(index * 2, levels, view);
       this.visit(index * 2 + 1, levels, view);
       return;
     }
-    this.complete = false;
     for (let level = finest; level <= coarsest; level++) at(this.levelBoxes, level).union(node.geometry);
   }
 

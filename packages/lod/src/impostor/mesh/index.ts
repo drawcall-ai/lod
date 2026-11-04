@@ -92,7 +92,7 @@ export class ImpostorMesh extends Mesh<PlaneGeometry, ImpostorMaterial> {
     this.count = count;
     this.instanceMatrix = new StorageInstancedBufferAttribute(count, 16);
     for (let i = 0; i < count; i++) scratch.identity().toArray(this.instanceMatrix.array, i * 16);
-    setDraw(this, { kind: "instances", fades: null, radius: boundingRadius(impostor.box), tint: new Color(1, 1, 1) });
+    setDraw(this, { kind: "instances", slots: null, radius: boundingRadius(impostor.box), tint: new Color(1, 1, 1) });
   }
 
   setMatrixAt(index: number, matrix: Matrix4): void {
