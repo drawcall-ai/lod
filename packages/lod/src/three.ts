@@ -57,6 +57,8 @@ export const isLOD = (
   node: Object3D,
 ): node is Object3D & { isLOD: true; autoUpdate: boolean; readonly levels: ReadonlyArray<{ readonly object?: Object3D; readonly box?: Box3 }> } =>
   flag(node, "isLOD");
+/** A Lod or InstancedLod, of this or another copy of the package (a nested level from a .glts script). */
+export const hasReady = (node: Object3D): node is Object3D & { ready(): Promise<void> } => isLOD(node) && "ready" in node && typeof node.ready === "function";
 export const isStandard = (material: Material): material is MeshStandardMaterial => flag(material, "isMeshStandardMaterial");
 export const isPhysical = (material: Material): material is MeshPhysicalMaterial => flag(material, "isMeshPhysicalMaterial");
 export const isNodeMaterial = (material: Material): material is NodeMaterial => flag(material, "isNodeMaterial");

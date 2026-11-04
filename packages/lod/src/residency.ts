@@ -27,13 +27,16 @@ function compiledIn(context: RenderContext): WeakSet<Object3D> {
 
 /** Decode is shared by load function; readiness and handover belong to each owner. */
 export class Residency {
-  readonly ready = new Set<Level>();
+  readonly installed = new Set<Level>();
   fallback: number[] = [];
   previous: number[] = [];
   private start: number | undefined;
   private task: { done: Promise<void>; level?: Level } | undefined;
   private readonly demanded = new Set<Level>();
   private readonly requested = new Set<() => Promise<Object3D>>();
+  /** Whether the last demand wanted levels before a draw with its camera supplied a render context to install them in. */
+  private blind = false;
+  private readonly waiting: { resolve: () => void; reject: (error: Error) => void }[] = [];
   private disposed = false;
   /** The first failure; it stops further demand. */
   error: Error | undefined;
@@ -46,8 +49,8 @@ export class Residency {
   ) {}
 
   reset(): void {
-    for (const level of this.levels) if (level.object) this.ready.add(level);
-    this.fallback = fallbacks(this.levels, this.ready);
+    for (const level of this.levels) if (level.object) this.installed.add(level);
+    this.fallback = fallbacks(this.levels, this.installed);
   }
 
   get progress(): number {
@@ -59,14 +62,19 @@ export class Residency {
 
   get pending(): boolean {
     if (this.disposed || this.error) return false;
-    if (this.task?.level) return true;
-    for (const level of this.demanded) if (!this.ready.has(level)) return true;
+    if (this.blind || this.task?.level) return true;
+    for (const level of this.demanded) if (!this.installed.has(level)) return true;
     return false;
   }
 
-  demand(camera: Camera, indices: Iterable<number>): void {
+  demand(camera: Camera, indices: readonly number[]): void {
     this.demanded.clear();
-    if (this.disposed || this.error || !renderContext(camera)) return;
+    this.blind = false;
+    if (this.disposed || this.error) return;
+    if (!renderContext(camera)) {
+      this.blind = indices.length > 0;
+      return;
+    }
     for (const index of indices) {
       const level = at(this.levels, index);
       this.demanded.add(level);
@@ -80,7 +88,7 @@ export class Residency {
   }
 
   needsDemand(camera: Camera, meshes: readonly (readonly Object3D[])[]): boolean {
-    if (this.ready.size < this.levels.length || this.progress < 1) return true;
+    if (this.installed.size < this.levels.length || this.progress < 1) return true;
     const context = renderContext(camera);
     if (!context) return false;
     const compiled = compiledMeshes.get(context);
@@ -115,17 +123,30 @@ export class Residency {
     }
     for (const level of this.levels) {
       const object = level.input.load && loading(level.input.load)?.object;
-      if (!object || !this.demanded.has(level) || this.ready.has(level)) continue;
+      if (!object || !this.demanded.has(level) || this.installed.has(level)) continue;
       this.run(async () => {
         await this.install(level, object, context);
         if (this.disposed) return;
         this.previous = this.fallback;
-        this.ready.add(level);
-        this.fallback = fallbacks(this.levels, this.ready);
+        this.installed.add(level);
+        this.fallback = fallbacks(this.levels, this.installed);
         this.start = performance.now();
       }, level);
       return;
     }
+  }
+
+  /** See `Lod.ready`. */
+  ready(): Promise<void> {
+    if (this.error) return Promise.reject(this.error);
+    if (this.disposed) return Promise.reject(new Error("Lod: disposed"));
+    return new Promise((resolve, reject) => this.waiting.push({ resolve, reject }));
+  }
+
+  /** Called at the end of each view's update: resolves `ready` once nothing it demanded is missing or still fading in. */
+  settle(): void {
+    if (this.waiting.length === 0 || this.pending || this.progress < 1) return;
+    for (const { resolve } of this.waiting.splice(0)) resolve();
   }
 
   private run(action: () => Promise<void>, level?: Level): void {
@@ -140,7 +161,7 @@ export class Residency {
         this.task = undefined;
       })
       .then(() => {
-        if (level && !this.disposed && this.ready.has(level)) this.changed();
+        if (level && !this.disposed && this.installed.has(level)) this.changed();
       });
     this.task = { done, level };
   }
@@ -150,10 +171,12 @@ export class Residency {
     this.error = error instanceof Error ? error : new Error("Lod: level failed", { cause: error });
     this.failed(this.error);
     console.error(this.error);
+    for (const { reject } of this.waiting.splice(0)) reject(this.error);
   }
 
   dispose(release: () => void): void {
     this.disposed = true;
+    for (const { reject } of this.waiting.splice(0)) reject(new Error("Lod: disposed while waiting for ready"));
     const free = () => {
       release();
       const templates = new Set<Object3D>();

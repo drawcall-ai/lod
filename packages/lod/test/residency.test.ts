@@ -184,3 +184,94 @@ it.each(["Lod", "InstancedLod"])("shares a failed decode with a cloned %s withou
     clone.dispose();
   }
 });
+
+/** Render `scene` every frame until `done` settles, as an app's frame loop does. */
+async function renderUntil<T>(scene: Scene, camera: PerspectiveCamera, done: Promise<T>): Promise<T> {
+  let frame = 0;
+  const loop = () => {
+    renderer.render(scene, camera);
+    frame = requestAnimationFrame(loop);
+  };
+  frame = requestAnimationFrame(loop);
+  try {
+    return await done;
+  } finally {
+    cancelAnimationFrame(frame);
+  }
+}
+
+/** A deferred box whose load finishes only once `release` is called. */
+function gatedBox() {
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const load = vi.fn(async () => {
+    await gate;
+    return box();
+  });
+  return { level: { load, maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) }, load, release };
+}
+
+it.each(["Lod", "InstancedLod"])("resolves %s.ready only once the level the view selects has arrived and faded in", { timeout: GPU_TIMEOUT }, async (kind) => {
+  const { level, load, release } = gatedBox();
+  // The box is about 40 px tall: the view selects the deferred source.
+  const levels = [level, { object: box(), maxPixels: 1 }];
+  const owner = kind === "Lod" ? new Lod(levels) : new InstancedLod(levels, 1);
+  owner.position.z = -5;
+  const camera = new PerspectiveCamera(60, 1, 0.1, 100);
+  const scene = new Scene().add(owner);
+  let settled = false;
+  // Asked before the first draw: the view's needs are unknown until then, so it waits.
+  const ready = owner.ready().then(() => (settled = true));
+  try {
+    await renderUntil(scene, camera, vi.waitFor(() => expect(load).toHaveBeenCalled()));
+    await renderUntil(scene, camera, new Promise((resolve) => setTimeout(resolve, 100)));
+    expect(settled).toBe(false);
+    release();
+    await renderUntil(scene, camera, ready);
+    if (owner instanceof InstancedLod) expect(owner.levelOf(0)).toBe(0);
+    else expect(visibleLevels(owner)).toEqual([0]);
+  } finally {
+    owner.dispose();
+  }
+});
+
+it("waits in Lod.ready for the deferred levels of a nested Lod the view draws", { timeout: GPU_TIMEOUT }, async () => {
+  const { level, release } = gatedBox();
+  const inner = new Lod([level, { object: box(), maxPixels: 1 }]);
+  const outer = new Lod([{ load: async () => inner, maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) }, { object: box(), maxPixels: 1 }]);
+  outer.position.z = -5;
+  const camera = new PerspectiveCamera(60, 1, 0.1, 100);
+  const scene = new Scene().add(outer);
+  try {
+    const ready = outer.ready();
+    let settled = false;
+    void ready.then(() => (settled = true));
+    await renderUntil(scene, camera, vi.waitFor(() => expect(outer.levels[0]?.object).toBeDefined(), { timeout: 10_000 }));
+    await renderUntil(scene, camera, new Promise((resolve) => setTimeout(resolve, 2 * HANDOVER_MS)));
+    expect(settled).toBe(false);
+    release();
+    await renderUntil(scene, camera, ready);
+    const nested = outer.levels[0]?.object;
+    if (!(nested instanceof Lod)) throw new Error("the nested level is not a Lod");
+    expect(visibleLevels(outer)).toEqual([0]);
+    expect(visibleLevels(nested)).toEqual([0]);
+  } finally {
+    outer.dispose();
+  }
+});
+
+it("rejects Lod.ready when a level the view needs fails", { timeout: GPU_TIMEOUT }, async () => {
+  const owner = new Lod([{ load: () => Promise.reject(new Error("load failed")), maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) }]);
+  owner.position.z = -5;
+  const camera = new PerspectiveCamera(60, 1, 0.1, 100);
+  const scene = new Scene().add(owner);
+  const report = vi.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    await expect(renderUntil(scene, camera, owner.ready())).rejects.toThrow("load failed");
+  } finally {
+    report.mockRestore();
+    owner.dispose();
+  }
+});
+
+const visibleLevels = (owner: Lod) => owner.levels.flatMap(({ object }, i) => (object?.visible ? [i] : []));

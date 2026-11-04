@@ -88,6 +88,24 @@ Match a low shell to the source's occupied shape and keep it inside the source's
 
 For dense cover, combine near individuals with a baked distant patch. Jitter position and rotation to avoid aligned gaps, preserve continuity across tile borders, and use side walls only on exposed boundaries. An empty far level can stop drawing individuals once the patch carries their appearance.
 
+## Wait for a view before a screenshot
+
+Levels load as the camera comes to need them, so a frame drawn soon after loading still shows coarser fallbacks. To capture one view correctly, even with nothing cached, place the camera first, keep the frame loop running, and await `ready()` on every visible `Lod` and `InstancedLod`; then capture a frame. Each `ready()` resolves at the end of an update that finds every level the view selects installed and faded in, including the levels of nested `Lod`s it draws, and rejects when a level fails. A promise covers the view it settled for: after moving the camera, ask again. An owner that is hidden is never updated, so its `ready()` waits until it is shown.
+
+```ts
+import { InstancedLod, Lod } from "@drawcall/lod";
+
+camera.position.copy(viewpoint);
+const lods: (Lod | InstancedLod)[] = [];
+scene.traverseVisible((node) => {
+  if (node instanceof Lod || node instanceof InstancedLod) lods.push(node);
+});
+await Promise.all(lods.map((lod) => lod.ready()));
+// the frame loop keeps rendering; capture the next frame
+```
+
+Levels install one draw preparation per frame, so the wait for a close view of many distinct assets takes many frames; a slow frame makes it longer.
+
 ## Tune the complete scene
 
 Tune transitions in the intended viewport with `Lod.debug`, then inspect motion through them. Use `Lod.quality` for a scene-wide adjustment and individual thresholds for particular assets. Give an impostor bake the intended screen size at its handover, then inspect its coverage and colour from several angles.

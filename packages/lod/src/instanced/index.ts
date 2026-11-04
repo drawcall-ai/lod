@@ -294,6 +294,12 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     // Selected only when something may draw: an InstancedLod with every level hidden
     // keeps its last selection.
     meshes.schedule(meshes.show(camera, this.matrixWorld));
+    residency.settle();
+  }
+
+  /** As `Lod.ready`: resolves once an update finds every level its instances select in view installed and faded in. */
+  ready(): Promise<void> {
+    return this.residency.ready();
   }
 
   /** Move each level's reach to the level that draws in its place: its fallback, and during a handover also its previous one. */

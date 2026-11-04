@@ -7,7 +7,7 @@ import { setDraw, type Draw } from "./fade.js";
 import { levelMaterial } from "./material.js";
 import { Residency, handover, type LevelsEventMap } from "./residency.js";
 import { FADE, Level, cloneLevels, estimate, fadeProgress, levelAt, demandLevels, tintLevels, validate, type LevelView, type LodLevel } from "./levels.js";
-import { inShadowPass, isImpostorMesh, isLOD, isMesh, rejectSkinned } from "./three.js";
+import { hasReady, inShadowPass, isImpostorMesh, isLOD, isMesh, rejectSkinned } from "./three.js";
 import { TYPICAL_HEIGHT, View, viewportHeight, watchViewport, watchContext, unwatchContext, inView, type RenderContext } from "./view.js";
 import { WIND_BOUNDS } from "./wind/hooks.js";
 import { copyWind, refreshWind } from "./wind/index.js";
@@ -154,6 +154,18 @@ export class Lod extends Object3D<LevelsEventMap> {
       draw.diameter = diameter;
       if (each.object) each.object.visible = i === level || (t > 0 && i === finer);
     });
+    this.residency.settle();
+  }
+
+  /**
+   * Resolves at the end of the first `update` (outside shadow passes) that finds every level
+   * the view selects installed and faded in, then waits for the nested Lods it draws; rejects
+   * when a level fails or the Lod is disposed. Levels install while frames render, so keep
+   * rendering meanwhile. Await it on every Lod and InstancedLod before a screenshot.
+   */
+  async ready(): Promise<void> {
+    await this.residency.ready();
+    await Promise.all(this.entries.flatMap(({ object }) => (object?.visible && hasReady(object) ? [object.ready()] : [])));
   }
 
   private async install(level: Level, template: Object3D, context: RenderContext): Promise<void> {
