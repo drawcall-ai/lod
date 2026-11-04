@@ -74,7 +74,7 @@ const object = new Lod([{ load: loadDetailedMesh, maxPixels: Infinity, box: sour
 scene.add(object);
 ```
 
-A missing level uses the nearest ready finer representation, or the nearest coarser one if none is finer. Requests follow the visible view and begin ahead of the transition. Clones share loading work. Keep the resources used by a deferred load alive until it finishes.
+A missing level draws as the nearest ready coarser representation, skipping empty levels, or as the nearest finer one if none is ready; a crowd never pays for detail its view does not select. Requests follow the visible view and begin ahead of the transition. Clones share loading work. Keep the resources used by a deferred load alive until it finishes.
 
 For direct preparation and storage outside `LodLoader`, combine `simplify`, `bakeMesh`, or `bakeImpostor` with the corresponding codecs and drawing objects. Use `ImpostorMesh` directly when copies stay distant throughout their lifetime. For external detail systems, combine an empty near level with a coarse representation and use `levelOf` or level visibility to decide where to supply detail.
 
