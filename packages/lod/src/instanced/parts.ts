@@ -1,6 +1,6 @@
 import { type BufferGeometry, Matrix4, type Mesh, type Object3D } from "three/webgpu";
 import { levelMaterial } from "../material.js";
-import type { IndirectDraw } from "./select.js";
+import type { IndirectDraw } from "./kernel.js";
 import { isImpostorMesh, isInstancedMesh, isLOD, isMesh, rejectSkinned } from "../three.js";
 
 // A level template split into the parts an InstancedLod draws, placed in the instance's space.
