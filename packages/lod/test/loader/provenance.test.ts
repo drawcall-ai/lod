@@ -91,9 +91,9 @@ describe("asset cache provenance", () => {
     });
   });
 
-  it("saves a level built with the ladder, and one built on demand, with what their own loads read", async () => {
+  it("saves a level built from the ladder's source with what that source and the level's own loads read", async () => {
     const { loader } = fixture((url) => ({ url, dependencyUrls: url.includes("low.glts") ? ["/models/low.bin"] : [helper], packages: [], runtimeModules: [] }));
-    // The baked level, without maxPixels, is built with the ladder; the impostor once it loads.
+    // The baked level, without maxPixels, is built with the ladder; the impostor builds from the source it measured.
     const levels = await loader.loadAsync({
       url: script,
       levels: [

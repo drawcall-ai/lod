@@ -62,18 +62,18 @@ describe("LodLoader", () => {
     const dependencies = level?.dependencies ?? {};
     expect(Object.values(dependencies).filter((value) => value.url === helper)).toHaveLength(1);
     expect(dependencies["resource:1"]).toEqual({ url: extra });
-    // The source measured for the shape, which the source level takes, then the build's own source, low shell and rooms.
-    expect(load).toHaveBeenCalledTimes(4);
+    // The source measured for the shape, which the build reuses, then the low shell and rooms.
+    expect(load).toHaveBeenCalledTimes(3);
     const warm = await loader.loadAsync(request);
     const baked = await warm[1]?.load?.();
-    expect(load).toHaveBeenCalledTimes(4);
+    expect(load).toHaveBeenCalledTimes(3);
     if (!(baked instanceof Mesh) || !(baked.material instanceof InteriorMaterial)) throw new Error("Expected restored baked windows");
     expect(baked.material.rooms?.boxes).toHaveLength(1);
     const source = warm[0];
     if (!source?.load) throw new Error("Expected deferred GLTS source");
     expect((await source.load()).children).toHaveLength(house().children.length + 1);
     expect(load).toHaveBeenLastCalledWith("/models/house.glts?variant=2");
-    expect(load).toHaveBeenCalledTimes(5);
+    expect(load).toHaveBeenCalledTimes(4);
   }, 120_000);
 
   it("builds a deferred level only on demand, from a source without onLevel effects, sharing the ladder source's textures", async () => {
@@ -163,6 +163,23 @@ describe("LodLoader", () => {
     const baked = (await new LodLoader(manager).loadAsync(request))[1];
     await expect(baked?.load?.()).rejects.toThrow("extends beyond the source's bounds");
     expect(cache.saved.map(({ options }) => options.dependencies?.["lod:level"]?.value)).toEqual([{ type: "shape" }]);
+  });
+
+  it("disposes the source measured for the shape once no level is left to build from it", async () => {
+    const sources: Mesh[] = [];
+    const { manager, load } = sourceFixture(() => sources[sources.push(new Mesh(new BoxGeometry(), new MeshStandardMaterial())) - 1]);
+    const request: LodRequest = { url: "/spare.glb", levels: [{ type: "impostor", maxPixels: 100 }] };
+    const loader = new LodLoader(manager);
+    await (await loader.loadAsync(request))[1]?.load?.();
+    // A cached level and a shape to measure again: the source measured is left over once the level has loaded.
+    for (const [key] of cache.files) if (key.includes('"type":"shape"')) cache.files.delete(key);
+    const levels = await loader.loadAsync(request);
+    expect(load).toHaveBeenCalledTimes(2);
+    const disposed = vi.fn();
+    sources[1]?.geometry.addEventListener("dispose", disposed);
+    await levels[1]?.load?.();
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(disposed).toHaveBeenCalledOnce();
   });
 
   it("disposes the source measured for the shape with an owner disposed before any level loaded", async () => {
@@ -265,8 +282,7 @@ describe("LodLoader", () => {
     }
   });
 
-  // Cold, the ladder loads its source to measure the shape, which the source level takes, and preloads its empty level;
-  // warm, only the empty level.
+  // Cold, the ladder loads its source to measure the shape and preloads its empty level; warm, only the empty level.
   it.each([false, true])("releases what a ladder loaded exactly once when the empty level's hook rejects (warm: %s)", async (warm) => {
     const sources: Array<{ object: Object3D; release: ReturnType<typeof vi.fn> }> = [];
     const { manager } = sourceFixture((url) => {
@@ -323,7 +339,7 @@ describe("LodLoader", () => {
     ).rejects.toBe(failure);
     expect(sources).toHaveLength(warm ? 0 : 1);
     for (const source of sources) expect(source.release).toHaveBeenCalledOnce();
-    expect([...released.keys()]).toEqual(warm ? [2] : [0, 2]);
+    expect([...released.keys()]).toEqual([2]);
     for (const release of released.values()) expect(release).toHaveBeenCalledOnce();
   });
 });
