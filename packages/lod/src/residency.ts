@@ -4,7 +4,7 @@ import { gpuRenderer, inShadowPass, isRenderer } from "./three.js";
 import { Watch, type Member } from "./watch.js";
 import { at } from "./at.js";
 import { compileLevel } from "./compile.js";
-import { enqueue } from "./queue.js";
+import { pause } from "./pause.js";
 import { disposeTree } from "./dispose.js";
 import { loadOnce, loading } from "./deferred.js";
 import { fallbacks, type Level } from "./levels.js";
@@ -54,7 +54,8 @@ export class Residency implements Member {
   fallback: number[] = [];
   previous: number[] = [];
   private start: number | undefined;
-  private task: { done: Promise<void>; level?: Level } | undefined;
+  /** What the owner is preparing: draws of levels it was given and the loaded levels it installs, all at once. */
+  private task: { done: Promise<void>; levels: readonly Level[] } | undefined;
   /** Each camera's last demand, and the scene's watch and pass it was made in (see watch.ts). */
   private readonly demands = new Map<Camera, Demand>();
   /** Whether a view updated the owner before its render was seen while levels are missing: it loads what it needs once it has. */
@@ -93,7 +94,7 @@ export class Residency implements Member {
 
   get pending(): boolean {
     if (this.disposed || this.error) return false;
-    if (this.waiting || this.task?.level) return true;
+    if (this.waiting || this.task?.levels.length) return true;
     for (const level of this.needed()) if (!this.installed.has(level)) return true;
     return false;
   }
@@ -154,7 +155,7 @@ export class Residency implements Member {
   }
 
   drawn(camera: Camera, object: Object3D): void {
-    // compileAsync also runs draw callbacks; its queued job records success itself.
+    // compileAsync also runs draw callbacks; its task records success itself.
     if (this.task) return;
     const context = renderContext(camera);
     if (!context) return;
@@ -166,35 +167,37 @@ export class Residency implements Member {
     if (!context || this.disposed || this.task || this.error || this.progress < 1) return;
     const compiled = compiledIn(context);
     const needed = this.needed();
-    const eager = this.levels.findIndex((level, index) => !level.input.load && needed.has(level) && meshes?.[index]?.some((mesh) => !compiled.has(mesh)));
-    const pending = meshes?.[eager];
-    if (pending) {
-      this.run(async () => {
-        for (const mesh of pending) {
-          if (compiled.has(mesh)) continue;
+    const given = this.levels.flatMap((level, index) =>
+      !level.input.load && needed.has(level) ? (meshes?.[index] ?? []).filter((mesh) => !compiled.has(mesh)) : [],
+    );
+    const arriving = this.levels.flatMap((level) => {
+      const object = level.input.load && loading(level.input.load)?.object;
+      return object && needed.has(level) && !this.installed.has(level) ? [{ level, object }] : [];
+    });
+    if (given.length === 0 && arriving.length === 0) return;
+    this.run(async () => {
+      const prepared = await Promise.allSettled([
+        ...given.map(async (mesh) => {
           await compileLevel(mesh, context);
           compiled.add(mesh);
-        }
+        }),
+        ...arriving.map(({ level, object }) => this.install(level, object, context)),
+      ]);
+      if (this.disposed) return;
+      const before = this.fallback;
+      arriving.forEach(({ level }, i) => {
+        if (prepared[given.length + i]?.status === "fulfilled") this.installed.add(level);
       });
-      return;
-    }
-    for (const level of this.levels) {
-      const object = level.input.load && loading(level.input.load)?.object;
-      if (!object || !needed.has(level) || this.installed.has(level)) continue;
-      this.run(async () => {
-        await this.install(level, object, context);
-        if (this.disposed) return;
-        const before = this.fallback;
-        this.installed.add(level);
-        this.fallback = fallbacks(this.levels, this.installed);
-        // The first level to arrive draws at once. Later ones hand over from what drew in their place: their route's
-        // level, or where that drew nothing, the level each instance kept drawing (the owner knows which).
-        if (at(before, 0) < 0 || this.fallback.every((index, i) => index === before[i])) return;
+      this.fallback = fallbacks(this.levels, this.installed);
+      // The first levels to arrive draw at once. Later ones hand over from what drew in their place: their route's
+      // level, or where that drew nothing, the level each instance kept drawing (the owner knows which).
+      if (at(before, 0) >= 0 && this.fallback.some((index, i) => index !== before[i])) {
         this.previous = before;
         this.start = performance.now();
-      }, level);
-      return;
-    }
+      }
+      const failed = prepared.find((result) => result.status === "rejected");
+      if (failed) throw failed.reason;
+    }, arriving.map(({ level }) => level));
   }
 
   /** A scene rendered a whole pass without updating the owner: it no longer draws there. */
@@ -211,21 +214,20 @@ export class Residency implements Member {
     this.item.held = !this.disposed && !this.error && (this.pending || this.task !== undefined || this.progress < 1);
   }
 
-  private run(action: () => Promise<void>, level?: Level): void {
-    const done = enqueue(
-      async () => {
+  /** Run `action` outside the render that asked for it, which may still be walking the scene. */
+  private run(action: () => Promise<void>, levels: readonly Level[]): void {
+    const done = pause()
+      .then(async () => {
         if (!this.disposed) await action();
-      },
-      level ? 0 : 1,
-    )
+      })
       .catch((error: unknown) => this.report(error))
       .finally(() => {
         this.task = undefined;
       })
       .then(() => {
-        if (level && !this.disposed && this.installed.has(level)) this.changed();
+        if (!this.disposed && levels.some((level) => this.installed.has(level))) this.changed();
       });
-    this.task = { done, level };
+    this.task = { done, levels };
   }
 
   /**
