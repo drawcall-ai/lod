@@ -1,6 +1,6 @@
 import { Vector2, Vector3, Vector4, type Camera, type Material, Matrix4, Frustum, Sphere, type Renderer, type Scene } from "three/webgpu";
 import { at } from "./at.js";
-import { inShadowPass, isOutputPass } from "./three.js";
+import { callDepth, inShadowPass, isOutputPass } from "./three.js";
 
 const scratch = new Vector3();
 
@@ -57,6 +57,8 @@ export interface RenderContext {
   mrt: Parameters<Renderer["setMRT"]>[0];
   cubeFace: number;
   mipLevel: number;
+  /** How deep in renders it drew (see `callDepth`). */
+  depth: number;
 }
 
 /**
@@ -74,6 +76,7 @@ export interface ShadowPass {
   camera: Camera;
   target: NonNullable<RenderContext["target"]>;
   material: Material;
+  depth: number;
 }
 
 const shadowPasses = new WeakMap<Scene, Map<ShadowPass["target"], ShadowPass>>();
@@ -92,7 +95,7 @@ export function recordRender(renderer: Renderer, scene: Scene, camera: Camera): 
     if (!active || !material) return;
     let passes = shadowPasses.get(scene);
     if (!passes) shadowPasses.set(scene, (passes = new Map()));
-    passes.set(active, { renderer, camera, target: active, material });
+    passes.set(active, { renderer, camera, target: active, material, depth: callDepth(renderer) });
     heights.set(camera, active.height);
     return;
   }
@@ -100,6 +103,7 @@ export function recordRender(renderer: Renderer, scene: Scene, camera: Camera): 
   const mrt = renderer.getMRT();
   const cubeFace = renderer.getActiveCubeFace();
   const mipLevel = renderer.getActiveMipmapLevel();
+  const depth = callDepth(renderer);
   let list = contexts.get(camera);
   if (!list) contexts.set(camera, (list = []));
   const index = list.findIndex(
@@ -109,9 +113,10 @@ export function recordRender(renderer: Renderer, scene: Scene, camera: Camera): 
       context.target === target &&
       context.mrt === mrt &&
       context.cubeFace === cubeFace &&
-      context.mipLevel === mipLevel,
+      context.mipLevel === mipLevel &&
+      context.depth === depth,
   );
-  const context = index >= 0 ? at(list.splice(index, 1), 0) : { renderer, camera, scene, target, mrt, cubeFace, mipLevel };
+  const context = index >= 0 ? at(list.splice(index, 1), 0) : { renderer, camera, scene, target, mrt, cubeFace, mipLevel, depth };
   // A few: those of a camera that draws several scenes or targets each frame.
   list.unshift(context);
   if (list.length > CONTEXTS) list.pop();

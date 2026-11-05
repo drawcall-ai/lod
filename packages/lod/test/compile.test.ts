@@ -21,6 +21,7 @@ import { ImpostorMesh } from "../src/impostor/mesh/index.js";
 import * as surface from "../src/impostor/mesh/surface.js";
 import { compileLevel } from "../src/compile.js";
 import { renderContext } from "../src/view.js";
+import { atDepth } from "../src/three.js";
 import { Lod } from "../src/lod.js";
 import { GPU_TIMEOUT, renderer } from "./gpu.js";
 
@@ -44,7 +45,7 @@ it(
     const object = new Mesh(geometry, materials);
     const scene = new Scene();
     const target = new RenderTarget(32, 32);
-    const context = { renderer, camera: new PerspectiveCamera(), scene, target, mrt: renderer.getMRT(), cubeFace: 0, mipLevel: 0 };
+    const context = { renderer, camera: new PerspectiveCamera(), scene, target, mrt: renderer.getMRT(), cubeFace: 0, mipLevel: 0, depth: 0 };
     // What happens in order: textures uploaded, frames begun, draws compiled.
     const log: string[] = [];
     const compile = renderer.compileAsync.bind(renderer);
@@ -94,7 +95,7 @@ it(
     const materials = [new MeshBasicNodeMaterial({ color: "teal" }), new MeshBasicNodeMaterial({ color: "teal" })];
     const geometry = new BoxGeometry();
     const scene = new Scene();
-    const context = { renderer, camera: new PerspectiveCamera(), scene, target: new RenderTarget(32, 32), mrt: renderer.getMRT(), cubeFace: 0, mipLevel: 0 };
+    const context = { renderer, camera: new PerspectiveCamera(), scene, target: new RenderTarget(32, 32), mrt: renderer.getMRT(), cubeFace: 0, mipLevel: 0, depth: 0 };
     const created = GPUDevice.prototype.createRenderPipelineAsync;
     let release = () => {};
     const held = new Promise<void>((resolve) => (release = resolve));
@@ -158,7 +159,7 @@ it(
       await renderer.compileAsync(scene, camera);
       renderer.setRenderTarget(null);
       renderer.setMRT(null);
-      await Promise.all(object.children.map((draw) => compileLevel(draw, { renderer, camera, scene, target, mrt: outputs, cubeFace: 0, mipLevel: 0 })));
+      await Promise.all(object.children.map((draw) => compileLevel(draw, { renderer, camera, scene, target, mrt: outputs, cubeFace: 0, mipLevel: 0, depth: 0 })));
       expect(renderer.getRenderTarget()).toBeNull();
       expect(renderer.getMRT()).toBeNull();
       expect(scene.background).toBe(background);
@@ -168,10 +169,12 @@ it(
         renderer.setMRT(outputs);
         grouped.visible = true;
         grouped.position.x = 0;
+        const builds = vi.spyOn(NodeMaterial.prototype, "setup");
         renderer.render(scene.add(object), camera);
         expect(synchronous).not.toHaveBeenCalled();
+        expect(builds).not.toHaveBeenCalled();
       } finally {
-        synchronous.mockRestore();
+        vi.restoreAllMocks();
         renderer.setRenderTarget(null);
         renderer.setMRT(null);
       }
@@ -213,7 +216,7 @@ it.each(["texture", "node"])(
     try {
       renderer.setRenderTarget(null);
       vi.mocked(surface.buildSurface).mockClear();
-      await compileLevel(card, { renderer, camera, scene, target, mrt: renderer.getMRT(), cubeFace: 0, mipLevel: 0 });
+      await compileLevel(card, { renderer, camera, scene, target, mrt: renderer.getMRT(), cubeFace: 0, mipLevel: 0, depth: 0 });
       expect(renderer.getRenderTarget()).toBeNull();
       expect(scene.background).toBe(kind === "texture" ? background : null);
       expect(scene.backgroundNode).toBe(backgroundNode);
@@ -263,12 +266,15 @@ it(
       if (!context) throw new Error("Expected the resident's render context");
       await compileLevel(arriving, context);
       synchronous.mockClear();
+      // Shaders too are built ahead, the shadow map's at the depth three draws it at, inside the view's render.
+      const builds = vi.spyOn(NodeMaterial.prototype, "setup");
       renderer.setRenderTarget(target);
       light.shadow.needsUpdate = true;
       renderer.render(scene.add(arriving), camera);
       expect(synchronous).not.toHaveBeenCalled();
+      expect(builds).not.toHaveBeenCalled();
     } finally {
-      synchronous.mockRestore();
+      vi.restoreAllMocks();
       renderer.setRenderTarget(null);
       renderer.shadowMap.enabled = false;
       owner.dispose();
@@ -279,3 +285,30 @@ it(
   },
   GPU_TIMEOUT,
 );
+
+it("gives a compile's own render context alone the depth it compiles for", async () => {
+  const contexts = Reflect.get(renderer, "_renderContexts");
+  const get = vi.spyOn(contexts, "get");
+  try {
+    // The compile's own context, then one a render it starts takes, as a scene's onBeforeRender may render elsewhere.
+    await atDepth(renderer, 1, async () => {
+      contexts.get(null, null);
+      contexts.get(null, null, 0);
+    });
+    expect(get.mock.calls).toEqual([
+      [null, null, 1],
+      [null, null, 0],
+    ]);
+    expect(contexts.get).toBe(get);
+    await atDepth(renderer, 0, async () => expect(contexts.get).toBe(get));
+    // A three whose compile takes no context as it starts fails loudly.
+    expect(() => atDepth(renderer, 1, async () => {})).toThrow(/r186/);
+    expect(contexts.get).toBe(get);
+    // On a lost device it compiles nothing, and that is all.
+    Reflect.set(renderer, "_isDeviceLost", true);
+    await atDepth(renderer, 1, async () => {});
+  } finally {
+    Reflect.set(renderer, "_isDeviceLost", false);
+    vi.restoreAllMocks();
+  }
+});

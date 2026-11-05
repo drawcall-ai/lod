@@ -1,6 +1,6 @@
 import type { Material, Mesh, Node, Object3D, Texture } from "three/webgpu";
 import { idOf } from "./id.js";
-import { isCompressedTexture, isMesh, isNode, isTexture } from "./three.js";
+import { atDepth, isCompressedTexture, isMesh, isNode, isTexture } from "./three.js";
 import { shadowPassesOf, type RenderContext } from "./view.js";
 
 /**
@@ -31,8 +31,8 @@ export async function compileLevel(object: Object3D, context: RenderContext): Pr
   for (const mesh of meshes) {
     const passes: Pass[] = [{ context, material: null }];
     if (mesh.castShadow)
-      for (const { camera, target, material } of shadows)
-        passes.push({ context: { ...context, camera, target, mrt: null, cubeFace: 0, mipLevel: 0 }, material });
+      for (const { camera, target, material, depth } of shadows)
+        passes.push({ context: { ...context, camera, target, mrt: null, cubeFace: 0, mipLevel: 0, depth }, material });
     // r186 starts only the first material before yielding; isolate one draw so setup sees its captured target/MRT.
     const parts = Array.isArray(mesh.material) ? mesh.geometry.groups.map((group) => [group]) : [mesh.geometry.groups];
     for (const pass of passes) for (const part of parts) draws.push(compileDraw(mesh, pass, part));
@@ -70,7 +70,7 @@ function paced(upload: () => number): Promise<void> {
  */
 const compiling = new Set<Promise<void>>();
 /**
- * The last draw compiled for each shader build: material, attributes, target and pass. three starts a build for each
+ * The last draw compiled for each shader build: material, attributes, target, pass and nesting. three starts a build for each
  * draw that misses its cache, even one another draw is building, so a draw that builds alike waits for the last one
  * and finds its build cached.
  */
@@ -85,6 +85,7 @@ async function compileDraw(mesh: Mesh, pass: Pass, part: Group[]): Promise<void>
     idOf(pass.context.renderer),
     pass.context.target ? idOf(pass.context.target) : "canvas",
     pass.material ? idOf(pass.material) : "view",
+    pass.context.depth,
   ].join(" ");
   const start = () => {
     const groups = mesh.geometry.groups;
@@ -123,8 +124,14 @@ interface Pass {
   material: Material | null;
 }
 
-/** What r186's renderObject gives an override material for one draw, and puts back once it has handed the draw on. */
+/**
+ * What r186's renderObject gives an override material for one draw, and puts back once it has handed the draw on.
+ * This and `DRAWN` mirror three 0.186.1's Renderer.renderObject; a three that sets other keys builds shadow shaders
+ * in the frame again.
+ */
 const DRAW_STATE = ["colorNode", "depthNode", "positionNode", "side", "displacementMap", "displacementScale", "displacementBias"];
+/** The keys a draw adds to an override material that lacks them, in the order it adds them. */
+const DRAWN = ["alphaMap", "displacementMap", "displacementScale", "displacementBias"];
 
 /**
  * A copy of the shadow pass's override material for compiling one draw. r186's compileAsync builds the draw only after
@@ -133,8 +140,11 @@ const DRAW_STATE = ["colorNode", "depthNode", "positionNode", "side", "displacem
  * It is not disposed: that would release the pipeline before the shadow pass draws with it.
  */
 function keepingDrawState(material: Material): Material {
-  // clone() skips the flag three marks its shadow material with.
-  const copy = Object.assign(material.clone(), { isShadowPassMaterial: true });
+  const copy = material.clone();
+  // The build's cache key lists a material's keys in order. clone() leaves out those three adds to its shadow material,
+  // its flag and those its draws set, which the copy gets in the order the shared material has them once it drew.
+  for (const key of [...Object.keys(material), ...DRAWN])
+    if (!key.startsWith("_") && !Object.hasOwn(copy, key)) Reflect.set(copy, key, Reflect.get(material, key) ?? null);
   for (const key of DRAW_STATE) {
     let value: unknown = Reflect.get(copy, key);
     let given = false;
@@ -175,7 +185,7 @@ function compileMesh(mesh: Mesh, { context, material }: Pass): Promise<void> {
     // r186 compiles backgrounds first, which would postpone this mesh until after renderer state is restored.
     scene.background = null;
     scene.backgroundNode = null;
-    return renderer.compileAsync(mesh, camera, scene);
+    return atDepth(renderer, context.depth, () => renderer.compileAsync(mesh, camera, scene));
   } finally {
     scene.background = background;
     scene.backgroundNode = backgroundNode;
