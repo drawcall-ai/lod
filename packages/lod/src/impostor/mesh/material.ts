@@ -1,4 +1,5 @@
 import {
+  ConvertNode,
   DoubleSide,
   Matrix4,
   MeshStandardNodeMaterial,
@@ -216,10 +217,13 @@ class SpreadLighting extends PhysicalLightingModel {
   }
 
   override direct(input: Parameters<PhysicalLightingModel["direct"]>[0], builder: NodeBuilder): void {
-    const { lightDirection, lightColor, reflectedLight } = input;
+    const { lightDirection, reflectedLight } = input;
     const { directDiffuse } = reflectedLight;
-    if (!isNodeOf(lightDirection, "vec3", builder) || !isNodeOf(lightColor, "color", builder) || !isNodeOf(directDiffuse, "vec3", builder))
-      throw new Error("ImpostorMesh: three's direct light is not a direction, a colour and a sum");
+    if (!isNodeOf(lightDirection, "vec3", builder) || !isNodeOf(directDiffuse, "vec3", builder))
+      throw new Error("ImpostorMesh: three's direct light is not a direction and a sum");
+    // Converted rather than asked its type: asking makes three keep a type the shadow it multiplies in may not have (a
+    // cascaded shadow's is vec4), and the shader then multiplies a vec3 by a vec4.
+    const lightColor = new ConvertNode<"vec3">(input.lightColor, "vec3");
     // three's terms, its diffuse into a throwaway.
     super.direct({ ...input, reflectedLight: { ...reflectedLight, directDiffuse: vec3(0).toVar() } }, builder);
     // Lambert: the diffuse colour over π.

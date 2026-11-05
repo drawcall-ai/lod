@@ -80,7 +80,7 @@ export function buildKey(builder: NodeBuilder, anchor: Node): object {
  * Whether `node` builds to a `type` value, which three's typings leave open for a
  * material's slots. Checked while a shader builds, so a slot of another type fails there.
  */
-export function isNodeOf<T extends "bool" | "float" | "vec3" | "vec4" | "color">(node: Node, type: T, builder: NodeBuilder): node is Node<T> {
+export function isNodeOf<T extends "bool" | "float" | "vec3" | "vec4">(node: Node, type: T, builder: NodeBuilder): node is Node<T> {
   return node.getNodeType(builder) === type;
 }
 

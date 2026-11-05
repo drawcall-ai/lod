@@ -16,6 +16,7 @@ import {
   Vector3,
   type Object3D,
 } from "three/webgpu";
+import { CSMShadowNode } from "three/addons/csm/CSMShadowNode.js";
 import { describe, expect, it } from "vitest";
 import { bakeMesh } from "../../../src/baked/index.js";
 import { InstancedLod } from "../../../src/instanced/index.js";
@@ -185,6 +186,28 @@ describe("interiors", { timeout: GPU_TIMEOUT }, () => {
     const dull = windowColor(await render(baked, eye, undefined, 0.6));
     const sunny = windowColor(await render(baked, eye, undefined, 0.6, eye));
     expect(Math.min(...sunny.map((v, i) => v - (dull[i] ?? 0)))).toBeGreaterThan(10);
+  });
+
+  it.each([false, true])("draws the room under a shadow-casting sun (cascaded: %s)", async (cascaded) => {
+    const rooms = interior();
+    const baked = await bakeMesh(house().add(rooms), { low: low(), textureSize: 64, interior: rooms });
+    const eye = new Vector3(0, 0, 5);
+    const sun = new DirectionalLight(0xffffff, 3);
+    sun.position.set(2, 4, 5);
+    sun.castShadow = true;
+    if (cascaded) sun.shadow.shadowNode = new CSMShadowNode(sun, { cascades: 2, maxFar: 40 });
+    const camera = new PerspectiveCamera(30, 1, 0.1, 100);
+    camera.position.copy(eye);
+    camera.lookAt(0, 0, 1);
+    const scene = new Scene().add(baked, sun, new AmbientLight(0xffffff, 0.6));
+    renderer.shadowMap.enabled = true;
+    try {
+      const pixels = await draw(scene, camera, SIZE);
+      expect(pixels[((SIZE / 2) * SIZE + SIZE / 2) * 4 + 3]).toBeGreaterThan(200);
+    } finally {
+      renderer.shadowMap.enabled = false;
+      sun.dispose();
+    }
   });
 
   it("refuses lights in the interior, and fails when no glass looks into a room", async () => {

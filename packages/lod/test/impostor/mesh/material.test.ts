@@ -9,11 +9,13 @@ import {
   MeshStandardMaterial,
   NodeMaterial,
   OrthographicCamera,
+  PerspectiveCamera,
   PlaneGeometry,
   Scene,
   StorageBufferAttribute,
   type Material,
 } from "three/webgpu";
+import { CSMShadowNode } from "three/addons/csm/CSMShadowNode.js";
 import { expect, it, vi } from "vitest";
 import { drawOf, setDraw } from "../../../src/fade.js";
 import { args } from "../../../src/instanced/args.js";
@@ -322,6 +324,32 @@ it("shares programs across baked specular values while keeping each asset's colo
   } finally {
     left.dispose();
     right.dispose();
+    source.geometry.dispose();
+    source.material.dispose();
+  }
+});
+
+it.each([false, true])("draws an impostor lit by a shadow-casting directional light (cascaded: %s)", { timeout: GPU_TIMEOUT }, async (cascaded) => {
+  const source = new Mesh(new BoxGeometry(2, 2, 2), new MeshStandardMaterial());
+  const impostor = new ImpostorMesh(await bakeImpostor(source, { frames: 4, resolution: 16 }));
+  impostor.castShadow = true;
+  impostor.receiveShadow = true;
+  const sun = new DirectionalLight(0xffffff, 3);
+  sun.position.set(2, 6, 4);
+  sun.castShadow = true;
+  if (cascaded) sun.shadow.shadowNode = new CSMShadowNode(sun, { cascades: 2, maxFar: 40 });
+  const camera = new PerspectiveCamera(40, 1, 0.1, 50);
+  camera.position.set(0, 0, 8);
+  camera.updateMatrixWorld();
+  renderer.shadowMap.enabled = true;
+  try {
+    const pixels = await render(new Scene().add(impostor, sun, new AmbientLight(0xffffff, 0.5)), camera);
+    // The middle of the view, where the box stands.
+    expect(pixels[(32 * 64 + 32) * 4 + 3]).toBeGreaterThan(200);
+  } finally {
+    renderer.shadowMap.enabled = false;
+    impostor.dispose();
+    sun.dispose();
     source.geometry.dispose();
     source.material.dispose();
   }
