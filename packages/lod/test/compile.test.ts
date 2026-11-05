@@ -20,9 +20,8 @@ import { mrt, output, texture, vec3, vec4 } from "three/tsl";
 import { expect, it, vi } from "vitest";
 import { ImpostorMesh } from "../src/impostor/mesh/index.js";
 import * as surface from "../src/impostor/mesh/surface.js";
-import { compileLevel } from "../src/compile.js";
+import { atDepth, compileLevel } from "../src/compile.js";
 import { renderContext } from "../src/view.js";
-import { atDepth } from "../src/three.js";
 import { Lod } from "../src/lod.js";
 import { GPU_TIMEOUT, renderer } from "./gpu.js";
 

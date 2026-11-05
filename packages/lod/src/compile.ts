@@ -1,6 +1,6 @@
 import type { Material, Mesh, Object3D, Renderer, Texture } from "three/webgpu";
 import { idOf } from "./id.js";
-import { atDepth, isMesh, isNode, isTexture } from "./three.js";
+import { isMesh, isNode, isTexture } from "./three.js";
 import { shadowPassesOf, type RenderContext } from "./view.js";
 
 /**
@@ -12,7 +12,8 @@ import { shadowPassesOf, type RenderContext } from "./view.js";
  */
 export async function compileLevel(object: Object3D, context: RenderContext): Promise<void> {
   const { renderer } = context;
-  const work = preparing(renderer);
+  let work = renderers.get(renderer);
+  if (!work) renderers.set(renderer, (work = { uploaded: 0, uploads: Promise.resolve(), compiling: new Set(), builds: new Map() }));
   const { memory } = renderer.info;
   for (const texture of textures(object))
     await paced(work, () => {
@@ -35,7 +36,17 @@ export async function compileLevel(object: Object3D, context: RenderContext): Pr
     const parts = Array.isArray(mesh.material) ? mesh.geometry.groups.map((group) => [group]) : [mesh.geometry.groups];
     for (const pass of passes) for (const part of parts) draws.push(compileDraw(work, mesh, pass, part));
   }
-  await Promise.all(draws);
+  const { compiling } = work;
+  const earlier = [...compiling];
+  const own = Promise.all(draws);
+  const settled = own.then(
+    () => {},
+    () => {},
+  );
+  compiling.add(settled);
+  void settled.then(() => compiling.delete(settled));
+  await own;
+  await Promise.all(earlier);
 }
 
 /**
@@ -52,10 +63,10 @@ interface Preparing {
   /** The last upload: uploads run in turn. */
   uploads: Promise<void>;
   /**
-   * Draws being compiled. A draw whose pipeline another of them already started creating finds it in three's cache
-   * and resolves at once, though three skips it until the pipeline is ready: a draw is done once those started before
-   * it are. Which of them creates it is not known: draws built apart share a pipeline when their programs come out
-   * alike, so `builds` cannot tell.
+   * Levels whose draws are being compiled, settled either way. A draw whose pipeline another level's already started creating finds it in
+   * three's cache and resolves at once, though three skips it until the pipeline is ready: a level is done once those
+   * started before it are. Which of them creates it is not known: draws built apart share a pipeline when their
+   * programs come out alike, so `builds` cannot tell.
    */
   compiling: Set<Promise<void>>;
   /**
@@ -67,12 +78,6 @@ interface Preparing {
 }
 
 const renderers = new WeakMap<Renderer, Preparing>();
-
-function preparing(renderer: Renderer): Preparing {
-  let work = renderers.get(renderer);
-  if (!work) renderers.set(renderer, (work = { uploaded: 0, uploads: Promise.resolve(), compiling: new Set(), builds: new Map() }));
-  return work;
-}
 
 /** Run `upload`, which answers the bytes it uploaded, after the next frame if those since the last one reached `FRAME_UPLOAD`. */
 function paced(work: Preparing, upload: () => number): Promise<void> {
@@ -88,7 +93,7 @@ function paced(work: Preparing, upload: () => number): Promise<void> {
 }
 
 /** Compile the draw of `mesh`'s groups `part` in `pass`. */
-async function compileDraw(work: Preparing, mesh: Mesh, pass: Pass, part: Group[]): Promise<void> {
+function compileDraw(work: Preparing, mesh: Mesh, pass: Pass, part: Group[]): Promise<void> {
   const material = Array.isArray(mesh.material) ? mesh.material[part[0]?.materialIndex ?? 0] : mesh.material;
   const key = [
     material ? idOf(material) : "none",
@@ -107,20 +112,16 @@ async function compileDraw(work: Preparing, mesh: Mesh, pass: Pass, part: Group[
     }
   };
   const alike = work.builds.get(key);
-  const earlier = [...work.compiling];
   const own = alike ? alike.then(start) : start();
   const settled = own.then(
     () => {},
     () => {},
   );
   work.builds.set(key, settled);
-  work.compiling.add(own);
   void settled.then(() => {
-    work.compiling.delete(own);
     if (work.builds.get(key) === settled) work.builds.delete(key);
   });
-  await own;
-  await Promise.allSettled(earlier);
+  return own;
 }
 
 /** A draw's range of a geometry, as three's groups hold it. */
@@ -261,4 +262,50 @@ function textures(object: Object3D): Set<Texture> {
     for (const material of [node.material].flat()) for (const [key, value] of Object.entries(material)) if (key !== "userData") visit(value);
   });
   return found;
+}
+
+/** three's render contexts, which a compile takes at depth 0. */
+interface RenderContexts {
+  get(target: unknown, mrt: unknown, depth?: number): unknown;
+}
+
+const isRenderContexts = (value: unknown): value is RenderContexts =>
+  typeof value === "object" && value !== null && typeof Reflect.get(value, "get") === "function";
+
+/**
+ * Run `compile`, which starts a compileAsync, so that it prepares draws for renders `depth` deep. Mirrors three r186
+ * (0.186.1): compileAsync takes its render context, as a render of its own, with the first `_renderContexts.get` of
+ * its synchronous start. Only that call is given `depth`; renders the compile starts meanwhile take their own. A three
+ * that no longer makes that call fails here rather than compiling for the wrong depth.
+ */
+export function atDepth(renderer: Renderer, depth: number, compile: () => Promise<void>): Promise<void> {
+  if (depth === 0) return compile();
+  const contexts: unknown = Reflect.get(renderer, "_renderContexts");
+  if (!isRenderContexts(contexts)) throw new Error("Lod: three's renderer keeps no render contexts");
+  const own = Object.hasOwn(contexts, "get");
+  const get = contexts.get;
+  let taken = false;
+  const restore = () => {
+    if (own) contexts.get = get;
+    else Reflect.deleteProperty(contexts, "get");
+  };
+  contexts.get = (target, mrt) => {
+    taken = true;
+    restore();
+    return get.call(contexts, target, mrt, depth);
+  };
+  let result: Promise<void>;
+  try {
+    result = compile();
+  } finally {
+    if (!taken) restore();
+  }
+  // compileAsync returns at once on a lost device, which is no fault of three's version.
+  if (taken || Reflect.get(renderer, "_isDeviceLost") === true) return result;
+  void result.catch(() => {});
+  throw new Error(
+    Reflect.get(renderer, "_initialized") === false
+      ? "Lod: initialise the renderer before levels compile"
+      : "Lod: three's compileAsync took no render context as it started (lod mirrors three r186)",
+  );
 }

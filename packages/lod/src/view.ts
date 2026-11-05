@@ -1,6 +1,6 @@
 import { Vector2, Vector3, Vector4, type Camera, type Material, Matrix4, Frustum, Sphere, type Renderer, type Scene } from "three/webgpu";
 import { at } from "./at.js";
-import { callDepth, inShadowPass, isOutputPass } from "./three.js";
+import { inShadowPass, isOutputPass } from "./three.js";
 
 const scratch = new Vector3();
 
@@ -161,4 +161,13 @@ export function inView(camera: Camera, root: Matrix4, sphere: Sphere): boolean {
   }
   worldSphere.copy(sphere).applyMatrix4(root);
   return cached.frustum.intersectsSphere(worldSphere);
+}
+
+/**
+ * How deep in renders `renderer` is: 0 in a render of its own, 1 in one it draws inside another, as it draws shadow
+ * maps and passes. three keeps a draw's built shader per depth.
+ */
+export function callDepth(renderer: Renderer): number {
+  const depth: unknown = Reflect.get(renderer, "_callDepth");
+  return typeof depth === "number" ? Math.max(depth, 0) : 0;
 }
