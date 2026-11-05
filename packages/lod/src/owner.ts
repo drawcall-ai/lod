@@ -17,7 +17,10 @@ export interface LodOptions {
   manager?: LoadingManager;
 }
 
-/** What a Lod and an InstancedLod share: levels picked per camera, prepared while their item is held. */
+/**
+ * What a Lod and an InstancedLod share: levels picked per camera, prepared while their item is held. Each draws with one
+ * renderer, the first that renders it; another that renders it is reported as its error.
+ */
 export abstract class Owner extends Object3D<LevelsEventMap> {
   readonly isLOD = true;
   /** Let the renderer call `update` with its camera every frame. */

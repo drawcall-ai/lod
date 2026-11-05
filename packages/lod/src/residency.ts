@@ -1,4 +1,4 @@
-import type { Camera, Object3D, Object3DEventMap } from "three/webgpu";
+import type { Camera, Object3D, Object3DEventMap, Renderer } from "three/webgpu";
 import { Item } from "./item.js";
 import { gpuRenderer, inShadowPass, isRenderer } from "./three.js";
 import { Watch, type Member } from "./watch.js";
@@ -64,6 +64,8 @@ export class Residency implements Member {
   private readonly union = new Set<Level>();
   private readonly requested = new Set<() => Promise<Object3D>>();
   private disposed = false;
+  /** What draws the owner: the first renderer that rendered it. */
+  private renderer: Renderer | undefined;
   /** The first failure; it stops further demand. */
   error: Error | undefined;
   /** Where pending levels are reported (see `sync`). */
@@ -71,7 +73,7 @@ export class Residency implements Member {
 
   constructor(
     private readonly owner: Object3D,
-    name: string,
+    private readonly name: string,
     private readonly levels: readonly Level[],
     private readonly install: (level: Level, object: Object3D, context: RenderContext) => Promise<void>,
     private readonly changed: () => void,
@@ -138,6 +140,8 @@ export class Residency implements Member {
     }
     this.waiting = false;
     const renderer = gpuRenderer(watch.renderer);
+    this.renderer ??= renderer;
+    if (renderer !== this.renderer) throw new Error(`${this.name}: a second renderer rendered it; an owner draws with the first renderer that rendered it only`);
     watch.join(this);
     this.watches.add(watch);
     let demand = this.demands.get(camera);

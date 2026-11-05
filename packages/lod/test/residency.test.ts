@@ -14,6 +14,7 @@ import {
   PlaneGeometry,
   PointLight,
   Scene,
+  WebGPURenderer,
 } from "three/webgpu";
 import { expect, it, vi } from "vitest";
 import { loadOnce } from "../src/deferred.js";
@@ -489,3 +490,32 @@ it("loads a Lod's level in a scene whose world matrices the app updates itself",
     owner.dispose();
   }
 });
+
+it.each(["Lod", "InstancedLod"])(
+  "reports a second renderer that renders a %s as its error, and keeps drawing with the first",
+  { timeout: GPU_TIMEOUT },
+  async (kind) => {
+    const other = new WebGPURenderer({ antialias: false });
+    await other.init();
+    const owner = kind === "Lod" ? new Lod([{ object: box() }]) : new InstancedLod([{ object: box() }], 1);
+    const scene = new Scene().add(owner);
+    const camera = new PerspectiveCamera(60, 1, 0.1, 100);
+    camera.position.z = 5;
+    const failed = vi.fn();
+    owner.addEventListener("levelserror", ({ error }) => failed(error));
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      for (let i = 0; i < 2; i++) await render(scene, camera);
+      expect(owner.error).toBeUndefined();
+      other.render(scene, camera);
+      expect(owner.error?.message).toMatch(/a second renderer rendered it/);
+      expect(failed).toHaveBeenCalledWith(owner.error);
+      expect(logged).toHaveBeenCalledWith(owner.error);
+      expect((await render(scene, camera)).some((value) => value > 0)).toBe(true);
+    } finally {
+      logged.mockRestore();
+      owner.dispose();
+      other.dispose();
+    }
+  },
+);

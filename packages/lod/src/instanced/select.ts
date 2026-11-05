@@ -7,7 +7,6 @@ import {
   Vector3,
   Vector4,
   type ComputeNode,
-  type Renderer,
   type Sphere,
 } from "three/webgpu";
 import { at } from "../at.js";
@@ -55,8 +54,8 @@ interface Selected extends Slots, Target {
   readonly maxPixels: number[];
   /** Bumped whenever the slots stop matching the aim or the instances. */
   revision: number;
-  /** Per renderer, the revision its buffers hold. */
-  readonly current: WeakMap<Renderer, number>;
+  /** The revision the renderer's buffers hold. */
+  taken: number;
 }
 
 /** The slots of each view of an InstancedLod's instances, and when its kernel has to fill them again (see kernel.ts). */
@@ -74,10 +73,9 @@ export class Selection {
   private readonly kernel: Kernel;
   private readonly views = new Map<Camera, Selected>();
   private readonly slotCount: number;
-  /** Renderers that have taken a selection: each keeps its own copy of the buffers. */
-  private readonly renderers = new WeakSet<Renderer>();
-  private readonly colorRenderers = new WeakSet<Renderer>();
-  private rendererCount = 0;
+  /** Whether a selection was taken, and one with colours. */
+  private started = false;
+  private coloured = false;
 
   constructor(
     /** 16 floats per instance */
@@ -134,7 +132,7 @@ export class Selection {
       planes: Array.from({ length: 6 }, () => new Vector4()),
       maxPixels: this.first.map(() => 0),
       revision: 0,
-      current: new WeakMap(),
+      taken: -1,
     };
     this.views.set(camera, view);
     return view;
@@ -210,26 +208,20 @@ export class Selection {
     for (const view of this.views.values()) view.revision++;
   }
 
-  /** The passes `renderer` has to run for `camera`'s slots to be current in its buffers, or none. */
-  take(renderer: Renderer, camera: Camera): ComputeNode[] {
+  /** The passes the renderer has to run for `camera`'s slots to be current in its buffers, or none. */
+  take(camera: Camera): ComputeNode[] {
     const view = this.views.get(camera);
-    if (!view?.aimed || view.current.get(renderer) === view.revision) return CURRENT;
-    const first = !this.renderers.has(renderer);
-    if (first) {
-      this.renderers.add(renderer);
-      this.rendererCount = Math.min(2, this.rendererCount + 1);
-    }
-    // Three clears updateRanges globally after one backend uploads them. A second,
-    // lagging renderer needs the whole current source, including earlier edits.
-    // Initial buffer creation also leaves ranges uncleared; start it with none.
-    if (first || this.rendererCount > 1) {
+    if (!view?.aimed || view.taken === view.revision) return CURRENT;
+    // Creating a buffer leaves its update ranges in place: its first upload takes all of it.
+    if (!this.started) {
+      this.started = true;
       this.matrices.clearUpdateRanges();
     }
-    if (this.colors && (!this.colorRenderers.has(renderer) || this.rendererCount > 1)) {
-      this.colorRenderers.add(renderer);
+    if (this.colors && !this.coloured) {
+      this.coloured = true;
       this.colors.clearUpdateRanges();
     }
-    view.current.set(renderer, view.revision);
+    view.taken = view.revision;
     return this.kernel.load(view);
   }
 

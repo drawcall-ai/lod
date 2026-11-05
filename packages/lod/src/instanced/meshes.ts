@@ -205,7 +205,7 @@ export class Meshes {
         // Each level's draws start at its slots (see select.ts).
         if (!gpu.hasFeature("indirect-first-instance")) throw new Error("InstancedLod: needs the GPU feature indirect-first-instance, which this device lacks");
         passes.length = 0;
-        for (const each of due) passes.push(...each.take(gpu, camera));
+        for (const each of due) passes.push(...each.take(camera));
         due.clear();
         if (passes.length > 0) gpu.compute(passes);
         const { args } = selection.view(camera);
