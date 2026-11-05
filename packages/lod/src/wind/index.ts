@@ -2,7 +2,7 @@ import { Box3, Matrix4, ObjectSpaceNormalMap, Vector2, type Mesh, type Object3D 
 import { boundingBox, levelBox } from "../bounds.js";
 import { levelMaterial } from "../material.js";
 import { isBatchedMesh, isImpostorMesh, isInstancedLod, isInstancedMesh, isLOD, isMesh, isSkinnedMesh, isStorageInstanced } from "../three.js";
-import { WIND_BOUNDS, type WindBounds } from "./hooks.js";
+import { WIND, type WindOwner } from "./hooks.js";
 import { windBounds } from "./bounds.js";
 import { setSway, swayMatrix, type Breeze } from "./sway.js";
 
@@ -96,7 +96,7 @@ export class Wind {
     this.breeze.direction.set(x, z).normalize();
   }
 
-  /** Attach once, after constructing all levels. Objects without this call keep their original shaders. */
+  /** Attach once, after constructing all levels and before a Lod or InstancedLod first renders. Objects without this call keep their original shaders. */
   apply(root: Object3D, { amplitude, baseY, height }: SwayOptions): void {
     if (bindings.has(root)) throw new Error("Wind: already applied to this object");
     this.attach(root, { amplitude, baseY, height }, false);
@@ -147,7 +147,7 @@ export class Wind {
     if (size <= 0) throw new Error("Wind: height must be positive");
     const shape = new Vector2(amplitude / size, base);
     const padding = (amplitude * Math.max(Math.abs(box.min.y - base), Math.abs(box.max.y - base))) / size;
-    if (hasBounds(root) && !refreshing) root[WIND_BOUNDS](padding, amplitude / size, base);
+    if (isOwner(root) && !refreshing) root[WIND](padding, amplitude / size, base);
     for (const { mesh, placement } of placed) {
       if (!isInstancedLod(root)) windBounds(mesh, placement, amplitude, base, size);
       setSway(mesh, { breeze: this.breeze, shape, placement, fromRoot: placement.clone().invert() });
@@ -164,8 +164,8 @@ export class Wind {
   }
 }
 
-function hasBounds(root: Object3D): root is Object3D & WindBounds {
-  return WIND_BOUNDS in root;
+function isOwner(root: Object3D): root is Object3D & WindOwner {
+  return WIND in root;
 }
 
 function sourceBox(root: Object3D): Box3 {

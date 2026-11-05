@@ -1,5 +1,6 @@
 import {
   AmbientLight,
+  Box3,
   BoxGeometry,
   DirectionalLight,
   Group,
@@ -7,6 +8,7 @@ import {
   Matrix4,
   Mesh,
   MeshStandardMaterial,
+  NodeMaterial,
   OrthographicCamera,
   PerspectiveCamera,
   PlaneGeometry,
@@ -14,10 +16,11 @@ import {
   RenderTarget,
   Scene,
   StorageInstancedBufferAttribute,
+  Vector3,
   type Camera,
   type Object3D,
 } from "three/webgpu";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { drawOf } from "../../src/fade.js";
 import { bakeImpostor } from "../../src/impostor/bake/index.js";
 import type { Impostor } from "../../src/impostor/impostor.js";
@@ -27,7 +30,7 @@ import { Lod } from "../../src/lod.js";
 import { readBytes } from "../../src/renderer.js";
 import { isMesh } from "../../src/three.js";
 import { Wind } from "../../src/wind/index.js";
-import { GPU_TIMEOUT, renderer } from "../gpu.js";
+import { GPU_TIMEOUT, nextLevel, render as draw, renderer } from "../gpu.js";
 
 /** Asymmetric, with a child transform: every part must use the same root-space sway. */
 function plant(): Group {
@@ -169,6 +172,78 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
     }
     expect(covered).toBeGreaterThan(100);
     expect(error / (covered * 3)).toBeLessThan(1);
+  });
+
+  it.each(["Lod", "InstancedLod"])("sways a %s's level that arrives after wind applied before the first render", async (kind) => {
+    const geometry = new BoxGeometry(0.7, 3, 0.7).translate(0, 1.5, 0);
+    const material = new MeshStandardMaterial({ color: 0x80b050, roughness: 1 });
+    const level = { load: async () => new Mesh(geometry, material), maxPixels: Infinity, box: new Box3(new Vector3(-0.35, 0, -0.35), new Vector3(0.35, 3, 0.35)) };
+    const owner = kind === "Lod" ? new Lod([level]) : new InstancedLod([level], 1);
+    const wind = new Wind({ direction: [1, 0], speed: 0.25 });
+    wind.apply(owner, { amplitude: 0.9, baseY: 0, height: 3 });
+    wind.time = 1;
+    const camera = new PerspectiveCamera(30, 1, 0.1, 100);
+    camera.position.set(0, 1.5, 12);
+    const scene = new Scene().add(owner);
+    // Shaders built while a frame renders, rather than in the compiles between frames.
+    let inFrame = 0;
+    let rendering = false;
+    const frame = renderer.render.bind(renderer);
+    const setup = NodeMaterial.prototype.setup;
+    vi.spyOn(renderer, "render").mockImplementation((...args) => {
+      rendering = true;
+      try {
+        frame(...args);
+      } finally {
+        rendering = false;
+      }
+    });
+    vi.spyOn(NodeMaterial.prototype, "setup").mockImplementation(function (this: NodeMaterial, builder) {
+      if (rendering) inFrame++;
+      return setup.call(this, builder);
+    });
+    try {
+      await draw(scene, camera, 128);
+      for (let frame = 0; frame < 200 && owner.pending; frame++) {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        await draw(scene, camera, 128);
+      }
+      const swayed = await draw(scene, camera, 128);
+      expect(inFrame).toBe(0);
+      const sheared = new Scene().add(new Mesh(geometry.clone().applyMatrix4(SHEAR()), material));
+      expect(overlap(swayed, await draw(sheared, camera, 128))).toBeGreaterThan(0.97);
+    } finally {
+      vi.restoreAllMocks();
+      owner.dispose();
+    }
+  });
+
+  it.each(["Lod", "InstancedLod"])("refuses wind once a %s has rendered, also while a level installs", async (kind) => {
+    let arrive = () => {};
+    const arrived = new Promise<void>((resolve) => (arrive = resolve));
+    const level = {
+      load: async () => (await arrived, new Mesh(new BoxGeometry(), new MeshStandardMaterial())),
+      maxPixels: Infinity,
+      box: new Box3(new Vector3(-0.5, -0.5, -0.5), new Vector3(0.5, 0.5, 0.5)),
+    };
+    const owner = kind === "Lod" ? new Lod([level]) : new InstancedLod([level], 1);
+    const camera = new PerspectiveCamera(30, 1, 0.1, 100);
+    camera.position.z = 5;
+    const scene = new Scene().add(owner);
+    try {
+      await draw(scene, camera);
+      expect(() => new Wind().apply(owner, { amplitude: 0.1 })).toThrow(`${kind}: apply wind before the first render`);
+      arrive();
+      await arrived;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      // This render starts installing the level that arrived.
+      await draw(scene, camera);
+      expect(owner.pending).toBe(true);
+      expect(() => new Wind().apply(owner, { amplitude: 0.1 })).toThrow(`${kind}: apply wind before the first render`);
+      await nextLevel(owner, camera);
+    } finally {
+      owner.dispose();
+    }
   });
 
   it("keeps Lod selection and fades based on the resting source size", () => {

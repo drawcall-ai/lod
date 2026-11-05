@@ -130,14 +130,15 @@ export function instanceMatrixOf(object: Object3D): Node<"mat4"> | null {
   return storageMatrices(object) ? matrices.element(instance()) : null;
 }
 
-const white = new StorageInstancedBufferAttribute(new Float32Array([1, 1, 1, 1]), 4);
+/** The colour of a draw whose instances have none: given one from the start, a draw's shader stays the same once they do. */
+export const white = new StorageInstancedBufferAttribute(new Float32Array([1, 1, 1, 1]), 4);
 const colors = storage(white, "vec4", 0)
   .setName("lodInstanceColors")
   .setGroup(instanceGroup)
   .toReadOnly()
   .onObjectUpdate(({ object }) => (object && (isImpostorMesh(object) || isLodInstances(object)) && object.instanceColor) || white);
 const colorIndex = uniform(0, "uint").onObjectUpdate(({ object }) =>
-  Number(!!object && (isImpostorMesh(object) || isLodInstances(object)) && object.instanceColor !== null),
+  Number(!!object && (isImpostorMesh(object) || isLodInstances(object)) && object.instanceColor !== null && object.instanceColor !== white),
 );
 
 export const instanceColor = varying(colors.element(instance().mul(colorIndex)).xyz).setInterpolation("flat");

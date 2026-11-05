@@ -9,7 +9,7 @@ import { Residency, handover, type LevelsEventMap } from "./residency.js";
 import { FADE, Level, cloneLevels, estimate, fadeProgress, levelAt, demandLevels, tintLevels, validate, type LevelView, type LodLevel } from "./levels.js";
 import { inShadowPass, isImpostorMesh, isLOD, isMesh, rejectSkinned } from "./three.js";
 import { TYPICAL_HEIGHT, View, inView, viewportHeight, type RenderContext } from "./view.js";
-import { WIND_BOUNDS } from "./wind/hooks.js";
+import { WIND } from "./wind/hooks.js";
 import { copyWind, refreshWind } from "./wind/index.js";
 
 const view = new View();
@@ -140,7 +140,8 @@ export class Lod extends Object3D<LevelsEventMap> {
     for (const child of node.children) this.hook(child, draw, inner, level);
   }
 
-  [WIND_BOUNDS](padding: number): void {
+  [WIND](padding: number): void {
+    if (this.residency.started) throw new Error("Lod: apply wind before the first render");
     this.casterRadius += padding;
   }
 

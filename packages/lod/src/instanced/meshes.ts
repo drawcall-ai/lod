@@ -14,7 +14,7 @@ import { at } from "../at.js";
 import { placeInterior } from "../baked/interior/material.js";
 import { prepareBounds } from "../bounds.js";
 import { disposeCopies } from "../dispose.js";
-import { drawOf, setDraw } from "../fade.js";
+import { drawOf, setDraw, white } from "../fade.js";
 import { impostorInstances, type ImpostorMesh } from "../impostor/mesh/index.js";
 import type { Level } from "../levels.js";
 import { gpuRenderer, inShadowPass, isImpostorMesh } from "../three.js";
@@ -40,14 +40,14 @@ export class Instances extends Mesh<BufferGeometry, NodeMaterial> {
   readonly count = 1;
   /** Every instance's matrix: a draw reads those of the instances in its view's slots. */
   instanceMatrix: StorageInstancedBufferAttribute;
-  instanceColor: StorageInstancedBufferAttribute | null;
+  instanceColor: StorageInstancedBufferAttribute;
   // The owner installs the aggregate bounds instead of scanning the instance slots.
   boundingSphere: Sphere | null = null;
 
   constructor(geometry: BufferGeometry, material: NodeMaterial, selection: Selection) {
     super(geometry, material);
     this.instanceMatrix = selection.matrices;
-    this.instanceColor = selection.colors;
+    this.instanceColor = selection.colors ?? white;
   }
 }
 
@@ -143,13 +143,9 @@ export class Meshes {
     mesh.geometry.dispose();
   }
 
-  /** Every level's meshes draw the instance colours the selection has begun to carry. */
+  /** Every level's meshes draw the instance colours the selection has begun to carry, with the shaders they have. */
   recolor(): void {
-    for (const mesh of this.byLevel.flat()) {
-      mesh.instanceColor = this.selection.colors;
-      // Instance colours change the shader.
-      if (!isImpostorMesh(mesh)) for (const material of [mesh.material].flat()) material.needsUpdate = true;
-    }
+    for (const mesh of this.byLevel.flat()) mesh.instanceColor = this.selection.colors ?? white;
   }
 
   /** Show only levels whose conservative bounds contain a possible selected instance; whether any may draw for `camera`. */
@@ -232,7 +228,7 @@ function card(template: ImpostorMesh, placement: Matrix4, selection: Selection):
   // used by Three to specialize its shader for one object's storage bindings.
   mesh.count = 1;
   mesh.instanceMatrix = selection.matrices;
-  mesh.instanceColor = selection.colors;
+  mesh.instanceColor = selection.colors ?? white;
   return mesh;
 }
 

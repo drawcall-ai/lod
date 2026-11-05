@@ -85,6 +85,9 @@ export class Residency implements Member {
     this.fallback = fallbacks(this.levels, this.installed);
   }
 
+  /** Whether a render has updated the owner: its shaders are being or have been built. */
+  started = false;
+
   get progress(): number {
     if (this.start === undefined) return 1;
     const progress = Math.min((performance.now() - this.start) / HANDOVER_MS, 1);
@@ -123,6 +126,7 @@ export class Residency implements Member {
    * been seen, which records the view the levels are prepared for; the item is held meanwhile.
    */
   demand(camera: Camera, indices: readonly number[]): void {
+    this.started = true;
     if (this.disposed || this.error) return;
     const watch = Watch.of(this.owner, camera);
     if (!watch) {

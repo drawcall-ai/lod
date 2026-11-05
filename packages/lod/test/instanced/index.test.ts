@@ -9,6 +9,7 @@ import {
   Mesh,
   MeshBasicMaterial,
   MeshStandardMaterial,
+  NodeMaterial,
   OrthographicCamera,
   PlaneGeometry,
   PerspectiveCamera,
@@ -543,5 +544,24 @@ it("builds identical vertex WGSL for equal material structures across independen
     renderer.info.autoReset = autoReset;
     first.dispose();
     second.dispose();
+  }
+});
+
+it("draws colours set after a crowd drew, with the shaders it has", { timeout: GPU_TIMEOUT }, async () => {
+  const lod = new InstancedLod([{ object: mesh() }], 1);
+  const scene = new Scene().add(lod);
+  const camera = new PerspectiveCamera(60, 1, 0.1, 100);
+  camera.position.z = 5;
+  try {
+    await render(scene, camera);
+    await render(scene, camera);
+    lod.setColorAt(0, new Color(1, 0, 0));
+    const builds = vi.spyOn(NodeMaterial.prototype, "setup");
+    const pixels = await render(scene, camera);
+    expect(builds).not.toHaveBeenCalled();
+    expect(Array.from(pixels.slice((32 * 64 + 32) * 4, (32 * 64 + 32) * 4 + 4))).toEqual([255, 0, 0, 255]);
+  } finally {
+    vi.restoreAllMocks();
+    lod.dispose();
   }
 });

@@ -18,7 +18,7 @@ import { Residency, type LevelsEventMap } from "../residency.js";
 import { inShadowPass, sameClass } from "../three.js";
 import { TYPICAL_HEIGHT, View, viewportHeight, type RenderContext } from "../view.js";
 import { compileLevel } from "../compile.js";
-import { WIND_BOUNDS } from "../wind/hooks.js";
+import { WIND } from "../wind/hooks.js";
 import { copyWind, refreshWind } from "../wind/index.js";
 import { Meshes } from "./meshes.js";
 import { parts } from "./parts.js";
@@ -192,7 +192,8 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     return ready < 0 ? null : ready;
   }
 
-  [WIND_BOUNDS](padding: number, slope: number, baseY: number): void {
+  [WIND](padding: number, slope: number, baseY: number): void {
+    if (this.residency.started) throw new Error("InstancedLod: apply wind before the first render");
     const sway = this.extent.wind(padding, slope, baseY);
     this.meshes?.setRadius(this.extent.drawRadius);
     this.blocks.pad(sway);
