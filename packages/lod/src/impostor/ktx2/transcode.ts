@@ -57,7 +57,12 @@ async function parse(file: Uint8Array): Promise<CompressedTexture> {
     // The loader hands its buffer to a worker.
     return await new Promise<CompressedTexture>((resolve, reject) => ktx2.parse(file.slice().buffer, resolve, reject));
   } finally {
-    if (--active === 0) idle = setTimeout(release, IDLE_MS);
+    if (--active === 0) {
+      idle = setTimeout(release, IDLE_MS);
+      // Releasing frees memory; it must not keep Node.js running once nothing else does.
+      const timer: unknown = idle;
+      if (typeof timer === "object" && timer !== null && "unref" in timer && typeof timer.unref === "function") timer.unref();
+    }
   }
 }
 
