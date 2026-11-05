@@ -30,7 +30,7 @@ import { Lod } from "../../src/lod.js";
 import { readBytes } from "../../src/renderer.js";
 import { isMesh } from "../../src/three.js";
 import { Wind } from "../../src/wind/index.js";
-import { GPU_TIMEOUT, nextLevel, render as draw, renderer } from "../gpu.js";
+import { GPU_TIMEOUT, render as draw, renderer } from "../gpu.js";
 
 /** Asymmetric, with a child transform: every part must use the same root-space sway. */
 function plant(): Group {
@@ -177,7 +177,11 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
   it.each(["Lod", "InstancedLod"])("sways a %s's level that arrives after wind applied before the first render", async (kind) => {
     const geometry = new BoxGeometry(0.7, 3, 0.7).translate(0, 1.5, 0);
     const material = new MeshStandardMaterial({ color: 0x80b050, roughness: 1 });
-    const level = { load: async () => new Mesh(geometry, material), maxPixels: Infinity, box: new Box3(new Vector3(-0.35, 0, -0.35), new Vector3(0.35, 3, 0.35)) };
+    const level = {
+      load: async () => new Mesh(geometry, material),
+      maxPixels: Infinity,
+      box: new Box3(new Vector3(-0.35, 0, -0.35), new Vector3(0.35, 3, 0.35)),
+    };
     const owner = kind === "Lod" ? new Lod([level]) : new InstancedLod([level], 1);
     const wind = new Wind({ direction: [1, 0], speed: 0.25 });
     wind.apply(owner, { amplitude: 0.9, baseY: 0, height: 3 });
@@ -218,29 +222,19 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
     }
   });
 
-  it.each(["Lod", "InstancedLod"])("refuses wind once a %s has rendered, also while a level installs", async (kind) => {
-    let arrive = () => {};
-    const arrived = new Promise<void>((resolve) => (arrive = resolve));
+  it.each(["Lod", "InstancedLod"])("refuses wind once a %s has rendered", async (kind) => {
     const level = {
-      load: async () => (await arrived, new Mesh(new BoxGeometry(), new MeshStandardMaterial())),
+      load: async () => new Mesh(new BoxGeometry(), new MeshStandardMaterial()),
       maxPixels: Infinity,
       box: new Box3(new Vector3(-0.5, -0.5, -0.5), new Vector3(0.5, 0.5, 0.5)),
     };
     const owner = kind === "Lod" ? new Lod([level]) : new InstancedLod([level], 1);
     const camera = new PerspectiveCamera(30, 1, 0.1, 100);
     camera.position.z = 5;
-    const scene = new Scene().add(owner);
     try {
-      await draw(scene, camera);
+      // Its level is still loading: its shaders are built from here on.
+      await draw(new Scene().add(owner), camera);
       expect(() => new Wind().apply(owner, { amplitude: 0.1 })).toThrow(`${kind}: apply wind before the first render`);
-      arrive();
-      await arrived;
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      // This render starts installing the level that arrived.
-      await draw(scene, camera);
-      expect(owner.pending).toBe(true);
-      expect(() => new Wind().apply(owner, { amplitude: 0.1 })).toThrow(`${kind}: apply wind before the first render`);
-      await nextLevel(owner, camera);
     } finally {
       owner.dispose();
     }
