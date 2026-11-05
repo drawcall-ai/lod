@@ -173,7 +173,10 @@ function clearance(): number {
   return camera.position.y - world.terrain.height(camera.position.x, camera.position.z) - 80;
 }
 
-/** Every live frame advances and renders; a level still loading draws as one that arrived. */
+/**
+ * Every live frame advances and renders; a level still loading draws as a ready coarser one, else as the level it
+ * already showed, else not at all.
+ */
 function frame(dt: number): void {
   if (wind) wind.time += dt;
   playback.time = playback.requested ?? (playback.playing ? Math.min(playback.time + dt, tour.duration) : playback.time);

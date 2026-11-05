@@ -55,7 +55,7 @@ describe("default maxPixels", () => {
   });
 });
 
-it("stands in the nearest ready coarser level that draws for a missing one, else the nearest finer", () => {
+it("stands in the nearest ready coarser level that draws for a missing one, never a finer one", () => {
   const deferred = (maxPixels: number) => ({ load: async () => box(), maxPixels, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) });
   const drawn = (lod: Lod, force: number) => {
     // Missing levels outside any Scene are a failure: none of its renders would load them.
@@ -68,9 +68,9 @@ it("stands in the nearest ready coarser level that draws for a missing one, else
   const lod = new Lod(input);
   expect(drawn(lod, 0)).toEqual([1]);
   expect(drawn(lod, 2)).toEqual([3]);
-  // An empty coarser level culls; it never stands in.
+  // An empty coarser level culls, so it never stands in; nor does the finer, costlier source.
   const culled = new Lod([{ object: box() }, deferred(100), { object: new Object3D(), maxPixels: 10 }]);
-  expect(drawn(culled, 1)).toEqual([0]);
+  expect(drawn(culled, 1)).toEqual([]);
   culled.dispose();
   must(lod.levels[2]).maxPixels = 50;
   const crowd = new InstancedLod(input, 1);

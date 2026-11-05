@@ -52,17 +52,24 @@ export class Extent {
     return this.rest.radius > 0 ? reach / this.rest.radius : 0;
   }
 
-  /** Move each level's reach to the level that draws in its place: its fallback, and during a handover also its previous one. */
+  /**
+   * Move each level's reach to the levels that may draw in its place: its fallback, during a handover also its previous
+   * one, and where either draws nothing, every ready finer level, which an instance that showed it keeps drawing.
+   */
   reroute(fallback: readonly number[], previous: readonly number[], progress: number): void {
     const { reaches } = this;
     for (let i = reaches.length - 1; i >= 0; i--) {
       const reach = at(reaches, i);
-      const target = at(fallback, i);
-      const before = progress < 1 ? at(previous, i) : -1;
-      if (before >= 0 && before !== target) at(reaches, before).union(reach);
-      if (target === i) continue;
-      if (target >= 0) at(reaches, target).union(reach);
-      reach.makeEmpty();
+      const into = (route: number): void => {
+        if (route >= 0) {
+          if (route !== i) at(reaches, route).union(reach);
+          return;
+        }
+        for (let level = 0; level < i; level++) if (at(fallback, level) === level) at(reaches, level).union(reach);
+      };
+      if (progress < 1) into(at(previous, i));
+      into(at(fallback, i));
+      if (at(fallback, i) !== i) reach.makeEmpty();
     }
   }
 }

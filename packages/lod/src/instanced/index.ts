@@ -222,7 +222,7 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
       selection.progress.value = progress;
       selection.changed();
     }
-    if (!shadow) this.demandLevels(camera, drawn);
+    this.demandLevels(camera, drawn, shadow);
     this.extent.reroute(residency.fallback, residency.previous, progress);
     selection.aim(camera, seen, entries);
     // Selected only when something may draw: an InstancedLod with every level hidden
@@ -231,12 +231,15 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     residency.sync();
   }
 
-  /** Ask for the levels `drawn` for `camera`, and install them as they arrive. */
-  private demandLevels(camera: Camera, drawn: number[]): void {
+  /**
+   * Ask for the levels `drawn` for `camera`, a view's or a shadow map's: every view demands what it draws. They install
+   * as they arrive, from a view's render context.
+   */
+  private demandLevels(camera: Camera, drawn: number[], shadow: boolean): void {
     const { entries, meshes, residency } = this;
     if (!meshes) return;
     tintLevels(entries, Lod.debug);
-    this.selected = true;
+    if (!shadow) this.selected = true;
     // Reusable crowds can be populated and drawn in the same frame.
     const needed = this.bounds.isEmpty() ? entries.flatMap((level) => (level.object ? [level.index] : [])) : drawn;
     residency.demand(camera, needed);

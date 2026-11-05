@@ -27,6 +27,7 @@ import { ARGS_BYTES } from "../../src/instanced/args.js";
 import { Instances } from "../../src/instanced/meshes.js";
 import { InstancedLod } from "../../src/instanced/index.js";
 import { Lod } from "../../src/lod.js";
+import { HANDOVER_MS } from "../../src/residency.js";
 import { Wind } from "../../src/wind/index.js";
 import { isMesh } from "../../src/three.js";
 import { setViewportHeight } from "../../src/view.js";
@@ -260,6 +261,94 @@ it("installs shared decoded detail only in crowds near enough to draw it", { tim
   } finally {
     near.dispose();
     away.dispose();
+  }
+});
+
+it("draws far instances whose coarse level is still loading as nothing, never as the installed source", { timeout: GPU_TIMEOUT }, async () => {
+  const bounds = new Box3(new Vector3(-1, -1, -1), new Vector3(1, 1, 1));
+  const coarse = { load: () => new Promise<Mesh>(() => {}), maxPixels: 5, box: bounds };
+  const crowd = new InstancedLod([{ load: async () => mesh(), maxPixels: Infinity, box: bounds }, coarse], 100);
+  for (let i = 0; i < 100; i++) crowd.setMatrixAt(i, new Matrix4().makeTranslation(0, 0, i < 10 ? -5 : -1000));
+  const camera = new PerspectiveCamera(60, 1, 0.1, 2000);
+  const scene = new Scene().add(crowd);
+  try {
+    await nextLevel(crowd, camera);
+    await render(scene, camera);
+    // Only the ten near instances draw the source; the ninety far ones wait for their level, the item held.
+    expect((await distances(crowd, camera)).map((level) => level.length)).toEqual([10]);
+    expect(crowd.pending).toBe(true);
+  } finally {
+    crowd.dispose();
+  }
+});
+
+it("keeps drawing the level each instance showed while the one it walked away to loads, then hands over to it", { timeout: GPU_TIMEOUT }, async () => {
+  const bounds = new Box3(new Vector3(-1, -1, -1), new Vector3(1, 1, 1));
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const coarse = { load: async () => (await gate, mesh()), maxPixels: 5, box: bounds };
+  const crowd = new InstancedLod([{ object: mesh() }, coarse], 4);
+  const place = (near: number) => {
+    for (let i = 0; i < 4; i++) crowd.setMatrixAt(i, new Matrix4().makeTranslation(0, 0, i < near ? -5 : -1000));
+  };
+  const camera = new PerspectiveCamera(60, 1, 0.1, 2000);
+  const scene = new Scene().add(crowd);
+  try {
+    place(2);
+    await render(scene, camera);
+    expect(await distances(crowd, camera)).toEqual([[5, 5]]);
+    // The two that showed the source keep it; the two that showed nothing still draw nothing.
+    place(0);
+    await render(scene, camera);
+    expect(await distances(crowd, camera)).toEqual([[1000, 1000]]);
+    const arrived = nextLevel(crowd, camera);
+    release();
+    await arrived;
+    await new Promise((resolve) => setTimeout(resolve, HANDOVER_MS));
+    await render(scene, camera);
+    expect(await distances(crowd, camera)).toEqual([[], [1000, 1000, 1000, 1000]]);
+  } finally {
+    crowd.dispose();
+  }
+});
+
+it("loads the levels its shadow map draws, for casters in view and behind it", { timeout: GPU_TIMEOUT }, async () => {
+  const bounds = new Box3(new Vector3(-1, -1, -1), new Vector3(1, 1, 1));
+  const source = mesh();
+  source.castShadow = true;
+  const coarse = { load: async () => mesh(), maxPixels: 20, box: bounds };
+  const crowd = new InstancedLod([{ object: source }, coarse], 2);
+  // One in view, near enough for its source; one behind the camera, casting into the view.
+  crowd.setMatrixAt(0, new Matrix4().makeTranslation(0, 0, -5));
+  crowd.setMatrixAt(1, new Matrix4().makeTranslation(0, 0, 5));
+  crowd.traverse((node) => (node.castShadow = true));
+  const sun = new DirectionalLight(0xffffff, 3);
+  sun.position.set(0, 20, 0);
+  sun.castShadow = true;
+  // Too coarse to need the source: about 5 texels a metre.
+  sun.shadow.mapSize.set(128, 128);
+  Object.assign(sun.shadow.camera, { left: -12, right: 12, top: 12, bottom: -12, near: 0.1, far: 50 });
+  sun.shadow.camera.updateProjectionMatrix();
+  // Lit ground: a shadow map is drawn only for what receives it.
+  const ground = new Mesh(new PlaneGeometry(24, 24).rotateX(-Math.PI / 2), new MeshStandardMaterial());
+  ground.position.y = -2;
+  ground.receiveShadow = true;
+  const camera = new PerspectiveCamera(60, 1, 0.1, 100);
+  const scene = new Scene().add(crowd, ground, sun, sun.target);
+  renderer.shadowMap.enabled = true;
+  try {
+    await render(scene, camera);
+    await nextLevel(crowd, camera);
+    for (let i = 0; i < 3; i++) await render(scene, camera);
+    expect(crowd.pending).toBe(false);
+    expect(await distances(crowd, camera)).toEqual([[5], []]);
+    expect(await distances(crowd, sun.shadow.camera)).toEqual([[], [-5, 5]]);
+  } finally {
+    renderer.shadowMap.enabled = false;
+    crowd.dispose();
+    sun.dispose();
+    ground.geometry.dispose();
+    ground.material.dispose();
   }
 });
 

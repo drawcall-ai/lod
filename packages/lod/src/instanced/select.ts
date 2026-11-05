@@ -104,6 +104,7 @@ export class Selection {
     view = {
       indices: new StorageBufferAttribute(new Uint32Array(this.slotCount), 1),
       fades: new StorageBufferAttribute(new Float32Array(this.slotCount), 1),
+      shown: new StorageBufferAttribute(new Uint32Array(Math.max(this.count, 1)), 1),
       args: this.allocate(this.draws),
       aimed: false,
       eye: new Vector3(),
@@ -212,6 +213,7 @@ export class Selection {
     for (const view of this.views.values()) {
       view.indices.dispose();
       view.fades.dispose();
+      view.shown.dispose();
       view.args.dispose();
     }
     this.views.clear();

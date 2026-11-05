@@ -222,10 +222,11 @@ export function demandLevels(levels: readonly Level[], height: number, forced: n
 }
 
 /**
- * The level each level draws as: itself once ready, else the nearest ready coarser level
- * that draws, else the nearest ready finer one; -1 draws nothing until one is ready.
- * Coarser first, so a missing level never costs more than it would: a crowd standing in
- * its source for a missing impostor draws thousands of full meshes.
+ * The level each level routes to: itself once ready, else the nearest ready coarser level
+ * that draws; -1 when there is none. Never a finer one, so a missing level never starts
+ * costing more than it would: a crowd standing in its source for a missing impostor draws
+ * thousands of full meshes. Where the route is -1, a copy keeps drawing the level it
+ * already showed, else nothing (see `Lod.pick` and kernel.ts).
  */
 export function fallbacks(levels: readonly Level[], ready: ReadonlySet<Level>): number[] {
   return levels.map((level, index) => {
@@ -234,7 +235,6 @@ export function fallbacks(levels: readonly Level[], ready: ReadonlySet<Level>): 
       const candidate = at(levels, coarser);
       if (ready.has(candidate) && !candidate.empty) return coarser;
     }
-    for (let finer = index - 1; finer >= 0; finer--) if (ready.has(at(levels, finer))) return finer;
     return -1;
   });
 }

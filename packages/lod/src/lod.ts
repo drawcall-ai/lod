@@ -8,7 +8,7 @@ import { levelMaterial } from "./material.js";
 import { Residency, handover, type LevelsEventMap } from "./residency.js";
 import { FADE, Level, cloneLevels, estimate, fadeProgress, levelAt, demandLevels, tintLevels, validate, type LevelView, type LodLevel } from "./levels.js";
 import { inShadowPass, isImpostorMesh, isLOD, isMesh, rejectSkinned } from "./three.js";
-import { TYPICAL_HEIGHT, View, viewportHeight, type RenderContext } from "./view.js";
+import { TYPICAL_HEIGHT, View, inView, viewportHeight, type RenderContext } from "./view.js";
 import { WIND_BOUNDS } from "./wind/hooks.js";
 import { copyWind, refreshWind } from "./wind/index.js";
 
@@ -66,6 +66,11 @@ export class Lod extends Object3D<LevelsEventMap> {
   /** Bounding sphere of the source (see the constructor) in the Lod's own space. */
   private sphere = new Sphere();
   private casterRadius = 0;
+  /**
+   * Per camera, the level it settled on drawing there, kept in place of a missing level that nothing ready and coarser
+   * replaces; none once it was out of that camera's view.
+   */
+  private readonly shown = new WeakMap<Camera, number>();
   private disposed = false;
   private readonly residency: Residency;
 
@@ -159,17 +164,21 @@ export class Lod extends Object3D<LevelsEventMap> {
     this.residency.update(camera);
     const { fallback, previous } = this.residency;
     const neighbour = Math.max(0, desired.index - 1);
+    const seen = inView(camera, this.matrixWorld, this.sphere);
+    const kept = seen ? (this.shown.get(camera) ?? -1) : -1;
     let level = at(fallback, desired.index);
     let finer = at(fallback, neighbour);
+    if (level < 0) level = finer = kept;
     const fade = view.fades ? fadeProgress(entries, desired, height) : 0;
     let t = level === finer ? 0 : fade;
     const progress = this.residency.progress;
-    // A level that replaced nothing draws at once.
-    const before = progress < 1 ? at(previous, desired.index) : -1;
-    if (before >= 0) {
-      const beforeFiner = at(previous, neighbour);
-      [level, finer, t] = handover([before, beforeFiner, before === beforeFiner ? 0 : fade], [level, finer, t], progress);
-    }
+    if (progress < 1) {
+      let before = at(previous, desired.index);
+      let beforeFiner = at(previous, neighbour);
+      if (before < 0) before = beforeFiner = kept;
+      // A level that replaced nothing draws at once.
+      if (before >= 0) [level, finer, t] = handover([before, beforeFiner, before === beforeFiner ? 0 : fade], [level, finer, t], progress);
+    } else this.shown.set(camera, seen ? level : -1);
     const diameter = 2 * this.casterRadius * this.matrixWorld.getMaxScaleOnAxis();
     entries.forEach((each, i) => {
       const draw = at(draws, i);

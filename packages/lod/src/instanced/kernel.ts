@@ -50,6 +50,8 @@ export interface Target {
   readonly maxPixels: readonly number[];
   readonly indices: StorageBufferAttribute;
   readonly fades: StorageBufferAttribute;
+  /** Per instance, the level it settled on drawing plus one, or 0. */
+  readonly shown: StorageBufferAttribute;
   args: ArgsSlice;
 }
 
@@ -89,6 +91,7 @@ export class Kernel {
   private readonly out = {
     indices: storage(new StorageBufferAttribute(new Uint32Array(1), 1), "uint", 0).setName("lodSlotIndices"),
     fades: storage(new StorageBufferAttribute(new Float32Array(1), 1), "float", 0).setName("lodSlotFades"),
+    shown: storage(new StorageBufferAttribute(new Uint32Array(1), 1), "uint", 0).setName("lodShown"),
     arguments: storage(new StorageBufferAttribute(new Uint32Array(5), 1), "uint", 0).setName("lodDrawArgs"),
   };
   // Allocation location must not specialize the arguments pass for every crowd.
@@ -120,8 +123,7 @@ export class Kernel {
     fallback.forEach((level, i) => {
       const route = at(this.routes, i);
       const previous = at(this.previous, i);
-      // A route that drew nothing hands over nothing: its level draws at once.
-      previous.value = fade && route.value >= 0 ? route.value : level;
+      previous.value = fade ? route.value : level;
       route.value = level;
     });
     this.progress.value = fade ? 0 : 1;
@@ -147,6 +149,7 @@ export class Kernel {
     target.planes.forEach((plane, i) => at(this.planes, i).value.copy(plane));
     this.out.indices.value = target.indices;
     this.out.fades.value = target.fades;
+    this.out.shown.value = target.shown;
     this.out.arguments.value = target.args.attribute;
     this.argsStart.value = target.args.offset / 4;
     this.kernels ??= [this.selectPass(), this.argumentsPass()];
@@ -168,11 +171,17 @@ export class Kernel {
     return Fn(() => {
       const m = matrices.element(instanceIndex).toVar();
       const r = this.bounds.w.mul(maxScale(m)).toVar();
-      If(r.equal(0), () => void Return());
+      // What it drew last, which it keeps drawing in place of a missing level; one out of view drew nothing.
+      const shown = out.shown.element(instanceIndex);
+      const hide = () => {
+        shown.assign(0);
+        Return();
+      };
+      If(r.equal(0), hide);
       const centre = m.mul(vec4(this.bounds.xyz, 1)).xyz.toVar();
       // Outside the view: wholly behind one of its planes, with every level and its sway.
       const extent = this.reach.mul(stretch(m)).mul(1 + 1e-4).negate();
-      for (const plane of this.planes) If(dot(plane.xyz, centre).add(plane.w).lessThan(extent), () => void Return());
+      for (const plane of this.planes) If(dot(plane.xyz, centre).add(plane.w).lessThan(extent), hide);
       const size = r.mul(2).mul(this.scale);
       const height = this.ortho
         .equal(uint(1))
@@ -203,6 +212,20 @@ export class Kernel {
           beforeFiner.assign(this.previous[level - 1] ?? this.previous[level] ?? route);
         });
       });
+      // A route that draws nothing draws the level this instance kept; with none, the new route draws at once.
+      const kept = int(shown).sub(1).toVar();
+      If(selected.lessThan(0), () => {
+        selected.assign(kept);
+        finer.assign(kept);
+      });
+      If(before.lessThan(0), () => {
+        before.assign(kept);
+        beforeFiner.assign(kept);
+      });
+      If(before.lessThan(0), () => {
+        before.assign(selected);
+        beforeFiner.assign(finer);
+      });
       const afterFade = selected.equal(finer).select(float(0), t).toVar();
       const beforeFade = before.equal(beforeFiner).select(float(0), t).toVar();
       t.assign(afterFade);
@@ -232,7 +255,7 @@ export class Kernel {
             );
           });
         If(selected.equal(finer), () => void t.assign(0));
-      });
+      }).Else(() => void shown.assign(uint(selected.add(1))));
       const emit = (level: number, first: Node<"uint">, fade: Node<"float">) => {
         const slot = atomicAdd(counts.element(level), uint(1)).add(first).toVar();
         out.indices.element(slot).assign(instanceIndex);

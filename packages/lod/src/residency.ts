@@ -1,6 +1,6 @@
 import type { Camera, Object3D, Object3DEventMap } from "three/webgpu";
 import { Item } from "./item.js";
-import { gpuRenderer } from "./three.js";
+import { gpuRenderer, inShadowPass, isRenderer } from "./three.js";
 import { Watch, type Member } from "./watch.js";
 import { at } from "./at.js";
 import { compileLevel } from "./compile.js";
@@ -29,6 +29,25 @@ function compiledIn(context: RenderContext): WeakSet<Object3D> {
   return compiled;
 }
 
+/** A camera's last demand, and the scene's watch, pass and, a shadow map's, the renderer's frame it was made in. */
+interface Demand {
+  levels: Set<Level>;
+  watch: Watch;
+  pass: number;
+  frame: number | null;
+}
+
+/**
+ * Whether `demand` still counts: made in its scene's current or last pass, or a shadow map's made this frame. three
+ * draws a shadow map at most once a frame for each view, so a view rendered again in the frame keeps drawing the map
+ * the last selection filled.
+ */
+function fresh(demand: Demand): boolean {
+  return demand.pass >= demand.watch.pass - 1 || (demand.frame !== null && demand.frame === frameOf(demand.watch.renderer));
+}
+
+const frameOf = (renderer: unknown): number | undefined => (isRenderer(renderer) ? renderer.info.frame : undefined);
+
 /** Decode is shared by load function; readiness and handover belong to each owner. */
 export class Residency implements Member {
   readonly installed = new Set<Level>();
@@ -37,7 +56,7 @@ export class Residency implements Member {
   private start: number | undefined;
   private task: { done: Promise<void>; level?: Level } | undefined;
   /** Each camera's last demand, and the scene's watch and pass it was made in (see watch.ts). */
-  private readonly demands = new Map<Camera, { levels: Set<Level>; watch: Watch; pass: number }>();
+  private readonly demands = new Map<Camera, Demand>();
   /** Whether a view updated the owner before its render was seen while levels are missing: it loads what it needs once it has. */
   private waiting = false;
   private readonly watches = new Set<Watch>();
@@ -80,13 +99,13 @@ export class Residency implements Member {
   }
 
   /**
-   * The levels needed by the cameras that updated the owner in its scene's current or last pass: each camera that
-   * renders the scene once a frame counts, whatever their order, and one that stopped rendering it drops out.
+   * The levels needed by the cameras whose demand is fresh: each camera that renders the scene once a frame counts,
+   * whatever their order, and one that stopped rendering it drops out.
    */
   private needed(): Set<Level> {
     this.union.clear();
     for (const [camera, demand] of this.demands) {
-      if (demand.pass < demand.watch.pass - 1) this.demands.delete(camera);
+      if (!fresh(demand)) this.demands.delete(camera);
       else for (const level of demand.levels) this.union.add(level);
     }
     return this.union;
@@ -107,13 +126,14 @@ export class Residency implements Member {
       return;
     }
     this.waiting = false;
-    gpuRenderer(watch.renderer);
+    const renderer = gpuRenderer(watch.renderer);
     watch.join(this);
     this.watches.add(watch);
     let demand = this.demands.get(camera);
-    if (!demand) this.demands.set(camera, (demand = { levels: new Set(), watch, pass: watch.pass }));
+    if (!demand) this.demands.set(camera, (demand = { levels: new Set(), watch, pass: watch.pass, frame: null }));
     demand.watch = watch;
     demand.pass = watch.pass;
+    demand.frame = inShadowPass(this.owner) ? renderer.info.frame : null;
     demand.levels.clear();
     for (const index of indices) {
       const level = at(this.levels, index);
@@ -161,8 +181,9 @@ export class Residency implements Member {
         const before = this.fallback;
         this.installed.add(level);
         this.fallback = fallbacks(this.levels, this.installed);
-        // Only what drew before hands over: a level that replaces nothing draws at once.
-        if (!this.fallback.some((index, i) => index !== before[i] && at(before, i) >= 0)) return;
+        // The first level to arrive draws at once. Later ones hand over from what drew in their place: their route's
+        // level, or where that drew nothing, the level each instance kept drawing (the owner knows which).
+        if (at(before, 0) < 0 || this.fallback.every((index, i) => index === before[i])) return;
         this.previous = before;
         this.start = performance.now();
       }, level);

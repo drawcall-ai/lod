@@ -214,3 +214,57 @@ it.each([false, true])("hands over an installed source without popping (height f
     lod.dispose();
   }
 });
+
+it("keeps drawing the level it showed while the one it walked away to loads, then hands over to it", { timeout: GPU_TIMEOUT }, async () => {
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const coarse = { load: async () => (await gate, box()), maxPixels: 5, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) };
+  const lod = new Lod([{ object: box() }, coarse]);
+  const scene = new Scene().add(lod);
+  const shown = () => lod.levels.flatMap(({ object }, i) => (object?.visible ? [i] : []));
+  lod.position.z = -5;
+  try {
+    await render(scene, camera);
+    expect(shown()).toEqual([0]);
+    lod.position.z = -900;
+    await render(scene, camera);
+    expect(shown()).toEqual([0]);
+    const arrived = nextLevel(lod, camera);
+    release();
+    await arrived;
+    await render(scene, camera);
+    // The arrival hands over from the kept source rather than replacing it at once.
+    expect(shown()).toContain(0);
+    await new Promise((resolve) => setTimeout(resolve, HANDOVER_MS));
+    await render(scene, camera);
+    expect(shown()).toEqual([1]);
+  } finally {
+    lod.dispose();
+  }
+});
+
+it("keeps a level per camera: another camera whose level is missing never draws the one a nearer camera shows", { timeout: GPU_TIMEOUT }, async () => {
+  const coarse = { load: () => new Promise<Mesh>(() => {}), maxPixels: 5, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) };
+  const lod = new Lod([{ object: box() }, coarse]);
+  const scene = new Scene().add(lod);
+  const shown = () => lod.levels.flatMap(({ object }, i) => (object?.visible ? [i] : []));
+  const near = new PerspectiveCamera(60, 1, 0.1, 1000);
+  near.position.z = 5;
+  const far = near.clone();
+  far.position.z = 900;
+  try {
+    await render(scene, near);
+    expect(shown()).toEqual([0]);
+    await render(scene, far);
+    expect(shown()).toEqual([]);
+    // Out of its view, a camera forgets what it showed.
+    await render(scene, near);
+    near.position.x = 100;
+    await render(scene, near);
+    near.position.set(0, 0, 900);
+    await render(scene, near);
+    expect(shown()).toEqual([]);
+  } finally {
+    lod.dispose();
+  }
+});
