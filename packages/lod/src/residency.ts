@@ -1,14 +1,13 @@
-import type { Camera, Object3D, Object3DEventMap, Renderer } from "three/webgpu";
+import { BufferGeometry, Float32BufferAttribute, Mesh, MeshBasicNodeMaterial, type Camera, type Object3D, type Object3DEventMap, type Renderer } from "three/webgpu";
 import { Item } from "./item.js";
-import { gpuRenderer, inShadowPass, isRenderer } from "./three.js";
-import { Watch, type Member } from "./watch.js";
+import { busy, gpuRenderer, inShadowPass, isScene, rootOf, skipDraw } from "./three.js";
 import { at } from "./at.js";
 import { compileLevel } from "./compile.js";
 import { pause } from "./pause.js";
 import { disposeTree } from "./dispose.js";
 import { loadOnce, loading } from "./deferred.js";
 import { fallbacks, type Level } from "./levels.js";
-import { renderContext, type RenderContext } from "./view.js";
+import { recordRender, renderContext, type RenderContext } from "./view.js";
 
 /** How long an arriving level fades in for, replacing the one that drew in its place. */
 export const HANDOVER_MS = 200;
@@ -29,42 +28,48 @@ function compiledIn(context: RenderContext): WeakSet<Object3D> {
   return compiled;
 }
 
-/** A camera's last demand, and the scene's watch, pass and, a shadow map's, the renderer's frame it was made in. */
+/** A camera's last demand, and the pass and, a shadow map's, the renderer's frame it was made in. */
 interface Demand {
   levels: Set<Level>;
-  watch: Watch;
   pass: number;
   frame: number | null;
 }
 
-/**
- * Whether `demand` still counts: made in its scene's current or last pass, or a shadow map's made this frame. three
- * draws a shadow map at most once a frame for each view, so a view rendered again in the frame keeps drawing the map
- * the last selection filled.
- */
-function fresh(demand: Demand): boolean {
-  return demand.pass >= demand.watch.pass - 1 || (demand.frame !== null && demand.frame === frameOf(demand.watch.renderer));
-}
+/** How long a held item waits between looks at its renderer's renders (see `look`): a frame's time. */
+const LOOK_MS = 16;
 
-const frameOf = (renderer: unknown): number | undefined => (isRenderer(renderer) ? renderer.info.frame : undefined);
+/** What learns an owner's renderer (see `ask`): one degenerate triangle, which would draw nothing were it drawn. */
+const probeGeometry = new BufferGeometry().setAttribute("position", new Float32BufferAttribute(new Float32Array(9), 3));
+const probeMaterial = new MeshBasicNodeMaterial({ colorWrite: false, depthWrite: false });
 
 /** Decode is shared by load function; readiness and handover belong to each owner. */
-export class Residency implements Member {
+export class Residency {
   readonly installed = new Set<Level>();
   fallback: number[] = [];
   previous: number[] = [];
   private start: number | undefined;
   /** What the owner is preparing: draws of levels it was given and the loaded levels it installs, all at once. */
   private task: { done: Promise<void>; levels: readonly Level[] } | undefined;
-  /** Each camera's last demand, and the scene's watch and pass it was made in (see watch.ts). */
+  /** Each camera's last demand, and the pass it was made in. */
   private readonly demands = new Map<Camera, Demand>();
-  /** Whether a view updated the owner before its render was seen while levels are missing: it loads what it needs once it has. */
+  /** Whether a view updated the owner before its renderer was known while levels are missing: it loads what it needs once it is. */
   private waiting = false;
-  private readonly watches = new Set<Watch>();
+  /**
+   * The renderer's updates of the owner, counted in passes: a pass ends when a camera updates it a second time, so a
+   * pass holds one update by each camera that renders it once a frame, whatever their order. Shadow maps do not count.
+   */
+  private pass = 0;
+  /** The cameras that updated the owner in the pass in progress. */
+  private readonly cameras = new Set<Camera>();
+  /** The mesh asking which renderer draws the owner, while it asks (see `ask`). */
+  private probe: Mesh | undefined;
+  /** Whether the owner was updated since the item's last look at its renderer, and whether a look is due (see `look`). */
+  private updated = false;
+  private looking = false;
   private readonly union = new Set<Level>();
   private readonly requested = new Set<() => Promise<Object3D>>();
   private disposed = false;
-  /** What draws the owner: the first renderer that rendered it. */
+  /** What draws the owner: the first renderer that drew it. */
   private renderer: Renderer | undefined;
   /** The first failure; it stops further demand. */
   error: Error | undefined;
@@ -111,43 +116,92 @@ export class Residency implements Member {
   private needed(): Set<Level> {
     this.union.clear();
     for (const [camera, demand] of this.demands) {
-      if (!fresh(demand)) this.demands.delete(camera);
+      if (!this.fresh(demand)) this.demands.delete(camera);
       else for (const level of demand.levels) this.union.add(level);
     }
     return this.union;
   }
 
-  /** Whether `camera` updated the owner in its scene's current or last pass, or, a shadow map's, in this frame. */
+  /**
+   * Whether `demand` still counts: made in the current or last pass, or a shadow map's made this frame. three draws a
+   * shadow map at most once a frame for each view, so a view rendered again in the frame keeps drawing the map the last
+   * selection filled.
+   */
+  private fresh(demand: Demand): boolean {
+    return demand.pass >= this.pass - 1 || (demand.frame !== null && demand.frame === this.renderer?.info.frame);
+  }
+
+  /** Whether `camera` updated the owner in the current or last pass, or, a shadow map's, in this frame. */
   viewing(camera: Camera): boolean {
     const demand = this.demands.get(camera);
-    return demand !== undefined && fresh(demand);
+    return demand !== undefined && this.fresh(demand);
   }
 
   /**
-   * A view update's demand: `camera` needs the levels of `indices`. Nothing loads before the render it updates for has
-   * been seen, which records the view the levels are prepared for; the item is held meanwhile.
+   * An update by `camera`, a view's or a shadow map's, of an owner in a Scene. One its renderer makes as it renders
+   * or compiles the Scene records the camera's render context and viewport height there, or the shadow map, and counts
+   * in the passes. Any other, before the renderer is known, by the app, or by another renderer, asks which renderer
+   * draws the owner.
+   */
+  view(camera: Camera): void {
+    const scene = rootOf(this.owner);
+    if (this.disposed || this.error || !isScene(scene)) return;
+    this.updated = true;
+    const { renderer } = this;
+    if (!renderer || !busy(renderer)) return this.ask();
+    recordRender(renderer, scene, camera);
+    if (inShadowPass(scene)) return;
+    if (this.cameras.has(camera)) {
+      this.pass++;
+      this.cameras.clear();
+    }
+    this.cameras.add(camera);
+  }
+
+  /**
+   * Learn which renderer draws the owner, and where: three hands a renderer only to what it draws, and the owner may
+   * draw nothing yet. A mesh under the owner meets the next render or compile that reaches it, records it as `view`
+   * does, and leaves. It builds and draws nothing: its draw is skipped. A second renderer is the owner's error.
+   */
+  private ask(): void {
+    if (this.probe) return;
+    const probe = (this.probe = new Mesh(probeGeometry, probeMaterial));
+    probe.frustumCulled = false;
+    probe.layers.enableAll();
+    // Ahead of the draws that render shadow maps, so that the owner's updates in them are its renderer's.
+    probe.renderOrder = -Infinity;
+    probe.onBeforeRender = (renderer, scene, camera) =>
+      this.guard(() => {
+        const gpu = gpuRenderer(renderer);
+        skipDraw(gpu);
+        if (this.probe !== probe) return;
+        this.probe = undefined;
+        probe.removeFromParent();
+        this.renderer ??= gpu;
+        if (gpu !== this.renderer) throw new Error(`${this.name}: a second renderer drew it; an owner draws with the first renderer that drew it only`);
+        if (isScene(scene)) recordRender(gpu, scene, camera);
+      });
+    this.owner.add(probe);
+  }
+
+  /**
+   * A view update's demand: `camera` needs the levels of `indices`. Nothing loads before the owner's renderer is known
+   * (see `ask`), which prepares the levels for the view; the item is held meanwhile.
    */
   demand(camera: Camera, indices: readonly number[]): void {
     this.started = true;
     if (this.disposed || this.error) return;
-    const watch = Watch.of(this.owner, camera);
-    if (!watch) {
-      if (watch === null && indices.some((index) => !this.installed.has(at(this.levels, index))))
-        throw new Error("Lod: render a Scene that holds it to load the levels it needs");
-      // The render's view is not known yet: any missing level may be the one it needs.
-      this.waiting = this.levels.some((level) => !this.installed.has(level));
+    if (!isScene(rootOf(this.owner))) {
+      if (indices.some((index) => !this.installed.has(at(this.levels, index)))) throw new Error("Lod: render a Scene that holds it to load the levels it needs");
       return;
     }
-    this.waiting = false;
-    const renderer = gpuRenderer(watch.renderer);
-    this.renderer ??= renderer;
-    if (renderer !== this.renderer) throw new Error(`${this.name}: a second renderer rendered it; an owner draws with the first renderer that rendered it only`);
-    watch.join(this);
-    this.watches.add(watch);
+    const { renderer } = this;
+    // Until the renderer is known, any missing level may be the one the view needs.
+    this.waiting = !renderer && this.levels.some((level) => !this.installed.has(level));
+    if (!renderer) return;
     let demand = this.demands.get(camera);
-    if (!demand) this.demands.set(camera, (demand = { levels: new Set(), watch, pass: watch.pass, frame: null }));
-    demand.watch = watch;
-    demand.pass = watch.pass;
+    if (!demand) this.demands.set(camera, (demand = { levels: new Set(), pass: this.pass, frame: null }));
+    demand.pass = this.pass;
     demand.frame = inShadowPass(this.owner) ? renderer.info.frame : null;
     demand.levels.clear();
     for (const index of indices) {
@@ -208,11 +262,6 @@ export class Residency implements Member {
     }, arriving.map(({ level }) => level));
   }
 
-  /** A scene rendered a whole pass without updating the owner: it no longer draws there. */
-  idle(): void {
-    this.item.held = false;
-  }
-
   /**
    * Holds the item while the levels the views need load, install, compile or hand over, and ends it once they are done,
    * so a host waiting for its manager renders the views complete. Called at the end of each update. Levels stay
@@ -220,6 +269,26 @@ export class Residency implements Member {
    */
   sync(): void {
     this.item.held = !this.disposed && !this.error && (this.pending || this.task !== undefined || this.progress < 1);
+    if (this.item.held && this.renderer && !this.looking) this.look(this.renderer);
+  }
+
+  /**
+   * While the item is held, look a frame's time apart at the renderer's renders: renders since the last look without
+   * an update of the owner mean it no longer draws (hidden, on a layer no camera tests, out of the scene, or another
+   * scene drawn alone), and end the item; its next update starts it again. A renderer that only compiles leaves it held.
+   */
+  private look(renderer: Renderer): void {
+    this.looking = true;
+    this.updated = false;
+    const renders = renderer.info.render.calls;
+    const timer: unknown = setTimeout(() => {
+      this.looking = false;
+      if (!this.item.held) return;
+      if (renderer.info.render.calls !== renders && !this.updated) this.item.held = false;
+      else this.look(renderer);
+    }, LOOK_MS);
+    // A held item must not keep Node.js running.
+    if (typeof timer === "object" && timer !== null && "unref" in timer && typeof timer.unref === "function") timer.unref();
   }
 
   /** Run `action` outside the render that asked for it, which may still be walking the scene. */
@@ -263,7 +332,7 @@ export class Residency implements Member {
   dispose(release: () => void): void {
     this.disposed = true;
     this.item.held = false;
-    for (const watch of this.watches) watch.leave(this);
+    this.probe?.removeFromParent();
     const free = () => {
       release();
       const templates = new Set<Object3D>();

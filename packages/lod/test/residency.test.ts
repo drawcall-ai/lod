@@ -331,7 +331,7 @@ const cases: { how: string; leave: (parts: Parts) => unknown; back: (parts: Part
   { how: "not auto-updated", leave: ({ owner }: Parts) => (owner.autoUpdate = false), back: ({ owner }: Parts) => (owner.autoUpdate = true) },
 ];
 it.each(cases)(
-  "ends a held Lod's item once its scene renders a pass without it, $how, and holds it again once drawn",
+  "ends a held Lod's item once its renderer renders a frame's time without it, $how, and holds it again once drawn",
   { timeout: GPU_TIMEOUT },
   async ({ leave, back }) => {
     const { level } = gatedBox();
@@ -349,12 +349,11 @@ it.each(cases)(
       await Promise.resolve();
       expect(start).toHaveBeenCalledOnce();
       leave({ scene, group, owner });
-      // The pass it last updated in ends with the next render; the one after ends a pass without it.
       renderer.render(scene, camera);
       await Promise.resolve();
       expect(end).not.toHaveBeenCalled();
-      renderer.render(scene, camera);
-      await Promise.resolve();
+      // The item's next look finds a render without an update.
+      await new Promise((resolve) => setTimeout(resolve, 40));
       expect(end).toHaveBeenCalledOnce();
       back({ scene, group, owner });
       renderer.render(scene, camera);
@@ -508,7 +507,7 @@ it.each(["Lod", "InstancedLod"])(
       for (let i = 0; i < 2; i++) await render(scene, camera);
       expect(owner.error).toBeUndefined();
       other.render(scene, camera);
-      expect(owner.error?.message).toMatch(/a second renderer rendered it/);
+      expect(owner.error?.message).toMatch(/a second renderer drew it/);
       expect(failed).toHaveBeenCalledWith(owner.error);
       expect(logged).toHaveBeenCalledWith(owner.error);
       expect((await render(scene, camera)).some((value) => value > 0)).toBe(true);

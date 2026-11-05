@@ -113,6 +113,26 @@ export function gpuRenderer(renderer: unknown): Renderer {
 }
 export const isRenderer = (value: unknown): value is Renderer => flag(value, "isRenderer");
 
+/**
+ * Whether `renderer` is rendering or compiling now, as it is while it updates what it draws; not while an app calls
+ * `update` itself or another renderer draws. Mirrors three r186's `_callDepth` and the compile's `_compilationPromises`.
+ */
+export function busy(renderer: Renderer): boolean {
+  const depth: unknown = Reflect.get(renderer, "_callDepth");
+  if (typeof depth !== "number") throw new Error("Lod: three's renderer keeps no call depth (lod mirrors three r186)");
+  return depth >= 0 || Reflect.get(renderer, "_compilationPromises") != null;
+}
+
+/**
+ * Let `renderer` skip the draw whose onBeforeRender calls this: three r186 hands the draw on to `_handleObjectFunction`,
+ * which builds its pipeline, to draw with or, in compileAsync, to keep.
+ */
+export function skipDraw(renderer: Renderer): void {
+  const handle: unknown = Reflect.get(renderer, "_handleObjectFunction");
+  if (typeof handle !== "function") throw new Error("Lod: three's renderer hands draws to nothing it can skip (lod mirrors three r186)");
+  Reflect.set(renderer, "_handleObjectFunction", () => Reflect.set(renderer, "_handleObjectFunction", handle));
+}
+
 /** The root of the tree `node` is in: its scene, once added to one. */
 export function rootOf(node: Object3D): Object3D {
   let root = node;

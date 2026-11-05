@@ -9,17 +9,16 @@ export interface LodOptions {
   /**
    * Gets an item while the levels the views need load, install, compile or fade in, ended once they are complete. Without
    * one, an owner nested in another's level reports to that owner's, any other to three's `DefaultLoadingManager`. Wait
-   * for it to go idle, rendering the Scene that holds the owner a frame apart meanwhile, to capture a view complete.
-   * Every camera that views the scene must then render it each frame: an owner that a whole pass of the scene's renders
-   * leaves without an update (a pass ends when a camera renders the scene again) ends its item, and starts it again on
-   * its next update.
+   * for it to go idle, rendering (or compiling) the Scene that holds the owner a frame apart meanwhile, to capture a
+   * view complete. An owner that its renderer renders around for a frame's time without an update ends its item, and
+   * starts it again on its next update.
    */
   manager?: LoadingManager;
 }
 
 /**
  * What a Lod and an InstancedLod share: levels picked per camera, prepared while their item is held. Each draws with one
- * renderer, the first that renders it; another that renders it is reported as its error.
+ * renderer, the first that draws it; another that draws it is reported as its error.
  */
 export abstract class Owner extends Object3D<LevelsEventMap> {
   readonly isLOD = true;
@@ -67,7 +66,10 @@ export abstract class Owner extends Object3D<LevelsEventMap> {
 
   /** Pick levels for `camera`. What fails is reported (see `Residency.report`): three is rendering. */
   update(camera: Camera): void {
-    this.residency.guard(() => this.pick(camera));
+    this.residency.guard(() => {
+      this.residency.view(camera);
+      this.pick(camera);
+    });
   }
 
   [WIND](padding: number, slope: number, baseY: number): void {
