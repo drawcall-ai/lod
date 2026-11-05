@@ -121,6 +121,18 @@ export class Selection {
     return view;
   }
 
+  /** Free the slots of the views of cameras that `viewing` no longer counts. */
+  forget(viewing: (camera: Camera) => boolean): void {
+    for (const [camera, view] of this.views) {
+      if (viewing(camera)) continue;
+      this.views.delete(camera);
+      view.indices.dispose();
+      view.fades.dispose();
+      view.shown.dispose();
+      view.args.dispose();
+    }
+  }
+
   /** Slots and kernels survive arrivals; only the variable-size draw tables are replaced. */
   append(draws: readonly IndirectDraw[]): number {
     const offset = this.draws.length * ARGS_BYTES;
@@ -210,13 +222,7 @@ export class Selection {
   /** Frees its buffers and passes. */
   dispose(): void {
     for (const attribute of [this.matrices, this.colors]) attribute?.dispose();
-    for (const view of this.views.values()) {
-      view.indices.dispose();
-      view.fades.dispose();
-      view.shown.dispose();
-      view.args.dispose();
-    }
-    this.views.clear();
+    this.forget(() => false);
     this.kernel.dispose();
   }
 }

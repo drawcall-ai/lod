@@ -32,6 +32,7 @@ import { Wind } from "../../src/wind/index.js";
 import { isMesh } from "../../src/three.js";
 import { setViewportHeight } from "../../src/view.js";
 import { GPU_TIMEOUT, render, renderer, nextLevel } from "../gpu.js";
+import { must } from "../must.js";
 
 const box = (name: string) => Object.assign(new Mesh(new BoxGeometry(2, 2, 2), new MeshBasicMaterial()), { name });
 const DIAMETER = 2 * Math.sqrt(3);
@@ -307,6 +308,26 @@ it("keeps drawing the level each instance showed while the one it walked away to
     await new Promise((resolve) => setTimeout(resolve, HANDOVER_MS));
     await render(scene, camera);
     expect(await distances(crowd, camera)).toEqual([[], [1000, 1000, 1000, 1000]]);
+  } finally {
+    crowd.dispose();
+  }
+});
+
+it("gives back the slots of a camera that stopped rendering it", { timeout: GPU_TIMEOUT }, async () => {
+  const crowd = new InstancedLod([{ object: mesh() }], 1);
+  crowd.setMatrixAt(0, new Matrix4().makeTranslation(0, 0, -5));
+  const scene = new Scene().add(crowd);
+  const camera = new PerspectiveCamera(60, 1, 0.1, 100);
+  const once = camera.clone();
+  try {
+    await render(scene, once);
+    const draw = drawOf(must(meshes(crowd)[0]));
+    if (draw?.kind !== "instances" || !draw.slots) throw new Error("not a level mesh");
+    const freed = vi.fn();
+    draw.slots(once).indices.addEventListener("dispose", freed);
+    // Two passes of another camera: the one-frame clone no longer views the crowd.
+    for (let i = 0; i < 3; i++) await render(scene, camera);
+    expect(freed).toHaveBeenCalledOnce();
   } finally {
     crowd.dispose();
   }

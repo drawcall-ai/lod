@@ -99,8 +99,8 @@ export class Residency implements Member {
   }
 
   /**
-   * The levels needed by the cameras whose demand is fresh: each camera that renders the scene once a frame counts,
-   * whatever their order, and one that stopped rendering it drops out.
+   * The levels needed by the cameras that still view the owner (see `viewing`): each camera that renders the scene
+   * once a frame counts, whatever their order, and one that stopped rendering it drops out.
    */
   private needed(): Set<Level> {
     this.union.clear();
@@ -109,6 +109,12 @@ export class Residency implements Member {
       else for (const level of demand.levels) this.union.add(level);
     }
     return this.union;
+  }
+
+  /** Whether `camera` updated the owner in its scene's current or last pass, or, a shadow map's, in this frame. */
+  viewing(camera: Camera): boolean {
+    const demand = this.demands.get(camera);
+    return demand !== undefined && fresh(demand);
   }
 
   /**

@@ -224,6 +224,8 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     }
     this.demandLevels(camera, drawn, shadow);
     this.extent.reroute(residency.fallback, residency.previous, progress);
+    // Cameras that stopped rendering it, as a clone made for one frame does, give their slots back.
+    selection.forget((other) => other === camera || residency.viewing(other));
     selection.aim(camera, seen, entries);
     // Selected only when something may draw: an InstancedLod with every level hidden
     // keeps its last selection.
