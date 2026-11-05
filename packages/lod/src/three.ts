@@ -108,6 +108,12 @@ export function gpuRenderer(renderer: unknown): Renderer {
 }
 const isRenderer = (value: unknown): value is Renderer => flag(value, "isRenderer");
 
+/** The root of the tree `node` is in: its scene, once added to one. */
+export function rootOf(node: Object3D): Object3D {
+  let root = node;
+  while (root.parent) root = root.parent;
+  return root;
+}
 
 /**
  * Whether the scene `node` is in is being drawn into a shadow map: three's shadow pass
@@ -115,8 +121,7 @@ const isRenderer = (value: unknown): value is Renderer => flag(value, "isRendere
  * light's camera, which must not switch the levels the view chose.
  */
 export function inShadowPass(node: Object3D): boolean {
-  let root = node;
-  while (root.parent) root = root.parent;
+  const root = rootOf(node);
   return "overrideMaterial" in root && isShadowPass(root.overrideMaterial);
 }
 

@@ -49,7 +49,7 @@ import {
   vec4,
 } from "three/tsl";
 import { instanceMatrixOf } from "../../fade.js";
-import { isScene } from "../../three.js";
+import { isScene, rootOf } from "../../three.js";
 import { affine, column, contextNode, isNodeOf, isOrthographic, roomBounds } from "../../tsl.js";
 import { FACES, type Faces } from "./faces.js";
 
@@ -232,8 +232,7 @@ class InteriorLighting extends PhysicalLightingModel {
 
 /** The environment of the scene `object` is in, if any. */
 function environmentOf(object: Object3D): Texture | null {
-  let root = object;
-  while (root.parent) root = root.parent;
+  const root = rootOf(object);
   return isScene(root) ? root.environment : null;
 }
 
