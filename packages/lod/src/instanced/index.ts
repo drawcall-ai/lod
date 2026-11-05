@@ -282,9 +282,10 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
   }
 
   /** Release drawables and templates only after every owner sharing their geometry, materials and textures has stopped drawing. */
-  dispose(): void {
+  override dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    super.dispose();
     this.residency.dispose(() => {
       this.meshes?.dispose();
       this.selection?.dispose();

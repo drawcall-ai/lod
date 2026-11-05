@@ -44,18 +44,18 @@
   },
   "peerDependencies": {
     "@drawcall/glts": "^4.1.0",
-    "three": ">=0.185.0 <0.186.0"
+    "three": ">=0.186.0"
   },
   "devDependencies": {
     "@drawcall/glts": "^4.1.0",
     "@drawcall/lod": "link:",
     "@types/node": "^24.13.6",
-    "@types/three": "^0.185.0",
+    "@types/three": "^0.186.0",
     "@vitest/browser-playwright": "4.1.11",
     "@webgpu/types": "^0.1.74",
     "ktx2-encoder": "0.6.0",
     "playwright": "1.63.0",
-    "three": "^0.185.1",
+    "three": "^0.186.1",
     "typescript": "^5.9.3",
     "vitest": "^4.0.17",
     "xatlas-wasm": "0.1.3"

@@ -240,9 +240,10 @@ export class Lod extends Object3D<LevelsEventMap> {
   }
 
   /** Release drawables and templates only after every owner sharing their geometry, materials and textures has stopped drawing. */
-  dispose(): void {
+  override dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    super.dispose();
     this.residency.dispose(() => {
       for (const { object } of this.entries) if (object) disposeCopies(object);
     });

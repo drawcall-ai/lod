@@ -5,7 +5,7 @@ import { shadowPassesOf, type RenderContext } from "./view.js";
 
 /**
  * Prepare the same target and MRT as the viewing draw, even if normal rendering has since restored the canvas, and the
- * shadow maps the scene's level meshes draw into, for each mesh that casts. r185 uploads a texture synchronously inside
+ * shadow maps the scene's level meshes draw into, for each mesh that casts. r186 uploads a texture synchronously inside
  * initTexture, and creates a pipeline it meets while rendering synchronously, so each texture and draw is prepared
  * here first. Textures upload paced across frames (see `paced`); every draw then compiles at once, as do the draws of
  * every other level being prepared, so their pipelines are created side by side.
@@ -33,7 +33,7 @@ export async function compileLevel(object: Object3D, context: RenderContext): Pr
     if (mesh.castShadow)
       for (const { camera, target, material } of shadows)
         passes.push({ context: { ...context, camera, target, mrt: null, cubeFace: 0, mipLevel: 0 }, material });
-    // r185 starts only the first material before yielding; isolate one draw so setup sees its captured target/MRT.
+    // r186 starts only the first material before yielding; isolate one draw so setup sees its captured target/MRT.
     const parts = Array.isArray(mesh.material) ? mesh.geometry.groups.map((group) => [group]) : [mesh.geometry.groups];
     for (const pass of passes) for (const part of parts) draws.push(compileDraw(mesh, pass, part));
   }
@@ -123,11 +123,11 @@ interface Pass {
   material: Material | null;
 }
 
-/** What r185's renderObject gives an override material for one draw, and puts back once it has handed the draw on. */
+/** What r186's renderObject gives an override material for one draw, and puts back once it has handed the draw on. */
 const DRAW_STATE = ["colorNode", "depthNode", "positionNode", "side", "displacementMap", "displacementScale", "displacementBias"];
 
 /**
- * A copy of the shadow pass's override material for compiling one draw. r185's compileAsync builds the draw only after
+ * A copy of the shadow pass's override material for compiling one draw. r186's compileAsync builds the draw only after
  * renderObject has put back the per-draw state it gave the override (the caster's shadow nodes and side), so with the
  * shared material it would prepare a pipeline the shadow pass never draws with. The copy keeps the state of the draw.
  * It is not disposed: that would release the pipeline before the shadow pass draws with it.
@@ -172,7 +172,7 @@ function compileMesh(mesh: Mesh, { context, material }: Pass): Promise<void> {
     mesh.frustumCulled = false;
     mesh.visible = true;
     mesh.children = [];
-    // r185 compiles backgrounds first, which would postpone this mesh until after renderer state is restored.
+    // r186 compiles backgrounds first, which would postpone this mesh until after renderer state is restored.
     scene.background = null;
     scene.backgroundNode = null;
     return renderer.compileAsync(mesh, camera, scene);

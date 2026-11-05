@@ -46,7 +46,8 @@ export const isInstancedMesh = (node: Object3D): node is InstancedMesh => flag(n
 export const isBatchedMesh = (node: Object3D): node is BatchedMesh => flag(node, "isBatchedMesh");
 export const isLight = (node: Object3D): boolean => flag(node, "isLight");
 export const isScene = (node: Object3D): node is Scene => flag(node, "isScene");
-export const isGLTSScene = (node: Object3D): node is GLTSScene => isScene(node) && "source" in node && "dispose" in node && typeof node.dispose === "function";
+/** A scene a GLTSLoader loaded: its loader gives it a dispose of its own, which a clone, a plain Scene, lacks. */
+export const isGLTSScene = (node: Object3D): node is GLTSScene => isScene(node) && "source" in node && Object.hasOwn(node, "dispose");
 /** A GLTSLoader, recognized by the bundled module provenance it publishes. */
 export const isGLTSLoader = (loader: Loader): loader is GLTSLoader =>
   "moduleSources" in loader && typeof loader.moduleSources === "object" && loader.moduleSources !== null;
@@ -133,7 +134,7 @@ export function inShadowPass(node: Object3D): boolean {
 export const isShadowPass = (material: unknown): boolean => flag(material, "isShadowPassMaterial");
 
 /**
- * Whether `target` is the framebuffer target r185 draws the canvas (or output target) through when tone mapping or
+ * Whether `target` is the framebuffer target r186 draws the canvas (or output target) through when tone mapping or
  * the output colour space needs a final pass. A draw meant for the output sees it as the active target; a compile for
  * the output leaves the target unset and lets three resolve it.
  */

@@ -1,9 +1,10 @@
 import { GLTSLoader } from "@drawcall/glts";
-import { Box3, BoxGeometry, LoadingManager, Mesh, MeshBasicMaterial, Texture } from "three/webgpu";
+import { Box3, BoxGeometry, LoadingManager, Mesh, MeshBasicMaterial, Scene, Texture } from "three/webgpu";
 import { expect, it, vi } from "vitest";
 import { InstancedLod } from "../src/instanced/index.js";
 import { decodeMeshAsync, encodeMeshAsync } from "../src/mesh/codec.js";
 import { Lod } from "../src/lod.js";
+import { isGLTSScene } from "../src/three.js";
 
 it.each([Lod, InstancedLod])("lets the GLTS source release its resources while preserving shared host textures (%s)", async (Type) => {
   const texture = new Texture();
@@ -23,6 +24,10 @@ it.each([Lod, InstancedLod])("lets the GLTS source release its resources while p
   const loader = new GLTSLoader(new LoadingManager(), { modules: { host: { texture, cleanup } } });
   try {
     const source = await loader.loadAsync("https://assets.test/owned.glts");
+    // A clone is a plain Scene: disposing it fires its draw state's release, not the script's.
+    expect(isGLTSScene(source)).toBe(true);
+    expect(isGLTSScene(source.clone())).toBe(false);
+    expect(isGLTSScene(Object.assign(new Scene(), { source: source.source }))).toBe(false);
     const mesh = source.children[0];
     if (!(mesh instanceof Mesh) || Array.isArray(mesh.material)) throw new Error("Missing source mesh");
     const geometryDisposed = vi.fn();
@@ -72,3 +77,18 @@ it.each([Lod, InstancedLod].map((Type) => ({ name: Type.name, Type })))(
     expect(dispose).toHaveBeenCalledOnce();
   },
 );
+
+it("frees the draw state of every level mesh once, of the source and of each copy", () => {
+  const lod = new Lod([{ object: new Mesh(new BoxGeometry(), new MeshBasicMaterial()) }]);
+  const copy = lod.clone();
+  const freed = new Map<object, number>();
+  for (const owner of [lod, copy])
+    owner.traverse((node) => node.addEventListener("dispose", () => freed.set(node, (freed.get(node) ?? 0) + 1)));
+  lod.dispose();
+  copy.dispose();
+  lod.dispose();
+  const meshes = [lod, copy].flatMap((owner) => owner.getObjectsByProperty("isMesh", true));
+  expect(meshes).toHaveLength(2);
+  expect([...freed.values()]).toEqual([1, 1, 1, 1]);
+  for (const mesh of meshes) expect(freed.get(mesh)).toBe(1);
+});

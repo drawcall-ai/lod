@@ -170,9 +170,10 @@ export class ImpostorMesh extends Mesh<PlaneGeometry, ImpostorMaterial> {
   }
 
   /** Frees its geometry and instance buffers; the last mesh sharing its material frees that too. */
-  dispose(): this {
+  override dispose(): this {
     if (this.disposed) return this;
     this.disposed = true;
+    super.dispose();
     this.geometry.dispose();
     this.instanceMatrix.dispose();
     this.instanceColor?.dispose();

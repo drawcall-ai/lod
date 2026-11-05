@@ -13,21 +13,22 @@ export function borrowMaterials(root: Object3D): void {
 
 /** Clones share source geometry, materials and textures; only their own draw state is released here. */
 export function disposeCopies(node: Object3D): void {
-  if ((isImpostorMesh(node) || isLOD(node)) && "dispose" in node && typeof node.dispose === "function") {
+  if (isImpostorMesh(node) || isLOD(node)) {
     node.dispose();
     return;
   }
+  // An InstancedMesh's clone owns its instance buffers. Any other node fires what Object3D.dispose fires, which frees
+  // its draw state: a subclass's own dispose may free what the clone shares.
   if (isInstancedMesh(node)) node.dispose();
+  else node.dispatchEvent({ type: "dispose" });
   for (const child of node.children) disposeCopies(child);
 }
 
 /** Free what `node` and its descendants hold; a nested LOD or an ImpostorMesh frees itself. */
 export function disposeTree(node: Object3D): void {
-  // ImpostorMesh, InstancedMesh, a nested Lod, a GLTS scene.
-  if ("dispose" in node && typeof node.dispose === "function") {
-    node.dispose();
-    if (isImpostorMesh(node) || isLOD(node) || isGLTSScene(node)) return;
-  }
+  // Every object frees its draw state; an ImpostorMesh, a nested Lod and a GLTS scene free the rest too.
+  node.dispose();
+  if (isImpostorMesh(node) || isLOD(node) || isGLTSScene(node)) return;
   if (isMesh(node)) {
     node.geometry.dispose();
     if (!borrowed.has(node)) disposeMaterials(node);
