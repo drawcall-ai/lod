@@ -1,6 +1,6 @@
-import { Box3, type Color, Frustum, Matrix4, Object3D, Sphere, Vector3, type Camera, type Intersection, type Raycaster } from "three/webgpu";
+import { type Color, Frustum, type Matrix4, Object3D, Sphere, Vector3, type Camera, type Intersection, type Raycaster } from "three/webgpu";
 import { at } from "../at.js";
-import { levelBox, measureLevels, prepareBounds } from "../bounds.js";
+import { prepareBounds } from "../bounds.js";
 import { disposeCopies } from "../dispose.js";
 import { Level, cloneLevels, estimate, fadeProgress, levelAt, tintLevels, validate, type LevelView, type LodLevel } from "../levels.js";
 import { Lod } from "../lod.js";
@@ -12,19 +12,18 @@ import { WIND_BOUNDS } from "../wind/hooks.js";
 import { copyWind, refreshWind } from "../wind/index.js";
 import { Meshes } from "./meshes.js";
 import { parts } from "./parts.js";
-import { Blocks, type BlockView } from "./blocks.js";
+import { Blocks } from "./blocks.js";
+import { sight, type Aim } from "./sight.js";
+import { Extent } from "./extent.js";
 import { Probes } from "./raycast.js";
 import { ARGS_BYTES } from "./args.js";
 import { Selection } from "./select.js";
 import { Store } from "./store.js";
 
 const view = new View();
-const inverse = new Matrix4();
-const local = new Matrix4();
-const frustum = new Frustum();
 
 /** The last view `update` selected for, in the InstancedLod's space, for `levelOf`. */
-interface Selected extends BlockView {
+interface Selected extends Aim {
   /** Whether there was one. */
   selected: boolean;
 }
@@ -70,23 +69,15 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
   );
   private disposed = false;
   private readonly store: Store;
-  /** Bounding sphere of the source in an instance's space. */
-  private readonly sphere = new Sphere();
-  /** Every placed level, kept separate from the source sphere used for LOD selection. */
-  private readonly envelope = new Box3();
-  private readonly rest = new Sphere();
+  private readonly extent = new Extent();
   /** Around every instance; each level may use tighter bounds. */
   readonly bounds = new Sphere();
-  /** Per level, what its meshes are culled by: `bounds`, or less where its instances must be near the camera. */
-  private readonly reaches: Sphere[] = [];
   /** Logical demand at the initial default viewport, separate from first-draw visibility. */
   private readonly demand: Sphere[] = [];
-  /** Source-radius padding for the shadow caster cutoff; culling pads every level separately. */
-  private padding = 0;
   private blocks: Blocks;
-  private readonly last: Selected = { selected: false, eye: new Vector3(), scale: 0, ortho: false, fades: false, forced: null };
+  private readonly last: Selected = { selected: false, eye: new Vector3(), scale: 0, ortho: false, fades: false, forced: null, frustum: new Frustum() };
   /** The shadow map `update` last selected for. */
-  private readonly cast: BlockView = { eye: new Vector3(), scale: 0, ortho: true, fades: false, forced: null };
+  private readonly cast: Aim = { eye: new Vector3(), scale: 0, ortho: true, fades: false, forced: null, frustum: new Frustum() };
 
   get pending(): boolean {
     return this.residency.pending;
@@ -102,38 +93,35 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     this.levels = this.entries;
     this.count = count;
     this.store = new Store(count);
-    this.probes = new Probes(this.store.matrices, this.rest);
+    this.probes = new Probes(this.store.matrices, this.extent.rest);
     const draws = levels.length > 0 ? this.build(levels) : 0;
-    this.blocks = new Blocks(this.store.matrices, this.store.spheres, this.sphere, this.bounds, draws, this.rest);
+    this.blocks = new Blocks(this.store.matrices, this.store.spheres, this.extent.source, this.bounds, draws, this.extent.rest);
   }
 
   private build(inputs: readonly LodLevel[]): number {
-    const { own, placed } = measureLevels(inputs, "InstancedLod");
-    this.sphere.copy(placed);
+    const { extent } = this;
+    const radius = extent.measure(inputs);
     inputs.forEach((input, i) => {
       this.entries.push(new Level(input, i, this.entries));
-      this.reaches.push(new Sphere());
       this.demand.push(new Sphere());
-      this.envelope.union(levelBox(input));
     });
-    estimate(this.entries, 2 * own.radius);
+    estimate(this.entries, 2 * radius);
     validate(this.entries);
     this.residency.reset();
-    this.boundLevels();
     const templates = this.entries.map(({ object }, i) => (object ? parts(object, i) : []));
     this.probes.add(templates[0] ?? []);
     const draws = templates.flatMap((parts) => parts.map((part) => part.draw));
     const selection = new Selection(
       this.store.matrices,
-      this.sphere,
+      extent.source,
       templates.map((parts, i) => parts.length > 0 || at(inputs, i).box?.isEmpty() === false),
       draws,
       this.residency.fallback,
     );
-    selection.reach.value = this.rest.radius;
+    selection.reach.value = extent.rest.radius;
     this.selection = selection;
     this.store.attach(selection);
-    const meshes = new Meshes(selection, this.reaches, this.drawRadius, {
+    const meshes = new Meshes(selection, extent.reaches, extent.drawRadius, {
       live: () => !this.disposed,
       drawn: (camera, mesh) => this.residency.drawn(camera, mesh),
     });
@@ -182,22 +170,6 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     for (const mesh of made) this.add(mesh);
   }
 
-  /** Metadata includes unloaded levels, so later arrivals cannot enlarge this envelope. */
-  private boundLevels(): void {
-    this.rest.copy(this.sphere);
-    if (this.envelope.isEmpty()) return;
-    const { center } = this.rest;
-    const { min, max } = this.envelope;
-    this.rest.radius = Math.max(
-      this.rest.radius,
-      Math.hypot(
-        Math.max(Math.abs(min.x - center.x), Math.abs(max.x - center.x)),
-        Math.max(Math.abs(min.y - center.y), Math.abs(max.y - center.y)),
-        Math.max(Math.abs(min.z - center.z), Math.abs(max.z - center.z)),
-      ),
-    );
-  }
-
   setMatrixAt(index: number, matrix: Matrix4): void {
     this.store.setMatrix(index, matrix);
   }
@@ -243,20 +215,12 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     return ready < 0 ? null : ready;
   }
 
-  /** Source radius padded for the level shaders' shadow caster cutoff. */
-  private get drawRadius(): number {
-    return this.sphere.radius * (1 + this.padding);
-  }
-
   [WIND_BOUNDS](padding: number, slope: number, baseY: number): void {
-    this.padding = padding / this.sphere.radius;
-    this.meshes?.setRadius(this.drawRadius);
-    // The wind shape comes from the source, but taller/offset levels can sway farther.
-    const reach = slope * Math.max(Math.abs(this.envelope.min.y - baseY), Math.abs(this.envelope.max.y - baseY));
-    const sway = this.rest.radius > 0 ? reach / this.rest.radius : 0;
+    const sway = this.extent.wind(padding, slope, baseY);
+    this.meshes?.setRadius(this.extent.drawRadius);
     this.blocks.pad(sway);
     this.blocks.refit();
-    if (this.selection) this.selection.reach.value = this.rest.radius * (1 + sway);
+    if (this.selection) this.selection.reach.value = this.extent.rest.radius * (1 + sway);
   }
 
   /**
@@ -273,24 +237,16 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     const height = viewportHeight(camera);
     view.begin(camera, height ?? TYPICAL_HEIGHT, this.forceLevel);
     const shadow = inShadowPass(this);
-    const seen = shadow ? this.cast : this.last;
-    const worldScale = this.matrixWorld.getMaxScaleOnAxis();
-    seen.eye.copy(view.eye).applyMatrix4(inverse.copy(this.matrixWorld).invert());
-    seen.scale = view.scale * Lod.quality * (view.ortho ? worldScale : 1);
-    seen.ortho = view.ortho;
-    seen.fades = view.fades;
-    seen.forced = this.forceLevel;
-    this.blocks.select(entries, seen, this.reaches, height !== null, this.matrixWorld);
+    const seen = sight(shadow ? this.cast : this.last, view, camera, this.matrixWorld, Lod.quality, this.forceLevel);
+    this.blocks.select(entries, seen, this.extent.reaches, height !== null, this.matrixWorld);
     const progress = residency.progress;
     if (selection.progress.value !== progress) {
       selection.progress.value = progress;
       selection.changed();
     }
     if (!shadow) this.demandLevels(camera);
-    this.reroute(progress);
-    local.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).multiply(this.matrixWorld);
-    frustum.setFromProjectionMatrix(local, camera.coordinateSystem, camera.reversedDepth);
-    selection.aim(camera, { ...seen, frustum }, entries);
+    this.extent.reroute(residency.fallback, residency.previous, progress);
+    selection.aim(camera, seen, entries);
     // Selected only when something may draw: an InstancedLod with every level hidden
     // keeps its last selection.
     meshes.schedule(meshes.show(camera, this.matrixWorld));
@@ -321,20 +277,6 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     return this.residency.ready();
   }
 
-  /** Move each level's reach to the level that draws in its place: its fallback, and during a handover also its previous one. */
-  private reroute(progress: number): void {
-    const { fallback, previous } = this.residency;
-    for (let i = this.reaches.length - 1; i >= 0; i--) {
-      const reach = at(this.reaches, i);
-      const target = at(fallback, i);
-      const before = progress < 1 ? at(previous, i) : -1;
-      if (before >= 0 && before !== target) at(this.reaches, before).union(reach);
-      if (target === i) continue;
-      if (target >= 0) at(this.reaches, target).union(reach);
-      reach.makeEmpty();
-    }
-  }
-
   /**
    * Hits every instance's source level, with `instanceId` set; `object` is this
    * InstancedLod. Meshes of the source on layers the raycaster does not test are skipped.
@@ -353,7 +295,7 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     super.copy(source, false);
     this.store.copy(source.store);
     const draws = source.entries.length > 0 ? this.build(cloneLevels(source.entries)) : 0;
-    this.blocks = new Blocks(this.store.matrices, this.store.spheres, this.sphere, this.bounds, draws, this.rest);
+    this.blocks = new Blocks(this.store.matrices, this.store.spheres, this.extent.source, this.bounds, draws, this.extent.rest);
     this.forceLevel = source.forceLevel;
     this.autoUpdate = source.autoUpdate;
     copyWind(source, this);

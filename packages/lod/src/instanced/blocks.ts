@@ -1,7 +1,9 @@
 import { Box3, Matrix4, Sphere, Vector3 } from "three/webgpu";
 import { FADE, DEMAND, lastFitting } from "../levels.js";
 import { at } from "../at.js";
+import { stretch } from "../three.js";
 import { Dirty } from "./dirty.js";
+import type { BlockView } from "./sight.js";
 
 // Cover float32 matrix products, distances and threshold arithmetic: near a switch,
 // uncertain blocks keep both levels.
@@ -29,14 +31,6 @@ interface Kept {
 }
 /** Orthographic scales kept per crowd: a shadow map's cascades. */
 const KEPT = 8;
-
-export interface BlockView {
-  eye: Vector3;
-  scale: number;
-  ortho: boolean;
-  fades: boolean;
-  forced: number | null;
-}
 
 /** Cached spatial blocks: instance edits refit leaves; moving views visit only blocks. */
 export class Blocks {
@@ -301,17 +295,6 @@ export class Blocks {
       this.high = Infinity;
     }
   }
-}
-
-/** Upper bound on the largest singular value, exact for orthogonal matrix axes. */
-export function stretch(matrix: Matrix4): number {
-  const e = matrix.elements;
-  const xy = Math.abs(e[0] * e[4] + e[1] * e[5] + e[2] * e[6]);
-  const xz = Math.abs(e[0] * e[8] + e[1] * e[9] + e[2] * e[10]);
-  const yz = Math.abs(e[4] * e[8] + e[5] * e[9] + e[6] * e[10]);
-  return Math.sqrt(
-    Math.max(e[0] ** 2 + e[1] ** 2 + e[2] ** 2 + xy + xz, e[4] ** 2 + e[5] ** 2 + e[6] ** 2 + xy + yz, e[8] ** 2 + e[9] ** 2 + e[10] ** 2 + xz + yz),
-  );
 }
 
 function expand(box: Box3, center: Vector3, radius: number): void {

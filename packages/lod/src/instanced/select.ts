@@ -1,6 +1,5 @@
 import {
   type Camera,
-  type Frustum,
   StorageBufferAttribute,
   StorageInstancedBufferAttribute,
   Vector3,
@@ -34,6 +33,7 @@ import { at } from "../at.js";
 import { FADE } from "../levels.js";
 import { maxScale, stretch } from "../tsl.js";
 import { ARGS_BYTES, args, type ArgsSlice } from "./args.js";
+import type { Aim } from "./sight.js";
 
 const CURRENT: ComputeNode[] = [];
 
@@ -59,18 +59,6 @@ export interface Slots {
   readonly fades: StorageBufferAttribute;
   /** this view's draws, `ARGS_BYTES` apart */
   args: ArgsSlice;
-}
-
-/** What a view selects with: see `Selection.aim`. */
-export interface Aim {
-  eye: Vector3;
-  /** pixels per unit of subtense (perspective) or of size (orthographic), × Lod.quality */
-  scale: number;
-  ortho: boolean;
-  fades: boolean;
-  forced: number | null;
-  /** the view's frustum in the crowd's space */
-  frustum: Frustum;
 }
 
 /** A view's slots and the aim they were last selected with. */

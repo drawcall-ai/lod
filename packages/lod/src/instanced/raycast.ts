@@ -1,5 +1,5 @@
 import { Matrix4, Ray, Sphere, type Intersection, type Mesh, type Object3D, type Raycaster } from "three/webgpu";
-import { stretch } from "./blocks.js";
+import { stretch } from "../three.js";
 import type { Part } from "./parts.js";
 
 const inverse = new Matrix4();

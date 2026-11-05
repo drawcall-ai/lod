@@ -9,6 +9,7 @@ import {
   MeshToonNodeMaterial,
   type BatchedMesh,
   type Box3,
+  type Matrix4,
   type BufferAttribute,
   type Color,
   type CompressedTexture,
@@ -161,4 +162,15 @@ export function placeLike(level: Object3D, source: Object3D): void {
     level.castShadow ||= node.castShadow;
     level.receiveShadow ||= node.receiveShadow;
   });
+}
+
+/** Upper bound on the largest singular value, exact for orthogonal matrix axes. */
+export function stretch(matrix: Matrix4): number {
+  const e = matrix.elements;
+  const xy = Math.abs(e[0] * e[4] + e[1] * e[5] + e[2] * e[6]);
+  const xz = Math.abs(e[0] * e[8] + e[1] * e[9] + e[2] * e[10]);
+  const yz = Math.abs(e[4] * e[8] + e[5] * e[9] + e[6] * e[10]);
+  return Math.sqrt(
+    Math.max(e[0] ** 2 + e[1] ** 2 + e[2] ** 2 + xy + xz, e[4] ** 2 + e[5] ** 2 + e[6] ** 2 + xy + yz, e[8] ** 2 + e[9] ** 2 + e[10] ** 2 + xz + yz),
+  );
 }
