@@ -1,6 +1,7 @@
 import { Object3D, type Camera, type LoadingManager } from "three/webgpu";
 import type { Level, LevelView } from "./levels.js";
 import { Residency, type LevelsEventMap } from "./residency.js";
+import { inShadowPass } from "./three.js";
 import type { RenderContext } from "./view.js";
 import { WIND } from "./wind/hooks.js";
 import { copyWind } from "./wind/index.js";
@@ -67,6 +68,8 @@ export abstract class Owner extends Object3D<LevelsEventMap> {
 
   /** Pick levels for `camera`. What fails is reported (see `Residency.report`): three is rendering. */
   update(camera: Camera): void {
+    // a shadow map draws nothing of an owner whose levels cast nothing
+    if (inShadowPass(this) && !this.children.some((level) => level.castShadow)) return;
     this.residency.guard(() => {
       this.residency.view(camera);
       this.pick(camera);
