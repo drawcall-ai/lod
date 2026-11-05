@@ -12,6 +12,7 @@ import {
   PlaneGeometry,
   Scene,
   StorageBufferAttribute,
+  type Material,
 } from "three/webgpu";
 import { expect, it, vi } from "vitest";
 import { drawOf, setDraw } from "../../../src/fade.js";
@@ -153,7 +154,10 @@ it("shares shadow shader builds while each crowd and single card keeps its own m
   view.lookAt(0, 0, 0);
   const scene = new Scene().add(left, right, lod, ground, sun, sun.target, new AmbientLight(0xffffff, 0.2));
   const shadow = vi.spyOn(NodeMaterial.prototype, "setup");
-  const builds = () => shadow.mock.calls.filter(([builder]) => builder.material.name === "ShadowMaterial" && builder.object instanceof ImpostorMesh);
+  // The shadow passes' own builds: compileLevel prepares a level's draws with copies of the shadow material (see compile.ts).
+  const copy = (material: Material) => Object.getOwnPropertyDescriptor(material, "side")?.get !== undefined;
+  const builds = () =>
+    shadow.mock.calls.filter(([builder]) => builder.material.name === "ShadowMaterial" && !copy(builder.material) && builder.object instanceof ImpostorMesh);
   const fades = new StorageBufferAttribute(new Float32Array([1, 0]), 1);
   const indices = new StorageBufferAttribute(new Uint32Array([0, 1]), 1);
   const enabled = renderer.shadowMap.enabled;

@@ -13,6 +13,8 @@ it("replaces the initial viewport height independently for each camera", { timeo
   first.position.z = second.position.z = 5;
   setViewportHeight(first, 800);
   try {
+    // The first render shows the owner its scene: the scene's renders are measured from the next.
+    renderer.render(scene, new PerspectiveCamera());
     await render(scene, first, 64);
     await render(scene, second, 16);
     expect(viewportHeight(first)).toBe(64);
@@ -30,6 +32,7 @@ it("uses CSS pixels for the canvas and same-sized postprocessing targets", { tim
   renderer.setPixelRatio(2);
   renderer.setSize(64, 64);
   try {
+    renderer.render(scene, camera);
     renderer.render(scene, camera);
     expect(viewportHeight(camera)).toBe(64);
     await render(scene, camera, 128);
@@ -50,6 +53,7 @@ it("keeps one render context per camera between drawing through the output pass 
   // Tone mapping draws the canvas through three's framebuffer target, which a compile for the canvas resolves itself.
   renderer.toneMapping = ACESFilmicToneMapping;
   try {
+    renderer.render(scene, camera);
     renderer.render(scene, camera);
     const drawn = renderContext(camera);
     const level = lod.levels[0]?.object;

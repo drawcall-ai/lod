@@ -219,7 +219,8 @@ export class Selection {
     fallback.forEach((level, i) => {
       const route = at(this.routes, i);
       const previous = at(this.previous, i);
-      previous.value = fade ? route.value : level;
+      // A route that drew nothing hands over nothing: its level draws at once.
+      previous.value = fade && route.value >= 0 ? route.value : level;
       route.value = level;
     });
     this.progress.value = fade ? 0 : 1;

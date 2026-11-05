@@ -232,16 +232,15 @@ describe("InstancedLod", { timeout: GPU_TIMEOUT }, () => {
 
 const mesh = () => new Mesh(new BoxGeometry(2, 2, 2), new MeshBasicMaterial());
 
-it("installs shared decoded detail only in crowds whose current view demands it", { timeout: GPU_TIMEOUT }, async () => {
+it("installs shared decoded detail only in crowds near enough to draw it", { timeout: GPU_TIMEOUT }, async () => {
   const load = vi.fn(async () => mesh());
   const deferred = { load, maxPixels: Infinity, box: new Box3(new Vector3(-1, -1, -1), new Vector3(1, 1, 1)) };
-  const levels = [deferred, { object: mesh() }];
+  const levels = [deferred, { object: mesh(), maxPixels: 5 }];
   const near = new InstancedLod(levels, 1);
   const away = new InstancedLod(levels, 1);
   near.setMatrixAt(0, new Matrix4().makeTranslation(0, 0, -5));
-  away.setMatrixAt(0, new Matrix4().makeTranslation(500, 0, -5));
-  near.forceLevel = away.forceLevel = 0;
-  const camera = new PerspectiveCamera(60, 1, 0.1, 100);
+  away.setMatrixAt(0, new Matrix4().makeTranslation(0, 0, -1000));
+  const camera = new PerspectiveCamera(60, 1, 0.1, 2000);
   const scene = new Scene().add(near, away);
   try {
     const nearInstalled = nextLevel(near, camera);
@@ -251,7 +250,8 @@ it("installs shared decoded detail only in crowds whose current view demands it"
     expect(away.children).toHaveLength(1);
     expect(away.pending).toBe(false);
 
-    camera.position.x = 500;
+    camera.position.z = -995;
+    camera.updateMatrixWorld();
     const awayInstalled = nextLevel(away, camera);
     await render(scene, camera);
     await awayInstalled;

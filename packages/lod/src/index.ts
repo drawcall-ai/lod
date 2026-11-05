@@ -3,7 +3,7 @@ export { type LevelRequest, type LodRequest } from "./loader/ladder.js";
 export { type LodCacheOptions } from "./loader/cache.js";
 export { encodeMeshAsync, decodeMeshAsync } from "./mesh/codec.js";
 export { setViewportHeight } from "./view.js";
-export { Lod } from "./lod.js";
+export { Lod, type LodOptions } from "./lod.js";
 export { Wind, type WindOptions, type SwayOptions } from "./wind/index.js";
 export { InstancedLod } from "./instanced/index.js";
 export { type LevelView, type LodLevel } from "./levels.js";

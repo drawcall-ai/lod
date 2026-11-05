@@ -1,4 +1,4 @@
-import { Object3D, Sphere, type Camera, type Intersection, type Raycaster } from "three/webgpu";
+import { Object3D, Sphere, type Camera, type LoadingManager, type Intersection, type Raycaster } from "three/webgpu";
 import { at } from "./at.js";
 import { compileLevel } from "./compile.js";
 import { measureLevels, prepareBounds } from "./bounds.js";
@@ -7,24 +7,36 @@ import { setDraw, type Draw } from "./fade.js";
 import { levelMaterial } from "./material.js";
 import { Residency, handover, type LevelsEventMap } from "./residency.js";
 import { FADE, Level, cloneLevels, estimate, fadeProgress, levelAt, demandLevels, tintLevels, validate, type LevelView, type LodLevel } from "./levels.js";
-import { hasReady, inShadowPass, isImpostorMesh, isLOD, isMesh, rejectSkinned } from "./three.js";
-import { TYPICAL_HEIGHT, View, viewportHeight, watchViewport, watchContext, unwatchContext, inView, type RenderContext } from "./view.js";
+import { inShadowPass, isImpostorMesh, isLOD, isMesh, rejectSkinned } from "./three.js";
+import { TYPICAL_HEIGHT, View, viewportHeight, type RenderContext } from "./view.js";
 import { WIND_BOUNDS } from "./wind/hooks.js";
 import { copyWind, refreshWind } from "./wind/index.js";
 
 const view = new View();
 
+export interface LodOptions {
+  /**
+   * Gets an item while the levels the views need load, install, compile or fade in, ended once they are complete. Without
+   * one, an owner nested in another's level reports to that owner's, any other to three's `DefaultLoadingManager`. Wait
+   * for it to go idle, rendering the Scene that holds the owner a frame apart meanwhile, to capture a view complete.
+   * Every camera that views the scene must then render it each frame: an owner that a whole pass of the scene's renders
+   * leaves without an update (a pass ends when a camera renders the scene again) ends its item, and starts it again on
+   * its next update.
+   */
+  manager?: LoadingManager;
+}
+
 type ObjectDraw = Extract<Draw, { kind: "object" }>;
 
 /**
  * One object's levels, switched by on-screen height with dithered transitions.
- * The renderer updates selection before shadows; each camera uses its last drawn
- * viewport height (1080 until known). Orthographic views switch without fading.
+ * The renderer updates selection before shadows; each camera uses the viewport height
+ * it last rendered at (1080 until known). Orthographic views switch without fading.
  * Shadows follow selection and omit casters smaller than a shadow texel.
  *
  * Eager and deferred objects are cloned into this owner's space. A nested Lod selects
- * and fades its own levels. Lines, points and sprites draw without fading or reporting
- * viewport height. Raycasts hit the source only.
+ * and fades its own levels. Lines, points and sprites draw without fading. Raycasts hit
+ * the source only.
  *
  * Build a new Lod after adding or moving meshes within a level: geometry is measured
  * and hooked at construction or arrival. Skinned meshes and ShaderMaterials are
@@ -55,12 +67,7 @@ export class Lod extends Object3D<LevelsEventMap> {
   private sphere = new Sphere();
   private casterRadius = 0;
   private disposed = false;
-  private readonly residency = new Residency(
-    this.entries,
-    (level, object, context) => this.install(level, object, context),
-    () => this.dispatchEvent({ type: "levelschange" }),
-    (error) => this.dispatchEvent({ type: "levelserror", error }),
-  );
+  private readonly residency: Residency;
 
   get pending(): boolean {
     return this.residency.pending;
@@ -74,17 +81,33 @@ export class Lod extends Object3D<LevelsEventMap> {
    * nothing (an empty Object3D, for detail another system draws) is measured by the
    * first level that draws something.
    */
-  constructor(levels: readonly LodLevel[] = []) {
+  constructor(levels: readonly LodLevel[] = [], options: LodOptions = {}) {
     super();
+    this.residency = new Residency(
+      this,
+      `Lod ${this.uuid}`,
+      this.entries,
+      (level, object, context) => this.install(level, object, context),
+      () => this.dispatchEvent({ type: "levelschange" }),
+      (error) => this.dispatchEvent({ type: "levelserror", error }),
+    );
+    this.residency.item.manager = options.manager;
     this.levels = this.entries;
     if (levels.length > 0) this.build(levels);
+  }
+
+  /** Where the item of pending levels goes (see `LodOptions.manager`). */
+  get manager(): LoadingManager {
+    return this.residency.item.resolved;
+  }
+  set manager(manager: LoadingManager | undefined) {
+    this.residency.item.manager = manager;
   }
 
   private build(inputs: readonly LodLevel[]): void {
     const { own, placed } = measureLevels(inputs, "Lod");
     this.sphere = placed;
     this.casterRadius = placed.radius;
-    let drawable = false;
     inputs.forEach((input, i) => {
       const level = new Level(input, i, this.entries);
       const draw: ObjectDraw = { kind: "object", fade: 0, diameter: 0, tint: level.tint };
@@ -95,24 +118,19 @@ export class Lod extends Object3D<LevelsEventMap> {
       rejectSkinned(object, "Lod");
       this.add(object);
       this.hook(object, draw, level.nested, object);
-      drawable ||= drawsMesh(object);
     });
     estimate(this.entries, 2 * own.radius);
     this.residency.reset();
     validate(this.entries);
-    if (!drawable) watchContext(this);
   }
 
-  /** Fade the meshes under `node` by `draw` and learn the viewport height from them; an inner Lod fades its own. */
+  /** Fade the meshes under `node` by `draw`; an inner Lod fades its own. */
   private hook(node: Object3D, draw: ObjectDraw, nested: boolean, level: Object3D): void {
     const inner = nested || (node !== level && isLOD(node));
-    if (isMesh(node)) {
-      if (!inner) {
-        setDraw(node, draw);
-        // An ImpostorMesh reads its draw itself.
-        if (!isImpostorMesh(node)) node.material = Array.isArray(node.material) ? node.material.map((m) => levelMaterial(m)) : levelMaterial(node.material);
-      }
-      watchViewport(node);
+    if (isMesh(node) && !inner) {
+      setDraw(node, draw);
+      // An ImpostorMesh reads its draw itself.
+      if (!isImpostorMesh(node)) node.material = Array.isArray(node.material) ? node.material.map((m) => levelMaterial(m)) : levelMaterial(node.material);
     }
     for (const child of node.children) this.hook(child, draw, inner, level);
   }
@@ -121,8 +139,12 @@ export class Lod extends Object3D<LevelsEventMap> {
     this.casterRadius += padding;
   }
 
-  /** Pick and fade levels for `camera`; detail starts after a draw supplies its render context. */
+  /** Pick and fade levels for `camera`. What fails is reported (see `Residency.report`): three is rendering. */
   update(camera: Camera): void {
+    this.residency.guard(() => this.pick(camera));
+  }
+
+  private pick(camera: Camera): void {
     const { entries, draws } = this;
     if (this.disposed || entries.length === 0 || inShadowPass(this)) return;
     validate(entries);
@@ -132,7 +154,7 @@ export class Lod extends Object3D<LevelsEventMap> {
     const desired = levelAt(entries, height, this.forceLevel);
     this.residency.demand(
       camera,
-      inView(camera, this.matrixWorld, this.sphere) ? demandLevels(entries, height, this.forceLevel).map(({ index }) => index) : [],
+      demandLevels(entries, height, this.forceLevel).map(({ index }) => index),
     );
     this.residency.update(camera);
     const { fallback, previous } = this.residency;
@@ -142,8 +164,9 @@ export class Lod extends Object3D<LevelsEventMap> {
     const fade = view.fades ? fadeProgress(entries, desired, height) : 0;
     let t = level === finer ? 0 : fade;
     const progress = this.residency.progress;
-    if (progress < 1) {
-      const before = at(previous, desired.index);
+    // A level that replaced nothing draws at once.
+    const before = progress < 1 ? at(previous, desired.index) : -1;
+    if (before >= 0) {
       const beforeFiner = at(previous, neighbour);
       [level, finer, t] = handover([before, beforeFiner, before === beforeFiner ? 0 : fade], [level, finer, t], progress);
     }
@@ -154,18 +177,7 @@ export class Lod extends Object3D<LevelsEventMap> {
       draw.diameter = diameter;
       if (each.object) each.object.visible = i === level || (t > 0 && i === finer);
     });
-    this.residency.settle();
-  }
-
-  /**
-   * Resolves at the end of the first `update` (outside shadow passes) that finds every level
-   * the view selects installed and faded in, then waits for the nested Lods it draws; rejects
-   * when a level fails or the Lod is disposed. Levels install while frames render, so keep
-   * rendering meanwhile. Await it on every Lod and InstancedLod before a screenshot.
-   */
-  async ready(): Promise<void> {
-    await this.residency.ready();
-    await Promise.all(this.entries.flatMap(({ object }) => (object?.visible && hasReady(object) ? [object.ready()] : [])));
+    this.residency.sync();
   }
 
   private async install(level: Level, template: Object3D, context: RenderContext): Promise<void> {
@@ -193,7 +205,6 @@ export class Lod extends Object3D<LevelsEventMap> {
     }
     level.object = object;
     level.nested = nested;
-    if (drawsMesh(object)) unwatchContext(this);
   }
 
   override raycast(raycaster: Raycaster, intersects: Intersection[]): boolean {
@@ -206,7 +217,7 @@ export class Lod extends Object3D<LevelsEventMap> {
   /**
    * Copies `source`'s levels into this empty Lod (it throws otherwise). The copies share
    * geometry, materials and textures with `source`, as three's clone does; the Lod
-   * settings and each level's `maxPixels` come along.
+   * settings, manager and each level's `maxPixels` come along.
    */
   override copy(source: Lod): this {
     if (this.entries.length > 0) throw new Error("Lod.copy: copy into an empty Lod");
@@ -214,6 +225,7 @@ export class Lod extends Object3D<LevelsEventMap> {
     if (source.entries.length > 0) this.build(cloneLevels(source.entries));
     this.forceLevel = source.forceLevel;
     this.autoUpdate = source.autoUpdate;
+    this.residency.item.manager = source.residency.item.manager;
     copyWind(source, this);
     return this;
   }
@@ -222,19 +234,8 @@ export class Lod extends Object3D<LevelsEventMap> {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    unwatchContext(this);
     this.residency.dispose(() => {
       for (const { object } of this.entries) if (object) disposeCopies(object);
     });
   }
-}
-
-/** Whether `level` holds a mesh that draws once Lod shows it: the level's own visibility is Lod's to switch, its descendants' are not. */
-function drawsMesh(level: Object3D): boolean {
-  let found = isMesh(level);
-  for (const child of level.children)
-    child.traverseVisible((node) => {
-      found ||= isMesh(node);
-    });
-  return found;
 }

@@ -1,5 +1,5 @@
 import { Box3, Matrix4, Sphere, Vector3 } from "three/webgpu";
-import { FADE, DEMAND, lastFitting } from "../levels.js";
+import { FADE, lastFitting } from "../levels.js";
 import { at } from "../at.js";
 import { stretch } from "../three.js";
 import { Dirty } from "./dirty.js";
@@ -170,15 +170,22 @@ export class Blocks {
     node.unsafe = a.unsafe || b.unsafe;
   }
 
-  /** Each level's bounds: where its instances may draw for `view`. */
-  select(levels: readonly { maxPixels: number }[], view: BlockView, reaches: Sphere[], measured: boolean, root: Matrix4): void {
-    this.resetBoxes(levels);
+  /**
+   * Each level's bounds: where its instances may draw for `view`, every level's the whole crowd's until `view` is
+   * `measured`. Returns the levels some instance draws, whichever way `view` faces, coarsest first.
+   */
+  select(levels: readonly { maxPixels: number }[], view: BlockView, reaches: Sphere[], measured: boolean, root: Matrix4): number[] {
+    while (this.levelBoxes.length < levels.length) this.levelBoxes.push(new Box3());
+    for (const box of this.levelBoxes) box.makeEmpty();
     if (!this.bounds.isEmpty()) {
-      if (!measured) for (const box of this.levelBoxes) box.copy(at(this.tree, 1).geometry);
-      else if (view.ortho && this.nearby(view)) this.keep(levels, view);
+      if (view.ortho && this.nearby(view)) this.keep(levels, view);
       else this.visit(1, levels, view);
     }
-    this.enclose(levels, view, reaches, root, measured, 1);
+    const drawn: number[] = [];
+    for (let level = levels.length - 1; level >= 0; level--) if (!at(this.levelBoxes, level).isEmpty()) drawn.push(level);
+    if (!measured && !this.bounds.isEmpty()) for (const box of this.levelBoxes) box.copy(at(this.tree, 1).geometry);
+    this.enclose(levels, view, reaches, root, measured);
+    return drawn;
   }
 
   /** Whether every node is near enough to `view` that only its scale decides an orthographic interval (see `interval`). */
@@ -205,26 +212,7 @@ export class Blocks {
     kept.boxes.forEach((box, level) => at(this.levelBoxes, level).copy(box));
   }
 
-  /** Ahead-of-view demand, widened by the demand margin. */
-  demand(levels: readonly { maxPixels: number }[], view: BlockView, reaches: Sphere[], root: Matrix4): void {
-    this.resetBoxes(levels);
-    this.gather(1, levels, view);
-    this.enclose(levels, view, reaches, root, true, DEMAND);
-  }
-
-  private gather(index: number, levels: readonly { maxPixels: number }[], view: BlockView): void {
-    const node = at(this.tree, index);
-    if (node.geometry.isEmpty()) return;
-    const [finest, coarsest] = this.span(node, levels, view, DEMAND);
-    if (finest !== coarsest && index < this.leaves) {
-      this.gather(index * 2, levels, view);
-      this.gather(index * 2 + 1, levels, view);
-      return;
-    }
-    for (let level = finest; level <= coarsest; level++) at(this.levelBoxes, level).union(node.geometry);
-  }
-
-  private enclose(levels: readonly { maxPixels: number }[], view: BlockView, reaches: Sphere[], root: Matrix4, measured: boolean, margin: number): void {
+  private enclose(levels: readonly { maxPixels: number }[], view: BlockView, reaches: Sphere[], root: Matrix4, measured: boolean): void {
     const top = at(this.tree, 1);
     const axis = root.getMaxScaleOnAxis();
     // Three transforms a culling sphere by max-axis scale, which underbounds shear.
@@ -233,7 +221,7 @@ export class Blocks {
       enclosing(at(this.levelBoxes, level), sphere);
       const next = levels[level + 1];
       if (measured && !top.unsafe && !unsafe(view.scale) && view.eye.length() < 1e15 && !sphere.isEmpty() && !view.ortho && view.forced === null && next) {
-        const threshold = next.maxPixels * (view.fades ? 1 - FADE : 1) * margin;
+        const threshold = next.maxPixels * (view.fades ? 1 - FADE : 1);
         const radius = (2 * top.largest * view.scale * (1 + ROUND * 4)) / threshold + top.reach + view.eye.length() * ROUND;
         if (radius < sphere.radius) sphere.set(view.eye, radius);
       }
@@ -244,7 +232,7 @@ export class Blocks {
   private visit(index: number, levels: readonly { maxPixels: number }[], view: BlockView): void {
     const node = at(this.tree, index);
     if (node.geometry.isEmpty()) return;
-    const [finest, coarsest] = this.span(node, levels, view, 1);
+    const [finest, coarsest] = this.span(node, levels, view);
     if (finest !== coarsest && index < this.leaves) {
       this.visit(index * 2, levels, view);
       this.visit(index * 2 + 1, levels, view);
@@ -253,18 +241,10 @@ export class Blocks {
     for (let level = finest; level <= coarsest; level++) at(this.levelBoxes, level).union(node.geometry);
   }
 
-  private resetBoxes(levels: readonly { maxPixels: number }[]): void {
-    while (this.levelBoxes.length < levels.length) this.levelBoxes.push(new Box3());
-    for (const box of this.levelBoxes) box.makeEmpty();
-  }
-
-  /**
-   * The finest and coarsest levels `node` may draw, fade partner included, with heights
-   * widened by `margin` for demand. Must match the GPU's selection and `levelOf`.
-   */
-  private span(node: Branch, levels: readonly { maxPixels: number }[], view: BlockView, margin: number): [finest: number, coarsest: number] {
+  /** The finest and coarsest levels `node` may draw, fade partner included. Must match the GPU's selection and `levelOf`. */
+  private span(node: Branch, levels: readonly { maxPixels: number }[], view: BlockView): [finest: number, coarsest: number] {
     this.interval(node, view);
-    const high = this.high / margin;
+    const { high } = this;
     // Infinity marks an unsafe float32 interval; even legal infinite thresholds
     // cannot exclude the source when the GPU's height may be NaN.
     let finest = view.forced ?? (high === Infinity ? 0 : lastFitting(levels, high));

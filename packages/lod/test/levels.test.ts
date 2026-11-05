@@ -1,11 +1,11 @@
-import { Box3, BoxGeometry, Mesh, MeshStandardMaterial, Object3D, PerspectiveCamera, RGBAFormat, SphereGeometry } from "three/webgpu";
-import { describe, expect, it } from "vitest";
+import { Box3, BoxGeometry, Group, Mesh, MeshStandardMaterial, Object3D, PerspectiveCamera, RGBAFormat, Scene, SphereGeometry } from "three/webgpu";
+import { describe, expect, it, vi } from "vitest";
 import type { Impostor } from "../src/impostor/impostor.js";
 import { ImpostorMesh } from "../src/impostor/mesh/index.js";
 import { InstancedLod } from "../src/instanced/index.js";
 import { Lod } from "../src/lod.js";
 import { simplify } from "../src/simplify.js";
-import { type LodLevel } from "../src/levels.js";
+import { Level, demandLevels, estimate, type LodLevel } from "../src/levels.js";
 import { must } from "./must.js";
 
 const box = () => new Mesh(new BoxGeometry(2, 2, 2), new MeshStandardMaterial());
@@ -47,13 +47,19 @@ describe("default maxPixels", () => {
     expect(thresholds(lod)).toEqual([Infinity, 800, 400]);
     must(lod.levels[1]).maxPixels = 300;
     expect(thresholds(lod)).toEqual([Infinity, 300, 400]);
-    expect(() => lod.update(new PerspectiveCamera())).toThrow(/level 2 has maxPixels 400, but at most 270/);
+    // An update runs inside three's render: it reports what fails rather than throwing.
+    const report = vi.spyOn(console, "error").mockImplementation(() => {});
+    lod.update(new PerspectiveCamera());
+    report.mockRestore();
+    expect(lod.error?.message).toMatch(/level 2 has maxPixels 400, but at most 270/);
   });
 });
 
 it("stands in the nearest ready coarser level that draws for a missing one, else the nearest finer", () => {
   const deferred = (maxPixels: number) => ({ load: async () => box(), maxPixels, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) });
   const drawn = (lod: Lod, force: number) => {
+    // Missing levels outside any Scene are a failure: none of its renders would load them.
+    if (!lod.parent) new Scene().add(lod);
     lod.forceLevel = force;
     lod.update(new PerspectiveCamera());
     return lod.levels.flatMap(({ object }, i) => (object?.visible ? [i] : []));
@@ -72,4 +78,13 @@ it("stands in the nearest ready coarser level that draws for a missing one, else
   expect(input[2]?.maxPixels).toBe(100);
   lod.dispose();
   crowd.dispose();
+});
+
+it("demands only the level a height draws, and its finer partner inside the fade", () => {
+  const ladder: Level[] = [];
+  for (const [index, input] of [{ object: new Group() }, { object: new Group(), maxPixels: 100 }].entries()) ladder.push(new Level(input, index, ladder));
+  estimate(ladder, 1);
+  // The finer level's fade starts at 90 px.
+  expect(demandLevels(ladder, 85, null).map((level) => level.index)).toEqual([1]);
+  expect(demandLevels(ladder, 95, null).map((level) => level.index)).toEqual([1, 0]);
 });

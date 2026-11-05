@@ -19,7 +19,8 @@ import { expect, it, vi } from "vitest";
 import { ImpostorMesh } from "../src/impostor/mesh/index.js";
 import * as surface from "../src/impostor/mesh/surface.js";
 import { compileLevel } from "../src/compile.js";
-import { renderContext, watchViewport } from "../src/view.js";
+import { renderContext } from "../src/view.js";
+import { Lod } from "../src/lod.js";
 import { GPU_TIMEOUT, renderer } from "./gpu.js";
 
 vi.mock("../src/impostor/mesh/surface.js", { spy: true });
@@ -189,8 +190,9 @@ it(
     ground.receiveShadow = true;
     const resident = new Mesh(new BoxGeometry(), new MeshStandardNodeMaterial());
     resident.castShadow = true;
-    watchViewport(resident);
-    const scene = new Scene().add(light, ground, resident);
+    // An owner in the scene learns its renders: the camera's context and the shadow maps.
+    const owner = new Lod([{ object: resident }]);
+    const scene = new Scene().add(light, ground, owner);
     const camera = new PerspectiveCamera(60, 1, 0.1, 100);
     camera.position.set(0, 2, 5);
     camera.lookAt(0, 0, 0);
@@ -207,6 +209,7 @@ it(
     try {
       renderer.setRenderTarget(target);
       renderer.render(scene, camera);
+      renderer.render(scene, camera);
       const context = renderContext(camera);
       if (!context) throw new Error("Expected the resident's render context");
       await compileLevel(arriving, context);
@@ -219,7 +222,8 @@ it(
       synchronous.mockRestore();
       renderer.setRenderTarget(null);
       renderer.shadowMap.enabled = false;
-      for (const mesh of [ground, resident, arriving]) mesh.geometry.dispose();
+      owner.dispose();
+      for (const mesh of [ground, arriving]) mesh.geometry.dispose();
       map.dispose();
       target.dispose();
     }

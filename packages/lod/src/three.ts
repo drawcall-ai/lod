@@ -9,6 +9,7 @@ import {
   MeshToonNodeMaterial,
   type BatchedMesh,
   type Box3,
+  type LoadingManager,
   type Matrix4,
   type BufferAttribute,
   type Color,
@@ -57,8 +58,10 @@ export const isLOD = (
   node: Object3D,
 ): node is Object3D & { isLOD: true; autoUpdate: boolean; readonly levels: ReadonlyArray<{ readonly object?: Object3D; readonly box?: Box3 }> } =>
   flag(node, "isLOD");
-/** A Lod or InstancedLod, of this or another copy of the package (a nested level from a .glts script). */
-export const hasReady = (node: Object3D): node is Object3D & { ready(): Promise<void> } => isLOD(node) && "ready" in node && typeof node.ready === "function";
+/** A Lod or an InstancedLod: what holds a LoadingManager item for its levels. */
+export const isOwner = (node: Object3D): node is Object3D & { readonly manager: LoadingManager } =>
+  isLOD(node) && "manager" in node && isLoadingManager(node.manager);
+const isLoadingManager = (value: unknown): value is LoadingManager => typeof value === "object" && value !== null && "itemStart" in value && "itemEnd" in value;
 export const isStandard = (material: Material): material is MeshStandardMaterial => flag(material, "isMeshStandardMaterial");
 export const isPhysical = (material: Material): material is MeshPhysicalMaterial => flag(material, "isMeshPhysicalMaterial");
 export const isNodeMaterial = (material: Material): material is NodeMaterial => flag(material, "isNodeMaterial");
@@ -107,7 +110,7 @@ export function gpuRenderer(renderer: unknown): Renderer {
   if (!isRenderer(renderer)) throw new Error("@drawcall/lod: draws with three's WebGPURenderer only");
   return renderer;
 }
-const isRenderer = (value: unknown): value is Renderer => flag(value, "isRenderer");
+export const isRenderer = (value: unknown): value is Renderer => flag(value, "isRenderer");
 
 /** The root of the tree `node` is in: its scene, once added to one. */
 export function rootOf(node: Object3D): Object3D {
@@ -122,8 +125,8 @@ export function rootOf(node: Object3D): Object3D {
  * light's camera, which must not switch the levels the view chose.
  */
 export function inShadowPass(node: Object3D): boolean {
-  const root = rootOf(node);
-  return "overrideMaterial" in root && isShadowPass(root.overrideMaterial);
+  for (let scene: Object3D | null = node; scene; scene = scene.parent) if (isScene(scene) && isShadowPass(scene.overrideMaterial)) return true;
+  return false;
 }
 
 /** Whether `material` is the one three draws shadow maps with (a node material building for a shadow pass has it). */

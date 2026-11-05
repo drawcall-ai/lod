@@ -213,15 +213,12 @@ export function tintLevels(levels: readonly Level[], debug: boolean): void {
   for (const level of levels) level.tint.set(debug ? (TINTS[level.index % TINTS.length] ?? 0xffffff) : 0xffffff);
 }
 
-// Start refinement 20% below its lower fade bound, leaving time for decode and GPU preparation.
-export const DEMAND = 0.8;
-
-/** Logical demand and the next finer fade partner, including a small approach margin. */
+/** The levels an object `height` pixels tall draws: its level, and inside a fade the next finer one. */
 export function demandLevels(levels: readonly Level[], height: number, forced: number | null): Level[] {
   const desired = levelAt(levels, height, forced);
   if (forced !== null) return [desired];
   const finer = levels[desired.index - 1];
-  return finer && height >= DEMAND * desired.maxPixels * (1 - FADE) ? [desired, finer] : [desired];
+  return finer && height >= desired.maxPixels * (1 - FADE) ? [desired, finer] : [desired];
 }
 
 /**

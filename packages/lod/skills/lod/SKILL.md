@@ -9,7 +9,7 @@ description: Use @drawcall/lod for cached, progressively loaded levels of detail
 
 Give the host's `LodLoader` an asset URL and the representations to derive from it. Use `.glb` or `.gltf` for stored models and `.glts` for procedural assets. Put generation parameters in the asset URL's query: each distinct query is a distinct cache identity. Build a `Lod` from the returned levels for an independently placed object, or an `InstancedLod` for repeated objects with per-instance matrices and colours.
 
-`loadAsync` resolves with the coarsest drawable level ready; finer levels load when the camera needs them. On a cache miss a derived level is built only when it loads, from a fresh run of the source, so a cold far view builds only the coarsest level. Give simplified and baked levels an explicit `maxPixels`: without one, a level is built with the ladder to measure its default. Include an impostor or baked mesh as the coarsest drawable when an overview should avoid constructing the source. A simplified coarsest level also loads the source for its original materials; a source-only ladder loads its source eagerly. Prefer baked or impostor middle levels for an expensive `.glts`: a simplified level brings the script run forward to that viewing range.
+`loadAsync` resolves with the ladder before its levels load; each level loads when a view first selects it, and a level that arrived draws in place of one still loading. On a cold cache a derived level is built when it first loads, so a cold far view builds only the coarse levels it selects. Give simplified and baked levels an explicit `maxPixels`: without one, a level is built with the ladder to measure its default. A simplified level also loads the source for its original materials; a source-only ladder loads its source eagerly. Prefer baked or impostor middle levels for an expensive `.glts`: a simplified level brings the script run forward to that viewing range.
 
 Choose levels from the asset's silhouette, materials and expected viewing range. Alpha-tested leaf cards often work best as source → impostor; simplifying the cards can destroy their shape. Hard-surface props often suit source → simplified → impostor. Detailed structures can use source → baked shell → impostor, with interiors supplied separately for windows. A very heavy source, such as a two-million-triangle scan, needs a simplified level between source and impostor, or every copy in mid range draws the full mesh. Add an empty final level when the object should disappear at distance.
 
@@ -93,7 +93,7 @@ const object = new Lod([{ load: loadDetailedMesh, maxPixels: Infinity, box: sour
 scene.add(object);
 ```
 
-A missing level draws as the nearest ready coarser representation, skipping empty levels, or as the nearest finer one if none is ready; a crowd never pays for detail its view does not select. Requests follow the visible view and begin ahead of the transition. Keep the resources used by a deferred load alive until it finishes.
+A missing level draws as the nearest ready coarser representation, skipping empty levels, or as the nearest finer one if none is ready. Each copy requests the levels its distance and screen size select, whichever way the camera faces, so shadow casters out of view and a turning camera find their levels loaded; a crowd never pays for detail no copy selects. A level that replaces a drawn one fades in over it; one that replaces nothing draws at once. Keep the resources used by a deferred load alive until it finishes.
 
 For direct preparation and storage outside `LodLoader`, combine `simplify`, `bakeMesh`, or `bakeImpostor` with the corresponding codecs and drawing objects. Use `ImpostorMesh` directly when copies stay distant throughout their lifetime. For external detail systems, combine an empty near level with a coarse representation and use `levelOf` or level visibility to decide where to supply detail.
 
@@ -111,18 +111,29 @@ For dense cover, combine near individuals with a baked distant patch. Jitter pos
 
 ## Wait for a view before a screenshot
 
-Levels load as the camera comes to need them, so a frame drawn soon after loading still shows coarser stand-ins. To capture one view correctly, even with nothing cached, place the camera, keep the frame loop running, and await `ready()` on every visible `Lod` and `InstancedLod`, together with any other streamed content in view, such as a terrain; then capture a frame. A cold cache builds only the levels that view selects. After moving the camera, await again. A hidden owner is never updated, so its `ready()` waits until it is shown.
+Levels load as the camera comes to need them, so a frame drawn soon after loading can lack them: a missing level draws as a level that arrived, or not at all. Each `Lod` and `InstancedLod` reports to the `manager` it is given: it holds one item while the levels its views need load, install, compile or fade in, and ends it once they are complete, or once its scene renders a frame without updating it; a failed level is an item error. Give the owners a manager of their own so that it tracks only them, and render the `Scene` that holds them, with every camera that views it each frame: an owner loads nothing before such a render, and a camera that skips frames lets the item end and start again. The manager hears of the item once the render returns. To capture one view, even with nothing cached, place the camera and render, then wait a frame; while the manager is loading, compile with `renderer.compileAsync(scene, camera)`, render again and wait a frame, which lets loads, workers and timers run; capture the render after which the manager is idle. A cold cache builds only the levels that viewpoint selects. After moving the camera, wait again. Loaded levels stay until their owner is disposed, which nothing does for you: in a world larger than memory, dispose the owners the camera has left far behind.
 
 ```ts
+import { LoadingManager } from "three/webgpu";
 import { InstancedLod, Lod } from "@drawcall/lod";
 
+const manager = new LoadingManager();
+const lod = new Lod(levels, { manager });
+const trees = new InstancedLod(treeLevels, positions.length, { manager });
+
 camera.position.copy(viewpoint);
-const lods: (Lod | InstancedLod)[] = [];
-scene.traverseVisible((node) => {
-  if (node instanceof Lod || node instanceof InstancedLod) lods.push(node);
-});
-await Promise.all(lods.map((lod) => lod.ready()));
-// the frame loop keeps rendering; capture the next frame
+let loading = false;
+manager.onStart = () => (loading = true);
+manager.onLoad = () => (loading = false);
+const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+renderer.render(scene, camera);
+await frame();
+while (loading) {
+  await renderer.compileAsync(scene, camera);
+  renderer.render(scene, camera);
+  await frame();
+}
+// The last render drew the complete view: capture it.
 ```
 
 ## Tune the complete scene

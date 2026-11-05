@@ -1,4 +1,4 @@
-import { RenderTarget, WebGPURenderer, type Camera, type Scene } from "three/webgpu";
+import { RenderTarget, WebGPURenderer, type Camera, type Object3D, type Scene } from "three/webgpu";
 import { readBytes } from "../src/renderer.js";
 
 /** A WebGPU renderer in the test browser, initialised, its canvas 64 px on the page. */
@@ -22,7 +22,7 @@ export async function render(scene: Scene, camera: Camera, size = 64): Promise<U
   return pixels;
 }
 
-/** Follow normal frame updates until this owner reports the actual installation. */
+/** Render the scene holding this owner each frame until the owner reports the actual installation. */
 export function nextLevel(owner: import("../src/lod.js").Lod | import("../src/instanced/index.js").InstancedLod, camera: Camera): Promise<void> {
   return new Promise((resolve, reject) => {
     let frame = 0;
@@ -39,8 +39,10 @@ export function nextLevel(owner: import("../src/lod.js").Lod | import("../src/in
       clear();
       reject(error);
     };
+    let scene: Object3D = owner;
+    while (scene.parent) scene = scene.parent;
     const update = () => {
-      owner.update(camera);
+      renderer.render(scene, camera);
       frame = requestAnimationFrame(update);
     };
     owner.addEventListener("levelschange", changed);

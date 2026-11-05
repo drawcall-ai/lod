@@ -1,12 +1,22 @@
-import { type Color, Frustum, type Matrix4, Object3D, Sphere, Vector3, type Camera, type Intersection, type Raycaster } from "three/webgpu";
+import {
+  type Color,
+  Frustum,
+  type Matrix4,
+  Object3D,
+  Sphere,
+  Vector3,
+  type Camera,
+  type Intersection,
+  type LoadingManager,
+  type Raycaster,
+} from "three/webgpu";
 import { at } from "../at.js";
-import { prepareBounds } from "../bounds.js";
 import { disposeCopies } from "../dispose.js";
 import { Level, cloneLevels, estimate, fadeProgress, levelAt, tintLevels, validate, type LevelView, type LodLevel } from "../levels.js";
-import { Lod } from "../lod.js";
+import { Lod, type LodOptions } from "../lod.js";
 import { Residency, type LevelsEventMap } from "../residency.js";
 import { inShadowPass, sameClass } from "../three.js";
-import { TYPICAL_HEIGHT, View, viewportHeight, watchContext, unwatchContext, inView, type RenderContext } from "../view.js";
+import { TYPICAL_HEIGHT, View, viewportHeight, type RenderContext } from "../view.js";
 import { compileLevel } from "../compile.js";
 import { WIND_BOUNDS } from "../wind/hooks.js";
 import { copyWind, refreshWind } from "../wind/index.js";
@@ -16,17 +26,10 @@ import { Blocks } from "./blocks.js";
 import { sight, type Aim } from "./sight.js";
 import { Extent } from "./extent.js";
 import { Probes } from "./raycast.js";
-import { ARGS_BYTES } from "./args.js";
 import { Selection } from "./select.js";
 import { Store } from "./store.js";
 
 const view = new View();
-
-/** The last view `update` selected for, in the InstancedLod's space, for `levelOf`. */
-interface Selected extends Aim {
-  /** Whether there was one. */
-  selected: boolean;
-}
 
 /**
  * Independently selected copies of one object, batched into indirect draws per view.
@@ -58,26 +61,18 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
   private readonly probes: Probes;
   private selection: Selection | null = null;
   private meshes: Meshes | null = null;
-  private readonly residency = new Residency(
-    this.entries,
-    (level, object, context) => this.install(level, object, context),
-    () => {
-      this.selection?.route(this.residency.fallback, true);
-      this.dispatchEvent({ type: "levelschange" });
-    },
-    (error) => this.dispatchEvent({ type: "levelserror", error }),
-  );
+  private readonly residency: Residency;
   private disposed = false;
   private readonly store: Store;
   private readonly extent = new Extent();
   /** Around every instance; each level may use tighter bounds. */
   readonly bounds = new Sphere();
-  /** Logical demand at the initial default viewport, separate from first-draw visibility. */
-  private readonly demand: Sphere[] = [];
   private blocks: Blocks;
-  private readonly last: Selected = { selected: false, eye: new Vector3(), scale: 0, ortho: false, fades: false, forced: null, frustum: new Frustum() };
+  /** The last view `update` selected for, for `levelOf`, once there was one. */
+  private readonly last: Aim = { eye: new Vector3(), scale: 0, ortho: false, fades: false, forced: null, frustum: new Frustum() };
+  private selected = false;
   /** The shadow map `update` last selected for. */
-  private readonly cast: Aim = { eye: new Vector3(), scale: 0, ortho: true, fades: false, forced: null, frustum: new Frustum() };
+  private readonly shadowView: Aim = { eye: new Vector3(), scale: 0, ortho: true, fades: false, forced: null, frustum: new Frustum() };
 
   get pending(): boolean {
     return this.residency.pending;
@@ -86,9 +81,29 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     return this.residency.error;
   }
 
+  /** Where the item of pending levels goes (see `LodOptions.manager`). */
+  get manager(): LoadingManager {
+    return this.residency.item.resolved;
+  }
+  set manager(manager: LoadingManager | undefined) {
+    this.residency.item.manager = manager;
+  }
+
   /** `levels[0]` is the source. Empty only as the target of `copy`. */
-  constructor(levels: readonly LodLevel[] = [], count = 0) {
+  constructor(levels: readonly LodLevel[] = [], count = 0, options: LodOptions = {}) {
     super();
+    this.residency = new Residency(
+      this,
+      `InstancedLod ${this.uuid}`,
+      this.entries,
+      (level, object, context) => this.install(level, object, context),
+      () => {
+        this.selection?.route(this.residency.fallback, this.residency.progress < 1);
+        this.dispatchEvent({ type: "levelschange" });
+      },
+      (error) => this.dispatchEvent({ type: "levelserror", error }),
+    );
+    this.residency.item.manager = options.manager;
     if (!Number.isInteger(count) || count < 0) throw new Error(`InstancedLod: count must be an integer >= 0, got ${count}`);
     this.levels = this.entries;
     this.count = count;
@@ -100,12 +115,8 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
 
   private build(inputs: readonly LodLevel[]): number {
     const { extent } = this;
-    const radius = extent.measure(inputs);
-    inputs.forEach((input, i) => {
-      this.entries.push(new Level(input, i, this.entries));
-      this.demand.push(new Sphere());
-    });
-    estimate(this.entries, 2 * radius);
+    inputs.forEach((input, i) => this.entries.push(new Level(input, i, this.entries)));
+    estimate(this.entries, 2 * extent.measure(inputs));
     validate(this.entries);
     this.residency.reset();
     const templates = this.entries.map(({ object }, i) => (object ? parts(object, i) : []));
@@ -124,50 +135,24 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     const meshes = new Meshes(selection, extent.reaches, extent.drawRadius, {
       live: () => !this.disposed,
       drawn: (camera, mesh) => this.residency.drawn(camera, mesh),
+      guard: (action) => this.residency.guard(action),
     });
     this.meshes = meshes;
-    let offset = 0;
-    templates.forEach((parts, i) => {
-      const made = meshes.make(at(this.entries, i), parts, offset);
-      offset += made.length * ARGS_BYTES;
-      meshes.byLevel[i] = made;
-      for (const mesh of made) this.add(mesh);
-    });
-    if (draws.length === 0) watchContext(this);
+    for (const mesh of meshes.fill(this.entries, templates)) this.add(mesh);
     return draws.length;
   }
 
   /** Compile only the arriving level; bounds and instance buffers stay fixed. */
   private async install(level: Level, template: Object3D, context: RenderContext): Promise<void> {
-    const { selection, meshes } = this;
-    if (!selection || !meshes) throw new Error("InstancedLod: missing selection");
-    const staged = new Object3D();
-    const object = template.clone();
-    if (level.box) prepareBounds(object, level.box);
-    const found = parts(object, level.index);
-    const offset = selection.append(found.map((part) => part.draw));
-    const made = meshes.make(level, found, offset);
-    for (const mesh of made) staged.add(mesh);
-    const abandon = () => {
-      for (const mesh of made) meshes.free(mesh);
-      disposeCopies(object);
-    };
-    try {
+    if (!this.meshes) throw new Error("InstancedLod: missing selection");
+    const loaded = await this.meshes.load(level, template, async (staged) => {
       refreshWind(this, staged);
       await compileLevel(staged, context);
-    } catch (error) {
-      abandon();
-      throw error;
-    }
-    if (this.disposed) {
-      abandon();
-      return;
-    }
-    level.object = object;
-    if (made.length > 0) unwatchContext(this);
-    if (level.index === 0) this.probes.add(found);
-    meshes.byLevel[level.index] = made;
-    for (const mesh of made) this.add(mesh);
+    });
+    if (!loaded) return;
+    level.object = loaded.object;
+    if (level.index === 0) this.probes.add(loaded.found);
+    for (const mesh of loaded.made) this.add(mesh);
   }
 
   setMatrixAt(index: number, matrix: Matrix4): void {
@@ -197,18 +182,10 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
   levelOf(index: number): number | null {
     const { last, store } = this;
     store.check(index);
-    if (!last.selected) return null;
+    if (!this.selected) return null;
     store.measure(this.blocks);
-    const offset = index * 4;
-    const r = at(store.spheres, offset + 3);
-    if (r === 0) return null;
-    let height = 2 * r * last.scale;
-    if (!last.ortho) {
-      const dx = at(store.spheres, offset) - last.eye.x;
-      const dy = at(store.spheres, offset + 1) - last.eye.y;
-      const dz = at(store.spheres, offset + 2) - last.eye.z;
-      height /= Math.max(Math.sqrt(dx * dx + dy * dy + dz * dz), 1e-6);
-    }
+    const height = store.height(index, last);
+    if (height === null) return null;
     const level = levelAt(this.entries, height, last.forced);
     const selected = last.fades && fadeProgress(this.entries, level, height) > 0 ? level.index - 1 : level.index;
     const ready = at(this.residency.fallback, selected);
@@ -223,11 +200,12 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     if (this.selection) this.selection.reach.value = this.extent.rest.radius * (1 + sway);
   }
 
-  /**
-   * Sort instances for `camera`, a view or a shadow map's; a view's demand begins after
-   * its first drawing context exists.
-   */
+  /** Sort instances for `camera`, a view or a shadow map's. What fails is reported (see `Residency.report`): three is rendering. */
   update(camera: Camera): void {
+    this.residency.guard(() => this.pick(camera));
+  }
+
+  private pick(camera: Camera): void {
     if (this.disposed) return;
     const { entries, selection, meshes, residency } = this;
     if (!selection || !meshes) return;
@@ -237,44 +215,32 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     const height = viewportHeight(camera);
     view.begin(camera, height ?? TYPICAL_HEIGHT, this.forceLevel);
     const shadow = inShadowPass(this);
-    const seen = sight(shadow ? this.cast : this.last, view, camera, this.matrixWorld, Lod.quality, this.forceLevel);
-    this.blocks.select(entries, seen, this.extent.reaches, height !== null, this.matrixWorld);
+    const seen = sight(shadow ? this.shadowView : this.last, view, camera, this.matrixWorld, Lod.quality, this.forceLevel);
+    const drawn = this.blocks.select(entries, seen, this.extent.reaches, height !== null, this.matrixWorld);
     const progress = residency.progress;
     if (selection.progress.value !== progress) {
       selection.progress.value = progress;
       selection.changed();
     }
-    if (!shadow) this.demandLevels(camera);
+    if (!shadow) this.demandLevels(camera, drawn);
     this.extent.reroute(residency.fallback, residency.previous, progress);
     selection.aim(camera, seen, entries);
     // Selected only when something may draw: an InstancedLod with every level hidden
     // keeps its last selection.
     meshes.schedule(meshes.show(camera, this.matrixWorld));
-    if (!shadow) residency.settle();
+    residency.sync();
   }
 
-  /** Ask for the levels the view of `camera` needs, and install them as they arrive. */
-  private demandLevels(camera: Camera): void {
-    const { entries, meshes, residency, last } = this;
+  /** Ask for the levels `drawn` for `camera`, and install them as they arrive. */
+  private demandLevels(camera: Camera, drawn: number[]): void {
+    const { entries, meshes, residency } = this;
     if (!meshes) return;
     tintLevels(entries, Lod.debug);
-    last.selected = true;
-    const needed: number[] = [];
-    if (this.bounds.isEmpty()) {
-      // Reusable crowds can be populated and drawn in the same frame.
-      for (const level of entries) if (level.object) needed.push(level.index);
-    } else if (residency.needsDemand(camera, meshes.byLevel)) {
-      this.blocks.demand(entries, last, this.demand, this.matrixWorld);
-      // Coarsest first, so its load starts first.
-      for (let i = this.demand.length - 1; i >= 0; i--) if (inView(camera, this.matrixWorld, at(this.demand, i))) needed.push(i);
-    }
+    this.selected = true;
+    // Reusable crowds can be populated and drawn in the same frame.
+    const needed = this.bounds.isEmpty() ? entries.flatMap((level) => (level.object ? [level.index] : [])) : drawn;
     residency.demand(camera, needed);
     residency.update(camera, meshes.byLevel);
-  }
-
-  /** As `Lod.ready`: resolves once an update finds every level its instances select in view installed and faded in. */
-  ready(): Promise<void> {
-    return this.residency.ready();
   }
 
   /**
@@ -298,6 +264,7 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     this.blocks = new Blocks(this.store.matrices, this.store.spheres, this.extent.source, this.bounds, draws, this.extent.rest);
     this.forceLevel = source.forceLevel;
     this.autoUpdate = source.autoUpdate;
+    this.residency.item.manager = source.residency.item.manager;
     copyWind(source, this);
     return this;
   }
@@ -313,18 +280,11 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    unwatchContext(this);
     this.residency.dispose(() => {
-      this.clearDraws();
+      this.meshes?.dispose();
+      this.selection?.dispose();
+      this.store.attach(null);
       for (const { object } of this.entries) if (object) disposeCopies(object);
     });
-  }
-
-  private clearDraws(): void {
-    this.meshes?.dispose();
-    this.meshes = null;
-    this.selection?.dispose();
-    this.selection = null;
-    this.store.attach(null);
   }
 }

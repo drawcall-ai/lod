@@ -78,17 +78,14 @@ describe("instance blocks", () => {
   });
 });
 
-it("demands detail 20% before its fade", () => {
+it("returns the levels an instance draws, its fade partner included, before the view is measured too", () => {
   const s = setup(1);
   s.set(0, new Matrix4().makeTranslation(0, 0, -200 / 30));
   s.refit();
-  s.select();
-  expect(s.reaches.map((bound) => !bound.isEmpty())).toEqual([false, true, false]);
-  const demand = levels.map(() => new Sphere());
-  s.blocks.demand(levels, s.view, demand, identity);
-  expect(demand.map((bound) => !bound.isEmpty())).toEqual([true, true, false]);
-  s.set(0, new Matrix4().makeTranslation(0, 0, -200 / 28));
+  expect(s.select()).toEqual([1]);
+  s.set(0, new Matrix4().makeTranslation(0, 0, -200 / 38));
   s.refit();
-  s.blocks.demand(levels, s.view, demand, identity);
-  expect(demand[0]?.isEmpty()).toBe(true);
+  expect(s.select()).toEqual([1, 0]);
+  expect(s.blocks.select(levels, s.view, s.reaches, false, identity)).toEqual([1, 0]);
+  expect(s.reaches.every((sphere) => !sphere.isEmpty())).toBe(true);
 });

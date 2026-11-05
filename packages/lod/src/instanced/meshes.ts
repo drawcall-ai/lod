@@ -6,18 +6,21 @@ import {
   type Matrix4,
   Mesh,
   type NodeMaterial,
+  Object3D,
   type Sphere,
   type StorageInstancedBufferAttribute,
 } from "three/webgpu";
 import { at } from "../at.js";
 import { placeInterior } from "../baked/interior/material.js";
+import { prepareBounds } from "../bounds.js";
+import { disposeCopies } from "../dispose.js";
 import { drawOf, setDraw } from "../fade.js";
 import { impostorInstances, type ImpostorMesh } from "../impostor/mesh/index.js";
 import type { Level } from "../levels.js";
 import { gpuRenderer, inShadowPass, isImpostorMesh } from "../three.js";
-import { inView, watchViewport } from "../view.js";
+import { inView } from "../view.js";
 import { ARGS_BYTES } from "./args.js";
-import { groupMaterial, placed, type Part } from "./parts.js";
+import { groupMaterial, parts, placed, type Part } from "./parts.js";
 import type { Selection } from "./select.js";
 
 // The indirect draws of one Selection's levels, and the compute that selects for them.
@@ -57,6 +60,8 @@ export interface Owner {
   live(): boolean;
   /** A mesh finished drawing for `camera` outside a shadow pass. */
   drawn(camera: Camera, mesh: LevelMesh): void;
+  /** Run a draw callback's `action`, reporting what it throws: nothing may throw while three renders. */
+  guard(action: () => void): void;
 }
 
 /** Every level's meshes for one Selection, each drawing from its indirect arguments. */
@@ -83,13 +88,56 @@ export class Meshes {
     }
   }
 
+  /** Every level's meshes from its `templates` parts, drawn in order from the selection's first indirect arguments. */
+  fill(levels: readonly Level[], templates: readonly (readonly Part[])[]): LevelMesh[] {
+    let offset = 0;
+    templates.forEach((parts, i) => {
+      this.byLevel[i] = this.make(at(levels, i), parts, offset);
+      offset += parts.length * ARGS_BYTES;
+    });
+    return this.byLevel.flat();
+  }
+
+  /**
+   * `level`'s meshes from a clone of `template`, staged and compiled by `compile`; they draw
+   * once its caller adds them. Null if the owner died meanwhile, which frees them.
+   */
+  async load(
+    level: Level,
+    template: Object3D,
+    compile: (staged: Object3D) => Promise<void>,
+  ): Promise<{ object: Object3D; found: Part[]; made: LevelMesh[] } | null> {
+    const staged = new Object3D();
+    const object = template.clone();
+    if (level.box) prepareBounds(object, level.box);
+    const found = parts(object, level.index);
+    const made = this.make(level, found, this.selection.append(found.map((part) => part.draw)));
+    for (const mesh of made) staged.add(mesh);
+    const abandon = () => {
+      for (const mesh of made) this.free(mesh);
+      disposeCopies(object);
+    };
+    try {
+      await compile(staged);
+    } catch (error) {
+      abandon();
+      throw error;
+    }
+    if (!this.owner.live()) {
+      abandon();
+      return null;
+    }
+    this.byLevel[level.index] = made;
+    return { object, found, made };
+  }
+
   /** `level`'s `parts`, drawn from consecutive indirect arguments starting at byte `offset`. */
-  make(level: Level, parts: readonly Part[], offset: number): LevelMesh[] {
+  private make(level: Level, parts: readonly Part[], offset: number): LevelMesh[] {
     return parts.map((part, i) => this.mesh(level, part, offset + i * ARGS_BYTES));
   }
 
   /** Release `mesh`, which may never have been added. */
-  free(mesh: LevelMesh): void {
+  private free(mesh: LevelMesh): void {
     // ImpostorMesh.dispose also destroys instance buffers; the Selection owns ours.
     if (isImpostorMesh(mesh)) mesh.material.release();
     mesh.geometry.dispose();
@@ -149,23 +197,24 @@ export class Meshes {
     mesh.castShadow = template.castShadow;
     mesh.receiveShadow = template.receiveShadow;
     mesh.boundingSphere = at(this.reaches, level.index);
-    watchViewport(mesh);
     const previous = mesh.onBeforeRender;
     // Selected once per view, before the first level mesh draws in it: the GPU runs the
     // selection before the pass, which is submitted when it ends.
     mesh.onBeforeRender = (renderer, scene, camera, geometry, material, group) => {
       if (!owner.live()) return;
       previous.call(mesh, renderer, scene, camera, geometry, material, group);
-      const gpu = gpuRenderer(renderer);
-      due.add(selection);
-      // Each level's draws start at its slots (see select.ts).
-      if (!gpu.hasFeature("indirect-first-instance")) throw new Error("InstancedLod: needs the GPU feature indirect-first-instance, which this device lacks");
-      passes.length = 0;
-      for (const each of due) passes.push(...each.take(gpu, camera));
-      due.clear();
-      if (passes.length > 0) gpu.compute(passes);
-      const { args } = selection.view(camera);
-      mesh.geometry.setIndirect(args.attribute, args.offset + offset);
+      owner.guard(() => {
+        const gpu = gpuRenderer(renderer);
+        due.add(selection);
+        // Each level's draws start at its slots (see select.ts).
+        if (!gpu.hasFeature("indirect-first-instance")) throw new Error("InstancedLod: needs the GPU feature indirect-first-instance, which this device lacks");
+        passes.length = 0;
+        for (const each of due) passes.push(...each.take(gpu, camera));
+        due.clear();
+        if (passes.length > 0) gpu.compute(passes);
+        const { args } = selection.view(camera);
+        mesh.geometry.setIndirect(args.attribute, args.offset + offset);
+      });
     };
     const after = mesh.onAfterRender;
     mesh.onAfterRender = (renderer, scene, camera, geometry, material, group) => {

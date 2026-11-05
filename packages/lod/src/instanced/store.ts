@@ -1,5 +1,7 @@
 import { Matrix4, type Color } from "three/webgpu";
+import { at } from "../at.js";
 import type { Blocks } from "./blocks.js";
+import type { BlockView } from "./sight.js";
 import { Dirty, upload } from "./dirty.js";
 import type { Selection } from "./select.js";
 
@@ -59,6 +61,19 @@ export class Store {
   getColor(index: number, color: Color): Color {
     this.check(index);
     return this.colors ? color.fromArray(this.colors, index * 4) : color.setRGB(1, 1, 1);
+  }
+
+  /** Instance `index`'s on-screen height in `view`, as of the last `measure`; null at scale 0. */
+  height(index: number, view: BlockView): number | null {
+    const offset = index * 4;
+    const r = at(this.spheres, offset + 3);
+    if (r === 0) return null;
+    const height = 2 * r * view.scale;
+    if (view.ortho) return height;
+    const dx = at(this.spheres, offset) - view.eye.x;
+    const dy = at(this.spheres, offset + 1) - view.eye.y;
+    const dz = at(this.spheres, offset + 2) - view.eye.z;
+    return height / Math.max(Math.sqrt(dx * dx + dy * dy + dz * dz), 1e-6);
   }
 
   /** Upload edits to `selection` from now on, colours included once there are any; null stops uploading. */
