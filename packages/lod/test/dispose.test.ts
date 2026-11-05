@@ -1,5 +1,5 @@
 import { GLTSLoader } from "@drawcall/glts";
-import { LoadingManager, Mesh, Texture } from "three/webgpu";
+import { Box3, BoxGeometry, LoadingManager, Mesh, MeshBasicMaterial, Texture } from "three/webgpu";
 import { expect, it, vi } from "vitest";
 import { InstancedLod } from "../src/instanced/index.js";
 import { decodeMeshAsync, encodeMeshAsync } from "../src/mesh/codec.js";
@@ -45,3 +45,30 @@ it.each([Lod, InstancedLod])("lets the GLTS source release its resources while p
     texture.dispose();
   }
 });
+
+it("frees a template's textures but leaves their ImageBitmap to the copies that still share it", async () => {
+  const image = await createImageBitmap(new ImageData(1, 1));
+  const map = new Texture(image);
+  const disposed = vi.spyOn(map, "dispose");
+  const lod = new Lod([{ object: new Mesh(new BoxGeometry(), new MeshBasicMaterial({ map })) }]);
+  const copy = lod.clone();
+  lod.dispose();
+  expect(disposed).toHaveBeenCalled();
+  // A closed bitmap has no size: the copy could no longer upload it.
+  expect(image.width).toBe(1);
+  copy.dispose();
+});
+
+it.each([Lod, InstancedLod].map((Type) => ({ name: Type.name, Type })))(
+  "frees what a deferred level holds for a load that never ran when its owner is disposed ($name)",
+  ({ Type }) => {
+    const dispose = vi.fn();
+    const load = vi.fn(async () => new Mesh());
+    new Type([
+      { object: new Mesh(new BoxGeometry(), new MeshBasicMaterial()) },
+      { load, maxPixels: 10, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]), dispose },
+    ]).dispose();
+    expect(load).not.toHaveBeenCalled();
+    expect(dispose).toHaveBeenCalledOnce();
+  },
+);

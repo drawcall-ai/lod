@@ -35,7 +35,10 @@ export function disposeTree(node: Object3D): void {
   for (const child of node.children) disposeTree(child);
 }
 
-/** Free `mesh`'s materials and their textures: the originals of level copies, which free their copies (see `levelMaterial`). */
+/**
+ * Free `mesh`'s materials and their textures: the originals of level copies, which free their copies (see
+ * `levelMaterial`). Images stay open: another owner, or three's Cache, may share them and upload them again.
+ */
 function disposeMaterials(mesh: Mesh): void {
   for (const material of new Set([mesh.material].flat().map(originalOf))) {
     const values: unknown[] = Object.values(material);

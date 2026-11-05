@@ -9,7 +9,15 @@ export const FADE = 0.1;
 
 /** A reusable level description. Deferred objects arrive already placed in the owner's space. */
 export type LodLevel =
-  { object: Object3D; maxPixels?: number; load?: never; box?: never } | { load: () => Promise<Object3D>; maxPixels: number; box: Box3; object?: never };
+  | { object: Object3D; maxPixels?: number; load?: never; box?: never; dispose?: never }
+  | {
+      load: () => Promise<Object3D>;
+      maxPixels: number;
+      box: Box3;
+      /** Frees what the level holds for a load that has not run, as a loader's spare source: an owner calls it when disposed. */
+      dispose?: () => void;
+      object?: never;
+    };
 
 /** One level of an owner, as `Lod.levels` and `InstancedLod.levels` show it. */
 export interface LevelView {

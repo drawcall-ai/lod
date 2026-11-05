@@ -185,6 +185,7 @@ export class Residency {
         if (object) templates.add(object);
       }
       for (const template of templates) disposeTree(template);
+      for (const { input } of this.levels) input.dispose?.();
     };
     const finish = () => {
       const pending = this.levels.flatMap(({ input }) => {
