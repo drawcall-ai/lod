@@ -84,7 +84,12 @@ export function levelEntry(ladder: Ladder, index: number, provenance: Provenance
   return entry(ladder, derived(ladder.levels, index), roles, provenance, options);
 }
 
-function entry({ modules }: Ladder, level: Derived, roles: Record<string, string>, provenance: Provenance, options?: LodCacheOptions) {
+/** The cache entry of the source's shape, which describes the ladder before any level is built. */
+export function shapeEntry(ladder: Ladder, provenance: Provenance, options?: LodCacheOptions): CacheEntry | undefined {
+  return entry(ladder, "shape", { source: "source" }, provenance, options);
+}
+
+function entry({ modules }: Ladder, of: Derived | "shape", roles: Record<string, string>, provenance: Provenance, options?: LodCacheOptions) {
   if (!modules) return undefined;
   const pick = <T>(values: Readonly<Record<string, T>>): Record<string, T> =>
     Object.fromEntries(
@@ -93,7 +98,7 @@ function entry({ modules }: Ladder, level: Derived, roles: Record<string, string
         return value === undefined ? [] : [[role, value] as const];
       }),
     );
-  return ladderEntry(pick(provenance.inputs), level, pick(modules), options);
+  return ladderEntry(pick(provenance.inputs), of, pick(modules), options);
 }
 
 /** `entry` and the bytes it holds, read: undefined when it holds none. */

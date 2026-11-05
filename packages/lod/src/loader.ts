@@ -9,8 +9,8 @@ import { bakeImpostor } from "./impostor/bake/index.js";
 import { ImpostorMesh } from "./impostor/mesh/index.js";
 import { resolveThresholds, type LodLevel } from "./levels.js";
 import type { LodCacheOptions } from "./loader/cache.js";
-import { auxiliary, derived, levelEntry, normalize, save, type Ladder, type LodRequest } from "./loader/ladder.js";
-import { decodeLevel, encodeLevel, placedBox, readLevel, shapeOf, type Derived } from "./loader/level.js";
+import { auxiliary, cached, derived, levelEntry, normalize, save, shapeEntry, type Ladder, type LodRequest } from "./loader/ladder.js";
+import { decodeLevel, encodeLevel, encodeShape, placedBox, readLevel, readShape, shapeOf, type Derived, type Shape } from "./loader/level.js";
 import { bundledModules, Provenance } from "./loader/provenance.js";
 import { assetPath, isLocal } from "./loader/url.js";
 import { simplify } from "./simplify.js";
@@ -39,9 +39,10 @@ export class LodLoader extends Loader<LodLevel[], LodRequest> {
   }
 
   /**
-   * Load empty levels and the coarsest drawable eagerly; finer drawables load on demand. Each derived level is cached on
-   * its own and built when first loaded, except a level whose default threshold is measured from it, which is built
-   * eagerly, as is every level in a `vite build` warmup.
+   * Describes the ladder from the cache, else from its source, which the source level then draws. Empty levels load
+   * with it, as does the source when it is the only drawable; other levels load when a view selects them, and each
+   * derived level is cached on its own and built when first loaded. A level whose default threshold is measured from it
+   * is built with the ladder, as is every level in a `vite build` warmup.
    */
   override async loadAsync(request: LodRequest): Promise<LodLevel[]> {
     const input = normalize(request, this.path);
@@ -64,10 +65,7 @@ export class LodLoader extends Loader<LodLevel[], LodRequest> {
       // vitecache resolves only same-origin paths to project files, so other sources build uncached.
       const modules = provenance.requested.every(isLocal) ? await bundledModules(input.urls, this.manager) : undefined;
       const ladder: Ladder = { ...input, modules };
-      const coarsest = requests.reduce((last, level, index) => (level.type === "empty" ? last : index + 1), 0);
-      const eager = requests.flatMap((level, index) =>
-        level.type !== "empty" && (warmup || index + 1 === coarsest || level.maxPixels === undefined) ? [index + 1] : [],
-      );
+      const eager = requests.flatMap((level, index) => (level.type !== "empty" && (warmup || level.maxPixels === undefined) ? [index + 1] : []));
       // Only the inputs: what each build is saved with is captured by its own loads.
       const entries = eager.map((index) => levelEntry(ladder, index, provenance, this.cacheOptions));
       const cached = await Promise.all(entries.map((entry) => entry?.load()));
@@ -75,12 +73,12 @@ export class LodLoader extends Loader<LodLevel[], LodRequest> {
       const handed = new Map<number, Uint8Array>();
       for (const [position, index] of eager.entries())
         handed.set(index, cached[position] ?? (await this.persist(ladder, index, await loadSource(), entries[position])));
-      const read = new Map([...handed].map(([index, bytes]) => [index, readLevel(bytes)]));
-      const shape = read.get(coarsest)?.shape ?? shapeOf((await loadSource()).source);
+      const measured = new Map([...handed].map(([index, bytes]) => [index, readLevel(bytes).level]));
+      const shape = await this.shape(ladder, provenance, loadSource);
       const box = placedBox(shape);
       if (box.isEmpty()) throw new Error("LodLoader: the source has no visible geometry to measure");
       const thresholds = resolveThresholds(
-        [{}, ...requests.map((level, position) => ({ maxPixels: level.maxPixels, measured: read.get(position + 1)?.level }))],
+        [{}, ...requests.map((level, position) => ({ maxPixels: level.maxPixels, measured: measured.get(position + 1) }))],
         shape.box.getSize(new Vector3()).length(),
       );
       const arrive = async (object: Object3D, index: number) => {
@@ -122,6 +120,16 @@ export class LodLoader extends Loader<LodLevel[], LodRequest> {
     } finally {
       this.manager.itemEnd(url);
     }
+  }
+
+  /** The source's shape from its entry, else measured from the source and saved. */
+  private async shape(ladder: Ladder, provenance: Provenance, loadSource: () => Promise<Loaded>): Promise<Shape> {
+    const { entry, bytes } = await cached(shapeEntry(ladder, provenance, this.cacheOptions));
+    if (bytes) return readShape(bytes);
+    const { source, provenance: read } = await loadSource();
+    const shape = shapeOf(source);
+    await save(ladder.url, entry, encodeShape(shape), read);
+    return shape;
   }
 
   /** A deferred level's bytes from its entry, else built from a source of its own: the ladder's source carries onLevel effects. */
@@ -224,14 +232,16 @@ function materialsOf(object: Object3D): Material[] {
   return materials;
 }
 
+/**
+ * Loads what every view draws before any selects a level: the empty levels, and the source if it is the only drawable.
+ * A source loaded to describe the ladder is handed to the source level.
+ */
 async function preload(levels: LodLevel[], hasSource: boolean): Promise<void> {
-  // A cold build hands its source to the same shared lifetime as a deferred source arrival.
   if (hasSource && levels[0]?.load) await loadOnce(levels[0].load).promise;
-  const coarse = [...levels].reverse().find((level) => level.box && !level.box.isEmpty());
-  if (!coarse?.load) throw new Error("LodLoader: ladder has no drawable level");
-  for (const [index, level] of levels.entries()) {
-    if (level.load && (level === coarse || level.box.isEmpty())) levels[index] = { object: await loadOnce(level.load).promise, maxPixels: level.maxPixels };
-  }
+  const drawable = levels.filter((level) => !level.box?.isEmpty());
+  for (const [index, level] of levels.entries())
+    if (level.load && (level.box.isEmpty() || drawable.length === 1))
+      levels[index] = { object: await loadOnce(level.load).promise, maxPixels: level.maxPixels };
 }
 
 function sceneOf(result: unknown, url: string): Object3D {

@@ -50,28 +50,33 @@ describe("LodLoader", () => {
       levels: [{ type: "baked", low: "?part=low", interior: "rooms.glts#bake", textureSize: 32, maxPixels: 100 }],
     };
     const loader = new LodLoader(manager).setPath("/models/");
-    await loader.loadAsync(request);
-    expect(cache.saved[0]?.options.dependencies).toMatchObject({
+    const cold = (await loader.loadAsync(request))[1];
+    if (!cold?.load) throw new Error("Expected a lazy baked level");
+    await cold.load();
+    const level = cache.saved.find(({ options }) => options.dependencies?.low);
+    expect(level?.options.dependencies).toMatchObject({
       source: { url: "/resolved/house.glts?variant=2" },
       low: { url: "/resolved/house.glts?part=low" },
       interior: { url: "/resolved/rooms.glts#bake" },
     });
-    const dependencies = cache.saved[0]?.dependencies ?? {};
+    const dependencies = level?.dependencies ?? {};
     expect(Object.values(dependencies).filter((value) => value.url === helper)).toHaveLength(1);
     expect(dependencies["resource:1"]).toEqual({ url: extra });
+    // The source measured for the shape, which the source level takes, then the build's own source, low shell and rooms.
+    expect(load).toHaveBeenCalledTimes(4);
     const warm = await loader.loadAsync(request);
-    expect(load).toHaveBeenCalledTimes(3);
-    const baked = warm[1]?.object;
+    const baked = await warm[1]?.load?.();
+    expect(load).toHaveBeenCalledTimes(4);
     if (!(baked instanceof Mesh) || !(baked.material instanceof InteriorMaterial)) throw new Error("Expected restored baked windows");
     expect(baked.material.rooms?.boxes).toHaveLength(1);
     const source = warm[0];
     if (!source?.load) throw new Error("Expected deferred GLTS source");
     expect((await source.load()).children).toHaveLength(house().children.length + 1);
     expect(load).toHaveBeenLastCalledWith("/models/house.glts?variant=2");
-    expect(load).toHaveBeenCalledTimes(4);
+    expect(load).toHaveBeenCalledTimes(5);
   }, 120_000);
 
-  it("builds a deferred level only on demand, from a source of its own, sharing the ladder source's textures", async () => {
+  it("builds a deferred level only on demand, from a source without onLevel effects, sharing the ladder source's textures", async () => {
     const { manager, load } = sourceFixture(() => {
       const map = new DataTexture(new Uint8Array([86, 98, 43, 0, 86, 98, 43, 255]), 2, 1);
       map.needsUpdate = true;
@@ -95,7 +100,8 @@ describe("LodLoader", () => {
     };
     await loader.loadAsync(request);
     expect(load).toHaveBeenCalledExactlyOnceWith("/models/tree.glb?seed=2");
-    expect(cache.saved).toHaveLength(1);
+    // The impostor, built eagerly, and the shape.
+    expect(cache.saved).toHaveLength(2);
     const warm = await loader.loadAsync(request);
     expect(load).toHaveBeenCalledOnce();
     const source = warm[0];
@@ -104,7 +110,7 @@ describe("LodLoader", () => {
     // The simplified level is built from a source without onLevel effects, then draws with the ladder source's materials.
     const simplified = await detail.load();
     expect(load).toHaveBeenCalledTimes(3);
-    expect(cache.saved).toHaveLength(2);
+    expect(cache.saved).toHaveLength(3);
     const original = await loadOnce(source.load).promise;
     expect(load).toHaveBeenCalledTimes(3);
     const released = vi.fn();
@@ -124,7 +130,7 @@ describe("LodLoader", () => {
     if (!rewarmed?.load) throw new Error("Expected lazy simplified level");
     await rewarmed.load();
     expect(load).toHaveBeenCalledTimes(4);
-    expect(cache.saved).toHaveLength(2);
+    expect(cache.saved).toHaveLength(3);
   });
 
   it("builds a level without maxPixels eagerly, since its default threshold is measured from it", async () => {
@@ -138,9 +144,11 @@ describe("LodLoader", () => {
       ],
     };
     const cold = await loader.loadAsync(request);
+    // The measured level and the shape.
     expect(cache.saved).toHaveLength(2);
     cache.loaded.length = 0;
     const warm = await loader.loadAsync(request);
+    // The impostor, which no view selected, is not read.
     expect(cache.loaded).toEqual([true, true]);
     expect(load).toHaveBeenCalledOnce();
     expect(warm.map((level) => level.maxPixels)).toEqual(cold.map((level) => level.maxPixels));
@@ -152,8 +160,19 @@ describe("LodLoader", () => {
       /\.glb$/,
     );
     const request: LodRequest = { url: "/shell.glb", levels: [{ type: "baked", low: "?part=low", textureSize: 32, maxPixels: 100 }] };
-    await expect(new LodLoader(manager).loadAsync(request)).rejects.toThrow("extends beyond the source's bounds");
-    expect(cache.saved).toHaveLength(0);
+    const baked = (await new LodLoader(manager).loadAsync(request))[1];
+    await expect(baked?.load?.()).rejects.toThrow("extends beyond the source's bounds");
+    expect(cache.saved.map(({ options }) => options.dependencies?.["lod:level"]?.value)).toEqual([{ type: "shape" }]);
+  });
+
+  it("disposes the source measured for the shape with an owner disposed before any level loaded", async () => {
+    const sources: Mesh[] = [];
+    const { manager } = sourceFixture(() => sources[sources.push(new Mesh(new BoxGeometry(), new MeshStandardMaterial())) - 1]);
+    const levels = await new LodLoader(manager).loadAsync({ url: "/unused.glb", levels: [{ type: "impostor", maxPixels: 100 }] });
+    const disposed = vi.fn();
+    sources[0]?.geometry.addEventListener("dispose", disposed);
+    new Lod(levels).dispose();
+    expect(disposed).toHaveBeenCalledOnce();
   });
 
   it("preloads a placed source when it is the only drawable, on cold and warm loads", async () => {
@@ -180,14 +199,17 @@ describe("LodLoader", () => {
         ],
       });
     const cold = await levels(10, 1);
+    const coldImpostor = await cold[1]?.load?.();
     const saved = cache.saved.length;
+    const loads = load.mock.calls.length;
     const warm = await levels(20, 0);
+    const warmImpostor = await warm[1]?.load?.();
     expect(cache.saved).toHaveLength(saved);
     expect(bakeImpostor).toHaveBeenCalledOnce();
-    expect(load).toHaveBeenCalledOnce();
+    expect(load).toHaveBeenCalledTimes(loads);
     expect(cold.map((level) => level.maxPixels)).toEqual([Infinity, 100, 10]);
     expect(warm.map((level) => level.maxPixels)).toEqual([Infinity, 100, 20]);
-    expect([cold, warm].map((ladder) => (ladder[1]?.object instanceof ImpostorMesh ? ladder[1].object.options.parallax : undefined))).toEqual([1, 0]);
+    expect([coldImpostor, warmImpostor].map((object) => (object instanceof ImpostorMesh ? object.options.parallax : undefined))).toEqual([1, 0]);
   });
 
   it("builds a deferred level again when the cache skips saving", async () => {
@@ -236,70 +258,72 @@ describe("LodLoader", () => {
       lod.update(camera);
       expect(lod.levels.flatMap(({ object }, index) => (object?.visible ? [index] : []))).toEqual([2]);
       expect(levels[2]?.object?.position.toArray()).toEqual([2, 3, 4]);
+      // No view selected the impostor: the source gives the shape once, which its cache entry then does.
       expect(load).toHaveBeenCalledOnce();
       lod.dispose();
       expect(released).toHaveBeenCalledTimes(run + 1);
     }
   });
 
-  it.each([false, true].flatMap((warm) => [0, 1, 2].map((index) => ({ warm, index }))))(
-    "releases every preloaded level exactly once when hook $index rejects (warm: $warm)",
-    async ({ warm, index }) => {
-      const sources: Array<{ object: Object3D; release: ReturnType<typeof vi.fn> }> = [];
-      const { manager } = sourceFixture((url) => {
-        const geometry = new BoxGeometry();
-        const material = new MeshStandardMaterial();
-        const release = vi.fn(() => {
-          geometry.dispose();
-          material.dispose();
-        });
-        const object = Object.assign(new Scene().add(new Mesh(geometry, material)), {
-          source: { url, dependencyUrls: [], packages: [], moduleHashes: {}, runtimeModules: [] },
-          dispose: release,
-        });
-        sources.push({ object, release });
-        return object;
+  // Cold, the ladder loads its source to measure the shape, which the source level takes, and preloads its empty level;
+  // warm, only the empty level.
+  it.each([false, true])("releases what a ladder loaded exactly once when the empty level's hook rejects (warm: %s)", async (warm) => {
+    const sources: Array<{ object: Object3D; release: ReturnType<typeof vi.fn> }> = [];
+    const { manager } = sourceFixture((url) => {
+      const geometry = new BoxGeometry();
+      const material = new MeshStandardMaterial();
+      const release = vi.fn(() => {
+        geometry.dispose();
+        material.dispose();
       });
-      const loader = new LodLoader(manager);
-      const request: LodRequest = {
-        url: "/source.glts",
-        levels: [
-          { type: "simplify", ratio: 0.5, maxPixels: 100 },
-          { type: "empty", maxPixels: 1 },
-        ],
-      };
-      if (warm) {
-        new Lod(await loader.loadAsync(request)).dispose();
-        sources.length = 0;
-      }
-      const released = new Map<number, ReturnType<typeof vi.fn>>();
-      const failure = new Error("level hook failed");
-      await expect(
-        loader.loadAsync({
-          ...request,
-          onLevel: async (object, level) => {
-            if (level === 0) {
-              const source = sources.find((source) => source.object === object);
-              if (!source) throw new Error("Expected loaded source");
-              released.set(level, source.release);
-            } else {
-              const release = vi.fn();
-              released.set(level, release);
-              if (level === 2) Object.assign(object, { dispose: release });
-              else
-                object.traverse((node) => {
-                  if (node instanceof Mesh) node.geometry.addEventListener("dispose", release);
-                });
-            }
-            await Promise.resolve();
-            if (level === index) throw failure;
-          },
-        }),
-      ).rejects.toBe(failure);
-      expect(sources).toHaveLength(1);
-      expect(sources[0]?.release).toHaveBeenCalledOnce();
-      expect([...released.keys()]).toEqual(Array.from({ length: index + 1 }, (_, level) => level));
-      for (const release of released.values()) expect(release).toHaveBeenCalledOnce();
-    },
-  );
+      const object = Object.assign(new Scene().add(new Mesh(geometry, material)), {
+        source: { url, dependencyUrls: [], packages: [], moduleHashes: {}, runtimeModules: [] },
+        dispose: release,
+      });
+      sources.push({ object, release });
+      return object;
+    });
+    const loader = new LodLoader(manager);
+    const request: LodRequest = {
+      url: "/source.glts",
+      levels: [
+        { type: "simplify", ratio: 0.5, maxPixels: 100 },
+        { type: "empty", maxPixels: 1 },
+      ],
+    };
+    if (warm) {
+      const levels = await loader.loadAsync(request);
+      await levels[1]?.load?.();
+      new Lod(levels).dispose();
+      sources.length = 0;
+    }
+    const released = new Map<number, ReturnType<typeof vi.fn>>();
+    const failure = new Error("level hook failed");
+    await expect(
+      loader.loadAsync({
+        ...request,
+        onLevel: async (object, level) => {
+          if (level === 0) {
+            const source = sources.find((source) => source.object === object);
+            if (!source) throw new Error("Expected loaded source");
+            released.set(level, source.release);
+          } else {
+            const release = vi.fn();
+            released.set(level, release);
+            if (level === 2) Object.assign(object, { dispose: release });
+            else
+              object.traverse((node) => {
+                if (node instanceof Mesh) node.geometry.addEventListener("dispose", release);
+              });
+          }
+          await Promise.resolve();
+          if (level === 2) throw failure;
+        },
+      }),
+    ).rejects.toBe(failure);
+    expect(sources).toHaveLength(warm ? 0 : 1);
+    for (const source of sources) expect(source.release).toHaveBeenCalledOnce();
+    expect([...released.keys()]).toEqual(warm ? [2] : [0, 2]);
+    for (const release of released.values()) expect(release).toHaveBeenCalledOnce();
+  });
 });

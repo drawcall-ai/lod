@@ -28,6 +28,19 @@ export function shapeOf(source: Object3D): Shape {
   return { box: boundingBox(source), matrix: source.matrix.clone() };
 }
 
+/** `shape` on its own, as its cache entry holds it. */
+export const encodeShape = (shape: Shape): Uint8Array => new TextEncoder().encode(JSON.stringify(shapeFields(shape)));
+
+export const readShape = (bytes: Uint8Array): Shape => parseShape(object(JSON.parse(new TextDecoder().decode(bytes))));
+
+const shapeFields = ({ box, matrix }: Shape) => ({ box: [...box.min.toArray(), ...box.max.toArray()], placement: matrix.toArray() });
+
+function parseShape(meta: Record<string, unknown>): Shape {
+  const box = new Box3().setFromArray(numbers(meta.box, 6));
+  if (box.isEmpty()) fail("empty source box");
+  return { box, matrix: new Matrix4().fromArray(numbers(meta.placement, 16)) };
+}
+
 /** The owner-space bounds every drawable level declares. */
 export const placedBox = ({ box, matrix }: Shape): Box3 => box.clone().applyMatrix4(matrix);
 
@@ -65,8 +78,7 @@ export async function encodeLevel(object: Object3D, kind: Kind, shape: Shape, ma
   const payload = await encodePayload(object, kind, materials);
   const header = new TextEncoder().encode(
     JSON.stringify({
-      box: [...shape.box.min.toArray(), ...shape.box.max.toArray()],
-      placement: shape.matrix.toArray(),
+      ...shapeFields(shape),
       name: object.name,
       ...measure(object),
       matrix: object.matrix.toArray(),
@@ -133,14 +145,12 @@ export function readLevel(bytes: Uint8Array): Entry {
     typeof meta.matrixAutoUpdate !== "boolean"
   )
     fail("invalid level settings");
-  const box = new Box3().setFromArray(numbers(meta.box, 6));
-  if (box.isEmpty()) fail("empty source box");
   const deviation = meta.deviation === undefined ? undefined : finite(meta.deviation);
   if (deviation !== undefined && deviation < 0) fail("negative deviation");
   const texels = meta.texels === undefined ? undefined : finite(meta.texels);
   if (texels !== undefined && texels <= 0) fail("invalid texels");
   return {
-    shape: { box, matrix: new Matrix4().fromArray(numbers(meta.placement, 16)) },
+    shape: parseShape(meta),
     level: {
       name: meta.name,
       deviation,

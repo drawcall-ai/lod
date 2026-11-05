@@ -8,11 +8,12 @@ export type LodCacheOptions = Pick<CacheEntryOptions, "basePath" | "root">;
 const version = "lod-level@21";
 
 /**
- * One derived level: keyed by the URLs it is built from, its request and their bundled modules, and saved with what
- * loading them revealed, so vitecache rechecks those without loading the sources. Each level has its own entry, so
- * a level is built and saved only when it is first needed.
+ * One derived level, or the source's shape: keyed by the URLs it is built from, its request and their bundled modules,
+ * and saved with what loading them revealed, so vitecache rechecks those without loading the sources. Each level has
+ * its own entry, so a level is built and saved only when it is first needed; the shape's describes the ladder before
+ * any level is.
  */
-export function ladderEntry(inputs: Dependencies, level: Derived, modules: Readonly<Record<string, string>>, options?: LodCacheOptions): CacheEntry {
+export function ladderEntry(inputs: Dependencies, of: Derived | "shape", modules: Readonly<Record<string, string>>, options?: LodCacheOptions): CacheEntry {
   // vitecache resolves URLs to file paths; keep generation parameters in the key.
   const queries: Record<string, string> = {};
   for (const [name, dependency] of Object.entries(inputs)) {
@@ -25,7 +26,7 @@ export function ladderEntry(inputs: Dependencies, level: Derived, modules: Reado
     version,
     dependencies: {
       ...inputs,
-      "lod:level": { value: parameters(level) },
+      "lod:level": { value: of === "shape" ? { type: of } : parameters(of) },
       "lod:modules": { value: modules },
       "lod:queries": { value: queries },
       // Only packages the app installs resolve from its root; this package's own dependencies are covered by its version and `version` above.

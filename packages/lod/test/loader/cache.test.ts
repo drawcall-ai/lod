@@ -24,28 +24,34 @@ it("resolves an alias for cache identity while loading each URL through its mana
     fetches.mock.calls.filter(([url, options]) => /\/_vitecache\/[^/]+\.bin$/.test(String(url)) && !options?.method).map(([url]) => String(url));
   try {
     const loader = new LodLoader(manager);
-    await loader.loadAsync(request);
-    // Only the coarsest level is built before the ladder resolves.
-    const [coarseWrite, ...others] = writes();
-    if (!coarseWrite) throw new Error("Expected the coarsest level's write");
-    expect(others).toHaveLength(0);
-    const sourceLoads = source.mock.calls.length;
+    const cold = await loader.loadAsync(request);
+    // No level is built before a view selects it: only the source's shape is saved.
+    const [shapeWrite, ...levelWrites] = writes();
+    if (!shapeWrite) throw new Error("Expected the shape's write");
+    expect(levelWrites).toHaveLength(0);
+    const coarse = cold[2];
+    if (!coarse?.load) throw new Error("Expected a lazy coarsest level");
+    await coarse.load();
+    // Built from the source measured for the shape; it draws with the source level's materials, which load the source.
+    expect(source).toHaveBeenCalledTimes(2);
+    expect(writes()).toHaveLength(2);
     fetches.mockClear();
     const warm = await loader.loadAsync(request);
-    // The simplified coarsest level draws with the source's materials.
-    expect(source).toHaveBeenCalledTimes(sourceLoads + 1);
-    expect(reads()).toEqual([String(coarseWrite[0])]);
+    // The cached shape describes the ladder, so neither the source nor a level loads.
+    expect(source).toHaveBeenCalledTimes(2);
+    expect(reads()).toEqual([String(shapeWrite[0])]);
     const first = warm[0],
       middle = warm[1];
     if (!first?.load || !middle?.load) throw new Error("Expected two lazy levels");
     expect(warm.map((level) => level.maxPixels)).toEqual([Infinity, 300, 100]);
     await loadOnce(first.load).promise;
+    expect(source).toHaveBeenCalledTimes(3);
     await middle.load();
     const [middleWrite, ...rest] = writes();
     if (!middleWrite) throw new Error("Expected the middle level's write on demand");
     expect(rest).toHaveLength(0);
-    expect(reads()).toEqual([String(coarseWrite[0]), String(middleWrite[0])]);
-    expect(source).toHaveBeenCalledTimes(sourceLoads + 2);
+    expect(reads()).toEqual([String(shapeWrite[0]), String(middleWrite[0])]);
+    expect(source).toHaveBeenCalledTimes(4);
   } finally {
     fetches.mockRestore();
     source.mockRestore();
@@ -70,18 +76,22 @@ it("resolves a warm impostor without source-graph fetches", async () => {
     levels: [{ type: "impostor", frames: 2, resolution: 8, maxPixels: 50 }],
   };
   try {
-    await loader.loadAsync(request);
+    const impostor = (await loader.loadAsync(request))[1];
+    if (!impostor?.load) throw new Error("Expected a lazy impostor");
+    await impostor.load();
+    const built = constructed.mock.calls.length;
     const writes = fetches.mock.calls.filter(([url, options]) => /\/_vitecache\/[^/]+\.bin$/.test(String(url)) && options?.method === "PUT");
-    expect(writes).toHaveLength(1);
+    // The shape, then the impostor.
+    expect(writes).toHaveLength(2);
     fetches.mockClear();
     const warm = await new LodLoader(freshManager).loadAsync(request);
     expect(
       fetches.mock.calls.filter(([url, options]) => /\/_vitecache\/[^/]+\.bin$/.test(String(url)) && !options?.method).map(([url]) => String(url)),
-    ).toEqual(writes.map(([url]) => String(url)));
+    ).toEqual([String(writes[0]?.[0])]);
     const sourceFetches = fetches.mock.calls.filter(([url]) => /\/test\/loader\/source\.(glts|ts)(?:\?|$)/.test(String(url)));
     expect(sourceFetches).toHaveLength(0);
     expect(freshLoad).not.toHaveBeenCalled();
-    expect(constructed).toHaveBeenCalledOnce();
+    expect(constructed).toHaveBeenCalledTimes(built);
     const source = warm[0];
     if (!source?.load) throw new Error("Expected deferred GLTS source");
     const pending = source.load();
@@ -91,7 +101,7 @@ it("resolves a warm impostor without source-graph fetches", async () => {
     if (typeof sourceMetadata !== "object" || sourceMetadata === null || !("dependencyUrls" in sourceMetadata)) throw new Error("Expected source provenance");
     expect(sourceMetadata.dependencyUrls).toContain(new URL("/test/loader/source.ts", location.href).href);
     expect(freshLoad).toHaveBeenCalledOnce();
-    expect(constructed).toHaveBeenCalledTimes(2);
+    expect(constructed).toHaveBeenCalledTimes(built + 1);
   } finally {
     window.removeEventListener("lod-source-constructed", constructed);
     fetches.mockRestore();

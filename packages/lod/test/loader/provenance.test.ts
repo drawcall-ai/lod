@@ -91,10 +91,10 @@ describe("asset cache provenance", () => {
     });
   });
 
-  it("saves each level built with the ladder with what the ladder's source and that level's own loads read", async () => {
+  it("saves a level built with the ladder, and one built on demand, with what their own loads read", async () => {
     const { loader } = fixture((url) => ({ url, dependencyUrls: url.includes("low.glts") ? ["/models/low.bin"] : [helper], packages: [], runtimeModules: [] }));
-    // Both levels are built with the ladder, from one source: the baked one, without maxPixels, and the coarsest.
-    await loader.loadAsync({
+    // The baked level, without maxPixels, is built with the ladder; the impostor once it loads.
+    const levels = await loader.loadAsync({
       url: script,
       levels: [
         { type: "baked", low: "low.glts", textureSize: 32 },
@@ -102,6 +102,7 @@ describe("asset cache provenance", () => {
       ],
     });
     expect(cache.saved.at(-2)?.dependencies).toEqual({ "resource:0": { url: helper }, "resource:1": { url: "/models/low.bin" } });
+    await levels[2]?.load?.();
     expect(cache.saved.at(-1)?.dependencies).toEqual({ "resource:0": { url: helper } });
   });
 
@@ -133,7 +134,8 @@ describe("asset cache provenance", () => {
     await loader.loadAsync(script);
     cache.loaded.length = 0;
     await loader.loadAsync(script);
-    expect(cache.loaded).toEqual([true]);
+    // The level and the shape.
+    expect(cache.loaded).toEqual([true, true]);
     expect(load).toHaveBeenCalledOnce();
     cache.versions.set(dependency, "changed");
     await loader.loadAsync(script);
