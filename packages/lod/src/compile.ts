@@ -1,5 +1,4 @@
 import type { Material, Mesh, Object3D, Renderer, Texture } from "three/webgpu";
-import { idOf } from "./id.js";
 import { isMesh, isNode, isTexture } from "./three.js";
 import { shadowPassesOf, type RenderContext } from "./view.js";
 
@@ -122,6 +121,16 @@ function compileDraw(work: Preparing, mesh: Mesh, pass: Pass, part: Group[]): Pr
     if (work.builds.get(key) === settled) work.builds.delete(key);
   });
   return own;
+}
+
+const ids = new WeakMap<object, number>();
+let next = 0;
+
+/** A number for `value`, the same for the same object only: for keys built of several objects. */
+function idOf(value: object): number {
+  let id = ids.get(value);
+  if (id === undefined) ids.set(value, (id = next++));
+  return id;
 }
 
 /** A draw's range of a geometry, as three's groups hold it. */

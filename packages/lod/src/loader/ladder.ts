@@ -1,6 +1,5 @@
 import type { Object3D } from "three/webgpu";
 import { MissingDependencyError, type CacheEntry } from "vitecache";
-import { warmup } from "../env.js";
 import type { ImpostorMeshOptions } from "../impostor/mesh/index.js";
 import type { BakeImpostorOptions } from "../impostor/bake/index.js";
 import type { SimplifyOptions } from "../simplify.js";
@@ -8,6 +7,12 @@ import { ladderEntry, type LodCacheOptions } from "./cache.js";
 import type { Derived } from "./level.js";
 import type { Provenance } from "./provenance.js";
 import { loaderPathURL, sourceRelativeURL } from "./url.js";
+
+/**
+ * Whether this runs in a production server-side build (`import.meta.env.PROD` and `SSR`), which precomputes assets
+ * into the deployed cache: every level is built and saved, and a level that cannot be saved fails the build.
+ */
+export const warmup = import.meta.env?.PROD === true && import.meta.env?.SSR === true;
 
 /**
  * Levels derived from the source, finest first. Each derived level is built and persisted when it first loads; a

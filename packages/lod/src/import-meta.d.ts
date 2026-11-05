@@ -1,4 +1,4 @@
-// What the package reads of the env Vite defines on `import.meta`; see env.ts.
+// What the package reads of the env Vite defines on `import.meta`; see `warmup` in loader/ladder.ts.
 interface ImportMeta {
   readonly env?: { readonly PROD?: boolean; readonly SSR?: boolean };
 }

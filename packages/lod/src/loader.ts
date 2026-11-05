@@ -10,14 +10,13 @@ import { framePixels } from "./impostor/impostor.js";
 import { ImpostorMesh } from "./impostor/mesh/index.js";
 import { resolveThresholds, type LodLevel } from "./levels.js";
 import type { LodCacheOptions } from "./loader/cache.js";
-import { auxiliary, cached, derived, levelEntry, normalize, save, shapeEntry, type Ladder, type LodRequest } from "./loader/ladder.js";
+import { auxiliary, cached, derived, levelEntry, normalize, save, shapeEntry, warmup, type Ladder, type LodRequest } from "./loader/ladder.js";
 import { decodeLevel, encodeLevel, encodeShape, placedBox, readLevel, readShape, shapeOf, type Derived, type Entry, type Shape } from "./loader/level.js";
 import { bundledModules, Provenance } from "./loader/provenance.js";
 import { Session, type Loaded } from "./loader/session.js";
 import { assetPath, isLocal } from "./loader/url.js";
 import { simplify } from "./simplify.js";
 import { meshoptDecoder } from "./meshopt.js";
-import { warmup } from "./env.js";
 import { isMesh, isObject3D, placeLike, rejectSkinned } from "./three.js";
 
 /** Loads asset URLs through manager handlers, falling back to GLTFLoader. Register a GLTSLoader for .glts sources. */
