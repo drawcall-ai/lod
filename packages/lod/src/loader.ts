@@ -47,7 +47,7 @@ export class LodLoader extends Loader<LodLevel[], LodRequest> {
     const input = normalize(request, this.path);
     const { url, levels: requests } = input;
     const provenance = new Provenance(input.urls, this.manager);
-    let source: Object3D | undefined;
+    let loaded: Loaded | undefined;
     let preloading = true;
     const owned = new Set<Object3D>();
     const release = (object: Object3D) => {
@@ -55,9 +55,9 @@ export class LodLoader extends Loader<LodLevel[], LodRequest> {
       disposeRejected(object);
     };
     const loadSource = async () => {
-      source ??= await this.loadAsset(url, provenance);
-      if (preloading) owned.add(source);
-      return source;
+      loaded ??= await this.loadSource(url);
+      if (preloading) owned.add(loaded.source);
+      return loaded;
     };
     this.manager.itemStart(url);
     try {
@@ -68,15 +68,15 @@ export class LodLoader extends Loader<LodLevel[], LodRequest> {
       const eager = requests.flatMap((level, index) =>
         level.type !== "empty" && (warmup || index + 1 === coarsest || level.maxPixels === undefined) ? [index + 1] : [],
       );
-      // The eager builds share one source and provenance, so each saves what all of them revealed: a superset of its own.
+      // Only the inputs: what each build is saved with is captured by its own loads.
       const entries = eager.map((index) => levelEntry(ladder, index, provenance, this.cacheOptions));
       const cached = await Promise.all(entries.map((entry) => entry?.load()));
       // Bytes of the eager levels, each handed over once: loadOnce decodes each level once per ladder, and a later call reads the cache.
       const handed = new Map<number, Uint8Array>();
       for (const [position, index] of eager.entries())
-        handed.set(index, cached[position] ?? (await this.persist(ladder, index, await loadSource(), provenance, entries[position])));
+        handed.set(index, cached[position] ?? (await this.persist(ladder, index, await loadSource(), entries[position])));
       const read = new Map([...handed].map(([index, bytes]) => [index, readLevel(bytes)]));
-      const shape = read.get(coarsest)?.shape ?? shapeOf(await loadSource());
+      const shape = read.get(coarsest)?.shape ?? shapeOf((await loadSource()).source);
       const box = placedBox(shape);
       if (box.isEmpty()) throw new Error("LodLoader: the source has no visible geometry to measure");
       const thresholds = resolveThresholds(
@@ -98,7 +98,7 @@ export class LodLoader extends Loader<LodLevel[], LodRequest> {
         return materialsOf(level.object ?? (await loadOnce(level.load).promise));
       };
       const levels: LodLevel[] = [
-        { load: async () => arrive(await loadSource(), 0), maxPixels: Infinity, box },
+        { load: async () => arrive((await loadSource()).source, 0), maxPixels: Infinity, box },
         ...requests.map((level, position): LodLevel => {
           const index = position + 1;
           const maxPixels = at(thresholds, index);
@@ -111,7 +111,7 @@ export class LodLoader extends Loader<LodLevel[], LodRequest> {
           return { load, maxPixels, box: box.clone() };
         }),
       ];
-      await preload(levels, source !== undefined);
+      await preload(levels, loaded !== undefined);
       preloading = false;
       owned.clear();
       return levels;
@@ -126,22 +126,25 @@ export class LodLoader extends Loader<LodLevel[], LodRequest> {
 
   /** A deferred level's bytes from its entry, else built from a source of its own: the ladder's source carries onLevel effects. */
   private async lazy(ladder: Ladder, index: number): Promise<Uint8Array> {
-    const provenance = new Provenance(ladder.urls, this.manager);
-    const entry = levelEntry(ladder, index, provenance, this.cacheOptions);
+    const entry = levelEntry(ladder, index, new Provenance(ladder.urls, this.manager), this.cacheOptions);
     const cached = await entry?.load();
     if (cached) return cached;
-    const source = await this.loadAsset(ladder.url, provenance);
+    const loaded = await this.loadSource(ladder.url);
     try {
-      return await this.persist(ladder, index, source, provenance, entry);
+      return await this.persist(ladder, index, loaded, entry);
     } finally {
-      disposeTree(source);
+      disposeTree(loaded.source);
     }
   }
 
-  /** Build level `index` from `source`, and save it to `entry` when what it was built from can be validated later. */
-  private async persist(ladder: Ladder, index: number, source: Object3D, provenance: Provenance, entry: CacheEntry | undefined): Promise<Uint8Array> {
+  /**
+   * Build level `index` from `loaded`, and save it to `entry` when what it was built from can be validated later: what
+   * loading the source read, and what this build loads besides.
+   */
+  private async persist(ladder: Ladder, index: number, { source, provenance: read }: Loaded, entry: CacheEntry | undefined): Promise<Uint8Array> {
     const { url, urls } = ladder;
     const request = derived(ladder.levels, index);
+    const provenance = new Provenance(urls, this.manager).include(read);
     const load = (name: "low" | "interior") => {
       const asset = urls[auxiliary(index, name)];
       return asset === undefined ? undefined : this.loadAsset(asset, provenance);
@@ -179,6 +182,12 @@ export class LodLoader extends Loader<LodLevel[], LodRequest> {
     }
   }
 
+  /** The ladder's source, with what loading it read. */
+  private async loadSource(url: string): Promise<Loaded> {
+    const provenance = new Provenance({ source: url }, this.manager);
+    return { source: await this.loadAsset(url, provenance), provenance };
+  }
+
   private async loadAsset(url: string, provenance: Provenance): Promise<Object3D> {
     const { path, extension } = assetPath(url);
     const handler = this.manager.getHandler(path);
@@ -199,6 +208,12 @@ export class LodLoader extends Loader<LodLevel[], LodRequest> {
       throw error;
     }
   }
+}
+
+/** A loaded source and what loading it read. */
+interface Loaded {
+  source: Object3D;
+  provenance: Provenance;
 }
 
 function materialsOf(object: Object3D): Material[] {

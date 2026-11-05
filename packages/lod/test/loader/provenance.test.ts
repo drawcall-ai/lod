@@ -91,6 +91,20 @@ describe("asset cache provenance", () => {
     });
   });
 
+  it("saves each level built with the ladder with what the ladder's source and that level's own loads read", async () => {
+    const { loader } = fixture((url) => ({ url, dependencyUrls: url.includes("low.glts") ? ["/models/low.bin"] : [helper], packages: [], runtimeModules: [] }));
+    // Both levels are built with the ladder, from one source: the baked one, without maxPixels, and the coarsest.
+    await loader.loadAsync({
+      url: script,
+      levels: [
+        { type: "baked", low: "low.glts", textureSize: 32 },
+        { type: "impostor", maxPixels: 20 },
+      ],
+    });
+    expect(cache.saved.at(-2)?.dependencies).toEqual({ "resource:0": { url: helper }, "resource:1": { url: "/models/low.bin" } });
+    expect(cache.saved.at(-1)?.dependencies).toEqual({ "resource:0": { url: helper } });
+  });
+
   it("keeps file: resources, as a build warmup reports public files", () => {
     const file = "file:///app/public/models/helper.bin";
     const provenance = new Provenance({ source: script }, new LoadingManager());

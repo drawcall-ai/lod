@@ -28,6 +28,13 @@ export class Provenance {
     this.scripts.push(object.source);
   }
 
+  /** Also hold what `other`'s loads read. */
+  include(other: Provenance): this {
+    for (const resource of other.resources) this.resources.add(resource);
+    this.scripts.push(...other.scripts);
+    return this;
+  }
+
   /** The requested URLs, resolved as `inputs` holds them. */
   get requested(): string[] {
     return Object.values(this.inputs).flatMap(({ url }) => (url === undefined ? [] : [url]));
