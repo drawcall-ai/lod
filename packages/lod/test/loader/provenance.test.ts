@@ -29,7 +29,7 @@ function fixture(metadata: (url: string) => unknown, type = "glts") {
 /** Source metadata as a GLTS scene or a glTF parser reports it, resolving `resources`. */
 function metadata(type: string, url: string, resources: string[]) {
   return type === "glts"
-    ? { url: location.origin + url, dependencyUrls: resources, packages: ["terrain-generator"], runtimeModules: [] }
+    ? { url: location.origin + url, dependencyUrls: resources, packages: ["scene-generator"], runtimeModules: [] }
     : { buffers: [{ uri: resources[0] }, { uri: "data:application/octet-stream;base64,AA==" }], images: [{ uri: resources[1] }, { bufferView: 0 }] };
 }
 
@@ -45,7 +45,7 @@ describe("asset cache provenance", () => {
     expect(saved?.dependencies).toEqual({
       "resource:0": { url: "/helper.bin?shape=oak" },
       "resource:1": { url: resolved },
-      ...(type === "glts" ? { "package:terrain-generator": { package: "terrain-generator" } } : {}),
+      ...(type === "glts" ? { "package:scene-generator": { package: "scene-generator" } } : {}),
     });
   });
 
@@ -54,7 +54,7 @@ describe("asset cache provenance", () => {
     { name: "a glts source with a cross-origin resource", type: "glts", url: "/models/remote.glts", resources: [helper, remote] },
     { name: "a gltf source with a cross-origin resource", type: "gltf", url: "/models/remote.gltf", resources: [helper, remote] },
     { name: "a cross-origin source", type: "gltf", url: "https://cdn.test/tree.gltf", resources: [] },
-    { name: "a saved dependency without a backing file", type: "glts", url: "/models/api.glts", resources: ["/api/terrain"], missing: "/api/terrain" },
+    { name: "a saved dependency without a backing file", type: "glts", url: "/models/api.glts", resources: ["/api/heights"], missing: "/api/heights" },
     { name: "an uninstalled key package", type: "glts", url: "/models/keyed.glts", resources: [], missing: "@drawcall/lod" },
   ])("serves $name uncached, with one warning", async ({ type, url, resources, missing }) => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -113,8 +113,8 @@ describe("asset cache provenance", () => {
     expect(await key("?seed=1")).toEqual(requested);
   });
 
-  it.each([helper, "terrain-generator"])("invalidates a derived level when dependency %s changes", async (dependency) => {
-    const { manager, load } = fixture((url) => ({ url, dependencyUrls: [helper], packages: ["terrain-generator"], runtimeModules: [] }));
+  it.each([helper, "scene-generator"])("invalidates a derived level when dependency %s changes", async (dependency) => {
+    const { manager, load } = fixture((url) => ({ url, dependencyUrls: [helper], packages: ["scene-generator"], runtimeModules: [] }));
     const loader = new LodLoader(manager);
     await loader.loadAsync(script);
     cache.loaded.length = 0;
