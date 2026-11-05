@@ -23,7 +23,8 @@ import { Lod } from "../../../src/lod.js";
 import { house, interior, low } from "../../house.js";
 import { InteriorMaterial } from "../../../src/baked/interior/material.js";
 import { isStandardNode } from "../../../src/three.js";
-import { GPU_TIMEOUT, render as draw } from "../../gpu.js";
+import { GPU_TIMEOUT, render as draw, renderer } from "../../gpu.js";
+import { must } from "../../must.js";
 
 const SIZE = 96;
 
@@ -131,6 +132,22 @@ describe("interiors", { timeout: GPU_TIMEOUT }, () => {
       expect(distance(real, fake)).toBeLessThan(12);
       expect(distance(fake, windowColor(await render(instanced, eye, window)))).toBeLessThan(2);
     }
+  });
+
+  it("takes the derivatives that pick a room's mip where every pixel of a quad takes them", async () => {
+    const rooms = interior();
+    const baked = await bakeMesh(house().add(rooms), { low: low(), textureSize: 128, interior: rooms });
+    const scene = new Scene().add(baked, new AmbientLight());
+    const camera = new PerspectiveCamera(30, 1, 0.1, 100);
+    camera.position.set(6, 1.5, 14);
+    // Outside uniform control flow a derivative reads neighbours that skipped the branch, whatever their registers
+    // held, so renders differ from process to process; three turns the check off, and the shader must pass it on.
+    const shader = must((await renderer.debug.getShaderAsync(scene, camera, baked)).fragmentShader);
+    const strict = shader.replace("diagnostic( off, derivative_uniformity );", "diagnostic( error, derivative_uniformity );");
+    expect(strict).not.toBe(shader);
+    const { device } = renderer.backend as unknown as { device: GPUDevice };
+    const { messages } = await device.createShaderModule({ code: strict }).getCompilationInfo();
+    expect(messages.filter((message) => message.type === "error").map((message) => message.message)).toEqual([]);
   });
 
   it("shows the next room through a doorway in the room behind the window", async () => {

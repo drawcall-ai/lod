@@ -184,10 +184,10 @@ class InteriorLighting extends PhysicalLightingModel {
       )
       .toVar();
     const far = low.sub(point).div(direction).max(high.sub(point).div(direction)).toVar();
-    // The box is intersected for every texel, so the derivatives that pick the cube's mip
-    // level are defined across window edges.
+    // The box is intersected for every texel, and the derivatives that pick the cube's mip level are taken here, before
+    // the branch: inside it, at a window's edge, they would read neighbours that skipped it, which differ run to run.
     const exit = point.add(direction.mul(max(min(far.x, min(far.y, far.z)), 0))).toVar();
-    const footprint = max(length(dFdx(exit)), length(dFdy(exit)));
+    const footprint = max(length(dFdx(exit)), length(dFdy(exit))).toVar();
 
     If(room.greaterThan(0).and(share.greaterThan(0)), () => {
       const wall = exit.sub(low.add(high).mul(0.5));
