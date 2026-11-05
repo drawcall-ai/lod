@@ -27,155 +27,35 @@ import { GPU_TIMEOUT, renderer } from "./gpu.js";
 
 vi.mock("../src/impostor/mesh/surface.js", { spy: true });
 
-it(
-  "waits a frame only after 16 MiB of texture uploads, and compiles every draw at once",
-  async () => {
-    // 2048² RGBA bytes: 16 MiB each.
-    const big = () => {
-      const map = new DataTexture(new Uint8Array(2048 * 2048 * 4), 2048, 2048);
-      map.needsUpdate = true;
-      return map;
-    };
-    const maps = [big(), big()];
-    const materials = maps.map((map) => new MeshBasicNodeMaterial({ map }));
-    const geometry = new BoxGeometry();
-    geometry.clearGroups();
-    geometry.addGroup(0, 18, 0);
-    geometry.addGroup(18, 18, 1);
-    const object = new Mesh(geometry, materials);
-    const scene = new Scene();
-    const target = new RenderTarget(32, 32);
-    const context = { renderer, camera: new PerspectiveCamera(), scene, target, mrt: renderer.getMRT(), cubeFace: 0, mipLevel: 0, depth: 0 };
-    // What happens in order: textures uploaded, frames begun, draws compiled.
-    const log: string[] = [];
-    const compile = renderer.compileAsync.bind(renderer);
-    vi.spyOn(renderer, "compileAsync").mockImplementation((...args) => {
-      log.push(`draw ${geometry.groups.map(({ start }) => start).join()}`);
-      return compile(...args);
-    });
-    const init = renderer.initTexture.bind(renderer);
-    vi.spyOn(renderer, "initTexture").mockImplementation((texture) => {
-      log.push("texture");
-      init(texture);
-    });
-    const request = window.requestAnimationFrame.bind(window);
-    let last = -1;
-    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) =>
-      request((time) => {
-        if (time !== last) log.push("frame");
-        last = time;
-        callback(time);
-      }),
-    );
-    try {
-      await compileLevel(object, context);
-      // The first texture filled the frame; the draws do not wait for one.
-      expect(log.slice(0, log.indexOf("draw 0"))).toEqual(["texture", "frame", "texture"]);
-      expect(log.filter((entry) => entry.startsWith("draw"))).toEqual(["draw 0", "draw 18"]);
-      await new Promise((resolve) => request(resolve));
-      log.length = 0;
-      await compileLevel(object, context);
-      // Nothing left to upload: nothing waits.
-      expect(log.slice(0, log.indexOf("draw 0"))).toEqual(["texture", "texture"]);
-    } finally {
-      vi.restoreAllMocks();
-      geometry.dispose();
-      for (const material of materials) material.dispose();
-      for (const map of maps) map.dispose();
-      target.dispose();
-    }
-  },
-  GPU_TIMEOUT,
-);
+/** A level's draws on a 32 px target, seen from a default camera. */
+const contextOf = (scene = new Scene()) => ({
+  renderer,
+  camera: new PerspectiveCamera(),
+  scene,
+  target: new RenderTarget(32, 32),
+  mrt: renderer.getMRT(),
+  cubeFace: 0,
+  mipLevel: 0,
+  depth: 0,
+});
 
 it(
-  "counts a cube's six faces against a frame's uploads, and uploads nothing a material keeps in userData",
+  "uploads every texture a level draws, waiting a frame after each 16 MiB, then compiles every draw at once",
   async () => {
-    // Six 1024² RGBA faces: 24 MiB each cube.
+    // 2048² RGBA bytes: 16 MiB. A cube of six 1024² faces: 24 MiB.
+    const map = new DataTexture(new Uint8Array(2048 * 2048 * 4), 2048, 2048);
+    map.needsUpdate = true;
     const face = () => new DataTexture(new Uint8Array(1024 * 1024 * 4), 1024, 1024);
-    const cube = () => {
-      const map = new CubeTexture([face(), face(), face(), face(), face(), face()]);
-      map.generateMipmaps = false;
-      map.needsUpdate = true;
-      return map;
-    };
-    const maps = [cube(), cube()];
+    const cube = new CubeTexture([face(), face(), face(), face(), face(), face()]);
+    cube.generateMipmaps = false;
+    cube.needsUpdate = true;
     const kept = new DataTexture(new Uint8Array(4), 1, 1);
-    const materials = maps.map((envMap) => Object.assign(new MeshBasicNodeMaterial({ envMap }), { userData: { kept } }));
+    const materials = [new MeshBasicNodeMaterial({ map }), Object.assign(new MeshBasicNodeMaterial({ envMap: cube }), { userData: { kept } })];
     const geometry = new BoxGeometry();
     geometry.clearGroups();
     geometry.addGroup(0, 18, 0);
     geometry.addGroup(18, 18, 1);
-    const context = { renderer, camera: new PerspectiveCamera(), scene: new Scene(), target: new RenderTarget(32, 32), mrt: renderer.getMRT(), cubeFace: 0, mipLevel: 0, depth: 0 };
-    const log: string[] = [];
-    const init = renderer.initTexture.bind(renderer);
-    vi.spyOn(renderer, "initTexture").mockImplementation((texture) => {
-      log.push(texture === kept ? "kept" : "cube");
-      init(texture);
-    });
-    const request = window.requestAnimationFrame.bind(window);
-    let last = -1;
-    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) =>
-      request((time) => {
-        if (time !== last) log.push("frame");
-        last = time;
-        callback(time);
-      }),
-    );
-    try {
-      await compileLevel(new Mesh(geometry, materials), context);
-      expect(log.slice(0, 3)).toEqual(["cube", "frame", "cube"]);
-      expect(log).not.toContain("kept");
-    } finally {
-      vi.restoreAllMocks();
-      geometry.dispose();
-      for (const material of materials) material.dispose();
-      for (const map of [...maps, kept]) map.dispose();
-      context.target.dispose();
-    }
-  },
-  GPU_TIMEOUT,
-);
-
-it(
-  "builds a shader once for draws compiled together, and finishes each only once the pipeline it shares is ready",
-  async () => {
-    // Two materials alike build to one program, and so one pipeline; the second draw of each finds its shader built.
-    const materials = [new MeshBasicNodeMaterial({ color: "teal" }), new MeshBasicNodeMaterial({ color: "teal" })];
-    const geometry = new BoxGeometry();
-    const scene = new Scene();
-    const context = { renderer, camera: new PerspectiveCamera(), scene, target: new RenderTarget(32, 32), mrt: renderer.getMRT(), cubeFace: 0, mipLevel: 0, depth: 0 };
-    const created = GPUDevice.prototype.createRenderPipelineAsync;
-    let release = () => {};
-    const held = new Promise<void>((resolve) => (release = resolve));
-    const pipelines = vi.spyOn(GPUDevice.prototype, "createRenderPipelineAsync").mockImplementation(async function (this: GPUDevice, descriptor) {
-      const pipeline = await created.call(this, descriptor);
-      await held;
-      return pipeline;
-    });
-    const builds = vi.spyOn(NodeMaterial.prototype, "setup");
-    try {
-      const done = new Set<number>();
-      const levels = [...materials, ...materials].map((material, i) => compileLevel(new Mesh(geometry, material), context).then(() => done.add(i)));
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      expect(pipelines).toHaveBeenCalledTimes(1);
-      expect(done.size).toBe(0);
-      release();
-      await Promise.all(levels);
-      expect(builds.mock.calls.filter(([builder]) => materials.some((material) => material === builder.material))).toHaveLength(2);
-    } finally {
-      vi.restoreAllMocks();
-      geometry.dispose();
-      for (const material of materials) material.dispose();
-      context.target.dispose();
-    }
-  },
-  GPU_TIMEOUT,
-);
-
-it(
-  "uploads an impostor's atlases paced, before its draws compile",
-  async () => {
+    // An impostor keeps its atlases where only its nodes reach them.
     const card = new ImpostorMesh({
       version: 4,
       layout: "full",
@@ -186,23 +66,44 @@ it(
       maps: ["base", "normalDepth", "orm"],
       layers: [0, 1, 2].map(() => ({ format: RGBAFormat, mipmaps: [16, 8, 4].map((size) => new Uint8Array(size * size * 4)) })),
     });
-    const context = { renderer, camera: new PerspectiveCamera(), scene: new Scene(), target: new RenderTarget(32, 32), mrt: renderer.getMRT(), cubeFace: 0, mipLevel: 0, depth: 0 };
+    const object = new Group().add(new Mesh(geometry, materials), card);
+    const context = contextOf();
+    // What happens in order: textures uploaded, frames begun, draws compiled.
     const log: string[] = [];
-    const init = renderer.initTexture.bind(renderer);
-    vi.spyOn(renderer, "initTexture").mockImplementation((texture) => {
-      if (card.material.textures.includes(texture)) log.push("atlas");
-      init(texture);
-    });
     const compile = renderer.compileAsync.bind(renderer);
     vi.spyOn(renderer, "compileAsync").mockImplementation((...args) => {
       log.push("draw");
       return compile(...args);
     });
+    const init = renderer.initTexture.bind(renderer);
+    vi.spyOn(renderer, "initTexture").mockImplementation((texture) => {
+      log.push(texture === map ? "map" : texture === cube ? "cube" : texture === kept ? "kept" : card.material.textures.includes(texture) ? "atlas" : "other");
+      init(texture);
+    });
+    const request = window.requestAnimationFrame.bind(window);
+    let last = -1;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) =>
+      request((time) => {
+        if (time !== last) log.push("frame");
+        last = time;
+        callback(time);
+      }),
+    );
     try {
-      await compileLevel(card, context);
-      expect(log).toEqual(["atlas", "atlas", "atlas", "draw"]);
+      await compileLevel(object, context);
+      // Each upload filled the frame; the draws do not wait for one. Frames that empty the budget may follow.
+      const drawn = () => log.slice(0, log.lastIndexOf("draw") + 1);
+      expect(drawn()).toEqual(["map", "frame", "cube", "frame", "atlas", "atlas", "atlas", "draw", "draw", "draw"]);
+      await new Promise((resolve) => request(resolve));
+      log.length = 0;
+      await compileLevel(object, context);
+      // Nothing left to upload: nothing waits.
+      expect(drawn()).toEqual(["map", "cube", "atlas", "atlas", "atlas", "draw", "draw", "draw"]);
     } finally {
       vi.restoreAllMocks();
+      geometry.dispose();
+      for (const material of materials) material.dispose();
+      for (const texture of [map, cube, kept]) texture.dispose();
       card.dispose();
       context.target.dispose();
     }
@@ -211,12 +112,13 @@ it(
 );
 
 it(
-  "requests the pipelines of different draws side by side",
+  "requests the pipelines of different draws side by side, builds a shader once for alike draws, and finishes each once its pipeline is ready",
   async () => {
-    // Two shaders, so two pipelines: the second is requested while the first is still being created.
-    const materials = [new MeshBasicNodeMaterial({ colorNode: vec3(1, 0, 0) }), new MeshBasicNodeMaterial({ colorNode: vec3(0, 1, 0).mul(0.5) })];
+    // Two materials alike build to one program, and so one pipeline; the second draw of each finds its shader built.
+    const alike = [new MeshBasicNodeMaterial({ color: "teal" }), new MeshBasicNodeMaterial({ color: "teal" })];
+    const other = new MeshBasicNodeMaterial({ colorNode: vec3(0, 1, 0).mul(0.5) });
     const geometry = new BoxGeometry();
-    const context = { renderer, camera: new PerspectiveCamera(), scene: new Scene(), target: new RenderTarget(32, 32), mrt: renderer.getMRT(), cubeFace: 0, mipLevel: 0, depth: 0 };
+    const context = contextOf();
     const created = GPUDevice.prototype.createRenderPipelineAsync;
     let release = () => {};
     const held = new Promise<void>((resolve) => (release = resolve));
@@ -225,16 +127,22 @@ it(
       await held;
       return pipeline;
     });
+    const builds = vi.spyOn(NodeMaterial.prototype, "setup");
     try {
-      const levels = materials.map((material) => compileLevel(new Mesh(geometry, material), context));
+      let done = 0;
+      const levels = [...alike, ...alike, other].map((material) => compileLevel(new Mesh(geometry, material), context).then(() => done++));
+      // The other shader's pipeline is requested while the first is still being created.
       await vi.waitFor(() => expect(pipelines).toHaveBeenCalledTimes(2), { timeout: 10_000 });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(done).toBe(0);
       release();
       await Promise.all(levels);
+      expect(builds.mock.calls.filter(([builder]) => alike.some((material) => material === builder.material))).toHaveLength(2);
     } finally {
       release();
       vi.restoreAllMocks();
       geometry.dispose();
-      for (const material of materials) material.dispose();
+      for (const material of [...alike, other]) material.dispose();
       context.target.dispose();
     }
   },
@@ -276,7 +184,9 @@ it(
       await renderer.compileAsync(scene, camera);
       renderer.setRenderTarget(null);
       renderer.setMRT(null);
-      await Promise.all(object.children.map((draw) => compileLevel(draw, { renderer, camera, scene, target, mrt: outputs, cubeFace: 0, mipLevel: 0, depth: 0 })));
+      await Promise.all(
+        object.children.map((draw) => compileLevel(draw, { renderer, camera, scene, target, mrt: outputs, cubeFace: 0, mipLevel: 0, depth: 0 })),
+      );
       expect(renderer.getRenderTarget()).toBeNull();
       expect(renderer.getMRT()).toBeNull();
       expect(scene.background).toBe(background);

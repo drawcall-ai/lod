@@ -235,59 +235,42 @@ function gatedBox() {
   return { level: { load, maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) }, load, release };
 }
 
-it.each(["Lod", "InstancedLod"])(
-  "holds an item on %s's manager until the level the view selects has arrived and faded in",
+/**
+ * Where a view finds the level it needs: in front of it, compiled while loading; behind it, facing away; or behind it,
+ * casting into the ground it sees under a shadow-casting light, which a level mesh in view lights.
+ */
+const placements = ["in view", "facing away", "directional shadow", "point shadow"] as const;
+
+it.each(["Lod", "InstancedLod"].flatMap((kind) => placements.map((placement) => ({ kind, placement }))))(
+  "holds an item on $kind's manager until the level the view needs, $placement, has arrived and faded in",
   { timeout: GPU_TIMEOUT },
-  async (kind) => {
+  async ({ kind, placement }) => {
+    const shadow = placement.endsWith("shadow");
+    renderer.shadowMap.enabled = shadow;
     const { level, load, release } = gatedBox();
     // The box is about 40 px tall: the view selects the deferred source.
     const levels = [level, { object: box(), maxPixels: 1 }];
     const manager = new LoadingManager();
     const owner = kind === "Lod" ? new Lod(levels, { manager }) : new InstancedLod(levels, 1, { manager });
-    owner.position.z = -5;
+    owner.position.z = shadow ? 5 : -5;
     const camera = new PerspectiveCamera(60, 1, 0.1, 100);
+    // Demand follows position, not the frustum.
+    if (placement === "facing away") camera.rotation.y = Math.PI;
     const scene = new Scene().add(owner);
-    let settled = false;
-    const idle = compileUntilIdle(scene, camera, manager).then(() => (settled = true));
-    try {
-      await vi.waitFor(() => expect(load).toHaveBeenCalled());
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      expect(settled).toBe(false);
-      release();
-      await idle;
-      if (owner instanceof InstancedLod) expect(owner.levelOf(0)).toBe(0);
-      else expect(visibleLevels(owner)).toEqual([0]);
-    } finally {
-      owner.dispose();
-    }
-  },
-);
-
-it.each(["Lod", "InstancedLod"].flatMap((kind) => ["directional", "point"].map((light) => ({ kind, light }))))(
-  "holds an item on $kind's manager until the level of a caster behind the view has arrived, lit by a $light light",
-  { timeout: GPU_TIMEOUT },
-  async ({ kind, light }) => {
-    renderer.shadowMap.enabled = true;
-    const { level, load, release } = gatedBox();
-    const levels = [level, { object: box(), maxPixels: 1 }];
-    const manager = new LoadingManager();
-    const owner = kind === "Lod" ? new Lod(levels, { manager }) : new InstancedLod(levels, 1, { manager });
-    // Behind the camera, casting onto the ground it sees.
-    owner.position.z = 5;
-    const lamp = light === "point" ? new PointLight(0xffffff, 100) : new DirectionalLight();
-    lamp.castShadow = true;
-    lamp.position.set(0, 10, 5);
-    const ground = new Mesh(new PlaneGeometry(40, 40).rotateX(-Math.PI / 2), new MeshStandardNodeMaterial());
-    ground.position.y = -2;
-    ground.receiveShadow = true;
-    // A level mesh in view supplies the view's render context.
     const seen = new Lod([{ object: box() }], { manager });
-    seen.position.z = -5;
-    const camera = new PerspectiveCamera(60, 1, 0.1, 100);
-    const scene = new Scene().add(owner, seen, lamp, ground);
-    owner.traverse((node) => (node.castShadow = true));
+    if (shadow) {
+      const lamp = placement === "point shadow" ? new PointLight(0xffffff, 100) : new DirectionalLight();
+      lamp.castShadow = true;
+      lamp.position.set(0, 10, 5);
+      const ground = new Mesh(new PlaneGeometry(40, 40).rotateX(-Math.PI / 2), new MeshStandardNodeMaterial());
+      ground.position.y = -2;
+      ground.receiveShadow = true;
+      seen.position.z = -5;
+      scene.add(seen, lamp, ground);
+      owner.traverse((node) => (node.castShadow = true));
+    }
     let settled = false;
-    const idle = compileUntilIdle(scene, camera, manager, false).then(() => (settled = true));
+    const idle = compileUntilIdle(scene, camera, manager, placement === "in view").then(() => (settled = true));
     try {
       await vi.waitFor(() => expect(load).toHaveBeenCalled());
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -295,6 +278,9 @@ it.each(["Lod", "InstancedLod"].flatMap((kind) => ["directional", "point"].map((
       release();
       await idle;
       expect(owner.levels[0]?.object).toBeDefined();
+      if (placement !== "in view") return;
+      if (owner instanceof InstancedLod) expect(owner.levelOf(0)).toBe(0);
+      else expect(visibleLevels(owner)).toEqual([0]);
     } finally {
       renderer.shadowMap.enabled = false;
       owner.dispose();
@@ -334,34 +320,6 @@ it("holds a Lod's item while a camera of the current or last pass misses a level
     owner.dispose();
   }
 });
-
-it.each(["Lod", "InstancedLod"])(
-  "holds an item on %s's manager for a fresh camera facing away from every installed level",
-  { timeout: GPU_TIMEOUT },
-  async (kind) => {
-    const { level, load, release } = gatedBox();
-    const levels = [level, { object: box(), maxPixels: 1 }];
-    const manager = new LoadingManager();
-    const owner = kind === "Lod" ? new Lod(levels, { manager }) : new InstancedLod(levels, 1, { manager });
-    owner.position.z = -5;
-    // Demand follows position, not the frustum: the camera looks away from the owner.
-    const camera = new PerspectiveCamera(60, 1, 0.1, 100);
-    camera.rotation.y = Math.PI;
-    const scene = new Scene().add(owner);
-    let settled = false;
-    const idle = compileUntilIdle(scene, camera, manager, false).then(() => (settled = true));
-    try {
-      await vi.waitFor(() => expect(load).toHaveBeenCalled());
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      expect(settled).toBe(false);
-      release();
-      await idle;
-      expect(owner.levels[0]?.object).toBeDefined();
-    } finally {
-      owner.dispose();
-    }
-  },
-);
 
 type Parts = { scene: Scene; group: Group; owner: Lod };
 const cases: { how: string; leave: (parts: Parts) => unknown; back: (parts: Parts) => unknown }[] = [
