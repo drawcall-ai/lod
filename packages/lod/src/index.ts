@@ -1,4 +1,5 @@
-export { type LevelRequest, type LodRequest, LodLoader } from "./loader.js";
+export { LodLoader } from "./loader.js";
+export { type LevelRequest, type LodRequest } from "./loader/ladder.js";
 export { type LodCacheOptions } from "./loader/cache.js";
 export { encodeMeshAsync, decodeMeshAsync } from "./mesh/codec.js";
 export { setViewportHeight } from "./view.js";

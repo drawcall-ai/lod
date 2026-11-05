@@ -12,7 +12,7 @@ const version = "lod-level@21";
  * loading them revealed, so vitecache rechecks those without loading the sources. Each level has its own entry, so
  * a level is built and saved only when it is first needed.
  */
-export function levelEntry(inputs: Dependencies, level: Derived, modules: Readonly<Record<string, string>>, options?: LodCacheOptions): CacheEntry {
+export function ladderEntry(inputs: Dependencies, level: Derived, modules: Readonly<Record<string, string>>, options?: LodCacheOptions): CacheEntry {
   // vitecache resolves URLs to file paths; keep generation parameters in the key.
   const queries: Record<string, string> = {};
   for (const [name, dependency] of Object.entries(inputs)) {

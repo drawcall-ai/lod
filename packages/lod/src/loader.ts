@@ -1,66 +1,23 @@
 import { Box3, Group, Loader, LoadingManager, Vector3, type Material, type Object3D } from "three/webgpu";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { MissingDependencyError, type CacheEntry } from "vitecache";
+import type { CacheEntry } from "vitecache";
 import { at } from "./at.js";
 import { bakeMesh } from "./baked/index.js";
 import { loadOnce } from "./deferred.js";
 import { disposeRejected, disposeTree } from "./dispose.js";
-import { bakeImpostor, type BakeImpostorOptions } from "./impostor/bake/index.js";
-import { ImpostorMesh, type ImpostorMeshOptions } from "./impostor/mesh/index.js";
+import { bakeImpostor } from "./impostor/bake/index.js";
+import { ImpostorMesh } from "./impostor/mesh/index.js";
 import { resolveThresholds, type LodLevel } from "./levels.js";
-import { levelEntry, type LodCacheOptions } from "./loader/cache.js";
+import type { LodCacheOptions } from "./loader/cache.js";
+import { auxiliary, derived, levelEntry, normalize, save, type Ladder, type LodRequest } from "./loader/ladder.js";
 import { decodeLevel, encodeLevel, placedBox, readLevel, shapeOf, type Derived } from "./loader/level.js";
 import { bundledModules, Provenance } from "./loader/provenance.js";
-import { assetPath, isLocal, loaderPathURL, sourceRelativeURL } from "./loader/url.js";
-import { simplify, type SimplifyOptions } from "./simplify.js";
+import { assetPath, isLocal } from "./loader/url.js";
+import { simplify } from "./simplify.js";
 import { meshoptDecoder } from "./meshopt.js";
+import { warmup } from "./env.js";
 import { isMesh, isObject3D, placeLike, rejectSkinned } from "./three.js";
 
-/**
- * Levels derived from the source, finest first. Each derived level is built and persisted when it first loads; a level
- * without `maxPixels` is built with the ladder, since its default threshold is measured from it, and so is every level
- * in a `vite build` warmup. Changing `maxPixels`
- * or an impostor's `draw` reuses them, except an impostor's `maxPixels`, which also sizes its bake.
- */
-export type LevelRequest =
-  | ({ type: "simplify"; maxPixels?: number } & SimplifyOptions)
-  | ({
-      type: "baked";
-      maxPixels?: number;
-      textureSize?: number;
-      /** Room geometry for window baking, as an asset URL relative to the source. */
-      interior?: string;
-    } & (
-      | {
-          /** Authored low shell to bake onto, as an asset URL relative to the source. */
-          low: string;
-          ratio?: never;
-        }
-      | { low?: never; ratio?: number }
-    ))
-  | ({ type: "impostor"; draw?: ImpostorMeshOptions } & BakeImpostorOptions)
-  | { type: "empty"; maxPixels: number };
-
-/** A .glb, .gltf or .glts asset URL. Source and simplified levels load the original asset on demand. */
-export type LodRequest =
-  | string
-  | {
-      url: string;
-      levels?: readonly LevelRequest[];
-      /**
-       * Apply runtime effects when a level arrives, before draws compile. Does not change baked content or bounds.
-       * `index` is the returned ladder's: 0 is the source, and `levels[i]` arrives as `i + 1`.
-       */
-      onLevel?: (object: Object3D, index: number) => void | Promise<void>;
-    };
-const DEFAULT_LEVELS: readonly LevelRequest[] = [{ type: "impostor" }];
-
-/**
- * Whether this runs in the warmup of a `vite build`, which runs public .glts scripts in Node: what they load is
- * precomputed into the deployed cache, so every level is built and saved, and a level that cannot be saved fails the
- * build. Vite defines `import.meta.env` for the app's packages; glts's warmup gives Node imports the same.
- */
-const warmup = import.meta.env?.PROD === true && import.meta.env?.SSR === true;
 /** Loads asset URLs through manager handlers, falling back to GLTFLoader. Register a GLTSLoader for .glts sources. */
 export class LodLoader extends Loader<LodLevel[], LodRequest> {
   private gltf: GLTFLoader | undefined;
@@ -112,7 +69,7 @@ export class LodLoader extends Loader<LodLevel[], LodRequest> {
         level.type !== "empty" && (warmup || index + 1 === coarsest || level.maxPixels === undefined) ? [index + 1] : [],
       );
       // The eager builds share one source and provenance, so each saves what all of them revealed: a superset of its own.
-      const entries = eager.map((index) => this.entry(ladder, index, provenance));
+      const entries = eager.map((index) => levelEntry(ladder, index, provenance, this.cacheOptions));
       const cached = await Promise.all(entries.map((entry) => entry?.load()));
       // Bytes of the eager levels, each handed over once: loadOnce decodes each level once per ladder, and a later call reads the cache.
       const handed = new Map<number, Uint8Array>();
@@ -167,25 +124,10 @@ export class LodLoader extends Loader<LodLevel[], LodRequest> {
     }
   }
 
-  /** The cache entry of level `index`, keyed by the inputs it is built from; undefined when the ladder is not cacheable. */
-  private entry({ levels, modules }: Ladder, index: number, provenance: Provenance): CacheEntry | undefined {
-    if (!modules) return undefined;
-    // Keyed by role rather than ladder position, so adding or removing another level keeps this one's entry.
-    const roles = { source: "source", low: auxiliary(index, "low"), interior: auxiliary(index, "interior") };
-    const pick = <T>(values: Readonly<Record<string, T>>): Record<string, T> =>
-      Object.fromEntries(
-        Object.entries(roles).flatMap(([role, name]) => {
-          const value = values[name];
-          return value === undefined ? [] : [[role, value] as const];
-        }),
-      );
-    return levelEntry(pick(provenance.inputs), derived(levels, index), pick(modules), this.cacheOptions);
-  }
-
   /** A deferred level's bytes from its entry, else built from a source of its own: the ladder's source carries onLevel effects. */
   private async lazy(ladder: Ladder, index: number): Promise<Uint8Array> {
     const provenance = new Provenance(ladder.urls, this.manager);
-    const entry = this.entry(ladder, index, provenance);
+    const entry = levelEntry(ladder, index, provenance, this.cacheOptions);
     const cached = await entry?.load();
     if (cached) return cached;
     const source = await this.loadAsset(ladder.url, provenance);
@@ -211,24 +153,7 @@ export class LodLoader extends Loader<LodLevel[], LodRequest> {
       interior = await load("interior");
       built = await this.build(source, request, low, interior);
       const bytes = await encodeLevel(built, request.type, shapeOf(source), materialsOf(source));
-      if (!entry) {
-        warnUncached(url, "it is not a same-origin path");
-        return bytes;
-      }
-      // Read now: GLTS sources keep reporting what they observe while levels are built.
-      const saved = provenance.dependencies();
-      if ("reason" in saved) {
-        warnUncached(url, saved.reason);
-        return bytes;
-      }
-      if (uncached.has(url)) return bytes;
-      try {
-        await entry.save(bytes, { dependencies: saved.dependencies });
-      } catch (error) {
-        // A dependency without a backing file, such as a middleware URL or a package the app does not install, cannot be validated.
-        if (!(error instanceof MissingDependencyError)) throw error;
-        warnUncached(url, error.message);
-      }
+      await save(url, entry, bytes, provenance);
       return bytes;
     } finally {
       for (const object of [interior, built, low]) if (object) disposeTree(object);
@@ -276,16 +201,6 @@ export class LodLoader extends Loader<LodLevel[], LodRequest> {
   }
 }
 
-/** A normalized request, with the digests of its bundled modules when its levels are cacheable. */
-type Ladder = ReturnType<typeof normalize> & { modules: Record<string, string> | undefined };
-
-/** The request of ladder level `index`, which must be a derived level. */
-function derived(levels: readonly LevelRequest[], index: number): Derived {
-  const level = levels[index - 1];
-  if (!level || level.type === "empty") throw new Error(`LodLoader: level ${index} is not derived`);
-  return level;
-}
-
 function materialsOf(object: Object3D): Material[] {
   const materials: Material[] = [];
   object.traverse((node) => {
@@ -293,34 +208,6 @@ function materialsOf(object: Object3D): Material[] {
   });
   return materials;
 }
-
-function normalize(request: LodRequest, path: string) {
-  const input = typeof request === "string" ? { url: request } : request;
-  const url = loaderPathURL(input.url, path);
-  const levels = structuredClone(input.levels ?? DEFAULT_LEVELS);
-  const urls: Record<string, string> = { source: url };
-  levels.forEach((level, position) => {
-    if (level.type !== "baked") return;
-    for (const name of ["low", "interior"] as const) {
-      const value = level[name];
-      if (value !== undefined) urls[auxiliary(position + 1, name)] = sourceRelativeURL(value, url);
-    }
-  });
-  return { ...input, url, levels, urls };
-}
-
-const uncached = new Set<string>();
-
-/** Builds of `url` are served without saving from now on, after one warning naming why; a build warmup fails instead. */
-function warnUncached(url: string, reason: string): void {
-  if (warmup) throw new Error(`LodLoader: cannot precompute "${url}": ${reason}`);
-  if (uncached.has(url)) return;
-  uncached.add(url);
-  console.warn(`LodLoader: "${url}" is not cached until the page reloads: ${reason}`);
-}
-
-/** Provenance name of the low or interior asset of the baked level at ladder index `level`. */
-const auxiliary = (level: number, name: "low" | "interior") => `auxiliary:${level}:${name}`;
 
 async function preload(levels: LodLevel[], hasSource: boolean): Promise<void> {
   // A cold build hands its source to the same shared lifetime as a deferred source arrival.

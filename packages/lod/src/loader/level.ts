@@ -6,7 +6,7 @@ import { ImpostorMesh, type ImpostorMeshOptions } from "../impostor/mesh/index.j
 import { measure, recordDeviation } from "../levels.js";
 import { isImpostorMesh, isMesh } from "../three.js";
 import { decodeMeshAsync, encodeMeshAsync } from "../mesh/codec.js";
-import type { LevelRequest } from "../loader.js";
+import type { LevelRequest } from "./ladder.js";
 
 // A cached level: the source's shape, what places the level and measures its default threshold, then its payload.
 

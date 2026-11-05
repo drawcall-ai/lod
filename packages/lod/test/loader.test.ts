@@ -18,7 +18,8 @@ import { Lod } from "../src/lod.js";
 import { loadOnce } from "../src/deferred.js";
 import { InteriorMaterial } from "../src/baked/interior/material.js";
 import { ImpostorMesh } from "../src/impostor/mesh/index.js";
-import { LodLoader, type LodRequest } from "../src/loader.js";
+import { LodLoader } from "../src/loader.js";
+import type { LodRequest } from "../src/loader/ladder.js";
 
 vi.mock("vitecache", async () => {
   const { CacheEntry, MissingDependencyError } = await import("./loader/fixture.js");
