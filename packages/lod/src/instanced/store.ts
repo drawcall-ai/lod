@@ -1,7 +1,6 @@
 import { Matrix4, type Color } from "three/webgpu";
 import { at } from "../at.js";
-import type { Blocks } from "./blocks.js";
-import type { BlockView } from "./sight.js";
+import type { BlockView, Blocks } from "./blocks.js";
 import { Dirty, upload } from "./dirty.js";
 import type { Selection } from "./select.js";
 

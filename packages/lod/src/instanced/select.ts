@@ -1,5 +1,7 @@
 import {
   type Camera,
+  type Frustum,
+  Matrix4,
   StorageBufferAttribute,
   StorageInstancedBufferAttribute,
   Vector3,
@@ -11,9 +13,30 @@ import {
 import { at } from "../at.js";
 import { ARGS_BYTES, args, type ArgsSlice } from "./args.js";
 import { Kernel, type IndirectDraw, type Target } from "./kernel.js";
-import type { Aim } from "./sight.js";
+import type { BlockView } from "./blocks.js";
+import type { View } from "../view.js";
 
 const CURRENT: ComputeNode[] = [];
+
+/** What a view selects with: see `Selection.aim`. */
+export interface Aim extends BlockView {
+  /** the view's frustum in the crowd's space */
+  frustum: Frustum;
+}
+
+const inverse = new Matrix4();
+
+/** `camera`'s `view` as the instances of a crowd placed by `matrixWorld` see it, written into `out`. */
+export function sight(out: Aim, view: View, camera: Camera, matrixWorld: Matrix4, quality: number, forced: number | null): Aim {
+  inverse.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).multiply(matrixWorld);
+  out.frustum.setFromProjectionMatrix(inverse, camera.coordinateSystem, camera.reversedDepth);
+  out.eye.copy(view.eye).applyMatrix4(inverse.copy(matrixWorld).invert());
+  out.scale = view.scale * quality * (view.ortho ? matrixWorld.getMaxScaleOnAxis() : 1);
+  out.ortho = view.ortho;
+  out.fades = view.fades;
+  out.forced = forced;
+  return out;
+}
 
 /** One view's selection: per level, the instances it draws and their fades, from `first`, and its indirect draws. */
 export interface Slots {
@@ -94,11 +117,7 @@ export class Selection {
   }
 
   /** `camera`'s slots, made when first asked for: until it is aimed, its draws draw nothing. */
-  view(camera: Camera): Slots {
-    return this.selected(camera);
-  }
-
-  private selected(camera: Camera): Selected {
+  view(camera: Camera): Selected {
     let view = this.views.get(camera);
     if (view) return view;
     view = {
@@ -155,7 +174,7 @@ export class Selection {
 
   /** Select for `camera` as `aim` says next time it draws; nothing runs while the aim stays the same. */
   aim(camera: Camera, aim: Aim, levels: readonly { maxPixels: number }[]): void {
-    const view = this.selected(camera);
+    const view = this.view(camera);
     const forced = aim.forced ?? -1;
     // any finite stand-in for level 0's Infinity
     const maxPixels = levels.map((level) => Math.min(level.maxPixels, 3.4e38));
@@ -168,7 +187,9 @@ export class Selection {
       view.fading === aim.fades &&
       view.forced === forced &&
       maxPixels.every((value, l) => view.maxPixels[l] === value) &&
-      view.planes.every((plane, i) => plane.x === planes[i]?.normal.x && plane.y === planes[i].normal.y && plane.z === planes[i].normal.z && plane.w === planes[i].constant);
+      view.planes.every(
+        (plane, i) => plane.x === planes[i]?.normal.x && plane.y === planes[i].normal.y && plane.z === planes[i].normal.z && plane.w === planes[i].constant,
+      );
     if (same) return;
     view.aimed = true;
     view.eye.copy(aim.eye);

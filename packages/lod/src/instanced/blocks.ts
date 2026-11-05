@@ -3,7 +3,6 @@ import { FADE, lastFitting } from "../levels.js";
 import { at } from "../at.js";
 import { stretch } from "../three.js";
 import { Dirty } from "./dirty.js";
-import type { BlockView } from "./sight.js";
 
 // Cover float32 matrix products, distances and threshold arithmetic: near a switch,
 // uncertain blocks keep both levels.
@@ -31,6 +30,16 @@ interface Kept {
 }
 /** Orthographic scales kept per crowd: a shadow map's cascades. */
 const KEPT = 8;
+
+/** A view as a crowd's blocks see it, in the crowd's space. */
+export interface BlockView {
+  eye: Vector3;
+  /** pixels per unit of subtense (perspective) or of size (orthographic), × Lod.quality */
+  scale: number;
+  ortho: boolean;
+  fades: boolean;
+  forced: number | null;
+}
 
 /** Cached spatial blocks: instance edits refit leaves; moving views visit only blocks. */
 export class Blocks {

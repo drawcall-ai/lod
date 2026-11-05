@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Matrix4, Sphere, Vector3 } from "three/webgpu";
 import { Blocks } from "../../src/instanced/blocks.js";
-import type { BlockView } from "../../src/instanced/sight.js";
+import type { BlockView } from "../../src/instanced/blocks.js";
 
 const levels = [Infinity, 40, 10].map((maxPixels) => ({ maxPixels }));
 const identity = new Matrix4();

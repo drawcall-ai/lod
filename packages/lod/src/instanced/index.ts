@@ -23,10 +23,9 @@ import { copyWind, refreshWind } from "../wind/index.js";
 import { Meshes } from "./meshes.js";
 import { parts } from "./parts.js";
 import { Blocks } from "./blocks.js";
-import { sight, type Aim } from "./sight.js";
 import { Extent } from "./extent.js";
 import { Probes } from "./raycast.js";
-import { Selection } from "./select.js";
+import { Selection, sight, type Aim } from "./select.js";
 import { Store } from "./store.js";
 
 const view = new View();
