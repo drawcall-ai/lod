@@ -41,6 +41,8 @@ const LOOK_MS = 16;
 /** What learns an owner's renderer (see `ask`): one degenerate triangle, which would draw nothing were it drawn. */
 const probeGeometry = new BufferGeometry().setAttribute("position", new Float32BufferAttribute(new Float32Array(9), 3));
 const probeMaterial = new MeshBasicNodeMaterial({ colorWrite: false, depthWrite: false });
+// Drawn as itself under any scene.overrideMaterial, so that three hands its draw on once: the call skipped.
+probeMaterial.allowOverride = false;
 
 /** Decode is shared by load function; readiness and handover belong to each owner. */
 export class Residency {
@@ -63,8 +65,12 @@ export class Residency {
   private readonly cameras = new Set<Camera>();
   /** The mesh asking which renderer draws the owner, while it asks (see `ask`). */
   private probe: Mesh | undefined;
-  /** Whether the owner was updated since the item's last look at its renderer, and whether a look is due (see `look`). */
+  /**
+   * Whether the owner was updated since the item's last look at its renderer, the renders counted at that look, and
+   * whether a look is due (see `look`).
+   */
   private updated = false;
+  private renders = 0;
   private looking = false;
   private readonly union = new Set<Level>();
   private readonly requested = new Set<() => Promise<Object3D>>();
@@ -269,23 +275,28 @@ export class Residency {
    */
   sync(): void {
     this.item.held = !this.disposed && !this.error && (this.pending || this.task !== undefined || this.progress < 1);
-    if (this.item.held && this.renderer && !this.looking) this.look(this.renderer);
+    if (!this.item.held || !this.renderer || this.looking) return;
+    // The first look only counts the renders: those still to come in this render are not without an update.
+    this.updated = true;
+    this.look(this.renderer);
   }
 
   /**
-   * While the item is held, look a frame's time apart at the renderer's renders: renders since the last look without
-   * an update of the owner mean it no longer draws (hidden, on a layer no camera tests, out of the scene, or another
-   * scene drawn alone), and end the item; its next update starts it again. A renderer that only compiles leaves it held.
+   * While the item is held, look a frame's time apart at the renderer's renders: an object its renderer rendered around
+   * for a frame without updating it (hidden, on a layer no camera tests, out of the scene) ends its item; its next
+   * update starts it again. Renders of other scenes in a separate task can end it early, and the next update reopens
+   * it; a renderer that only compiles keeps a hidden owner's item held.
    */
   private look(renderer: Renderer): void {
     this.looking = true;
-    this.updated = false;
-    const renders = renderer.info.render.calls;
     const timer: unknown = setTimeout(() => {
       this.looking = false;
       if (!this.item.held) return;
-      if (renderer.info.render.calls !== renders && !this.updated) this.item.held = false;
-      else this.look(renderer);
+      const renders = renderer.info.render.calls;
+      if (renders !== this.renders && !this.updated) return void (this.item.held = false);
+      this.renders = renders;
+      this.updated = false;
+      this.look(renderer);
     }, LOOK_MS);
     // A held item must not keep Node.js running.
     if (typeof timer === "object" && timer !== null && "unref" in timer && typeof timer.unref === "function") timer.unref();

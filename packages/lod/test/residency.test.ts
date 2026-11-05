@@ -352,9 +352,14 @@ it.each(cases)(
       renderer.render(scene, camera);
       await Promise.resolve();
       expect(end).not.toHaveBeenCalled();
-      // The item's next look finds a render without an update.
-      await new Promise((resolve) => setTimeout(resolve, 40));
-      expect(end).toHaveBeenCalledOnce();
+      // A look a frame later finds renders without an update.
+      await vi.waitFor(
+        () => {
+          renderer.render(scene, camera);
+          expect(end).toHaveBeenCalledOnce();
+        },
+        { interval: 20 },
+      );
       back({ scene, group, owner });
       renderer.render(scene, camera);
       await Promise.resolve();
