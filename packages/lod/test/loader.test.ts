@@ -100,8 +100,8 @@ describe("LodLoader", () => {
     };
     await loader.loadAsync(request);
     expect(load).toHaveBeenCalledExactlyOnceWith("/models/tree.glb?seed=2");
-    // The impostor, built eagerly, and the shape.
-    expect(cache.saved).toHaveLength(2);
+    // Only the shape: the impostor's default threshold needs no build.
+    expect(cache.saved).toHaveLength(1);
     const warm = await loader.loadAsync(request);
     expect(load).toHaveBeenCalledOnce();
     const source = warm[0];
@@ -110,7 +110,7 @@ describe("LodLoader", () => {
     // The simplified level is built from a source without onLevel effects, then draws with the ladder source's materials.
     const simplified = await detail.load();
     expect(load).toHaveBeenCalledTimes(3);
-    expect(cache.saved).toHaveLength(3);
+    expect(cache.saved).toHaveLength(2);
     const original = await loadOnce(source.load).promise;
     expect(load).toHaveBeenCalledTimes(3);
     const released = vi.fn();
@@ -130,7 +130,7 @@ describe("LodLoader", () => {
     if (!rewarmed?.load) throw new Error("Expected lazy simplified level");
     await rewarmed.load();
     expect(load).toHaveBeenCalledTimes(4);
-    expect(cache.saved).toHaveLength(3);
+    expect(cache.saved).toHaveLength(2);
   });
 
   it("builds a level without maxPixels eagerly, since its default threshold is measured from it", async () => {

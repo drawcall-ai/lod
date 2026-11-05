@@ -10,10 +10,13 @@ import type { Provenance } from "./provenance.js";
 import { loaderPathURL, sourceRelativeURL } from "./url.js";
 
 /**
- * Levels derived from the source, finest first. Each derived level is built and persisted when it first loads; a level
- * without `maxPixels` is built with the ladder, since its default threshold is measured from it, and so is every level
- * in a `vite build` warmup. Changing `maxPixels`
- * or an impostor's `draw` reuses them, except an impostor's `maxPixels`, which also sizes its bake.
+ * Levels derived from the source, finest first. Each derived level is built and persisted when it first loads; a
+ * simplified or baked level without `maxPixels` is built with the ladder, since its default threshold is measured from
+ * its deviation, and so is every level in a `vite build` warmup. An impostor's default is `framePixels` of its
+ * resolution: the threshold of a frame fitted to the source's bounding sphere, so the level before it draws smaller
+ * than it needs to. The frame the bake fits to the source is up to about 1.5 times tighter; give `maxPixels` to
+ * switch to the impostor sooner. Changing `maxPixels` or an impostor's `draw` reuses them, except an impostor's
+ * `maxPixels`, which also sizes its bake.
  */
 export type LevelRequest =
   | ({ type: "simplify"; maxPixels?: number } & SimplifyOptions)

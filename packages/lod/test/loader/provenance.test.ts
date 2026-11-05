@@ -33,6 +33,12 @@ function metadata(type: string, url: string, resources: string[]) {
     : { buffers: [{ uri: resources[0] }, { uri: "data:application/octet-stream;base64,AA==" }], images: [{ uri: resources[1] }, { bufferView: 0 }] };
 }
 
+/** Describe the ladder at `url`, then load its impostor, which builds it on a cold cache. */
+async function build(loader: LodLoader, url: string) {
+  const levels = await loader.loadAsync(url);
+  await levels[1]?.load?.();
+}
+
 describe("asset cache provenance", () => {
   it.each(["glts", "gltf", "glb"])("discovers %s dependencies with portable, query-preserving identities", async (type) => {
     const url = script.replace(".glts", `.${type}`),
@@ -84,8 +90,8 @@ describe("asset cache provenance", () => {
       urls.push("/models/late.bin");
       return impostorOf(source);
     });
-    await loader.loadAsync(script);
-    expect(cache.saved.find((entry) => entry.options.dependencies?.source)?.dependencies).toEqual({
+    await build(loader, script);
+    expect(cache.saved.at(-1)?.dependencies).toEqual({
       "resource:0": { url: helper },
       "resource:1": { url: "/models/late.bin" },
     });
@@ -131,14 +137,14 @@ describe("asset cache provenance", () => {
   it.each([helper, "scene-generator"])("invalidates a derived level when dependency %s changes", async (dependency) => {
     const { manager, load } = fixture((url) => ({ url, dependencyUrls: [helper], packages: ["scene-generator"], runtimeModules: [] }));
     const loader = new LodLoader(manager);
-    await loader.loadAsync(script);
+    await build(loader, script);
     cache.loaded.length = 0;
-    await loader.loadAsync(script);
-    // The level and the shape.
+    await build(loader, script);
+    // The shape and the level.
     expect(cache.loaded).toEqual([true, true]);
     expect(load).toHaveBeenCalledOnce();
     cache.versions.set(dependency, "changed");
-    await loader.loadAsync(script);
+    await build(loader, script);
     expect(load).toHaveBeenCalledTimes(2);
     expect(bakeImpostor).toHaveBeenCalledTimes(2);
   });
@@ -147,12 +153,12 @@ describe("asset cache provenance", () => {
     const modules: Record<string, string> = { "https://cdn.test/generator@1": "first" };
     const { loader, handler, load } = fixture((url) => ({ url, dependencyUrls: [], packages: [], runtimeModules: [] }));
     Object.assign(handler, { moduleSources: { "generator@1": { moduleHashes: modules } } });
-    await loader.loadAsync(script);
-    await loader.loadAsync(script);
+    await build(loader, script);
+    await build(loader, script);
     expect(load).toHaveBeenCalledOnce();
     if (identity === "unavailable") Reflect.deleteProperty(handler, "moduleSources");
     else Object.assign(handler, { moduleSources: { "generator@1": { moduleHashes: { "https://cdn.test/generator@1": "changed" } } } });
-    await loader.loadAsync(script);
+    await build(loader, script);
     expect(load).toHaveBeenCalledTimes(2);
     expect(bakeImpostor).toHaveBeenCalledTimes(2);
   });

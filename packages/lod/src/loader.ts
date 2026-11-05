@@ -6,6 +6,7 @@ import { bakeMesh } from "./baked/index.js";
 import { loadOnce } from "./deferred.js";
 import { disposeRejected, disposeTree } from "./dispose.js";
 import { bakeImpostor } from "./impostor/bake/index.js";
+import { framePixels } from "./impostor/impostor.js";
 import { ImpostorMesh } from "./impostor/mesh/index.js";
 import { resolveThresholds, type LodLevel } from "./levels.js";
 import type { LodCacheOptions } from "./loader/cache.js";
@@ -55,7 +56,10 @@ export class LodLoader extends Loader<LodLevel[], LodRequest> {
       // vitecache resolves only same-origin paths to project files, so other sources build uncached.
       const modules = provenance.requested.every(isLocal) ? await bundledModules(input.urls, this.manager) : undefined;
       const ladder: Ladder = { ...input, modules };
-      const eager = requests.flatMap((level, index) => (level.type !== "empty" && (warmup || level.maxPixels === undefined) ? [index + 1] : []));
+      // A simplified or baked level's default threshold is measured from its deviation, so it is built with the ladder.
+      const eager = requests.flatMap((level, index) =>
+        level.type !== "empty" && (warmup || (level.type !== "impostor" && level.maxPixels === undefined)) ? [index + 1] : [],
+      );
       const reads = await Promise.all(eager.map(async (index) => ({ index, ...(await cached(levelEntry(ladder, index, provenance, this.cacheOptions))) })));
       // Only what measures a default threshold: bytes no view asked for are not kept.
       const measured = new Map<number, Entry["level"]>();
@@ -68,7 +72,14 @@ export class LodLoader extends Loader<LodLevel[], LodRequest> {
       const box = placedBox(shape);
       if (box.isEmpty()) throw new Error("LodLoader: the source has no visible geometry to measure");
       const thresholds = resolveThresholds(
-        [{}, ...requests.map((level, position) => ({ maxPixels: level.maxPixels, measured: measured.get(position + 1) }))],
+        [
+          {},
+          ...requests.map((level, position) => ({
+            // An impostor's default is its frame's even when a warmup bakes it, as it is without one.
+            maxPixels: level.maxPixels ?? (level.type === "impostor" ? framePixels(level.resolution) : undefined),
+            measured: level.type === "impostor" ? undefined : measured.get(position + 1),
+          })),
+        ],
         shape.box.getSize(new Vector3()).length(),
       );
       const materials = async (): Promise<Material[]> => {

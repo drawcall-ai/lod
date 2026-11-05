@@ -11,7 +11,7 @@ import {
   type Renderer,
 } from "three/webgpu";
 import { uniform } from "three/tsl";
-import { MAPS, boundingRadius, texelPixels, validateImpostor, type Impostor, type ImpostorLayout, type ImpostorMap } from "../impostor.js";
+import { MAPS, PAD, boundingRadius, texelPixels, validateImpostor, type Impostor, type ImpostorLayout, type ImpostorMap } from "../impostor.js";
 import { frameBasis, frameDirection, type Vec3 } from "../octahedral.js";
 import { boundingBox, forEachVertex, showDetail } from "../../bounds.js";
 import { pause } from "../../pause.js";
@@ -40,7 +40,8 @@ export interface BakeImpostorOptions {
    * Larger, it shows its top mip magnified, which then reads the source's textures as
    * sharp as they are at this height: alpha-tested leaves keep the coverage and colour
    * they show up close, not the denser, darker look of their texture's small mips.
-   * Default: the height where it is sharp.
+   * Default: the height where it is sharp (see `texelPixels`, and `framePixels` for a
+   * LodLoader level).
    */
   maxPixels?: number;
   /**
@@ -54,12 +55,6 @@ export interface BakeImpostorOptions {
    */
   supersample?: number;
 }
-
-/**
- * Empty border around the object in every frame, as a fraction of the frame's half
- * size. It keeps mip levels from blending a frame's silhouette into its neighbour.
- */
-const PAD = 0.06;
 
 /**
  * Bake `object` (in its own space, ignoring its own transform) into an impostor. Nested
