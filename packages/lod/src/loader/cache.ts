@@ -5,7 +5,12 @@ import { urlQuery } from "./url.js";
 /** Persistent cache location. Generator packages are discovered from GLTS source provenance. */
 export type LodCacheOptions = Pick<CacheEntryOptions, "basePath" | "root">;
 
-const version = "lod-level@21";
+/**
+ * What builds and lays out a cached level, and so what identifies it beside its inputs: bump it with any change to
+ * the bytes a level or shape entry holds. Not this package's files, which change with every rebuild, whether a level
+ * would or not.
+ */
+const version = "lod-level@22";
 
 /**
  * One derived level, or the source's shape: keyed by the URLs it is built from, its request and their bundled modules,
@@ -29,8 +34,7 @@ export function ladderEntry(inputs: Dependencies, of: Derived | "shape", modules
       "lod:level": { value: of === "shape" ? { type: of } : parameters(of) },
       "lod:modules": { value: modules },
       "lod:queries": { value: queries },
-      // Only packages the app installs resolve from its root; this package's own dependencies are covered by its version and `version` above.
-      "lod:package": { package: "@drawcall/lod" },
+      // Only packages the app installs resolve from its root; this package's own dependencies are covered by `version` above.
       "lod:three": { package: "three" },
     },
   });

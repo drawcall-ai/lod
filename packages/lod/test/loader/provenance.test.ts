@@ -61,7 +61,7 @@ describe("asset cache provenance", () => {
     { name: "a gltf source with a cross-origin resource", type: "gltf", url: "/models/remote.gltf", resources: [helper, remote] },
     { name: "a cross-origin source", type: "gltf", url: "https://cdn.test/tree.gltf", resources: [] },
     { name: "a saved dependency without a backing file", type: "glts", url: "/models/api.glts", resources: ["/api/heights"], missing: "/api/heights" },
-    { name: "an uninstalled key package", type: "glts", url: "/models/keyed.glts", resources: [], missing: "@drawcall/lod" },
+    { name: "an uninstalled key package", type: "glts", url: "/models/keyed.glts", resources: [], missing: "three" },
   ])("serves $name uncached, with one warning", async ({ type, url, resources, missing }) => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     if (missing) cache.missing.add(missing);
