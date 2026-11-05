@@ -268,33 +268,34 @@ it("still selects an offscreen crowd when its shadow reaches the visible ground"
   source.castShadow = true;
   const crowd = new InstancedLod([{ object: source }], 1);
   crowd.position.set(4, 4, 0);
-  const ground = new Mesh(new PlaneGeometry(24, 24).rotateX(-Math.PI / 2), new MeshStandardMaterial());
-  ground.receiveShadow = true;
-  const sun = new DirectionalLight(0xffffff, 3);
-  sun.position.set(12, 12, 0);
-  sun.castShadow = true;
-  sun.shadow.mapSize.set(256, 256);
-  Object.assign(sun.shadow.camera, { left: -12, right: 12, top: 12, bottom: -12, near: 0.1, far: 50 });
-  sun.shadow.camera.updateProjectionMatrix();
-  const scene = new Scene().add(crowd, ground, sun, sun.target, new AmbientLight(0xffffff, 0.2));
+  // Lit ground under a sun, a world of its own for each render: one shadow map never stands in for another's.
+  const made: { dispose(): void }[] = [];
+  const world = () => {
+    const ground = new Mesh(new PlaneGeometry(24, 24).rotateX(-Math.PI / 2), new MeshStandardMaterial());
+    ground.receiveShadow = true;
+    const sun = new DirectionalLight(0xffffff, 3);
+    sun.position.set(12, 12, 0);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(256, 256);
+    Object.assign(sun.shadow.camera, { left: -12, right: 12, top: 12, bottom: -12, near: 0.1, far: 50 });
+    sun.shadow.camera.updateProjectionMatrix();
+    made.push(ground.geometry, ground.material, sun);
+    return new Scene().add(ground, sun, sun.target, new AmbientLight(0xffffff, 0.2));
+  };
   const camera = new OrthographicCamera(-2, 2, 2, -2, 0.1, 100);
   camera.position.set(0, 20, 0);
   camera.up.set(0, 0, -1);
   camera.lookAt(0, 0, 0);
   renderer.shadowMap.enabled = true;
   try {
-    const shadow = await render(scene, camera);
-    scene.remove(crowd);
-    sun.shadow.needsUpdate = true;
-    const lit = await render(scene, camera.clone());
+    const shadow = await render(world().add(crowd), camera);
+    const lit = await render(world(), camera.clone());
     const center = (32 * 64 + 32) * 4;
     expect(shadow[center]).toBeLessThan((lit[center] ?? 0) * 0.8);
   } finally {
     renderer.shadowMap.enabled = false;
     crowd.dispose();
-    ground.geometry.dispose();
-    ground.material.dispose();
-    sun.dispose();
+    for (const each of made) each.dispose();
   }
 });
 
