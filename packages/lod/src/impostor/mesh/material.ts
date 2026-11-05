@@ -10,6 +10,7 @@ import {
   type Node,
   type NodeBuilder,
   type Object3D,
+  type Texture,
 } from "three/webgpu";
 import { Fn, diffuseColor, float, materialColor, metalness, mix, specularColor, specularF90, uniform, varyingProperty, vec3, vec4 } from "three/tsl";
 import { castPosition, instanceColor, instanceMatrixOf, tint } from "../../fade.js";
@@ -52,6 +53,8 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
   deformNode: Node<"mat4"> | null = null;
   /** Mip bias of every atlas read: see `ImpostorMeshOptions.mipBias`, which it starts at. */
   readonly mipBias: Node<"float"> & { value: number };
+  /** The impostor's atlases, one per map, shared by every material drawing it. */
+  readonly textures: readonly Texture[];
 
   private readonly inputs: CardInputs & SurfaceInputs;
   private readonly specular: Node<"vec4">;
@@ -74,6 +77,7 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
     super({ roughness: 1, metalness: 1, alphaToCoverage: true, side: DoubleSide });
     this.name = "impostor";
     const textures = acquireTextures(impostor);
+    this.textures = textures;
     this.mipBias = uniform(shading.mipBias);
     this.specular = uniform(new Vector4().fromArray(impostor.specular ?? [0.04, 0.04, 0.04, 1]));
     const layer = (map: Impostor["maps"][number]) => textures[impostor.maps.indexOf(map)] ?? null;
