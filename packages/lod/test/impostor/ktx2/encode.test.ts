@@ -20,7 +20,7 @@ describe("impostor map encoding", () => {
 
   it("leaves BC7, ASTC and RGBA transcodes as they are with the fastest ETC1 hints", async () => {
     const job = { data: image(64), width: 64, height: 64, srgb: false };
-    expect(await transcodes(await encode(job), 0)).toEqual(await transcodes(await defaultFlags(job), 0));
+    expect(await transcodes(await encode(job), 0)).toEqual(await transcodes(await withoutHints(job), 0));
   });
 });
 
@@ -37,8 +37,8 @@ function image(size: number): Uint8Array {
 
 const inflate = (base64: string) => inflateSync(Uint8Array.from(atob(base64), (c) => c.charCodeAt(0)));
 
-/** `job` as basisu encodes it with its default pack flags, the default level (2), and otherwise the package's settings. */
-async function defaultFlags({ data, width, height, srgb }: { data: Uint8Array; width: number; height: number; srgb: boolean }): Promise<Uint8Array> {
+/** `job` as basisu encodes it with the package's level (1) and settings, but without the ETC1 hints. */
+async function withoutHints({ data, width, height, srgb }: { data: Uint8Array; width: number; height: number; srgb: boolean }): Promise<Uint8Array> {
   const url = `data:text/javascript,${encodeURIComponent(new TextDecoder().decode(inflate(ENCODER_JS)))}`;
   const factory = (await import(/* @vite-ignore */ url)).default;
   const basis = await factory({ wasmBinary: inflate(ENCODER_WASM), locateFile: (name: string) => name });
@@ -52,7 +52,7 @@ async function defaultFlags({ data, width, height, srgb }: { data: Uint8Array; w
     encoder.setPerceptual(srgb);
     encoder.setKTX2AndBasisSRGBTransferFunc(srgb);
     encoder.setMipGen(false);
-    encoder.setPackUASTCFlags(2);
+    encoder.setPackUASTCFlags(1);
     encoder.setKTX2UASTCSupercompression(true);
     const out = new Uint8Array(4 * width * height + 65536);
     return out.slice(0, encoder.encode(out));

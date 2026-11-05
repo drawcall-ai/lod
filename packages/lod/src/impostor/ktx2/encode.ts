@@ -27,8 +27,11 @@ interface Task {
 
 // Read when the module loads, which also happens in Node, as for a .glts warmup; Node before 21 has no navigator.
 const cores = globalThis.navigator?.hardwareConcurrency ?? 4;
-/** A few workers, since each holds tens of MB of WebAssembly memory and a ladder of cold impostors queues jobs for every map level. */
-const LIMIT = Math.max(1, Math.min(4, cores - 1));
+/**
+ * A worker per core but one, since a cold ladder's encodes take far longer than its bakes; at most 8, since each holds
+ * 100 to 250 MB of WebAssembly memory.
+ */
+const LIMIT = Math.max(1, Math.min(8, cores - 1));
 /** Largest job first, so that the smaller ones fill the other workers meanwhile. */
 const queue: Task[] = [];
 let workers = 0;

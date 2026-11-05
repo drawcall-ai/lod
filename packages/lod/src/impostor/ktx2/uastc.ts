@@ -24,14 +24,15 @@ interface Basis {
 let basis: Promise<Basis> | undefined;
 
 /**
- * basisu's pack flags: the default level (2), with the fastest ETC1 hints (128), which only transcodes to ETC1 and
- * ETC2 read; three picks those only on a GPU without ASTC and BC texture compression, which WebGPU adapters on
+ * basisu's pack flags: level 1, which encodes about twice as fast as the default level 2 and loses under 0.1 dB on
+ * albedo and normal maps (level 0 loses 1 to 4 dB), with the fastest ETC1 hints (128), which only transcodes to ETC1
+ * and ETC2 read; three picks those only on a GPU without ASTC and BC texture compression, which WebGPU adapters on
  * desktops and most phones have.
  */
-const PACK_FLAGS = 2 | 128;
+const PACK_FLAGS = 1 | 128;
 
 /**
- * Rows of a mip level as a KTX2 file of UASTC LDR 4x4 with Zstandard supercompression, at basisu's default effort and
+ * Rows of a mip level as a KTX2 file of UASTC LDR 4x4 with Zstandard supercompression, at level 1 (see PACK_FLAGS) and
  * without RDO, which would trade normal accuracy for size. The encoder's own mips would filter level 0, so each baked
  * level is encoded on its own (see `encodeLayer`).
  */
