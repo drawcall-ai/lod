@@ -14,8 +14,8 @@ const object = await house(scene.source, variant, part, library);
 if (part === "interior") scene.add(...object.children);
 else scene.add(object);
 
-// Warm every variant cache on the server before the browser requests individual assets.
-if (import.meta.env.SSR) {
+// Warm every variant cache in a `vite build` warmup, so the deployed app finds each asset it requests.
+if (import.meta.env.PROD && import.meta.env.SSR) {
   for (let v = 0; v < HOUSE_VARIANTS; v++) {
     for (const p of ["source", "interior"] satisfies HousePart[]) library.release(await house(scene.source, v, p, library));
   }

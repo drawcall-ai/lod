@@ -12,7 +12,7 @@ const object = await church(scene.source, part, library);
 if (part === "interior") scene.add(...object.children);
 else scene.add(object);
 
-// Warm every part's cache on the server before the browser requests individual assets.
-if (import.meta.env.SSR) {
+// Warm every part's cache in a `vite build` warmup, so the deployed app finds each asset it requests.
+if (import.meta.env.PROD && import.meta.env.SSR) {
   for (const p of ["source", "interior"] satisfies HousePart[]) library.release(await church(scene.source, p, library));
 }

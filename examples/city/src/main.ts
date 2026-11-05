@@ -46,7 +46,15 @@ const loaded = (name: string) => {
 };
 
 const ui = new Ui();
-THREE.DefaultLoadingManager.onProgress = (url, loaded, total) => ui.progress(`Loading ${url.split("/").pop()} (${loaded}/${total})`, (0.85 * loaded) / total);
+// Each Lod holds an item on `lodManager` while the levels its view needs arrive: `loading` tells when the first view
+// is complete.
+const lodManager = new THREE.LoadingManager();
+let loading = false;
+lodManager.onStart = () => (loading = true);
+lodManager.onLoad = () => (loading = false);
+THREE.DefaultLoadingManager.onProgress = (url, loaded, total) => {
+  ui.progress(`Loading ${url.split("/").pop()} (${loaded}/${total})`, (0.85 * loaded) / total);
+};
 
 const library = new Library(THREE.DefaultLoadingManager, new URL("/assets/", location.href).href, textures);
 await library.load();
@@ -105,6 +113,7 @@ scene.traverse((object) => {
   if (object instanceof Patches) patches.push(object);
   if (!(object instanceof Lod || object instanceof InstancedLod)) return;
   lods.push(object);
+  object.manager = lodManager;
   object.addEventListener("levelschange", () => {
     sun.castBy(object);
   });
@@ -164,7 +173,7 @@ function clearance(): number {
   return camera.position.y - world.terrain.height(camera.position.x, camera.position.z) - 80;
 }
 
-/** Every live frame advances and renders; resident coarse levels cover deferred detail. */
+/** Every live frame advances and renders; a level still loading draws as one that arrived. */
 function frame(dt: number): void {
   if (wind) wind.time += dt;
   playback.time = playback.requested ?? (playback.playing ? Math.min(playback.time + dt, tour.duration) : playback.time);
@@ -184,20 +193,15 @@ sun.update(camera, focus, clearance());
 ui.progress("Preparing the first view…", 0.85);
 await library.ready(scene);
 loaded("textures");
-// Select resident levels before compiling the first view.
-for (const lod of lods) {
-  lod.autoUpdate = false;
-  lod.update(camera);
-}
 await pipeline.compile();
 loaded("compiled");
+// Render the first view until its levels and shadows have arrived, and while the viewport changes meanwhile.
 for (;;) {
   const version = viewportVersion;
   await pipeline.step(() => frame(0));
   await pipeline.wait();
-  if (version === viewportVersion) break;
+  if (version === viewportVersion && !loading) break;
 }
-for (const lod of lods) lod.autoUpdate = true;
 const loadMs = performance.now() - started;
 loaded("first frame");
 ui.ready();
