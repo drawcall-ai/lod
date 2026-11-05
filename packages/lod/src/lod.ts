@@ -1,30 +1,18 @@
-import { Object3D, Sphere, type Camera, type LoadingManager, type Intersection, type Raycaster } from "three/webgpu";
+import { Sphere, type Camera, type Intersection, type Object3D, type Raycaster } from "three/webgpu";
 import { at } from "./at.js";
 import { compileLevel } from "./compile.js";
 import { measureLevels, prepareBounds } from "./bounds.js";
 import { disposeCopies } from "./dispose.js";
 import { setDraw, type Draw } from "./fade.js";
 import { levelMaterial } from "./material.js";
-import { Residency, handover, type LevelsEventMap } from "./residency.js";
-import { FADE, Level, cloneLevels, estimate, fadeProgress, levelAt, demandLevels, tintLevels, validate, type LevelView, type LodLevel } from "./levels.js";
+import { handover } from "./residency.js";
+import { Owner, type LodOptions } from "./owner.js";
+import { FADE, Level, cloneLevels, estimate, fadeProgress, levelAt, demandLevels, tintLevels, validate, type LodLevel } from "./levels.js";
 import { inShadowPass, isImpostorMesh, isLOD, isMesh, rejectSkinned } from "./three.js";
 import { TYPICAL_HEIGHT, View, inView, viewportHeight, type RenderContext } from "./view.js";
-import { WIND } from "./wind/hooks.js";
-import { copyWind, refreshWind } from "./wind/index.js";
+import { refreshWind } from "./wind/index.js";
 
 const view = new View();
-
-export interface LodOptions {
-  /**
-   * Gets an item while the levels the views need load, install, compile or fade in, ended once they are complete. Without
-   * one, an owner nested in another's level reports to that owner's, any other to three's `DefaultLoadingManager`. Wait
-   * for it to go idle, rendering the Scene that holds the owner a frame apart meanwhile, to capture a view complete.
-   * Every camera that views the scene must then render it each frame: an owner that a whole pass of the scene's renders
-   * leaves without an update (a pass ends when a camera renders the scene again) ends its item, and starts it again on
-   * its next update.
-   */
-  manager?: LoadingManager;
-}
 
 type ObjectDraw = Extract<Draw, { kind: "object" }>;
 
@@ -42,7 +30,7 @@ type ObjectDraw = Extract<Draw, { kind: "object" }>;
  * and hooked at construction or arrival. Skinned meshes and ShaderMaterials are
  * refused; use static meshes with node materials or supported built-in materials.
  */
-export class Lod extends Object3D<LevelsEventMap> {
+export class Lod extends Owner {
   /** Multiplies every measured height: below 1, cheaper levels take over sooner. */
   static quality = 1;
   /** Tint every level by its index, to see which level draws where. */
@@ -53,14 +41,6 @@ export class Lod extends Object3D<LevelsEventMap> {
    */
   static readonly fade = FADE;
 
-  readonly isLOD = true;
-  /** Let the renderer call `update` with its camera every frame. */
-  autoUpdate = true;
-  /** Draw only this level, without fades. */
-  forceLevel: number | null = null;
-  readonly levels: readonly LevelView[];
-
-  private readonly entries: Level[] = [];
   /** Per level, how its meshes draw. */
   private readonly draws: ObjectDraw[] = [];
   /** Bounding sphere of the source (see the constructor) in the Lod's own space. */
@@ -71,15 +51,6 @@ export class Lod extends Object3D<LevelsEventMap> {
    * replaces; none once it was out of that camera's view.
    */
   private readonly shown = new WeakMap<Camera, number>();
-  private disposed = false;
-  private readonly residency: Residency;
-
-  get pending(): boolean {
-    return this.residency.pending;
-  }
-  get error(): Error | undefined {
-    return this.residency.error;
-  }
 
   /**
    * `levels[0]` is the source. Empty only as the target of `copy`. A source that draws
@@ -87,26 +58,8 @@ export class Lod extends Object3D<LevelsEventMap> {
    * first level that draws something.
    */
   constructor(levels: readonly LodLevel[] = [], options: LodOptions = {}) {
-    super();
-    this.residency = new Residency(
-      this,
-      `Lod ${this.uuid}`,
-      this.entries,
-      (level, object, context) => this.install(level, object, context),
-      () => this.dispatchEvent({ type: "levelschange" }),
-      (error) => this.dispatchEvent({ type: "levelserror", error }),
-    );
-    this.residency.item.manager = options.manager;
-    this.levels = this.entries;
+    super("Lod", options);
     if (levels.length > 0) this.build(levels);
-  }
-
-  /** Where the item of pending levels goes (see `LodOptions.manager`). */
-  get manager(): LoadingManager {
-    return this.residency.item.resolved;
-  }
-  set manager(manager: LoadingManager | undefined) {
-    this.residency.item.manager = manager;
   }
 
   private build(inputs: readonly LodLevel[]): void {
@@ -140,17 +93,12 @@ export class Lod extends Object3D<LevelsEventMap> {
     for (const child of node.children) this.hook(child, draw, inner, level);
   }
 
-  [WIND](padding: number): void {
-    if (this.residency.started) throw new Error("Lod: apply wind before the first render");
+  protected sway(padding: number): void {
     this.casterRadius += padding;
   }
 
-  /** Pick and fade levels for `camera`. What fails is reported (see `Residency.report`): three is rendering. */
-  update(camera: Camera): void {
-    this.residency.guard(() => this.pick(camera));
-  }
-
-  private pick(camera: Camera): void {
+  /** Pick and fade levels for `camera`. */
+  protected pick(camera: Camera): void {
     const { entries, draws } = this;
     if (this.disposed || entries.length === 0 || inShadowPass(this)) return;
     validate(entries);
@@ -190,7 +138,7 @@ export class Lod extends Object3D<LevelsEventMap> {
     this.residency.sync();
   }
 
-  private async install(level: Level, template: Object3D, context: RenderContext): Promise<void> {
+  protected async install(level: Level, template: Object3D, context: RenderContext): Promise<void> {
     const object = template.clone();
     const nested = isLOD(object);
     object.visible = false;
@@ -233,20 +181,11 @@ export class Lod extends Object3D<LevelsEventMap> {
     if (this.entries.length > 0) throw new Error("Lod.copy: copy into an empty Lod");
     super.copy(source, false);
     if (source.entries.length > 0) this.build(cloneLevels(source.entries));
-    this.forceLevel = source.forceLevel;
-    this.autoUpdate = source.autoUpdate;
-    this.residency.item.manager = source.residency.item.manager;
-    copyWind(source, this);
+    this.copySettings(source);
     return this;
   }
 
-  /** Release drawables and templates only after every owner sharing their geometry, materials and textures has stopped drawing. */
-  override dispose(): void {
-    if (this.disposed) return;
-    this.disposed = true;
-    super.dispose();
-    this.residency.dispose(() => {
-      for (const { object } of this.entries) if (object) disposeCopies(object);
-    });
+  protected release(): void {
+    for (const { object } of this.entries) if (object) disposeCopies(object);
   }
 }

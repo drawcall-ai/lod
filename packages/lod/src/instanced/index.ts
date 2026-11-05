@@ -1,25 +1,13 @@
-import {
-  type Color,
-  Frustum,
-  type Matrix4,
-  Object3D,
-  Sphere,
-  Vector3,
-  type Camera,
-  type Intersection,
-  type LoadingManager,
-  type Raycaster,
-} from "three/webgpu";
+import { type Color, Frustum, type Matrix4, type Object3D, Sphere, Vector3, type Camera, type Intersection, type Raycaster } from "three/webgpu";
 import { at } from "../at.js";
 import { disposeCopies } from "../dispose.js";
-import { Level, cloneLevels, estimate, fadeProgress, levelAt, tintLevels, validate, type LevelView, type LodLevel } from "../levels.js";
-import { Lod, type LodOptions } from "../lod.js";
-import { Residency, type LevelsEventMap } from "../residency.js";
+import { Level, cloneLevels, estimate, fadeProgress, levelAt, tintLevels, validate, type LodLevel } from "../levels.js";
+import { Lod } from "../lod.js";
+import { Owner, type LodOptions } from "../owner.js";
 import { inShadowPass, sameClass } from "../three.js";
 import { TYPICAL_HEIGHT, View, viewportHeight, type RenderContext } from "../view.js";
 import { compileLevel } from "../compile.js";
-import { WIND } from "../wind/hooks.js";
-import { copyWind, refreshWind } from "../wind/index.js";
+import { refreshWind } from "../wind/index.js";
 import { Meshes } from "./meshes.js";
 import { parts } from "./parts.js";
 import { Blocks } from "./blocks.js";
@@ -46,22 +34,13 @@ const view = new View();
  * Requires WebGPU `indirect-first-instance`. Sequential cameras are supported; nested
  * renders replace the outer selection, so exclude this crowd with camera layers.
  */
-export class InstancedLod extends Object3D<LevelsEventMap> {
-  readonly isLOD = true;
+export class InstancedLod extends Owner {
   readonly isInstancedLod = true;
-  /** Let the renderer call `update` with its camera every frame. */
-  autoUpdate = true;
-  /** Draw only this level for every instance, without fades. */
-  forceLevel: number | null = null;
-  readonly levels: readonly LevelView[];
   readonly count: number;
 
-  private readonly entries: Level[] = [];
   private readonly probes: Probes;
   private selection: Selection | null = null;
   private meshes: Meshes | null = null;
-  private readonly residency: Residency;
-  private disposed = false;
   private readonly store: Store;
   private readonly extent = new Extent();
   /** Around every instance; each level may use tighter bounds. */
@@ -73,38 +52,10 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
   /** The shadow map `update` last selected for. */
   private readonly shadowView: Aim = { eye: new Vector3(), scale: 0, ortho: true, fades: false, forced: null, frustum: new Frustum() };
 
-  get pending(): boolean {
-    return this.residency.pending;
-  }
-  get error(): Error | undefined {
-    return this.residency.error;
-  }
-
-  /** Where the item of pending levels goes (see `LodOptions.manager`). */
-  get manager(): LoadingManager {
-    return this.residency.item.resolved;
-  }
-  set manager(manager: LoadingManager | undefined) {
-    this.residency.item.manager = manager;
-  }
-
   /** `levels[0]` is the source. Empty only as the target of `copy`. */
   constructor(levels: readonly LodLevel[] = [], count = 0, options: LodOptions = {}) {
-    super();
-    this.residency = new Residency(
-      this,
-      `InstancedLod ${this.uuid}`,
-      this.entries,
-      (level, object, context) => this.install(level, object, context),
-      () => {
-        this.selection?.route(this.residency.fallback, this.residency.progress < 1);
-        this.dispatchEvent({ type: "levelschange" });
-      },
-      (error) => this.dispatchEvent({ type: "levelserror", error }),
-    );
-    this.residency.item.manager = options.manager;
+    super("InstancedLod", options);
     if (!Number.isInteger(count) || count < 0) throw new Error(`InstancedLod: count must be an integer >= 0, got ${count}`);
-    this.levels = this.entries;
     this.count = count;
     this.store = new Store(count);
     this.probes = new Probes(this.store.matrices, this.extent.rest);
@@ -141,8 +92,13 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     return draws.length;
   }
 
+  protected override arrived(): void {
+    this.selection?.route(this.residency.fallback, this.residency.progress < 1);
+    super.arrived();
+  }
+
   /** Compile only the arriving level; bounds and instance buffers stay fixed. */
-  private async install(level: Level, template: Object3D, context: RenderContext): Promise<void> {
+  protected async install(level: Level, template: Object3D, context: RenderContext): Promise<void> {
     if (!this.meshes) throw new Error("InstancedLod: missing selection");
     const loaded = await this.meshes.load(level, template, async (staged) => {
       refreshWind(this, staged);
@@ -191,8 +147,7 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     return ready < 0 ? null : ready;
   }
 
-  [WIND](padding: number, slope: number, baseY: number): void {
-    if (this.residency.started) throw new Error("InstancedLod: apply wind before the first render");
+  protected sway(padding: number, slope: number, baseY: number): void {
     const sway = this.extent.wind(padding, slope, baseY);
     this.meshes?.setRadius(this.extent.drawRadius);
     this.blocks.pad(sway);
@@ -200,12 +155,8 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     if (this.selection) this.selection.reach.value = this.extent.rest.radius * (1 + sway);
   }
 
-  /** Sort instances for `camera`, a view or a shadow map's. What fails is reported (see `Residency.report`): three is rendering. */
-  update(camera: Camera): void {
-    this.residency.guard(() => this.pick(camera));
-  }
-
-  private pick(camera: Camera): void {
+  /** Sort instances for `camera`, a view or a shadow map's. */
+  protected pick(camera: Camera): void {
     if (this.disposed) return;
     const { entries, selection, meshes, residency } = this;
     if (!selection || !meshes) return;
@@ -267,10 +218,7 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     this.store.copy(source.store);
     const draws = source.entries.length > 0 ? this.build(cloneLevels(source.entries)) : 0;
     this.blocks = new Blocks(this.store.matrices, this.store.spheres, this.extent.source, this.bounds, draws, this.extent.rest);
-    this.forceLevel = source.forceLevel;
-    this.autoUpdate = source.autoUpdate;
-    this.residency.item.manager = source.residency.item.manager;
-    copyWind(source, this);
+    this.copySettings(source);
     return this;
   }
 
@@ -281,16 +229,10 @@ export class InstancedLod extends Object3D<LevelsEventMap> {
     return clone;
   }
 
-  /** Release drawables and templates only after every owner sharing their geometry, materials and textures has stopped drawing. */
-  override dispose(): void {
-    if (this.disposed) return;
-    this.disposed = true;
-    super.dispose();
-    this.residency.dispose(() => {
-      this.meshes?.dispose();
-      this.selection?.dispose();
-      this.store.attach(null);
-      for (const { object } of this.entries) if (object) disposeCopies(object);
-    });
+  protected release(): void {
+    this.meshes?.dispose();
+    this.selection?.dispose();
+    this.store.attach(null);
+    for (const { object } of this.entries) if (object) disposeCopies(object);
   }
 }
