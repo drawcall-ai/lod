@@ -9,9 +9,10 @@ export interface LodOptions {
   /**
    * Gets an item while the levels the views need load, install, compile or fade in, ended once they are complete. Without
    * one, an owner nested in another's level reports to that owner's, any other to three's `DefaultLoadingManager`. Wait
-   * for it to go idle, rendering (or compiling) the Scene that holds the owner a frame apart meanwhile, to capture a
-   * view complete. An owner that its renderer renders around for a frame's time without an update ends its item, and
-   * starts it again on its next update.
+   * for a quiet frame, one in which no item started or ended, rendering (or compiling) the Scene that holds the owner a
+   * frame apart meanwhile, to capture a view complete. An object its renderer rendered around for a frame without
+   * updating it ends its item, and its next update starts it again. Renders of other scenes in a separate task can end
+   * the item early, and the next update reopens it; a renderer that only compiles keeps a hidden owner's item held.
    */
   manager?: LoadingManager;
 }
