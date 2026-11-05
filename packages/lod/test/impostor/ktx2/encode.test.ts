@@ -2,6 +2,7 @@ import { inflateSync } from "fflate";
 import { describe, expect, it } from "vitest";
 import { encodeLayer } from "../../../src/impostor/ktx2/encode.js";
 import { encode } from "../../../src/impostor/ktx2/uastc.js";
+import { ENCODER_JS, ENCODER_WASM } from "../../../src/impostor/ktx2/wasm/encoder.js";
 import { TRANSCODER_JS, TRANSCODER_WASM } from "../../../src/impostor/ktx2/wasm/transcoder.js";
 
 describe("impostor map encoding", () => {
@@ -15,6 +16,11 @@ describe("impostor map encoding", () => {
           expect(await transcodes(file, m)).toEqual(await transcodes(whole, 0));
         }
       }
+  });
+
+  it("leaves BC7, ASTC and RGBA transcodes as they are with the fastest ETC1 hints", async () => {
+    const job = { data: image(64), width: 64, height: 64, srgb: false };
+    expect(await transcodes(await encode(job), 0)).toEqual(await transcodes(await defaultFlags(job), 0));
   });
 });
 
@@ -30,6 +36,30 @@ function image(size: number): Uint8Array {
 }
 
 const inflate = (base64: string) => inflateSync(Uint8Array.from(atob(base64), (c) => c.charCodeAt(0)));
+
+/** `job` as basisu encodes it with its default pack flags, the default level (2), and otherwise the package's settings. */
+async function defaultFlags({ data, width, height, srgb }: { data: Uint8Array; width: number; height: number; srgb: boolean }): Promise<Uint8Array> {
+  const url = `data:text/javascript,${encodeURIComponent(new TextDecoder().decode(inflate(ENCODER_JS)))}`;
+  const factory = (await import(/* @vite-ignore */ url)).default;
+  const basis = await factory({ wasmBinary: inflate(ENCODER_WASM), locateFile: (name: string) => name });
+  basis.initializeBasis();
+  const encoder = new basis.BasisEncoder();
+  try {
+    encoder.setCreateKTX2File(true);
+    encoder.setUASTC(true);
+    encoder.setTexType(0);
+    encoder.setSliceSourceImage(0, data, width, height, 0);
+    encoder.setPerceptual(srgb);
+    encoder.setKTX2AndBasisSRGBTransferFunc(srgb);
+    encoder.setMipGen(false);
+    encoder.setPackUASTCFlags(2);
+    encoder.setKTX2UASTCSupercompression(true);
+    const out = new Uint8Array(4 * width * height + 65536);
+    return out.slice(0, encoder.encode(out));
+  } finally {
+    encoder.delete();
+  }
+}
 
 /** basisu's transcoder formats: BC7, ASTC 4x4 and RGBA32. */
 const FORMATS = [6, 10, 13];
