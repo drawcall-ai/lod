@@ -23,7 +23,7 @@ import {
   vec4,
 } from "three/tsl";
 import { isMesh, isNodeMaterial, isPhysical, isStandard, isStandardNode, toNodeMaterial } from "../../three.js";
-import { affine, biasedTextures, isNodeOf } from "../../tsl.js";
+import { affine, biasedTextures, isNodeOf, sharpTextures } from "../../tsl.js";
 import { placeInstances } from "../../fade.js";
 import { originalOf } from "../../material.js";
 
@@ -32,7 +32,7 @@ export interface BakeSettings {
   /** the cameras' distance from the bounding box centre, and the bounding radius: the depth encoding */
   distance: number;
   radius: number;
-  /** mip bias of every texture read, per mip level: textures are read at the size of a texel (see `bakeImpostor`) */
+  /** mip bias of every texture read but an alpha-tested material's, per mip level: textures are read at the size of a texel (see `bakeImpostor`) */
   textureBias: Node<"float"> & { value: number };
 }
 
@@ -148,7 +148,10 @@ function bakeMaterial(source: Material, settings: BakeSettings): { material: Nod
   material.transparent = false;
   material.blending = NoBlending;
   material.depthWrite = true;
-  material.contextNode = biasedTextures(settings.textureBias);
+  // A cut-out is kept where its alpha passes the test at full detail, and the supersamples average that. Tested at
+  // a smaller mip, whose alpha averages the holes in, thin cut-outs such as needles fall below the cutoff and vanish.
+  const cutOut = material.alphaTest > 0 || material.alphaTestNode !== null;
+  material.contextNode = cutOut ? sharpTextures() : biasedTextures(settings.textureBias);
 
   // Two ways to store the normals three shades with, each a normal and the share of the
   // surface that shades with it rather than its opposite; the bake keeps the one whose

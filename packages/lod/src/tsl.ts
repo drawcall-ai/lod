@@ -1,5 +1,5 @@
 import type { BufferAttribute, ContextNode, Node, NodeBuilder, StorageBufferNode, TextureNode } from "three/webgpu";
-import { NodeUpdateType, context, cross, dFdx, dFdy, dot, length, log2, max, storage, uniform, uniformGroup, uv, vec2, vec3, vec4 } from "three/tsl";
+import { NodeUpdateType, context, cross, dFdx, dFdy, dot, float, length, log2, max, storage, uniform, uniformGroup, uv, vec2, vec3, vec4 } from "three/tsl";
 import { isNode } from "./three.js";
 
 // Matrix access for the shaders, in operations three's typings know: they type no
@@ -120,5 +120,15 @@ export function biasedTextures(bias: Node<"float">): ContextNode<unknown> {
       const texels = at.mul(vec2(size[0], size[1]));
       return log2(max(max(length(dFdx(texels)), length(dFdy(texels))), 1e-6)).add(bias);
     },
+  });
+}
+
+/**
+ * A context in which every texture read is at level 0, the full detail. Reads with uv of their own making, or with an
+ * explicit level or gradients, keep theirs.
+ */
+export function sharpTextures(): ContextNode<unknown> {
+  return context({
+    getTextureLevel: (node: TextureNode) => (node.uvNode || !texelsOf(node.value.image) ? null : float(0)),
   });
 }

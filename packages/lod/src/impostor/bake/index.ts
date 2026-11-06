@@ -38,8 +38,8 @@ export interface BakeImpostorOptions {
    * Largest on-screen height (CSS pixels, as `LodLevel.maxPixels`) the impostor will be
    * drawn at, when that is above the height where it is sharp (its default maxPixels).
    * Larger, it shows its top mip magnified, which then reads the source's textures as
-   * sharp as they are at this height: alpha-tested leaves keep the coverage and colour
-   * they show up close, not the denser, darker look of their texture's small mips.
+   * sharp as they are at this height, not with the look of their small mips. Alpha-tested
+   * materials are read at full detail at every size, which keeps their cut-out's coverage.
    * Default: the height where it is sharp (see `texelPixels`, and `framePixels` for a
    * LodLoader level).
    */
@@ -116,7 +116,8 @@ async function bakeNow(object: Object3D, options: BakeImpostorOptions, excluded:
   const halfSize = fittedHalfSize(source, centre, directions) * (1 + PAD);
 
   const distance = 2 * radius + 1e-3;
-  // Textures are read at the size of an atlas texel; the top mip's at the size of a pixel at maxPixels.
+  // Textures are read at the size of an atlas texel; the top mip's at the size of a pixel at maxPixels. Alpha-tested
+  // materials read theirs at full detail (see `swapMaterials`).
   const sharp = texelPixels({ size: cell * frames, frames, box, halfSize });
   const textureBias = (m: number) => Math.log2(supersample) - (m === 0 ? Math.log2(Math.max(1, (options.maxPixels ?? sharp) / sharp)) : 0);
   const settings: BakeSettings = { distance, radius, textureBias: uniform(0) };
@@ -125,8 +126,8 @@ async function bakeNow(object: Object3D, options: BakeImpostorOptions, excluded:
   const maps: ImpostorMap[] = emissive ? [...MAPS] : ["base", "normalDepth", "orm"];
 
   // Every mip level is rendered, not filtered from the one above: the source does not look
-  // the same at every size (alpha-tested leaves whose texture mips mix in the dark texels
-  // around them darken with distance), and filtering would freeze the look of the largest.
+  // the same at every size (a texture whose small mips mix in dark texels darkens with
+  // distance), and filtering would freeze the look of the largest.
   const atlases = Array.from({ length: Math.log2(cell) + 1 }, (_, m) => new Atlas(maps, frames, cell >> m, swapped.specular));
   const renderer = await sharedRenderer();
   const scene = new Scene();

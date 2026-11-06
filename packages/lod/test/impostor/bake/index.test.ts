@@ -214,6 +214,29 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
     expect(coverage(cut) / coverage(solid)).toBeLessThan(0.65);
   });
 
+  it("keeps an alpha-tested cut-out's coverage at every mip level, however thin its parts", async () => {
+    // Needles: every fourth texel column opaque. The smaller mips average them to a uniform quarter, below the cutoff.
+    const mipmaps = Array.from({ length: 9 }, (_, m) => {
+      const size = 256 >> m;
+      const data = new Uint8Array(size * size * 4).fill(255);
+      for (let i = 0; i < size * size; i++) data[i * 4 + 3] = m > 0 ? 64 : i % 4 === 0 ? 255 : 0;
+      return { data, width: size, height: size };
+    });
+    const map = new DataTexture(mipmaps[0]?.data, 256, 256, RGBAFormat);
+    map.mipmaps = mipmaps;
+    map.generateMipmaps = false;
+    map.minFilter = LinearMipmapLinearFilter;
+    map.needsUpdate = true;
+    const card = (alphaTest: number) => new Mesh(new PlaneGeometry(2, 2), new MeshStandardMaterial({ map, alphaTest, side: DoubleSide }));
+    const [solid, needles] = await Promise.all([bake(card(0), "hemi"), bake(card(0.5), "hemi")]);
+    // Summed coverage: partial texels count by their share.
+    const cover = (impostor: Impostor, m: number) => base(impostor, m).reduce((sum, v, i) => (i % 4 === 3 ? sum + v : sum), 0);
+    for (const m of [0, 2]) {
+      expect(cover(needles, m) / cover(solid, m)).toBeGreaterThan(0.15);
+      expect(cover(needles, m) / cover(solid, m)).toBeLessThan(0.35);
+    }
+  });
+
   it("bakes glass as a dark opaque pane, not a hole, and keeps a blended texture's cut-out", async () => {
     const glass = await bake(
       new Mesh(new PlaneGeometry(2, 2), new MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.25, side: DoubleSide })),

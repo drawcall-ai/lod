@@ -10,7 +10,7 @@ export type LodCacheOptions = Pick<CacheEntryOptions, "basePath" | "root">;
  * the bytes a level or shape entry holds. Not this package's files, which change with every rebuild, whether a level
  * would or not.
  */
-const version = "lod-level@22";
+const version = "lod-level@23";
 
 /**
  * One derived level, or the source's shape: keyed by the URLs it is built from, its request and their bundled modules,
