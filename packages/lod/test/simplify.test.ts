@@ -1,6 +1,10 @@
 import {
+  Box3,
   BoxGeometry,
+  BufferAttribute,
+  BufferGeometry,
   CompressedTexture,
+  DataTexture,
   Group,
   InstancedMesh,
   Matrix4,
@@ -8,7 +12,6 @@ import {
   MeshStandardMaterial,
   RGBAFormat,
   SphereGeometry,
-  type BufferGeometry,
   type Object3D,
 } from "three";
 import { describe, expect, it, vi } from "vitest";
@@ -19,6 +22,7 @@ import { InstancedLod } from "../src/instanced/index.js";
 import { Lod } from "../src/lod.js";
 import { simplify } from "../src/simplify.js";
 import { isImpostorMesh, isInstancedMesh, isLOD, isMesh } from "../src/three.js";
+import { area } from "../src/source/surface.js";
 import { must } from "./must.js";
 
 const triangles = (geometry: BufferGeometry) => (geometry.index?.count ?? 0) / 3;
@@ -94,6 +98,42 @@ describe("simplify", () => {
       clone.mockRestore();
       crowd.dispose();
     }
+  });
+
+  it("thins alpha-tested cards whole, spread evenly, keeping their coverage", async () => {
+    // 20 x 20 separate quads on a wavy sheet, as a crown's needle cards.
+    const positions: number[] = [];
+    const index: number[] = [];
+    for (let i = 0; i < 400; i++) {
+      const [x, y] = [(i % 20) - 9.5, Math.floor(i / 20) - 9.5];
+      const z = Math.sin(x) * Math.cos(y);
+      const v = positions.length / 3;
+      for (const [dx, dy] of [[0, 0], [0.4, 0], [0.4, 0.4], [0, 0.4]]) positions.push(x + (dx ?? 0), y + (dy ?? 0), z);
+      index.push(v, v + 1, v + 2, v, v + 2, v + 3);
+    }
+    const geometry = new BufferGeometry().setAttribute("position", new BufferAttribute(new Float32Array(positions), 3)).setIndex(index);
+    geometry.computeVertexNormals();
+    const needles = new MeshStandardMaterial({ map: new DataTexture(new Uint8Array(4).fill(255), 1, 1), alphaTest: 0.5 });
+    const source = new Mesh(geometry, needles);
+    const copy = await simplify(source, { ratio: 0.05 });
+    if (!isMesh(copy)) throw new Error("expected a mesh");
+    const kept = copy.geometry;
+    const surface = (g: BufferGeometry) => area({ positions: Float32Array.from(g.getAttribute("position").array), index: Uint32Array.from(must(g.index).array), normals: new Float32Array() });
+    // About 5% of the 400 cards (meshopt's point simplifier keeps at most its target), each whole.
+    expect(triangles(kept) / 2).toBeGreaterThanOrEqual(15);
+    expect(triangles(kept) / 2).toBeLessThanOrEqual(20);
+    expect(triangles(kept) % 2).toBe(0);
+    expect(surface(kept) / surface(geometry)).toBeCloseTo(1, 2);
+    // Every quarter of the sheet keeps its share; a quad's six corners average to its centre.
+    const corner = (i: number, axis: number) => kept.getAttribute("position").getComponent(must(kept.index).getX(i), axis);
+    const centres = Array.from({ length: triangles(kept) / 2 }, (_, c) => [0, 1].map((axis) => Array.from({ length: 6 }, (_, k) => corner(c * 6 + k, axis)).reduce((sum, v) => sum + v) / 6));
+    for (const [sx, sy] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+      expect(centres.filter(([x = 0, y = 0]) => Math.sign(x) === sx && Math.sign(y) === sy).length).toBeGreaterThanOrEqual(3);
+    }
+    // A level must stay inside its source's bounds, though the cards at the edge grow too.
+    const bounds = new Box3().setFromObject(source).expandByScalar(1e-6);
+    for (const level of [copy, await simplify(source, { ratio: 0.5 })]) expect(bounds.containsBox(new Box3().setFromObject(level))).toBe(true);
+    expect(deviation(source, copy)).toBeGreaterThan(0);
   });
 
   it("measures a source whose cut-out textures the CPU cannot read, as opaque", async () => {

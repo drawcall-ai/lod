@@ -49,7 +49,8 @@ export async function sha256(bytes: Uint8Array): Promise<string> {
 function parameters(level: Derived): JsonValue {
   switch (level.type) {
     case "simplify":
-      return { type: level.type, ratio: level.ratio ?? null };
+      // Alpha-tested cards are thinned whole since lod-level@23; keyed here so other kinds' levels stay cached.
+      return { type: level.type, ratio: level.ratio ?? null, cards: "thin" };
     case "baked":
       return {
         type: level.type,
