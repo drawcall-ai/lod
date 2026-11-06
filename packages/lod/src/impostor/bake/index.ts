@@ -72,8 +72,21 @@ export function bakeImpostor(object: Object3D, options: BakeImpostorOptions = {}
   return bake(object, options);
 }
 
-/** Loader entry: rooms attached for the close source are absent from distant bakes. */
-export async function bake(object: Object3D, options: BakeImpostorOptions, excluded: readonly Object3D[] = []): Promise<Impostor> {
+/** The bake under way and those queued after it: see `bake`. */
+let baking: Promise<unknown> = Promise.resolve();
+
+/**
+ * Loader entry: rooms attached for the close source are absent from distant bakes. Bakes run one at a time on the
+ * shared renderer: each keeps one tile's renders in flight, and a scene's bakes all at once queued GPU work seconds
+ * deep (macOS ends a device whose work keeps the display waiting).
+ */
+export function bake(object: Object3D, options: BakeImpostorOptions, excluded: readonly Object3D[] = []): Promise<Impostor> {
+  const next = baking.then(() => bakeNow(object, options, excluded));
+  baking = next.catch(() => {});
+  return next;
+}
+
+async function bakeNow(object: Object3D, options: BakeImpostorOptions, excluded: readonly Object3D[]): Promise<Impostor> {
   const layout = options.layout ?? "full";
   const frames = options.frames ?? (layout === "hemi" ? 12 : 16);
   const resolution = options.resolution ?? 128;
