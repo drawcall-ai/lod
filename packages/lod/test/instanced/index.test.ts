@@ -608,6 +608,27 @@ describe("chunks", { timeout: GPU_TIMEOUT }, () => {
     }
   });
 
+  it("never keeps drawing at a reused place the level its last instance showed, removed and replaced in one frame", async () => {
+    // The coarse level never loads: an instance that selects it keeps the level it showed, or draws nothing.
+    const bounds = new Box3(new Vector3(-1, -1, -1), new Vector3(1, 1, 1));
+    const lod = new InstancedLod([{ object: mesh() }, { load: () => new Promise<Mesh>(() => {}), maxPixels: 5, box: bounds }]);
+    const camera = new PerspectiveCamera(60, 1, 0.1, 2000);
+    const scene = new Scene().add(lod);
+    try {
+      // A second chunk keeps the capacity, so the far chunk takes the near one's places.
+      const near = lod.addChunk(row([5, 5]));
+      lod.addChunk(row([6]));
+      await render(scene, camera);
+      expect(await distances(lod, camera)).toEqual([[5, 5, 6]]);
+      lod.removeChunk(near);
+      expect(lod.addChunk(row([1000, 1000])).start).toBe(near.start);
+      await render(scene, camera);
+      expect(await distances(lod, camera)).toEqual([[6]]);
+    } finally {
+      lod.dispose();
+    }
+  });
+
   it("uploads only an added chunk's instances while it fits, keeping the buffers the draws hold", async () => {
     const lod = new InstancedLod([{ object: box("source") }]);
     const camera = new PerspectiveCamera(60, 1, 0.1, 1e5);

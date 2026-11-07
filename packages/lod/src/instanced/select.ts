@@ -6,19 +6,18 @@ import {
   StorageInstancedBufferAttribute,
   Vector3,
   Vector4,
-  type ComputeNode,
   type Renderer,
   type Sphere,
 } from "three/webgpu";
 import { at } from "../at.js";
 import { ARGS_BYTES, args, type ArgsSlice } from "./args.js";
-import { Kernel, type IndirectDraw, type RangeAim, type Target } from "./kernel.js";
-import type { Pages } from "./pages.js";
-import type { Store } from "./store.js";
+import { upload } from "./dirty.js";
+import { Kernel, type IndirectDraw, type Pass, type RangeAim, type Target } from "./kernel.js";
+import type { Places } from "./places.js";
 import type { BlockView } from "./blocks.js";
 import type { View } from "../view.js";
 
-const CURRENT: ComputeNode[] = [];
+const CURRENT: readonly Pass[] = [];
 
 /** What a view selects with: see `Selection.aim`. */
 export interface Aim extends BlockView {
@@ -61,15 +60,10 @@ interface Selected extends Slots, Target {
   taken: number;
 }
 
-/** What a selection selects from: a store's instances (see store.ts). */
-export type Instances = Pick<Store, "capacity" | "matrices" | "keeps" | "colors">;
-
 /** The slots of each view of an InstancedLod's instances, and when its kernel has to fill them again (see kernel.ts). */
 export class Selection {
   /** The instances' colours (RGB, padded to four floats), once there are any. */
   colors: StorageInstancedBufferAttribute | null = null;
-  /** One past the last place in use: the kernel visits only the places before it. */
-  end = 0;
   readonly progress: Kernel["progress"];
   /** The radius around an instance's centre, in its own space, that every level and its sway stay within. */
   readonly reach: Kernel["reach"];
@@ -85,18 +79,17 @@ export class Selection {
   private coloured = false;
 
   constructor(
-    instances: Instances,
+    private readonly places: Places,
     /** One instance's bounding sphere, in its own space. */
     sphere: Sphere,
     /** Per level, whether it draws anything. */
     private readonly drawing: readonly boolean[],
     private draws: readonly IndirectDraw[],
     fallback: readonly number[],
-    /** The pool the instances live in when GPU chunks feed them, or null. */
-    private readonly pages: Pages | null = null,
   ) {
-    this.buffers = buffers(instances, drawing);
-    this.kernel = new Kernel(sphere, this.buffers.first, fallback, pages?.fills ?? null);
+    this.buffers = buffers(places, drawing);
+    if (places.colors) this.useColors(places.colors);
+    this.kernel = new Kernel(sphere, this.buffers.first, fallback, places.occupied);
     this.progress = this.kernel.progress;
     this.reach = this.kernel.reach;
     this.bind();
@@ -123,13 +116,14 @@ export class Selection {
     return this.scaled ?? this.matrices;
   }
 
-  /** Select from `instances`, whose capacity changed, from now on: every buffer sized by it is replaced. */
-  resize(instances: Instances): void {
+  /** Select from the places again, whose capacity changed: every buffer sized by it is replaced. */
+  resize(): void {
+    const { places } = this;
     const old = [this.matrices, this.keeps, this.colors, this.scaled];
     const survivors = this.scaled !== null;
     this.colors = null;
-    this.buffers = buffers(instances, this.drawing);
-    if (instances.colors) this.useColors(instances.colors);
+    this.buffers = buffers(places, this.drawing);
+    if (places.colors) this.useColors(places.colors);
     this.scaled = survivors ? scaledMatrices(this.capacity) : null;
     this.bind();
     for (const view of this.views.values()) {
@@ -284,13 +278,24 @@ export class Selection {
     for (const view of this.views.values()) view.revision++;
   }
 
-  /** Bring the instances up to date on `renderer` before any view takes its passes: GPU chunks' changes run first. */
+  /** Bring the instances up to date on `renderer` before any view takes its passes. */
   prepare(renderer: Renderer): void {
-    this.pages?.run(renderer, this);
+    this.places.prepare(renderer);
+  }
+
+  /** Every view's record of the level each place drew, which the places clear for a new instance. */
+  shown(): StorageBufferAttribute[] {
+    return [...this.views.values()].map((view) => view.shown);
+  }
+
+  /** Clear every view's record of the levels the places from `start` to `end` drew: they hold new instances. */
+  forgetShown(start: number, end: number): void {
+    // Only the GPU writes a view's record: its CPU array stays zeros.
+    for (const view of this.views.values()) upload(view.shown, start, Math.min(end, view.shown.count));
   }
 
   /** The passes the renderer has to run for `camera`'s slots to be current in its buffers, or none. */
-  take(camera: Camera): ComputeNode[] {
+  take(camera: Camera): readonly Pass[] {
     const view = this.views.get(camera);
     if (!view?.aimed || view.taken === view.revision) return CURRENT;
     // Creating a buffer leaves its update ranges in place: its first upload takes all of it.
@@ -303,7 +308,7 @@ export class Selection {
       this.colors.clearUpdateRanges();
     }
     view.taken = view.revision;
-    return this.kernel.load(view, this.end);
+    return this.kernel.load(view, this.places.end);
   }
 
   /** Carry `colors` (4 floats per instance) with the instances from now on. */
@@ -331,15 +336,15 @@ interface Buffers {
   slotCount: number;
 }
 
-/** Buffers for `instances`, with slots for every level that is `drawing`. */
-function buffers(instances: Instances, drawing: readonly boolean[]): Buffers {
-  const { capacity } = instances;
+/** Buffers for `places`, with slots for every level that is `drawing`. */
+function buffers(places: Places, drawing: readonly boolean[]): Buffers {
+  const { capacity } = places;
   let next = 0;
   const first = drawing.map((draws) => (draws ? next++ * capacity : null));
   return {
     capacity,
-    matrices: new StorageInstancedBufferAttribute(padded(instances.matrices, 16), 16),
-    keeps: new StorageBufferAttribute(padded(instances.keeps, 1), 1),
+    matrices: new StorageInstancedBufferAttribute(padded(places.matrices, 16), 16),
+    keeps: new StorageBufferAttribute(padded(places.keeps, 1), 1),
     first,
     slotCount: Math.max(next * capacity, 1),
   };

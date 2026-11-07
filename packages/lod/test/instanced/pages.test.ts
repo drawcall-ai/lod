@@ -1,12 +1,27 @@
 import * as t3 from "@typegpu/three";
 import { d, std, tgpu } from "typegpu";
-import { Box3, BoxGeometry, Color, Matrix4, Mesh, MeshBasicMaterial, PerspectiveCamera, Scene, Vector3, type Camera } from "three/webgpu";
+import {
+  Box3,
+  BoxGeometry,
+  Color,
+  DirectionalLight,
+  Matrix4,
+  Mesh,
+  MeshBasicMaterial,
+  MeshStandardMaterial,
+  PerspectiveCamera,
+  PlaneGeometry,
+  Scene,
+  Vector3,
+  type Camera,
+  type Object3D,
+} from "three/webgpu";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { drawOf } from "../../src/fade.js";
 import { ARGS_BYTES } from "../../src/instanced/args.js";
 import { InstancedLod } from "../../src/instanced/index.js";
 import { Instances } from "../../src/instanced/meshes.js";
-import { GpuInstance, PAGE, type GpuChunks } from "../../src/instanced/pages.js";
+import { GpuInstance, PAGE, type GpuRecords } from "../../src/instanced/pages/index.js";
 import { GPU_TIMEOUT, render, renderer } from "../gpu.js";
 
 // The app's side, as a test: a GPU pass that writes records and their count, and the instance function.
@@ -85,8 +100,8 @@ const everywhere = new Box3(new Vector3(-11, 0, -600), new Vector3(11, 0, -4));
 const box = () => new Mesh(new BoxGeometry(2, 2, 2), new MeshBasicMaterial());
 const read = (attribute: Parameters<typeof renderer.getArrayBufferAsync>[0]) => renderer.getArrayBufferAsync(attribute);
 
-function crowd(gpuChunks?: Partial<GpuChunks>): InstancedLod {
-  const options = gpuChunks && { gpuChunks: { instance: place, records: records.node.value, counts: counts.node.value, capacity: CAPACITY, scales: [1, 1.75], ...gpuChunks } as const };
+function crowd(gpuRecords?: Partial<GpuRecords>): InstancedLod {
+  const options = gpuRecords && { gpuRecords: { instance: place, records: records.node.value, counts: counts.node.value, capacity: CAPACITY, scales: [1, 1.75], ...gpuRecords } as const };
   const lod = new InstancedLod([{ object: box() }, { object: box() }], options);
   lod.levels.forEach((level, i) => (level.maxPixels = [Infinity, 6][i] ?? level.maxPixels));
   return lod;
@@ -128,21 +143,44 @@ above.position.set(0, 800, -260);
 above.lookAt(0, 0, -260);
 above.updateMatrixWorld();
 
-/** Render `lod` from `view` twice, so that it selects and takes in its chunks. */
-async function frames(lod: InstancedLod, view = camera): Promise<void> {
-  const scene = new Scene().add(lod);
+/** Render `lod`, with `others`, from `view` twice, so that it selects and takes in its chunks. */
+async function frames(lod: InstancedLod, view = camera, ...others: Object3D[]): Promise<void> {
+  const scene = new Scene().add(lod, ...others);
   for (let i = 0; i < 2; i++) await render(scene, view);
+}
+
+/** A sun whose shadow map covers every record, and ground to receive it. */
+function sunlit(): { sun: DirectionalLight; others: Object3D[]; dispose: () => void } {
+  const sun = new DirectionalLight();
+  sun.position.set(0, 100, -130);
+  sun.target.position.set(0, 0, -130);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(256, 256);
+  Object.assign(sun.shadow.camera, { left: -140, right: 140, top: 140, bottom: -140, near: 1, far: 200 });
+  sun.shadow.camera.updateProjectionMatrix();
+  const ground = new Mesh(new PlaneGeometry(300, 300).rotateX(-Math.PI / 2), new MeshStandardMaterial());
+  ground.position.set(0, -2, -130);
+  ground.receiveShadow = true;
+  const dispose = () => {
+    sun.dispose();
+    ground.geometry.dispose();
+    ground.material.dispose();
+  };
+  return { sun, others: [sun, sun.target, ground], dispose };
 }
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("GPU chunks", { timeout: GPU_TIMEOUT }, () => {
-  it("draw, thin and select the same instances as the same records given from the CPU", async () => {
+  it("draw, thin, scale and cast the same instances as the same records given from the CPU", async () => {
     const cpu = crowd();
     const gpu = crowd({});
     for (const lod of [cpu, gpu]) {
-      lod.range = { camera, radius: 160, ramp: 120 };
+      lod.range = { camera, radius: 160, ramp: 120, scaleSurvivors: true };
+      lod.traverse((node) => (node.castShadow = true));
     }
+    const { sun, others, dispose } = sunlit();
+    renderer.shadowMap.enabled = true;
     // Two chunks, the first over several pages.
     const parts = [
       [0, 700],
@@ -154,17 +192,22 @@ describe("GPU chunks", { timeout: GPU_TIMEOUT }, () => {
       gpu.addGpuChunk({ box: everywhere, first: from, counter: i });
     });
     try {
-      await frames(cpu);
-      await frames(gpu);
+      await frames(cpu, camera, ...others);
+      await frames(gpu, camera, ...others);
       const expected = await drawn(cpu, camera);
       // Both levels, thinned.
       expect(expected.map((slots) => slots.length > 0)).toEqual([true, true]);
       expect(expected[0]?.length).toBeLessThan(1000);
       expect(await drawn(gpu, camera)).toEqual(expected);
+      const cast = await drawn(cpu, sun.shadow.camera);
+      expect(cast.flat().length).toBeGreaterThan(0);
+      expect(await drawn(gpu, sun.shadow.camera)).toEqual(cast);
       expect(await gpu.drained(renderer)).toBe(true);
     } finally {
+      renderer.shadowMap.enabled = false;
       cpu.dispose();
       gpu.dispose();
+      dispose();
     }
   });
 
@@ -192,6 +235,47 @@ describe("GPU chunks", { timeout: GPU_TIMEOUT }, () => {
     } finally {
       cpu.dispose();
       gpu.dispose();
+    }
+  });
+
+  it("give a chunk replacing another in one frame its slot and pages, never the levels their instances showed", async () => {
+    // The coarse level never loads: an instance that selects it keeps the level it showed, or draws nothing.
+    const bounds = new Box3(new Vector3(-1, -1, -1), new Vector3(1, 1, 1));
+    const gpuRecords = { instance: place, records: records.node.value, counts: counts.node.value, capacity: CAPACITY, scales: [1, 1.75] as const };
+    const lod = new InstancedLod([{ object: box() }, { load: () => new Promise<Mesh>(() => {}), maxPixels: 6, box: bounds }], { gpuRecords });
+    // Sees all eight records of the first row.
+    const view = new PerspectiveCamera(60, 1, 0.1, 1e4);
+    view.position.z = 15;
+    view.updateMatrixWorld();
+    const scene = new Scene().add(lod);
+    try {
+      produce(0, 8, 0);
+      const near = lod.addGpuChunk({ box: everywhere, first: 0, counter: 0 });
+      for (let i = 0; i < 2; i++) await render(scene, view);
+      expect(distinct(await drawn(lod, view)).size).toBe(8);
+      // From afar, the same records again as a new chunk: too small for the source, which they never showed.
+      lod.removeGpuChunk(near);
+      expect(lod.addGpuChunk({ box: everywhere, first: 0, counter: 0 }).slot).toBe(near.slot);
+      view.position.z = 3000;
+      view.updateMatrixWorld();
+      for (let i = 0; i < 2; i++) await render(scene, view);
+      expect((await drawn(lod, view)).flat()).toEqual([]);
+      expect(await lod.drained(renderer)).toBe(true);
+    } finally {
+      lod.dispose();
+    }
+  });
+
+  it("refuse a crowd without levels and the API of instance indices", () => {
+    const gpuRecords = { instance: place, records: records.node.value, counts: counts.node.value, capacity: CAPACITY, scales: [1, 1.75] as const };
+    expect(() => new InstancedLod([], { gpuRecords })).toThrow("needs its levels from the start");
+    const lod = crowd({});
+    try {
+      expect(() => lod.setMatrixAt(0, new Matrix4())).toThrow("GPU chunks, whose instances have no index");
+      expect(() => lod.levelOf(0)).toThrow("GPU chunks, whose instances have no index");
+      expect(() => lod.addChunk({ matrices: new Matrix4().elements })).toThrow("GPU chunks, whose instances have no index");
+    } finally {
+      lod.dispose();
     }
   });
 
@@ -237,7 +321,7 @@ describe("GPU chunks", { timeout: GPU_TIMEOUT }, () => {
       const b = lod.addGpuChunk({ box: everywhere, first: CAPACITY, counter: 1 });
       await frames(lod, above);
       expect(await total()).toBe(600 + PAGE);
-      await expect(lod.drained(renderer)).rejects.toThrow("1 GPU chunk lack pages, holding 1 of the 2 pages they need: raise gpuChunks.pages (now 4)");
+      await expect(lod.drained(renderer)).rejects.toThrow("1 GPU chunk lack pages, holding 1 of the 2 pages they need: raise gpuRecords.pages (now 4)");
       // Pages freed later do not complete it.
       lod.removeGpuChunk(a);
       await frames(lod, above);

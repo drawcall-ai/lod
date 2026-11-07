@@ -7,6 +7,7 @@ import {
   Mesh,
   type NodeMaterial,
   Object3D,
+  type Renderer,
   type Sphere,
   type StorageInstancedBufferAttribute,
 } from "three/webgpu";
@@ -31,7 +32,14 @@ import type { Selection } from "./select.js";
  * pass, a submit). Each renderer runs those its own buffers are not current with.
  */
 const due = new Set<Selection>();
-const passes: ComputeNode[] = [];
+const batch: ComputeNode[] = [];
+
+/** Run the passes batched so far on `renderer`. */
+function flush(renderer: Renderer): void {
+  if (batch.length === 0) return;
+  renderer.compute(batch);
+  batch.length = 0;
+}
 
 /** An indirect level draw. Its material applies instance storage without Three's per-build nodes. */
 export class Instances extends Mesh<BufferGeometry, NodeMaterial> {
@@ -227,11 +235,20 @@ function runDue(renderer: unknown, camera: Camera, selection: Selection): void {
   due.add(selection);
   // Each level's draws start at its slots (see select.ts).
   if (!gpu.hasFeature("indirect-first-instance")) throw new Error("InstancedLod: needs the GPU feature indirect-first-instance, which this device lacks");
-  passes.length = 0;
   for (const each of due) each.prepare(gpu);
-  for (const each of due) passes.push(...each.take(camera));
+  // In order, passes without a dispatch of their own in batches.
+  for (const each of due) {
+    for (const { node, dispatch } of each.take(camera)) {
+      if (!dispatch) {
+        batch.push(node);
+        continue;
+      }
+      flush(gpu);
+      gpu.compute(node, dispatch);
+    }
+  }
   due.clear();
-  if (passes.length > 0) gpu.compute(passes);
+  flush(gpu);
 }
 
 /** An impostor's cards for `selection`'s slots. */

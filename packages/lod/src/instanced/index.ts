@@ -10,27 +10,29 @@ import { compileLevel } from "../compile.js";
 import { refreshWind } from "../wind/index.js";
 import { Meshes } from "./meshes.js";
 import { parts } from "./parts.js";
-import { Blocks } from "./blocks.js";
+import type { Blocks } from "./blocks.js";
 import { Extent } from "./extent.js";
 import { Probes } from "./raycast.js";
 import type { RangeAim } from "./kernel.js";
 import { checkRange, keptFraction, survivorScale, type InstancedRange } from "./range.js";
 import { Selection, sight, type Aim } from "./select.js";
 import { Store, type ChunkData, type InstancedChunk } from "./store.js";
-import { Pages, type GpuChunk, type GpuChunkData, type GpuChunks } from "./pages.js";
+import { Pages, type GpuChunk, type GpuChunkData, type GpuRecords } from "./pages/index.js";
 import { meeting } from "../residency.js";
 
 /** How an InstancedLod is made. */
 export interface InstancedLodOptions extends LodOptions {
   /**
-   * Take chunks from the app's GPU passes (see `addGpuChunk`) instead of the CPU. Its instances then live only on the
-   * GPU: they have no index, so `setMatrixAt`, `levelOf`, raycasting and `copy` do not apply to them.
+   * Take chunks of the records the app's GPU passes write (see `addGpuChunk`) instead of chunks from the CPU. Its
+   * instances then live only on the GPU: they have no index, so `setMatrixAt`, `levelOf`, raycasting and `copy` do not
+   * apply to them. It needs levels from the start.
    */
-  gpuChunks?: GpuChunks;
+  gpuRecords?: GpuRecords;
 }
 
 const view = new View();
 const empty = new Box3();
+const none: ReadonlySet<never> = new Set();
 const inverse = new Matrix4();
 const origin = new Vector3();
 
@@ -57,12 +59,11 @@ export class InstancedLod extends Owner {
   /** How far from a camera its instances draw, thinning out before it, in every view; null draws them at any distance. */
   range: InstancedRange | null = null;
 
-  private readonly probes: Probes;
+  /** Raycasts its CPU instances; GPU instances have none to hit. */
+  private readonly probes: Probes | null;
   private selection: Selection | null = null;
   private meshes: Meshes | null = null;
-  private readonly store: Store;
-  /** The page pool, while GPU chunks feed it. */
-  private readonly pages: Pages | null;
+  private readonly places: Store | Pages;
   private readonly extent = new Extent();
   /** Around every instance; each level may use tighter bounds. */
   readonly bounds = new Sphere();
@@ -83,29 +84,48 @@ export class InstancedLod extends Owner {
   /** `levels[0]` is the source. Empty only as the target of `copy`. It holds no instances until chunks are added. */
   constructor(levels: readonly LodLevel[] = [], options: InstancedLodOptions = {}) {
     super("InstancedLod", options);
-    this.store = new Store();
-    this.pages = options.gpuChunks ? new Pages(options.gpuChunks) : null;
-    this.probes = new Probes(this.store, this.extent.rest);
+    // Without levels it never selects, so its GPU chunks would never be taken in.
+    if (options.gpuRecords && levels.length === 0) throw new Error("InstancedLod: one made with gpuRecords needs its levels from the start");
+    if (options.gpuRecords) {
+      this.places = new Pages(options.gpuRecords);
+      this.probes = null;
+    } else {
+      const store = new Store();
+      this.places = store;
+      this.probes = new Probes(store, this.extent.rest);
+    }
     this.draws = levels.length > 0 ? this.build(levels) : 0;
     this.blocks = this.makeBlocks();
-    // Every render takes in the GPU chunks' changes first, whether or not any instance draws, so a producer can
-    // reuse its records once it has rendered.
-    if (this.pages) this.add(meeting((renderer) => this.residency.guard(() => this.selection?.prepare(renderer))));
+    // Every render takes GPU chunks in first, whether or not any instance draws, so a producer can reuse its records
+    // once it has rendered. CPU chunks are sent as they are measured.
+    if (this.places instanceof Pages) this.add(meeting((renderer) => this.residency.guard(() => this.selection?.prepare(renderer))));
   }
 
   /** Instances in its chunks from the CPU. */
   get count(): number {
-    return this.store.count;
+    return this.places instanceof Store ? this.places.count : 0;
   }
 
   /** Its chunks from the CPU, in the order they were added. */
   get chunks(): ReadonlySet<InstancedChunk> {
-    return this.store.chunks;
+    return this.places instanceof Store ? this.places.chunks : none;
   }
 
   /** Its chunks from the GPU, in the order they were added. */
   get gpuChunks(): ReadonlySet<GpuChunk> {
-    return this.pages?.chunks ?? new Set();
+    return this.places instanceof Pages ? this.places.chunks : none;
+  }
+
+  /** Its instances from the CPU, which have indices. */
+  private get store(): Store {
+    if (this.places instanceof Store) return this.places;
+    throw new Error("InstancedLod: one made with gpuRecords holds GPU chunks, whose instances have no index");
+  }
+
+  /** Its page pool for GPU chunks. */
+  private get pages(): Pages {
+    if (this.places instanceof Pages) return this.places;
+    throw new Error("InstancedLod: GPU chunks need an InstancedLod made with gpuRecords");
   }
 
   /**
@@ -113,9 +133,9 @@ export class InstancedLod extends Owner {
    * chunk is removed. Adding and removing chunks costs about what they hold, a few per frame included.
    */
   addChunk(data: ChunkData): InstancedChunk {
-    if (this.pages) throw new Error("InstancedLod: one made with gpuChunks takes chunks from the GPU only (see addGpuChunk)");
-    const { capacity, colors } = this.store;
-    const chunk = this.store.add(data);
+    const { store } = this;
+    const { capacity, colors } = store;
+    const chunk = store.add(data);
     this.fit(capacity, colors);
     return chunk;
   }
@@ -129,12 +149,12 @@ export class InstancedLod extends Owner {
 
   /**
    * Add the instances of the records an app's GPU pass wrote for `data` as one chunk, in an InstancedLod made with
-   * `gpuChunks`. The next render that reaches this InstancedLod copies them into its pages, and nothing is read back:
+   * `gpuRecords`. The next render that reaches this InstancedLod copies them into its pages, and nothing is read back:
    * the records and count need to hold only until that render, after which the producer may overwrite them. A chunk
    * the pool lacks pages for draws the instances it got until it is removed, and `drained` throws.
    */
   addGpuChunk(data: GpuChunkData): GpuChunk {
-    const pages = this.gpuPages();
+    const { pages } = this;
     const chunk = pages.add(data);
     this.blocks.place(chunk.slot, chunk.box, pages.scales);
     this.blocks.refit();
@@ -144,7 +164,7 @@ export class InstancedLod extends Owner {
 
   /** Remove `chunk`'s instances; its pages return to the pool before the next draw. */
   removeGpuChunk(chunk: GpuChunk): void {
-    const pages = this.gpuPages();
+    const { pages } = this;
     pages.remove(chunk);
     this.blocks.place(chunk.slot, empty, pages.scales);
     this.blocks.refit();
@@ -157,14 +177,8 @@ export class InstancedLod extends Owner {
    * wait for it, say before a capture. Always true without GPU chunks.
    */
   async drained(renderer: Renderer): Promise<boolean> {
-    if (!this.pages) return true;
     this.selection?.prepare(renderer);
-    return this.pages.drained(renderer);
-  }
-
-  private gpuPages(): Pages {
-    if (!this.pages) throw new Error("InstancedLod: GPU chunks need an InstancedLod made with gpuChunks");
-    return this.pages;
+    return this.places.drained(renderer);
   }
 
   /** Follow the store to a new capacity, or to colours it has begun to carry. */
@@ -172,27 +186,15 @@ export class InstancedLod extends Owner {
     const { store } = this;
     if (store.capacity !== capacity) {
       this.blocks = this.makeBlocks();
-      this.selection?.resize(store);
+      this.selection?.resize();
     }
     if (store.capacity !== capacity || store.colors !== colors) this.meshes?.rebind();
   }
 
   private makeBlocks(): Blocks {
-    const { store, pages } = this;
-    const scaling = this.ranged?.survivors ?? false;
-    if (pages) {
-      // A leaf per chunk slot; a chunk's survivors may draw as large as any.
-      const slots = pages.slotCount;
-      const blocks = new Blocks(slots, new Float32Array(slots * 4), this.extent.source, this.bounds, this.draws, this.extent.rest, scaling ? new Float32Array(slots) : null, 1);
-      blocks.pad(this.padding);
-      for (const chunk of pages.chunks) blocks.place(chunk.slot, chunk.box, pages.scales);
-      blocks.refit();
-      return blocks;
-    }
-    const survivors = scaling ? store.keeps : null;
-    const blocks = new Blocks(store.capacity, store.spheres, this.extent.source, this.bounds, this.draws, this.extent.rest, survivors);
-    blocks.pad(this.padding);
-    return blocks;
+    const { extent } = this;
+    const frame = { source: extent.source, bounds: this.bounds, draws: this.draws, rest: extent.rest, padding: this.padding };
+    return this.places.blocks(frame, this.ranged?.survivors ?? false);
   }
 
   private build(inputs: readonly LodLevel[]): number {
@@ -202,22 +204,13 @@ export class InstancedLod extends Owner {
     validate(this.entries);
     this.residency.reset();
     const templates = this.entries.map(({ object }, i) => (object ? parts(object, i) : []));
-    this.probes.add(templates[0] ?? []);
+    this.probes?.add(templates[0] ?? []);
     const draws = templates.flatMap((parts) => parts.map((part) => part.draw));
-    const { pages } = this;
-    const selection = new Selection(
-      pages ?? this.store,
-      extent.source,
-      templates.map((parts, i) => parts.length > 0 || at(inputs, i).box?.isEmpty() === false),
-      draws,
-      this.residency.fallback,
-      pages,
-    );
+    const drawing = templates.map((parts, i) => parts.length > 0 || at(inputs, i).box?.isEmpty() === false);
+    const selection = new Selection(this.places, extent.source, drawing, draws, this.residency.fallback);
     selection.reach.value = extent.rest.radius;
-    selection.end = pages ? pages.capacity : this.store.end;
     this.selection = selection;
-    this.store.attach(selection);
-    if (pages) selection.useColors(pages.colors);
+    this.places.attach(selection);
     const meshes = new Meshes(selection, extent.reaches, extent.drawRadius, {
       live: () => !this.disposed,
       drawn: (camera, mesh) => this.residency.drawn(camera, mesh),
@@ -242,7 +235,7 @@ export class InstancedLod extends Owner {
     });
     if (!loaded) return;
     level.object = loaded.object;
-    if (level.index === 0) this.probes.add(loaded.found);
+    if (level.index === 0) this.probes?.add(loaded.found);
     for (const mesh of loaded.made) this.add(mesh);
   }
 
@@ -306,7 +299,7 @@ export class InstancedLod extends Owner {
     validate(entries);
     if (this.forceLevel !== null && !entries[this.forceLevel]) throw new Error(`Lod: forceLevel ${this.forceLevel} is not a level`);
     this.aimRange(selection, meshes);
-    this.store.measure(this.blocks);
+    this.places.measure(this.blocks);
     const height = viewportHeight(camera);
     view.begin(camera, height ?? TYPICAL_HEIGHT, this.forceLevel);
     const shadow = inShadowPass(this);
@@ -347,8 +340,6 @@ export class InstancedLod extends Owner {
     if ((this.ranged?.survivors ?? false) === survived) return;
     // Survivors draw larger than the blocks bounded them, or no longer do.
     this.blocks = this.makeBlocks();
-    this.blocks.measure(this.store.matrices, 0, this.store.end);
-    this.blocks.refit();
     meshes.rebind();
   }
 
@@ -372,7 +363,7 @@ export class InstancedLod extends Owner {
    * InstancedLod. Meshes of the source on layers the raycaster does not test are skipped.
    */
   override raycast(raycaster: Raycaster, intersects: Intersection[]): boolean {
-    this.probes.raycast(this, raycaster, intersects);
+    this.probes?.raycast(this, raycaster, intersects);
     return false;
   }
 
@@ -381,10 +372,10 @@ export class InstancedLod extends Owner {
    * otherwise); the copy shares geometry and textures with `source`. Its chunks are its own, at the same indices.
    */
   override copy(source: InstancedLod): this {
-    if (this.entries.length > 0 || this.store.chunks.size > 0) throw new Error("InstancedLod.copy: copy into an InstancedLod without levels or chunks");
-    if (this.pages || source.pages) throw new Error("InstancedLod.copy: an InstancedLod made with gpuChunks cannot be copied");
+    if (!(source.places instanceof Store)) throw new Error("InstancedLod.copy: an InstancedLod made with gpuRecords cannot be copied");
+    if (this.entries.length > 0 || this.count > 0) throw new Error("InstancedLod.copy: copy into an InstancedLod without levels or chunks");
     super.copy(source, false);
-    this.store.copy(source.store);
+    this.store.copy(source.places);
     this.range = source.range && { ...source.range };
     this.draws = source.entries.length > 0 ? this.build(cloneLevels(source.entries)) : 0;
     this.blocks = this.makeBlocks();
@@ -401,8 +392,8 @@ export class InstancedLod extends Owner {
   protected release(): void {
     this.meshes?.dispose();
     this.selection?.dispose();
-    this.pages?.dispose();
-    this.store.attach(null);
+    this.places.attach(null);
+    this.places.dispose();
     for (const { object } of this.entries) if (object) disposeCopies(object);
   }
 }

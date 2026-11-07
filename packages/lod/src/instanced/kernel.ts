@@ -1,4 +1,13 @@
-import { StorageBufferAttribute, StorageInstancedBufferAttribute, Vector3, Vector4, type ComputeNode, type Node, type Sphere } from "three/webgpu";
+import {
+  StorageBufferAttribute,
+  StorageInstancedBufferAttribute,
+  Vector3,
+  Vector4,
+  type ComputeNode,
+  type IndirectStorageBufferAttribute,
+  type Node,
+  type Sphere,
+} from "three/webgpu";
 import {
   Fn,
   If,
@@ -8,11 +17,13 @@ import {
   atomicLoad,
   atomicStore,
   clamp,
+  computeKernel,
   distance,
   dot,
   float,
   instanceIndex,
   int,
+  localId,
   mat4,
   max,
   min,
@@ -22,12 +33,14 @@ import {
   uint,
   uniform,
   vec4,
+  workgroupId,
 } from "three/tsl";
 import { at } from "../at.js";
 import { FADE } from "../levels.js";
 import { column, maxScale, stretch } from "../tsl.js";
 import { ARGS_BYTES, type ArgsSlice } from "./args.js";
-import { PAGE } from "./pages.js";
+import type { Occupied } from "./places.js";
+import { PAGE } from "./pages/workgroup.js";
 import { MAX_SURVIVOR_SCALE } from "./range.js";
 
 // Sorting the instances of an InstancedLod into its levels, on the GPU, once per view.
@@ -45,8 +58,8 @@ import { MAX_SURVIVOR_SCALE } from "./range.js";
 // scale 0, free places among them included, draw in no level. With a range, an instance
 // draws only if its keep ratio is below the fraction kept at its distance from the range's
 // camera, the same in every view; survivors that scale write their scaled matrix, which
-// the level draws read instead, and are measured and culled at that size. Instances in pages (see pages.ts) run one
-// workgroup per page, and a place past its page's fill draws in no level.
+// the level draws read instead, and are measured and culled at that size. Places in pages (see pages/index.ts) are
+// visited one workgroup per page in use; a place past its chunk's last instance holds scale 0.
 
 /** What every view of a crowd selects with alongside its own aim: its range, in the crowd's space. */
 export interface RangeAim {
@@ -71,6 +84,12 @@ export interface Target {
   /** Per instance, the level it settled on drawing plus one, or 0. */
   readonly shown: StorageBufferAttribute;
   args: ArgsSlice;
+}
+
+/** A pass to run: its node, dispatched by `dispatch` when it has one, else by its own count. */
+export interface Pass {
+  readonly node: ComputeNode;
+  readonly dispatch: IndirectStorageBufferAttribute | null;
 }
 
 /** One indirect draw: a level's mesh, drawing `count` indices (or vertices) from `start`. */
@@ -124,7 +143,7 @@ export class Kernel {
   private readonly argsStart = uniform(0, "uint");
   /** Each level's count of the view being selected. */
   private readonly counts: StorageBufferAttribute;
-  private kernels: ComputeNode[] | null = null;
+  private kernels: [select: Pass, args: Pass] | null = null;
 
   constructor(
     /** One instance's bounding sphere, in its own space. */
@@ -132,8 +151,8 @@ export class Kernel {
     /** Per level, its first slot, or null for a level that draws nothing; only which ones are null stays fixed. */
     private readonly first: readonly (number | null)[],
     fallback: readonly number[],
-    /** Per page of `PAGE` instances, how many of its places hold one; null for instances not in pages. */
-    private readonly fills: StorageBufferAttribute | null,
+    /** The pages of `PAGE` places in use, to visit instead of every place; null for places not in pages. */
+    private readonly occupied: Occupied | null,
   ) {
     this.starts = first.map((start) => uniform(start ?? 0, "uint"));
     this.bounds.value.set(sphere.center.x, sphere.center.y, sphere.center.z, sphere.radius);
@@ -188,7 +207,7 @@ export class Kernel {
   }
 
   /** The passes over the first `end` instances, pointed at `target`: its aim in the uniforms, its slots and draws in the storage. */
-  load(target: Target, end: number): ComputeNode[] {
+  load(target: Target, end: number): readonly Pass[] {
     this.eye.value.copy(target.eye);
     this.scale.value = target.scale;
     this.ortho.value = Number(target.ortho);
@@ -201,14 +220,18 @@ export class Kernel {
     this.out.shown.value = target.shown;
     this.out.arguments.value = target.args.attribute;
     this.argsStart.value = target.args.offset / 4;
-    this.kernels ??= [this.selectPass(), this.argumentsPass()];
-    at(this.kernels, 0).count = Math.max(end, 1);
+    this.kernels ??= [
+      { node: this.selectPass(), dispatch: this.occupied?.dispatch ?? null },
+      { node: this.argumentsPass(), dispatch: null },
+    ];
+    // Pages in use dispatch their own selection.
+    if (!this.occupied) this.kernels[0].node.count = Math.max(end, 1);
     return this.kernels;
   }
 
   dispose(): void {
     this.counts.dispose();
-    for (const kernel of this.kernels ?? []) kernel.dispose();
+    for (const kernel of this.kernels ?? []) kernel.node.dispose();
     this.kernels = null;
     this.records.value.dispose();
   }
@@ -217,29 +240,29 @@ export class Kernel {
   private selectPass(): ComputeNode {
     const { out } = this;
     const counts = storage(this.counts, "uint", 0).setName("lodCounts").toAtomic();
-    return Fn(() => {
-      const m = this.source.element(instanceIndex).toVar();
+    const pass = Fn(() => {
+      // The place this thread visits: one workgroup per page in use, or one thread per place.
+      const place = this.occupied
+        ? storage(this.occupied.pages, "uint", this.occupied.pages.count).setName("lodOccupiedPages").toReadOnly().element(workgroupId.x).mul(PAGE).add(localId.x).toVar()
+        : instanceIndex;
+      const m = this.source.element(place).toVar();
       const r = this.bounds.w.mul(maxScale(m)).toVar();
       // What it drew last, which it keeps drawing in place of a missing level; one out of view drew nothing.
-      const shown = out.shown.element(instanceIndex);
+      const shown = out.shown.element(place);
       const hide = () => {
         shown.assign(0);
         Return();
       };
-      if (this.fills) {
-        const fills = storage(this.fills, "uint", this.fills.count).setName("lodPageFills").toReadOnly();
-        If(instanceIndex.mod(PAGE).greaterThanEqual(fills.element(instanceIndex.div(PAGE))), hide);
-      }
       If(r.equal(0), hide);
       const grow = float(1).toVar();
       If(this.ranged.equal(uint(1)), () => {
         const origin = column(m, 3).xyz;
         const kept = clamp(this.rangeRadius.sub(distance(origin, this.rangeEye)).div(this.rangeRamp), 0, 1).toVar();
-        If(this.keeps.element(instanceIndex).greaterThanEqual(kept), hide);
+        If(this.keeps.element(place).greaterThanEqual(kept), hide);
         If(this.survivors.equal(uint(1)), () => {
           grow.assign(min(float(1).div(sqrt(kept)), MAX_SURVIVOR_SCALE));
           const scaled = mat4(column(m, 0).mul(grow), column(m, 1).mul(grow), column(m, 2).mul(grow), column(m, 3));
-          this.scaled.element(instanceIndex).assign(scaled);
+          this.scaled.element(place).assign(scaled);
         });
       });
       r.mulAssign(grow);
@@ -323,7 +346,7 @@ export class Kernel {
       }).Else(() => void shown.assign(uint(selected.add(1))));
       const emit = (level: number, first: Node<"uint">, fade: Node<"float">) => {
         const slot = atomicAdd(counts.element(level), uint(1)).add(first).toVar();
-        out.indices.element(slot).assign(instanceIndex);
+        out.indices.element(slot).assign(place);
         out.fades.element(slot).assign(fade);
       };
       this.first.forEach((first, level) => {
@@ -333,7 +356,8 @@ export class Kernel {
         // The finer neighbour fading out with it.
         If(finer.equal(level).and(t.greaterThan(0)), () => emit(level, start, t.negate()));
       });
-    })().compute(1, this.fills ? [PAGE] : undefined);
+    });
+    return this.occupied ? computeKernel(pass(), [PAGE]) : pass().compute(1);
   }
 
   private argumentsPass(): ComputeNode {

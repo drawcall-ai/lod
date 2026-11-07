@@ -2,7 +2,9 @@
 import { Camera, Frustum, Matrix4, Plane, Sphere, Vector3 } from "three/webgpu";
 import { expect, it, vi } from "vitest";
 import { ARGS_BYTES } from "../../src/instanced/args.js";
+import type { Pass } from "../../src/instanced/kernel.js";
 import { Selection } from "../../src/instanced/select.js";
+import { Store } from "../../src/instanced/store.js";
 import { GPU_TIMEOUT, renderer } from "../gpu.js";
 
 const levels = [{ maxPixels: Infinity }, { maxPixels: 10 }];
@@ -13,17 +15,15 @@ const everywhere = new Frustum(...Array.from({ length: 6 }, () => new Plane(new 
 const aim = (selection: Selection, eye: Vector3, scale: number, ortho: boolean, forced: number | null, thresholds: { maxPixels: number }[], frustum = everywhere) =>
   selection.aim(camera, { eye, scale, ortho, fades: !ortho && forced === null, forced, frustum }, thresholds);
 
-/** What a selection selects from: `matrices`, 16 floats per instance, each kept. */
-function instances(matrices: Float32Array) {
-  return { capacity: matrices.length / 16, matrices, keeps: new Float32Array(matrices.length / 16), colors: null };
+/** A selection of `levels` over `matrices`, 16 floats per instance, each kept, in a store of the next power of two places. */
+function over(matrices: Float32Array, ...rest: Tail<ConstructorParameters<typeof Selection>>): Selection {
+  const store = new Store();
+  store.add({ matrices });
+  return new Selection(store, ...rest);
 }
 
-/** A selection of `levels` over `matrices`, visiting every instance. */
-function over(matrices: Float32Array, ...rest: Tail<ConstructorParameters<typeof Selection>>): Selection {
-  const selection = new Selection(instances(matrices), ...rest);
-  selection.end = matrices.length / 16;
-  return selection;
-}
+/** Run a selection's passes, none of which has a dispatch of its own here. */
+const run = (passes: readonly Pass[]) => renderer.compute(passes.map((pass) => pass.node));
 type Tail<T extends unknown[]> = T extends [unknown, ...infer U] ? U : never;
 
 function selection(count: number, indexed: boolean, start: number, sphere = new Sphere(new Vector3(), 1)): Selection {
@@ -54,17 +54,17 @@ it("shares native shader modules across crowd capacities, spheres and slot offse
   const b = selection(17, true, 6, new Sphere(new Vector3(-4, 5, -6), 3.5));
   const shader = vi.spyOn(GPUDevice.prototype, "createShaderModule");
   try {
-    renderer.compute(a.take(camera));
+    run(a.take(camera));
     expect(words(await read(a))).toEqual([6, 0, 0, 0, 0, 9, 2, 6, 0, 2]);
     const compiled = shader.mock.calls.length;
     expect(compiled).toBe(2);
-    renderer.compute(b.take(camera));
-    expect(words(await read(b))).toEqual([6, 0, 0, 0, 0, 9, 17, 6, 0, 17]);
+    run(b.take(camera));
+    expect(words(await read(b))).toEqual([6, 0, 0, 0, 0, 9, 17, 6, 0, 32]);
     // Three caches native pipelines by ComputeNode.id, but shares identical WGSL modules.
     expect(shader).toHaveBeenCalledTimes(compiled);
-    // Level 1's slots, from 17, hold the instances in order of arrival: each once.
+    // Level 1's slots, from its 32 places, hold the instances in order of arrival: each once.
     const indices = new Uint32Array(await renderer.getArrayBufferAsync(b.view(camera).indices));
-    expect(Array.from(indices.slice(17)).sort((x, y) => x - y)).toEqual(Array.from({ length: 17 }, (_, i) => i));
+    expect(Array.from(indices.slice(32, 32 + 17)).sort((x, y) => x - y)).toEqual(Array.from({ length: 17 }, (_, i) => i));
   } finally {
     shader.mockRestore();
     a.dispose();
@@ -81,7 +81,7 @@ it("installs lazy draws without replacing storage buffers already bound by rende
   try {
     aim(a, new Vector3(), 1, true, 1, levels);
     const kernels = a.take(camera);
-    renderer.compute(kernels);
+    run(kernels);
     expect(words(await read(a, 1))).toEqual([6, 1, 0, 0, 0]);
     a.append([{ ...draw, level: 1, count: 9 }]);
     a.route([0, 1]);
@@ -90,7 +90,7 @@ it("installs lazy draws without replacing storage buffers already bound by rende
     expect(a.view(camera)).toMatchObject({ indices, fades });
     const installed = a.take(camera);
     expect(installed).toBe(kernels);
-    renderer.compute(installed);
+    run(installed);
     expect(words(await read(a))).toEqual([6, 0, 0, 0, 0, 9, 1, 0, 0, 1]);
     expect(Array.from(new Uint32Array(await renderer.getArrayBufferAsync(indices)))).toEqual([0, 0]);
   } finally {
@@ -113,12 +113,12 @@ it("draws pending levels through a solid finer fallback and fades ready coarse l
   try {
     // Height 95 lies in the unavailable level's fade: fallback must draw exactly once, solid.
     aim(a, new Vector3(0, 0, 2), 95, false, null, thresholds);
-    renderer.compute(a.take(camera));
+    run(a.take(camera));
     expect(words(await read(a))).toEqual([6, 1, 0, 0, 0, 9, 0, 0, 0, 1]);
     expect(new Float32Array(await renderer.getArrayBufferAsync(a.view(camera).fades))[0]).toBe(0);
     // Height 9.5 fades a ready coarse card against level 0, skipping pending level 1.
     aim(a, new Vector3(0, 0, 2), 9.5, false, null, thresholds);
-    renderer.compute(a.take(camera));
+    run(a.take(camera));
     expect(words(await read(a))).toEqual([6, 1, 0, 0, 0, 9, 1, 0, 0, 1]);
     const fades = new Float32Array(await renderer.getArrayBufferAsync(a.view(camera).fades));
     expect(fades[0]).toBeCloseTo(-0.5);
@@ -133,13 +133,13 @@ it("initializes appended and reused GPU slices without overwriting live draws or
   let b: Selection | undefined;
   let replacement: Selection | undefined;
   try {
-    renderer.compute(a.take(camera));
-    expect(words(await read(a))).toEqual([6, 0, 0, 0, 0, 9, 3, 6, 0, 3]);
+    run(a.take(camera));
+    expect(words(await read(a))).toEqual([6, 0, 0, 0, 0, 9, 3, 6, 0, 4]);
     b = selection(2, false, 12);
     expect(b.view(camera).args.attribute).toBe(a.view(camera).args.attribute);
-    renderer.compute(b.take(camera));
+    run(b.take(camera));
     expect(words(await read(b))).toEqual([6, 0, 0, 0, 0, 9, 2, 12, 2, 0]);
-    expect(words(await read(a))).toEqual([6, 0, 0, 0, 0, 9, 3, 6, 0, 3]);
+    expect(words(await read(a))).toEqual([6, 0, 0, 0, 0, 9, 3, 6, 0, 4]);
 
     // The copy is submitted before disposal. Reuse can happen while its readback
     // is pending; queue order must preserve both the old draw and the new one.
@@ -149,8 +149,8 @@ it("initializes appended and reused GPU slices without overwriting live draws or
     replacement = selection(4, false, 21);
     expect(replacement.view(camera).args.attribute).toBe(b.view(camera).args.attribute);
     expect(replacement.view(camera).args.offset).toBe(offset);
-    renderer.compute(replacement.take(camera));
-    expect(words(await pending)).toEqual([6, 0, 0, 0, 0, 9, 3, 6, 0, 3]);
+    run(replacement.take(camera));
+    expect(words(await pending)).toEqual([6, 0, 0, 0, 0, 9, 3, 6, 0, 4]);
     expect(words(await read(replacement))).toEqual([6, 0, 0, 0, 0, 9, 4, 21, 4, 0]);
     expect(words(await read(b))).toEqual([6, 0, 0, 0, 0, 9, 2, 12, 2, 0]);
   } finally {
@@ -167,7 +167,7 @@ it("hands over an arriving fade neighbour without a jump at either end of the he
   try {
     aim(a, new Vector3(0, 0, 2), 9.5, false, null, thresholds);
     const kernels = a.take(camera);
-    renderer.compute(kernels);
+    run(kernels);
     a.append([{ ...draw, level: 1 }]);
     a.route([0, 1, 2], true);
     for (const [progress, expected] of [
@@ -180,7 +180,7 @@ it("hands over an arriving fade neighbour without a jump at either end of the he
       a.progress.value = progress;
       a.changed();
       expect(a.take(camera)).toBe(kernels);
-      renderer.compute(kernels);
+      run(kernels);
       const counts = new Uint32Array(await read(a, 3));
       const fades = new Float32Array(await renderer.getArrayBufferAsync(a.view(camera).fades));
       for (const [level, word] of [

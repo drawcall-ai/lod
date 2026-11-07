@@ -1,7 +1,8 @@
 import type { Color, Matrix4 } from "three/webgpu";
 import { at } from "../at.js";
-import type { BlockView, Blocks } from "./blocks.js";
+import { Blocks, type BlockView } from "./blocks.js";
 import { Dirty, upload } from "./dirty.js";
+import type { BlockFrame, Places } from "./places.js";
 import { Runs } from "./runs.js";
 import type { Selection } from "./select.js";
 
@@ -26,7 +27,7 @@ export interface ChunkData {
  * measured and uploaded. Chunks keep their indices; capacity doubles as they need it and halves once a quarter of it
  * is used, keeping the places in use.
  */
-export class Store {
+export class Store implements Places {
   /** Instance matrices, 16 floats each; a free place holds zeros, which draw nothing. */
   matrices: Float32Array;
   /** Instance keep ratios. */
@@ -36,6 +37,7 @@ export class Store {
   /** Each instance's bounding sphere, centre and radius, in the InstancedLod's space, as `measure` last left it. */
   spheres: Float32Array;
   readonly chunks = new Set<InstancedChunk>();
+  readonly occupied = null;
   /** Instances in chunks. */
   count = 0;
   private readonly runs = new Runs();
@@ -99,6 +101,8 @@ export class Store {
       for (let c = 0; c < 3; c++) tints[(start + i) * 4 + c] = at(colors, i * 3 + c);
     }
     this.changed(chunk);
+    // What the views drew at these places was another instance's.
+    this.selection?.forgetShown(start, start + count);
     return chunk;
   }
 
@@ -172,6 +176,25 @@ export class Store {
     }
   }
 
+  /** Blocks around every instance, at a leaf size for `frame.draws`. */
+  blocks(frame: BlockFrame, survivors: boolean): Blocks {
+    const blocks = new Blocks(this.capacity, this.spheres, frame.source, frame.bounds, frame.draws, frame.rest, survivors ? this.keeps : null);
+    blocks.pad(frame.padding);
+    blocks.measure(this.matrices, 0, this.end);
+    blocks.refit();
+    return blocks;
+  }
+
+  /** Nothing to prepare: `measure` sends edits as they are measured. */
+  prepare(): void {}
+
+  /** Always: chunks are taken in as they are added. */
+  drained(): Promise<boolean> {
+    return Promise.resolve(true);
+  }
+
+  dispose(): void {}
+
   /** Measure only changed instances into `blocks`; instance and colour uploads have separate ranges. */
   measure(blocks: Blocks): void {
     if (this.changes.empty && this.colorChanges.empty) return;
@@ -192,10 +215,7 @@ export class Store {
     this.colorChanges.drain((start, end) => {
       if (selection?.colors) upload(selection.colors, start, end);
     });
-    if (selection) {
-      selection.end = this.end;
-      selection.changed();
-    }
+    selection?.changed();
     if (changed) blocks.refit();
   }
 
