@@ -155,12 +155,12 @@ export class Store implements Places {
     return height / Math.max(Math.sqrt(dx * dx + dy * dy + dz * dz), 1e-6);
   }
 
-  /** Upload edits to `selection` from now on, colours included once there are any; null stops uploading. */
   /** The store's own arrays: the selection's buffers share them, and the store uploads what it changes. */
   seed(): Seed {
     return { matrices: this.matrices, keeps: this.keeps, colors: this.colors };
   }
 
+  /** Upload edits to `selection` from now on, colours included once there are any; null stops uploading. */
   attach(selection: Selection | null): void {
     this.selection = selection;
     if (selection && this.colors) selection.useColors(this.colors);
