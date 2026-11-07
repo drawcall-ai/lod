@@ -20,10 +20,11 @@ import type { Level } from "../levels.js";
 import { gpuRenderer, inShadowPass, isImpostorMesh } from "../three.js";
 import { inView } from "../view.js";
 import { ARGS_BYTES } from "./args.js";
+import { ContactMesh } from "./contact.js";
 import { groupMaterial, parts, placed, type Part } from "./parts.js";
 import type { Selection } from "./select.js";
 
-// The indirect draws of one Selection's levels, and the compute that selects for them.
+// The indirect draws of one Selection's levels and contacts, and the compute that selects for them.
 
 /**
  * Selections due before the next draw of any InstancedLod: the first level mesh to draw
@@ -68,6 +69,7 @@ export interface Owner {
 export class Meshes {
   /** Per level, the meshes drawing it. */
   readonly byLevel: LevelMesh[][] = [];
+  private contactMesh: ContactMesh | null = null;
 
   /**
    * `reaches` are the per-level spheres the meshes are culled by; `radius` is the source
@@ -150,6 +152,7 @@ export class Meshes {
       mesh.instanceColor = this.selection.colors ?? white;
       if (mesh.geometry instanceof InstancedBufferGeometry) mesh.geometry.instanceCount = this.selection.capacity;
     }
+    this.contactMesh?.rebind();
   }
 
   /** Show only levels whose conservative bounds contain a possible selected instance; whether any may draw for `camera`. */
@@ -171,6 +174,27 @@ export class Meshes {
     else due.delete(this.selection);
   }
 
+  /** The mesh drawing the instances' contacts while they have them, made when first asked for; null, freed, without. */
+  useContacts(on: boolean): ContactMesh | null {
+    if (!on) {
+      this.contactMesh?.dispose();
+      this.contactMesh = null;
+      return null;
+    }
+    if (this.contactMesh) return this.contactMesh;
+    const { selection, owner } = this;
+    const mesh = new ContactMesh(selection);
+    mesh.onBeforeRender = (renderer, _scene, camera) => {
+      if (!owner.live()) return;
+      owner.guard(() => {
+        runDue(renderer, camera, selection);
+        mesh.aim(camera);
+      });
+    };
+    this.contactMesh = mesh;
+    return mesh;
+  }
+
   dispose(): void {
     // An ImpostorMesh frees its own material and geometry; the other meshes' faded
     // materials go with the levels' originals.
@@ -178,6 +202,8 @@ export class Meshes {
       mesh.removeFromParent();
       this.free(mesh);
     }
+    this.contactMesh?.dispose();
+    this.contactMesh = null;
     due.delete(this.selection);
     this.byLevel.length = 0;
   }
@@ -204,14 +230,7 @@ export class Meshes {
       if (!owner.live()) return;
       previous.call(mesh, renderer, scene, camera, geometry, material, group);
       owner.guard(() => {
-        const gpu = gpuRenderer(renderer);
-        due.add(selection);
-        // Each level's draws start at its slots (see select.ts).
-        if (!gpu.hasFeature("indirect-first-instance")) throw new Error("InstancedLod: needs the GPU feature indirect-first-instance, which this device lacks");
-        passes.length = 0;
-        for (const each of due) passes.push(...each.take(camera));
-        due.clear();
-        if (passes.length > 0) gpu.compute(passes);
+        runDue(renderer, camera, selection);
         const { args } = selection.view(camera);
         mesh.geometry.setIndirect(args.attribute, args.offset + offset);
       });
@@ -223,6 +242,21 @@ export class Meshes {
     };
     return mesh;
   }
+}
+
+/**
+ * Run the selections due, `selection`'s among them, that `renderer`'s buffers are not current with for `camera`,
+ * before a draw of `selection`'s.
+ */
+function runDue(renderer: unknown, camera: Camera, selection: Selection): void {
+  const gpu = gpuRenderer(renderer);
+  due.add(selection);
+  // Each level's draws start at its slots (see select.ts).
+  if (!gpu.hasFeature("indirect-first-instance")) throw new Error("InstancedLod: needs the GPU feature indirect-first-instance, which this device lacks");
+  passes.length = 0;
+  for (const each of due) passes.push(...each.take(camera));
+  due.clear();
+  if (passes.length > 0) gpu.compute(passes);
 }
 
 /** An impostor's cards for `selection`'s slots. */

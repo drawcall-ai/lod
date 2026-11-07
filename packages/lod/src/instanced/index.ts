@@ -13,6 +13,7 @@ import { parts } from "./parts.js";
 import { Blocks } from "./blocks.js";
 import { Extent } from "./extent.js";
 import { Probes } from "./raycast.js";
+import { checkContact, type InstancedContact } from "./contact.js";
 import type { RangeAim } from "./kernel.js";
 import { checkRange, keptFraction, survivorScale, type InstancedRange } from "./range.js";
 import { Selection, sight, type Aim } from "./select.js";
@@ -43,6 +44,11 @@ export class InstancedLod extends Owner {
   readonly isInstancedLod = true;
   /** How far from a camera its instances draw, thinning out before it, in every view; null draws them at any distance. */
   range: InstancedRange | null = null;
+  /**
+   * A soft contact shadow under each instance it draws within a distance of the viewing camera, so that copies sit on
+   * the ground; null draws none. A contact shows exactly when its instance does, `range` and frustum included.
+   */
+  contact: InstancedContact | null = null;
 
   private readonly probes: Probes;
   private selection: Selection | null = null;
@@ -246,8 +252,23 @@ export class InstancedLod extends Owner {
     selection.aim(camera, seen, entries);
     // Selected only when something may draw: an InstancedLod with every level hidden
     // keeps its last selection.
-    meshes.schedule(meshes.show(camera, this.matrixWorld));
+    const shown = meshes.show(camera, this.matrixWorld);
+    meshes.schedule(shown);
+    if (!shadow) this.showContacts(selection, meshes, shown);
     residency.sync();
+  }
+
+  /** Select and draw the current `contact`s for a view, in which something may draw if `shown`. */
+  private showContacts(selection: Selection, meshes: Meshes, shown: boolean): void {
+    const { contact } = this;
+    if (contact) checkContact(contact);
+    selection.contact(contact && contact.distance / this.matrixWorld.getMaxScaleOnAxis());
+    const mesh = meshes.useContacts(contact !== null);
+    if (!mesh || !contact) return;
+    if (mesh.parent !== this) this.add(mesh);
+    mesh.contact = contact;
+    // Its draws are as current as the levels': stale while nothing may draw.
+    mesh.visible = shown;
   }
 
   /** Select every view with the current `range`, measured from its camera, in this crowd's space. */
@@ -307,6 +328,7 @@ export class InstancedLod extends Owner {
     super.copy(source, false);
     this.store.copy(source.store);
     this.range = source.range && { ...source.range };
+    this.contact = source.contact && { ...source.contact };
     this.draws = source.entries.length > 0 ? this.build(cloneLevels(source.entries)) : 0;
     this.blocks = this.makeBlocks();
     this.copySettings(source);
