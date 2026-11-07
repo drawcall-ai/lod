@@ -47,12 +47,23 @@ const place = tgpu.fn([d.vec4u, d.vec4u], GpuInstance)((spot) => {
   });
 });
 
-/** Records `from` to `from + n` as the CPU sees them: what `emit` and `place` make of them. */
-function cpuChunk(from: number, n: number) {
+/** `place` for the records whose hash picks the first of three variants; the others make no instance. */
+const firstVariant = tgpu.fn([d.vec4u, d.vec4u], GpuInstance)((spot, extra) => {
+  "use gpu";
+  const instance = place(spot, extra);
+  return GpuInstance({ matrix: instance.matrix, color: instance.color, keep: std.select(instance.keep, 1, std.intdiv(spot.w, 1024) % 3 !== 0) });
+});
+
+/** Whether record `k`'s hash picks the first variant. */
+const picked = (k: number) => Math.floor((Math.imul(k + 1, 2654435761) >>> 0) / 1024) % 3 === 0;
+
+/** Records `from` to `from + n` as the CPU sees them: what `emit` and `place` make of them, or of those `only` takes. */
+function cpuChunk(from: number, n: number, only = (_k: number) => true) {
   const matrices: number[] = [];
   const colors: number[] = [];
   const keeps: number[] = [];
   for (let k = from; k < from + n; k++) {
+    if (!only(k)) continue;
     const hash = Math.imul(k + 1, 2654435761) >>> 0;
     const s = 1 + (hash % 4) * 0.25;
     matrices.push(...new Matrix4().makeScale(s, s, s).setPosition((k % 8) * 3 - 10.5, 0, -(5 + Math.floor(k / 8) * 2)).elements);
@@ -155,6 +166,33 @@ describe("GPU chunks", { timeout: GPU_TIMEOUT }, () => {
       expect(expected.map((slots) => slots.length > 0)).toEqual([true, true, true]);
       expect(expected[0]?.length).toBeLessThan(1000);
       expect(await drawn(gpu, camera)).toEqual(expected);
+      expect(await gpu.drained(renderer)).toBe(true);
+    } finally {
+      cpu.dispose();
+      gpu.dispose();
+    }
+  });
+
+  it("give pages only to the instances of records whose keep ratio is below 1, packed into as few pages as they fill", async () => {
+    // 235 of the first chunk's 700 records pick the first variant, 99 of the second's 300: a page each, where all
+    // records would take five.
+    const cpu = crowd();
+    const gpu = crowd({ instance: firstVariant, pages: 2 });
+    const parts = [
+      [0, 700],
+      [CAPACITY, 300],
+    ] as const;
+    parts.forEach(([from, n], i) => {
+      cpu.addChunk(cpuChunk(from, n, picked));
+      produce(from, n, i);
+      gpu.addGpuChunk({ box: everywhere, first: from, counter: i });
+    });
+    try {
+      await frames(cpu, above);
+      await frames(gpu, above);
+      const expected = await drawn(cpu, above);
+      expect(distinct(expected).size).toBe(235 + 99);
+      expect(await drawn(gpu, above)).toEqual(expected);
       expect(await gpu.drained(renderer)).toBe(true);
     } finally {
       cpu.dispose();

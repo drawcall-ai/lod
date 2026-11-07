@@ -1,19 +1,50 @@
-import { type Box3, type ComputeNode, IndirectStorageBufferAttribute, type Node, StorageBufferAttribute, type StorageInstancedBufferAttribute, type Renderer } from "three/webgpu";
-import { Break, Fn, If, Loop, atomicAdd, atomicLoad, atomicStore, atomicSub, code, computeKernel, localId, storage, storageBarrier, uint, uvec4, wgslFn, workgroupId } from "three/tsl";
-import { type TgpuFn, d, tgpu } from "typegpu";
+import {
+  type Box3,
+  type ComputeNode,
+  IndirectStorageBufferAttribute,
+  type Node,
+  StorageBufferAttribute,
+  type StorageInstancedBufferAttribute,
+  type Renderer,
+} from "three/webgpu";
+import {
+  Break,
+  Fn,
+  If,
+  Loop,
+  atomicAdd,
+  atomicLoad,
+  atomicStore,
+  atomicSub,
+  code,
+  computeKernel,
+  localId,
+  storage,
+  storageBarrier,
+  uint,
+  uvec2,
+  uvec4,
+  wgslFn,
+  workgroupId,
+} from "three/tsl";
+import { type TgpuFn, d } from "typegpu";
 import { at } from "../at.js";
 import { upload } from "./dirty.js";
+import { Records } from "./records.js";
 
 // Instances a GPU pass of the app produces, never read back: each chunk's records are turned into instances on the
 // GPU, into fixed-size pages of a pool, and the selection reads them where they land (see kernel.ts).
 //
-// In the first render after chunks were added or removed, ahead of any selection, one workgroup walks the chunk
-// slots: first every removed or replaced chunk pushes its pages back on the free stack, then every new chunk pops the
-// pages its count needs, writes each page's fill and lists it as a job. A second pass, dispatched indirectly with one
-// workgroup per job, runs the app's instance function on each record of the page and writes the instance. That is
-// the only time a chunk's records are read, so the producer may reuse them right after. A chunk that finds the stack
-// short keeps the pages it got, its count clamped to them, until it is removed; `drained` reports it. The CPU never
-// learns a count: it knows only which slots hold chunks, and the GPU knows what each got.
+// In the first render after chunks were added or removed, ahead of any selection, four passes run. One workgroup walks
+// the chunk slots: every removed or replaced chunk pushes its pages back on the free stack, then every new chunk lists
+// its records, a window of up to `PAGE` per job. A pass with one workgroup per job counts the window's survivors, the
+// records whose instance has a keep ratio below 1. One workgroup then gives every new chunk the pages its survivors
+// need and writes each page's fill, turning its windows' counts into where their survivors start. A last pass with one
+// workgroup per job runs the app's instance function again and writes each survivor into its place, so a chunk's
+// instances fill its pages in order and a record that makes no instance costs no room. That render is the only time a
+// chunk's records are read, so the producer may reuse them right after. A chunk that finds the stack short keeps the
+// pages it got, its instances clamped to them, until it is removed; `drained` reports it. The CPU never learns a
+// count: it knows only which slots hold chunks, and the GPU knows what each got.
 
 /** Instances per page: the selection runs one workgroup per page. */
 export const PAGE = 256;
@@ -24,7 +55,7 @@ export const GpuInstance = d.struct({
   matrix: d.mat4x4f,
   /** Its tint, as `setColorAt` takes it. */
   color: d.vec3f,
-  /** Its keep ratio in [0, 1) (see `InstancedRange`). */
+  /** Its keep ratio in [0, 1) (see `InstancedRange`); 1 or more makes no instance, and the record takes no room in the pool. */
   keep: d.f32,
 });
 
@@ -88,24 +119,26 @@ export class Pages {
   readonly chunks = new Set<GpuChunk>();
   /** The most chunks held at once. */
   readonly slotCount: number;
-  /** The page ids a slot can hold. */
+  /** The page ids a slot can hold, and the windows of `PAGE` records its chunk can have. */
   private readonly perSlot: number;
-  private readonly words: number;
+  private readonly records: Records;
   /** The free page count, then the free page ids. */
   private readonly stack: StorageBufferAttribute;
   /** Per slot, the ids of the pages it holds. */
   private readonly table: StorageBufferAttribute;
+  /** Per slot and window of its records, the window's survivors, then where they start among the chunk's instances. */
+  private readonly windows: StorageBufferAttribute;
   /** Per slot, written by the CPU: whether it holds a chunk, the chunk's first record, its counter and generation. */
   private readonly sources: StorageBufferAttribute;
   /** Per slot, written by the GPU: the generation it got to, its pages, its instances and the pages it needs. */
   private readonly states: StorageBufferAttribute;
-  /** The pages to fill this frame: first record, page, records. */
+  /** The windows of records to take in this frame: first record, slot, records, window. */
   private readonly jobs: StorageBufferAttribute;
   private readonly dispatch = new IndirectStorageBufferAttribute(new Uint32Array([0, 1, 1]), 1);
   /** Per slot, the generation of the chunk it last took: a slot reused in one frame still frees its pages. */
   private readonly generations: Uint32Array;
   private readonly free: number[] = [];
-  private kernels: { allocate: ComputeNode; copy: ComputeNode } | null = null;
+  private kernels: { list: ComputeNode; count: ComputeNode; allocate: ComputeNode; copy: ComputeNode } | null = null;
   /** Whether chunks changed since the passes last ran. */
   private pending = false;
   /** Bumped whenever chunks change. */
@@ -115,7 +148,7 @@ export class Pages {
     const { capacity, scales, records, counts, instance } = options;
     const pages = options.pages ?? 512;
     this.slotCount = options.slots ?? 256;
-    this.words = recordWords(instance);
+    this.records = new Records(instance, records);
     for (const [name, value] of [
       ["pages", pages],
       ["slots", this.slotCount],
@@ -123,7 +156,8 @@ export class Pages {
     ] as const) {
       if (!Number.isInteger(value) || value < 1) throw new RangeError(`InstancedLod: gpuChunks.${name} must be a positive integer, got ${value}`);
     }
-    if (!(scales[0] > 0 && scales[0] <= scales[1] && Number.isFinite(scales[1]))) throw new RangeError(`InstancedLod: gpuChunks.scales must be 0 < min <= max, got ${scales.join(", ")}`);
+    if (!(scales[0] > 0 && scales[0] <= scales[1] && Number.isFinite(scales[1])))
+      throw new RangeError(`InstancedLod: gpuChunks.scales must be 0 < min <= max, got ${scales.join(", ")}`);
     if (!(records.array instanceof Uint32Array) || records.itemSize !== 4) throw new TypeError("InstancedLod: gpuChunks.records must hold vec4u items");
     if (!(counts.array instanceof Uint32Array) || counts.itemSize !== 1) throw new TypeError("InstancedLod: gpuChunks.counts must hold u32 items");
     this.capacity = pages * PAGE;
@@ -138,9 +172,10 @@ export class Pages {
     for (let i = 0; i < pages; i++) stack[i + 1] = pages - 1 - i;
     this.stack = new StorageBufferAttribute(stack, 1);
     this.table = new StorageBufferAttribute(new Uint32Array(this.slotCount * this.perSlot), 1);
+    this.windows = new StorageBufferAttribute(new Uint32Array(this.slotCount * this.perSlot), 1);
     this.sources = new StorageBufferAttribute(new Uint32Array(this.slotCount * 4), 4);
     this.states = new StorageBufferAttribute(new Uint32Array(this.slotCount * 4), 4);
-    this.jobs = new StorageBufferAttribute(new Uint32Array(pages * 4), 4);
+    this.jobs = new StorageBufferAttribute(new Uint32Array(this.slotCount * this.perSlot * 4), 4);
     this.generations = new Uint32Array(this.slotCount);
     for (let slot = this.slotCount - 1; slot >= 0; slot--) this.free.push(slot);
   }
@@ -155,7 +190,8 @@ export class Pages {
     if (!Number.isInteger(first) || first < 0) throw new RangeError(`InstancedLod: a GPU chunk's first record must be an integer >= 0, got ${first}`);
     if (!Number.isInteger(counter) || counter < 0) throw new RangeError(`InstancedLod: a GPU chunk's counter must be an integer >= 0, got ${counter}`);
     const { records, counts, capacity } = this.options;
-    if ((first + capacity) * this.words > records.count) throw new RangeError(`InstancedLod: a GPU chunk's records from ${first} on, up to gpuChunks.capacity of them, pass the end of gpuChunks.records`);
+    if ((first + capacity) * this.records.words > records.count)
+      throw new RangeError(`InstancedLod: a GPU chunk's records from ${first} on, up to gpuChunks.capacity of them, pass the end of gpuChunks.records`);
     if (counter >= counts.count) throw new RangeError(`InstancedLod: a GPU chunk's counter ${counter} passes the end of gpuChunks.counts`);
     const slot = this.free.pop();
     if (slot === undefined) throw new Error(`InstancedLod: all ${this.slotCount} GPU chunk slots are taken (see gpuChunks.slots)`);
@@ -186,9 +222,14 @@ export class Pages {
   run(renderer: Renderer, targets: Targets): void {
     if (!this.pending) return;
     this.pending = false;
-    this.kernels ??= { allocate: this.allocatePass(), copy: this.copyPass(targets) };
-    renderer.compute(this.kernels.allocate);
-    renderer.compute(this.kernels.copy, this.dispatch);
+    if (!this.kernels) {
+      this.kernels = { list: this.listPass(), count: this.countPass(), allocate: this.allocatePass(), copy: this.copyPass(targets) };
+    }
+    const { list, count, allocate, copy } = this.kernels;
+    renderer.compute(list);
+    renderer.compute(count, this.dispatch);
+    renderer.compute(allocate);
+    renderer.compute(copy, this.dispatch);
   }
 
   /**
@@ -221,38 +262,55 @@ export class Pages {
   }
 
   dispose(): void {
-    for (const attribute of [this.fills, this.stack, this.table, this.sources, this.states, this.jobs, this.dispatch]) attribute.dispose();
-    this.kernels?.allocate.dispose();
-    this.kernels?.copy.dispose();
+    for (const attribute of [this.fills, this.stack, this.table, this.windows, this.sources, this.states, this.jobs, this.dispatch]) attribute.dispose();
+    for (const kernel of Object.values(this.kernels ?? {})) kernel.dispose();
     this.kernels = null;
   }
 
-  /**
-   * The pass that frees the pages of removed chunks, then gives chunks the pages they lack and lists them as jobs: one
-   * workgroup, its lanes taking every `PAGE`th slot. Under a short stack, which chunks get its last pages is a race.
-   */
-  private allocatePass(): ComputeNode {
+  /** The pool's buffers as one pass uses them: a node each, since a pass may not bind a buffer it writes twice. */
+  private nodes() {
     const { slotCount: slots, perSlot } = this;
     const pages = this.fills.count;
-    const stack = storage(this.stack, "uint", pages + 1).toAtomic();
+    const { counts } = this.options;
+    return {
+      stack: storage(this.stack, "uint", pages + 1).toAtomic(),
+      table: storage(this.table, "uint", slots * perSlot),
+      windows: storage(this.windows, "uint", slots * perSlot),
+      sources: storage(this.sources, "uvec4", slots).toReadOnly(),
+      states: storage(this.states, "uvec4", slots),
+      fills: storage(this.fills, "uint", pages),
+      jobs: storage(this.jobs, "uvec4", slots * perSlot),
+      listed: storage(this.dispatch, "uint", 3).toAtomic().element(0),
+      counts: storage(counts, "uint", counts.count).toReadOnly(),
+    };
+  }
+
+  /** `body` for every chunk slot, in a pass of one workgroup, its lanes taking every `PAGE`th slot. */
+  private eachSlot(body: (slot: Node<"uint">) => void): void {
+    Loop({ start: uint(0), end: uint(Math.ceil(this.slotCount / PAGE)), type: "uint", condition: "<" }, ({ i }) => {
+      const slot = i.mul(PAGE).add(localId.x).toVar();
+      If(slot.lessThan(this.slotCount), () => body(slot));
+    });
+  }
+
+  /** `body` for `slot` if it holds a chunk added since the last run, with the chunk's source and record count. */
+  private ifNew(nodes: Nodes, slot: Node<"uint">, body: (source: Node<"uvec4">, records: Node<"uint">) => void): void {
+    const source = nodes.sources.element(slot).toVar();
+    const state = nodes.states.element(slot).toVar();
+    If(source.x.equal(1).and(state.x.notEqual(source.w)), () => body(source, least(nodes.counts.element(source.z), uint(this.options.capacity)).toVar()));
+  }
+
+  /** The pass that frees the pages of removed chunks, then lists new chunks' records as jobs: one workgroup. */
+  private listPass(): ComputeNode {
+    const { perSlot } = this;
+    const nodes = this.nodes();
+    const { stack, table, states, fills, jobs, listed } = nodes;
     const top = stack.element(0);
-    const table = storage(this.table, "uint", slots * perSlot);
-    const sources = storage(this.sources, "uvec4", slots).toReadOnly();
-    const states = storage(this.states, "uvec4", slots);
-    const fills = storage(this.fills, "uint", pages);
-    const jobs = storage(this.jobs, "uvec4", pages);
-    const listed = storage(this.dispatch, "uint", 3).toAtomic().element(0);
-    const counts = storage(this.options.counts, "uint", this.options.counts.count).toReadOnly();
-    const eachSlot = (body: (slot: Node<"uint">) => void) =>
-      Loop({ start: uint(0), end: uint(Math.ceil(slots / PAGE)), type: "uint", condition: "<" }, ({ i }) => {
-        const slot = i.mul(PAGE).add(localId.x).toVar();
-        If(slot.lessThan(slots), () => body(slot));
-      });
-    const pass = Fn(() => {
+    return workgroups(() => {
       If(localId.x.equal(0), () => void atomicStore(listed, uint(0)));
       // A removed chunk, or one replaced since the last run, frees every page it held.
-      eachSlot((slot) => {
-        const source = sources.element(slot).toVar();
+      this.eachSlot((slot) => {
+        const source = nodes.sources.element(slot).toVar();
         const state = states.element(slot).toVar();
         If(source.x.equal(0).or(state.x.notEqual(source.w)), () => {
           Loop({ start: uint(0), end: state.y, type: "uint", condition: "<" }, ({ i }) => {
@@ -264,13 +322,52 @@ export class Pages {
         });
       });
       storageBarrier();
-      eachSlot((slot) => {
-        const source = sources.element(slot).toVar();
-        const state = states.element(slot).toVar();
-        // A new chunk: the only time its records are read.
-        If(source.x.equal(1).and(state.x.notEqual(source.w)), () => {
-          const records = least(counts.element(source.z), uint(this.options.capacity)).toVar();
-          const need = records.add(PAGE - 1).div(PAGE).toVar();
+      this.eachSlot((slot) =>
+        this.ifNew(nodes, slot, (source, records) => {
+          Loop({ start: uint(0), end: records.add(PAGE - 1).div(PAGE), type: "uint", condition: "<" }, ({ i }) => {
+            const window = uvec4(source.y.add(i.mul(PAGE)), slot, least(records.sub(i.mul(PAGE)), uint(PAGE)), i);
+            jobs.element(atomicAdd(listed, uint(1))).assign(window);
+          });
+        }),
+      );
+    });
+  }
+
+  /** The pass that counts each job's survivors: one workgroup per job. */
+  private countPass(): ComputeNode {
+    const { perSlot, records } = this;
+    const { jobs, windows } = this.nodes();
+    return workgroups(() => {
+      const job = jobs.element(workgroupId.x).toVar();
+      const { total } = rank(records.keepAt(job).lessThan(1));
+      If(localId.x.equal(0), () => void windows.element(job.y.mul(perSlot).add(job.w)).assign(total));
+    });
+  }
+
+  /**
+   * The pass that gives new chunks the pages their survivors need, writes the pages' fills and turns the chunks' window
+   * counts into where their survivors start: one workgroup. Under a short stack, which chunks get its last pages is a race.
+   */
+  private allocatePass(): ComputeNode {
+    const { perSlot } = this;
+    const pages = this.fills.count;
+    const nodes = this.nodes();
+    const { stack, table, windows, states, fills } = nodes;
+    const top = stack.element(0);
+    return workgroups(() =>
+      this.eachSlot((slot) =>
+        this.ifNew(nodes, slot, (source, records) => {
+          const survivors = uint(0).toVar();
+          Loop({ start: uint(0), end: records.add(PAGE - 1).div(PAGE), type: "uint", condition: "<" }, ({ i }) => {
+            const window = windows.element(slot.mul(perSlot).add(i));
+            const counted = window.toVar();
+            window.assign(survivors);
+            survivors.addAssign(counted);
+          });
+          const need = survivors
+            .add(PAGE - 1)
+            .div(PAGE)
+            .toVar();
           const held = uint(0).toVar();
           Loop({ start: uint(0), end: need, type: "uint", condition: "<" }, ({ i }) => {
             // The page under the top before taking it; none when the stack ran dry, its count wrapped past 0.
@@ -281,76 +378,83 @@ export class Pages {
             });
             const page = atomicLoad(stack.element(before)).toVar();
             table.element(slot.mul(perSlot).add(i)).assign(page);
-            const filled = least(records.sub(i.mul(PAGE)), uint(PAGE));
-            fills.element(page).assign(filled);
-            jobs.element(atomicAdd(listed, uint(1))).assign(uvec4(source.y.add(i.mul(PAGE)), page, filled, 0));
+            fills.element(page).assign(least(survivors.sub(i.mul(PAGE)), uint(PAGE)));
             held.addAssign(1);
           });
-          states.element(slot).assign(uvec4(source.w, held, least(records, held.mul(PAGE)), need));
-        });
-      });
-    });
-    // A dispatch size rather than a count: a count adds an early return, which the barrier may not follow.
-    const node = computeKernel(pass(), [PAGE]);
-    node.dispatchSize = [1, 1, 1];
-    return node;
+          states.element(slot).assign(uvec4(source.w, held, least(survivors, held.mul(PAGE)), need));
+        }),
+      ),
+    );
   }
 
-  /** The pass that turns each job's records into instances on its page: one workgroup per job. */
+  /** The pass that writes each job's survivors into their places in their chunk's pages: one workgroup per job. */
   private copyPass(targets: Targets): ComputeNode {
-    const { words, capacity } = this;
-    const { records } = this.options;
-    const jobs = storage(this.jobs, "uvec4", this.fills.count).toReadOnly();
-    const source = storage(records, "uvec4", records.count).toReadOnly();
+    const { capacity, perSlot, records } = this;
+    const { jobs, windows, table, states } = this.nodes();
     const matrices = storage(targets.matrices, "mat4", capacity);
     const keeps = storage(targets.keeps, "float", capacity);
     if (!targets.colors) throw new Error("InstancedLod: GPU chunks need the selection's colours");
     const colors = storage(targets.colors, "vec4", capacity);
-    const { matrixOf, colorOf, keepOf } = instanceFunctions(this.options.instance, words);
-    return Fn(() => {
+    return workgroups(() => {
       const job = jobs.element(workgroupId.x).toVar();
-      const i = localId.x;
-      If(i.lessThan(job.z), () => {
-        const record = job.x.add(i).mul(words);
-        const place = job.y.mul(PAGE).add(i);
-        const args = Object.fromEntries(Array.from({ length: words }, (_, w) => [`w${w}`, source.element(record.add(w))]));
-        matrices.element(place).assign(matrixOf(args));
-        colors.element(place).assign(colorOf(args));
-        keeps.element(place).assign(keepOf(args));
+      const keep = records.keepAt(job);
+      const survives = keep.lessThan(1);
+      const { before } = rank(survives);
+      const base = job.y.mul(perSlot);
+      const place = windows.element(base.add(job.w)).add(before).toVar();
+      // Survivors past the pages the chunk got are left out.
+      If(survives.and(place.lessThan(states.element(job.y).y.mul(PAGE))), () => {
+        const index = table
+          .element(base.add(place.div(PAGE)))
+          .mul(PAGE)
+          .add(place.mod(PAGE))
+          .toVar();
+        matrices.element(index).assign(records.matrixAt(job));
+        colors.element(index).assign(records.colorAt(job));
+        keeps.element(index).assign(keep);
       });
-    })().compute(capacity, [PAGE]);
+    });
   }
 }
 
-/** The words of `instance`'s record. */
-function recordWords(instance: GpuChunks["instance"]): number {
-  const words = instance.shell.argTypes;
-  if (words.length === 0 || words.some((word) => word.type !== "vec4u")) throw new TypeError("InstancedLod: gpuChunks.instance must take a record's vec4u words");
-  return words.length;
+type Nodes = ReturnType<Pages["nodes"]>;
+
+/**
+ * A pass of workgroups of `PAGE` lanes: one, unless dispatched with the jobs listed. A dispatch size rather than a
+ * count: a count adds an early return, which a barrier may not follow.
+ */
+function workgroups(body: () => void): ComputeNode {
+  const node = computeKernel(Fn(body)(), [PAGE]);
+  node.dispatchSize = [1, 1, 1];
+  return node;
+}
+
+/**
+ * Across a workgroup of `PAGE` lanes: how many lanes before this one are `chosen`, and how many are in all. Every lane
+ * calls it, outside any branch: it waits for the others. Hillis–Steele: after the step of width w, each lane holds the
+ * sum of the 2w lanes up to it.
+ */
+const rankOf = wgslFn(
+  `fn lodRank(lane: u32, chosen: u32) -> vec2u {
+  lodRankSums[lane] = chosen;
+  for (var width = 1u; width < ${PAGE}u; width *= 2u) {
+    workgroupBarrier();
+    var sum = lodRankSums[lane];
+    if (lane >= width) { sum += lodRankSums[lane - width]; }
+    workgroupBarrier();
+    lodRankSums[lane] = sum;
+  }
+  workgroupBarrier();
+  return vec2u(lodRankSums[lane] - chosen, lodRankSums[${PAGE - 1}]);
+}`,
+  [code(`var<workgroup> lodRankSums: array<u32, ${PAGE}>;`)],
+);
+
+function rank(chosen: Node<"bool">) {
+  const ranked = uvec2(0).toVar();
+  ranked.assign(rankOf({ lane: localId.x, chosen: chosen.select(uint(1), uint(0)) }));
+  return { before: ranked.x, total: ranked.y };
 }
 
 /** The lesser of two uints. */
 const least = (a: Node<"uint">, b: Node<"uint">) => a.lessThan(b).select(a, b);
-
-/**
- * `instance` as TSL functions of a record's words `w0`, `w1`…: its matrix, its colour (padded to four floats) and its
- * keep ratio. TypeGPU writes the WGSL of `instance`, which three's shaders include; its return type keeps its own name.
- */
-function instanceFunctions(instance: GpuChunks["instance"], words: number) {
-  const names = Array.from({ length: words }, (_, w) => `w${w}`).join(", ");
-  const params = Array.from({ length: words }, (_, w) => `w${w}: vec4u`).join(", ");
-  const parts = { Matrix: ["mat4x4f", "$.matrix"], Color: ["vec4f", "vec4f($.color, 1)"], Keep: ["f32", "$.keep"] } as const;
-  const record = `instance(${names})`;
-  const library = code(
-    tgpu.resolve({
-      template: Object.entries(parts)
-        .map(([part, [type, value]]) => `fn lodInstance${part}(${params}) -> ${type} { return ${value.replace("$", record)}; }`)
-        .join("\n"),
-      externals: { instance },
-    }),
-  );
-  // three calls a function it parsed itself, which forwards to TypeGPU's.
-  const forward = (part: keyof typeof parts) =>
-    wgslFn(`fn lodInstance${part}Of(${params}) -> ${parts[part][0]} { return lodInstance${part}(${names}); }`, [library]);
-  return { matrixOf: forward("Matrix"), colorOf: forward("Color"), keepOf: forward("Keep") };
-}
