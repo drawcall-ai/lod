@@ -7,7 +7,7 @@ description: Use @drawcall/lod for cached, progressively loaded levels of detail
 
 ## Start with the loader
 
-Give the host's `LodLoader` an asset URL and the representations to derive from it. Use `.glb` or `.gltf` for stored models and `.glts` for procedural assets. Put generation parameters in the asset URL's query: each distinct query is a distinct cache identity. Build a `Lod` from the returned levels for an independently placed object, or an `InstancedLod` for repeated objects with per-instance matrices and colours.
+Give the host's `LodLoader` an asset URL and the representations to derive from it. Use `.glb` or `.gltf` for stored models and `.glts` for procedural assets. Put generation parameters in the asset URL's query: each distinct query is a distinct cache identity. Build a `Lod` from the returned levels for an independently placed object, or an `InstancedLod` for repeated objects, whose instances arrive and leave in chunks of matrices, colours and keep ratios.
 
 `loadAsync` resolves with the ladder before its levels load; each level loads when a view first selects it, and a level still loading draws as a ready coarser one, as the level a copy already showed, or not at all. On a cold cache a derived level is built when it first loads, so a cold far view builds only the coarse levels it selects. Give simplified and baked levels an explicit `maxPixels`: without one, a level is built with the ladder to measure its default. A simplified level also loads the source for its original materials; a source-only ladder loads its source eagerly. Prefer baked or impostor middle levels for an expensive `.glts`: a simplified level brings the script run forward to that viewing range.
 
@@ -32,12 +32,10 @@ const levels = await loader.loadAsync({
     { type: "empty", maxPixels: 4 },
   ],
 });
-const trees = new InstancedLod(levels, positions.length);
+const trees = new InstancedLod(levels);
 
 const matrix = new Matrix4();
-positions.forEach((position, index) => {
-  trees.setMatrixAt(index, matrix.makeTranslation(position));
-});
+trees.addChunk({ matrices: positions.flatMap((position) => matrix.makeTranslation(position).toArray()) });
 scene.add(trees);
 ```
 
@@ -68,7 +66,7 @@ Cache expensive generation inside a `.glts` asset, such as geometry, rooms or ge
 
 ## Place, share and dispose levels
 
-Load an asset once and build spatial crowds from its levels, each with its own instance count, placements and colours; clone a `Lod` for further independently placed copies. Reuse descriptors across owners; adjust each owner's resolved thresholds through its `levels` view. Clones and crowds share geometry, materials, textures and deferred loads. Dispose shared resources only after every copy has stopped drawing; disposal does not count references.
+Load an asset once and build spatial crowds from its levels, each with its own chunks of placements and colours; clone a `Lod` for further independently placed copies. Reuse descriptors across owners; adjust each owner's resolved thresholds through its `levels` view. Clones and crowds share geometry, materials, textures and deferred loads. Dispose shared resources only after every copy has stopped drawing; disposal does not count references.
 
 Use `onLevel` for application effects and shadow settings. Set `castShadow` and `shadowSide` there rather than after a level arrives: a level compiles its draws, including those into the shadow maps the scene already draws into, before it arrives, and a setting changed afterwards compiles its shadow pipeline in the middle of a frame. Keep source generation and its materials in the asset so that the same URL also loads correctly outside the LOD host.
 
@@ -77,6 +75,23 @@ Levels draw with copies of the source's materials, made once through three's `cl
 Apply a shared `Wind` after assembling a LOD and before its first render; arriving levels inherit the effect. A `Lod` or `InstancedLod` that has rendered refuses wind: its shaders would build in a frame. Apply it separately to nested LODs and independently managed batches. Instance colours set after a crowd draws keep its shaders.
 
 Levels are chosen by on-screen size in CSS pixels on the actual render target, so a lower renderer pixel ratio saves shading, not geometry. Seed the camera with `setViewportHeight` before preparing its first view, and refresh that height after resizing views whose levels may all be culled. Compile the initial scene with the actual camera and renderer before revealing it. Continue drawing while finer levels load so preparation can use the same rendering context.
+
+## Stream instances in chunks and thin them with distance
+
+A fixed set of copies is one chunk. For copies that exist only near the camera, such as plants on ground tiles, add a chunk when a tile comes into reach and remove it when the camera moves on; a few chunks a frame cost about what they hold, not what the crowd holds. Instance `i` of a chunk is index `chunk.start + i` for `setMatrixAt`, `setColorAt`, `levelOf` and raycast hits while the chunk lives; once it is removed, its indices go to later chunks, so keep the chunk handle with whatever placed it. Prefer whole chunks over parking unused instances at scale 0.
+
+Give a crowd a `range` to thin it out towards a distance instead of cutting it off there: an instance draws while its keep ratio is below `keptFraction(d, range)`. Measure from the main camera: every view, shadow maps and secondary cameras included, uses that camera's distance, so a copy and its shadow appear and vanish together and a reflection shows what the main view shows. Derive each keep ratio from something stable about its instance, such as a hash of where it stands, never from its order in a chunk: the kept copies then form nested subsets as the camera recedes, and a tile filled again keeps the same ones. Uniform keep ratios in [0, 1) thin the crowd evenly over the ramp; to paint what the thinned crowd no longer covers elsewhere, such as a ground tint, use the same `keptFraction` with the same radius and ramp. `scaleSurvivors` enlarges the copies that remain so that a crowd of small things like grass keeps its coverage; leave it off for objects whose size reads, such as trees. The range thins the copies the views draw, not the levels they need: an instance beyond it can still ask for a level, so let the ladder's last drawn level end near the range, or add an empty level there.
+
+```ts
+import { keptFraction } from "@drawcall/lod";
+
+grass.range = { camera, radius: 60, ramp: 25, scaleSurvivors: true };
+const chunk = grass.addChunk({ matrices, keeps: spots.map((spot) => hash(spot.x, spot.z)) });
+// Later, when the tile leaves reach:
+grass.removeChunk(chunk);
+// The same thinning elsewhere, such as the coverage a ground shader paints:
+const covered = 1 - keptFraction(distanceToCamera, grass.range);
+```
 
 ## Assemble levels you already have
 
@@ -119,7 +134,8 @@ import { InstancedLod, Lod } from "@drawcall/lod";
 
 const manager = new LoadingManager();
 const lod = new Lod(levels, { manager });
-const trees = new InstancedLod(treeLevels, positions.length, { manager });
+const trees = new InstancedLod(treeLevels, { manager });
+trees.addChunk({ matrices });
 
 camera.position.copy(viewpoint);
 let loading = false;
@@ -140,7 +156,7 @@ while (loading) {
 
 Tune transitions in the intended viewport with `Lod.debug`, then inspect motion through them. Use `Lod.quality` for a scene-wide adjustment and individual thresholds for particular assets. Give an impostor bake the intended screen size at its handover, then inspect its coverage and colour from several angles.
 
-Group nearby copies into spatial regions. Broad batches can lose useful culling, while tiny batches spend too much time submitting draws. Reuse instance slots and update changed matrices or colours instead of rebuilding whole crowds. Count material groups as well as triangles; an atlas alone does not combine draws. Each distinct material structure costs a pipeline compile on the first view, so variants should share material structure.
+Group nearby copies into spatial regions. Broad batches can lose useful culling, while tiny batches spend too much time submitting draws. Add and remove chunks and move changed instances instead of rebuilding whole crowds. Count material groups as well as triangles; an atlas alone does not combine draws. Each distinct material structure costs a pipeline compile on the first view, so variants should share material structure.
 
 Levels cast into three's shadow maps, not into a light whose shadow map has been replaced by a custom shadow node. An `InstancedLod` draws into each view, shadow maps included, only the instances inside it, at the level the map's texels resolve, so shadow casting costs about what the map can show. When it still dominates, turn `castShadow` off in `onLevel` on the levels that matter least to the shadow, such as small plants.
 
