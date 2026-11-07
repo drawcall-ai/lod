@@ -1,7 +1,7 @@
 import { BufferAttribute, BufferGeometry, Mesh, type Object3D } from "three/webgpu";
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
 import { decimate } from "../simplify.js";
-import { measureError } from "../source/error.js";
+import { measureDeviation } from "../source/deviation.js";
 import type { Source } from "../source/source.js";
 import { merge, type Surface } from "../source/surface.js";
 import { rasterize, type Raster } from "./raster.js";
@@ -11,8 +11,8 @@ import { unwrap } from "./unwrap.js";
 export interface Low extends Surface {
   uvs: Float32Array;
   raster: Raster;
-  /** How far the low surface is from the source's, in the source's units: see `measureError`. */
-  error: number;
+  /** How far the low surface is from the source's, in the source's units: see `measureDeviation`. */
+  deviation: number;
   widest: number;
 }
 
@@ -31,14 +31,14 @@ export function simplified(source: Source, ratio: number): Promise<Object3D> {
  */
 export async function layOut(object: Object3D, source: Source, size: number): Promise<Low> {
   const surface = merge(object, "bakeMesh");
-  const { error, widest } = measureError(source, surface);
+  const { deviation, widest } = measureDeviation(source, surface);
   const { uvs, index } = surface;
   if (surface.hasUvs && uvs.every((x) => x >= 0 && x <= 1)) {
     const raster = rasterize(uvs, index, size);
-    if (raster.overlaps === 0 && raster.covered > 0 && separated(raster, charts(uvs, index))) return { ...surface, raster, error, widest };
+    if (raster.overlaps === 0 && raster.covered > 0 && separated(raster, charts(uvs, index))) return { ...surface, raster, deviation, widest };
   }
   const atlas = await unwrap(surface, size);
-  return { ...atlas, raster: rasterize(atlas.uvs, atlas.index, size), error, widest };
+  return { ...atlas, raster: rasterize(atlas.uvs, atlas.index, size), deviation, widest };
 }
 
 /** Per triangle, its chart: triangles that share a UV point are in one. */

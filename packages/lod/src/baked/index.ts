@@ -20,7 +20,7 @@ import {
   type Object3D,
 } from "three/webgpu";
 import { boundingBox, forEachMesh } from "../bounds.js";
-import { recordError } from "../levels.js";
+import { recordDeviation } from "../levels.js";
 import { sharedRenderer } from "../renderer.js";
 import { readSource } from "../source/source.js";
 import { area } from "../source/surface.js";
@@ -162,7 +162,7 @@ async function bake(source: Object3D, options: BakeMeshOptions, interior: Interi
   const mesh = new Mesh(geometry, material);
   mesh.name = `${source.name || "object"} baked`;
   placeLike(mesh, source);
-  recordError(mesh, Math.max(texelSize, low.error));
+  recordDeviation(mesh, Math.max(texelSize, low.deviation));
   return mesh;
 }
 

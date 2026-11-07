@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { Dirty } from "../../src/instanced/dirty.js";
+import { StorageBufferAttribute } from "three/webgpu";
+import { Dirty, upload } from "../../src/instanced/dirty.js";
 
 function runs(dirty: Dirty): number[][] {
   const result: number[][] = [];
@@ -30,4 +31,16 @@ describe("dirty instance indices", () => {
       expect(runs(dirty)).toEqual(count ? [[0, count]] : []);
     }
   });
+});
+
+it("unions pending uploads across measurements, including left extensions and bridges", () => {
+  const attribute = new StorageBufferAttribute(1000, 16);
+  for (const index of [5, 6, 9, 4, 8, 7, 5, 6, 998]) upload(attribute, index, index + 1);
+  expect(attribute.updateRanges).toEqual([
+    { start: 4 * 16, count: 6 * 16 },
+    { start: 998 * 16, count: 16 },
+  ]);
+  attribute.clearUpdateRanges();
+  upload(attribute, 1, 2);
+  expect(attribute.updateRanges).toEqual([{ start: 16, count: 16 }]);
 });

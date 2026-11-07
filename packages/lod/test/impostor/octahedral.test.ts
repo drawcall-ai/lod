@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { frameBasis, frameDirection, octDecode, octEncode, type Vec3 } from "../../src/impostor/octahedral.js";
+import { frameBasis, frameDirection, type Vec3 } from "../../src/impostor/octahedral.js";
 import type { ImpostorLayout } from "../../src/impostor/impostor.js";
 
 const LAYOUTS: ImpostorLayout[] = ["hemi", "full"];
@@ -20,42 +20,6 @@ const dot = (a: Vec3, b: Vec3): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2
 function expectVec(actual: Vec3, expected: Vec3): void {
   expected.forEach((value, i) => expect(actual[i]).toBeCloseTo(value, 6));
 }
-
-describe("octEncode / octDecode", () => {
-  for (const layout of LAYOUTS) {
-    it(`${layout}: decoding gives unit directions that encode back to themselves`, () => {
-      for (const [u, v] of grid()) {
-        const d = octDecode(layout, u, v);
-        expect(Math.hypot(...d)).toBeCloseTo(1, 9);
-        const [eu, ev] = octEncode(layout, d);
-        expectVec(octDecode(layout, eu, ev), d);
-      }
-    });
-  }
-
-  it("hemi: grid positions round trip everywhere", () => {
-    for (const [u, v] of grid()) {
-      const [eu, ev] = octEncode("hemi", octDecode("hemi", u, v));
-      expect(eu).toBeCloseTo(u, 9);
-      expect(ev).toBeCloseTo(v, 9);
-    }
-  });
-
-  it("full: grid positions round trip off the seam", () => {
-    // On the map's edge mirrored positions name the same direction, so only directions round trip there.
-    for (const [u, v] of grid()) {
-      if (u === 0 || v === 0 || u === 1 || v === 1) continue;
-      const [eu, ev] = octEncode("full", octDecode("full", u, v));
-      expect(eu).toBeCloseTo(u, 9);
-      expect(ev).toBeCloseTo(v, 9);
-    }
-  });
-
-  it("hemi: directions below the horizon clamp onto it", () => {
-    const [u, v] = octEncode("hemi", [0.6, -0.8, 0]);
-    expect(octDecode("hemi", u, v)[1]).toBeCloseTo(0, 9);
-  });
-});
 
 describe("frameDirection", () => {
   it("hemi: the outer frames lie on the horizon", () => {
@@ -80,7 +44,13 @@ describe("frameDirection", () => {
 });
 
 describe("frameBasis", () => {
-  const directions: Vec3[] = [[0, 1, 0], [0, -1, 0], [1, 0, 0], [0, 0, -1], ...LAYOUTS.flatMap((layout) => grid().map(([u, v]) => octDecode(layout, u, v)))];
+  const directions: Vec3[] = [
+    [0, 1, 0],
+    [0, -1, 0],
+    [1, 0, 0],
+    [0, 0, -1],
+    ...LAYOUTS.flatMap((layout) => grid().map(([u, v]) => frameDirection(layout, STEPS + 1, u * STEPS, v * STEPS))),
+  ];
 
   it("is orthonormal and right-handed, cross(tangent, bitangent) = n", () => {
     // Include the band next to the poles, where the basis switches tangent rules.

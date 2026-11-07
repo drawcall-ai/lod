@@ -32,27 +32,36 @@
     "build": "rm -rf dist && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.test.json",
     "test": "vitest run",
-    "xatlas": "node --experimental-strip-types --no-warnings scripts/xatlas.ts"
+    "xatlas": "node --experimental-strip-types --no-warnings scripts/xatlas.ts",
+    "basis": "node --experimental-strip-types --no-warnings scripts/basis.ts"
   },
   "dependencies": {
-    "@drawcall/glts": "^2.0.0",
     "fflate": "^0.8.2",
     "ktx-parse": "^2.0.0",
     "meshoptimizer": "^1.3.0",
     "three-mesh-bvh": "^0.9.15",
-    "vitecache": "^0.1.2"
+    "vitecache": "^0.2.1"
   },
   "peerDependencies": {
-    "three": ">=0.185.0 <0.186.0"
+    "@drawcall/glts": "^4.1.0",
+    "three": ">=0.186.0",
+    "typegpu": "^0.12.9"
   },
   "devDependencies": {
+    "@drawcall/glts": "^4.1.0",
+    "@drawcall/lod": "link:",
+    "@typegpu/gl": "^0.12.9",
+    "@typegpu/three": "^0.12.2",
     "@types/node": "^24.13.6",
-    "@types/three": "^0.185.0",
+    "@types/three": "^0.186.0",
     "@vitest/browser-playwright": "4.1.11",
     "@webgpu/types": "^0.1.74",
+    "ktx2-encoder": "0.6.0",
     "playwright": "1.63.0",
-    "three": "^0.185.1",
+    "three": "^0.186.1",
+    "typegpu": "0.12.9",
     "typescript": "^5.9.3",
+    "unplugin-typegpu": "^0.12.8",
     "vitest": "^4.0.17",
     "xatlas-wasm": "0.1.3"
   },
@@ -68,5 +77,10 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "peerDependenciesMeta": {
+    "@drawcall/glts": {
+      "optional": true
+    }
   }
 }

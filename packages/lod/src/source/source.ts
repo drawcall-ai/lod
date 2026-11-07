@@ -20,7 +20,7 @@ export interface Source extends Merged {
 }
 
 /**
- * `object` read for `who` (named in errors), to `bake` or only to `measure` the error of
+ * `object` read for `who` (named in errors), to `bake` or only to `measure` the deviation of
  * a level against it. A measure needs only where the surface is cut out: a cut-out whose
  * textures the CPU cannot read (compressed ones) counts as opaque there, where a bake
  * fails on it.

@@ -1,12 +1,15 @@
+import { type Library, baseColor, surface } from "../../public/content/materials.ts";
 import * as THREE from "three/webgpu";
 import { abs, attribute, fract, max, mix, step, vec3, vec4 } from "three/tsl";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
-import { baseColor, surface } from "../content/materials.ts";
 import { axes, PAVEMENT, type Plan } from "./plan.ts";
 import type { Terrain } from "./terrain.ts";
 
 /** Height of each surface above the ground: later ones win where they overlap. */
 const LIFT = { bed: 0.012, path: 0.02, drive: 0.025, track: 0.03, street: 0.04, main: 0.05, plaza: 0.07 };
+
+type RoadShapes = Record<"asphalt" | "tracks" | "pavements" | "beds" | "plaza", THREE.BufferGeometry>;
+const cached = new WeakMap<Plan, RoadShapes>();
 
 /**
  * Roads, pavements and the plaza as draped ribbons: vertices every few metres along and
@@ -14,7 +17,36 @@ const LIFT = { bed: 0.012, path: 0.02, drive: 0.025, track: 0.03, street: 0.04, 
  * world x/z texture coordinates, so where two roads overlap they show the same texels;
  * main roads carry painted lines.
  */
-export function roads(plan: Plan): THREE.Group {
+export function roads(library: Library, plan: Plan): THREE.Group {
+  const shapes = roadShapes(plan);
+  const group = new THREE.Group();
+  group.name = "roads";
+  const add = (name: keyof RoadShapes, material: THREE.Material) => {
+    const mesh = new THREE.Mesh(shapes[name], material);
+    mesh.name = name;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+  };
+  add("asphalt", markings(library));
+  add("tracks", surface(library, "gravel_road", { normalScale: 1.2 }));
+  add("pavements", surface(library, "brushed_concrete_04", { weather: 0.4 }));
+  add("beds", surface(library, "farm_soil", { color: "#8a7a6a", normalScale: 1.2 }));
+  add("plaza", surface(library, "cobblestone_floor_04", { normalScale: 1.5 }));
+  return group;
+}
+
+/** The plan cache stores these draped ribbons without creating textures or shaders. */
+export function roadShapes(plan: Plan): RoadShapes {
+  let shapes = cached.get(plan);
+  if (!shapes) cached.set(plan, (shapes = buildShapes(plan)));
+  return shapes;
+}
+
+export function restoreRoadShapes(plan: Plan, shapes: RoadShapes): void {
+  cached.set(plan, shapes);
+}
+
+function buildShapes(plan: Plan): RoadShapes {
   const { terrain } = plan;
   const asphalt: THREE.BufferGeometry[] = [];
   const gravel: THREE.BufferGeometry[] = [];
@@ -68,25 +100,20 @@ export function roads(plan: Plan): THREE.Group {
       ),
     );
   }
-  const group = new THREE.Group();
-  group.name = "roads";
-  group.add(
-    drape(asphalt, markings(), "asphalt"),
-    drape(gravel, surface("gravel_road", { normalScale: 1.2 }), "tracks"),
-    drape(kerbs, surface("brushed_concrete_04", { weather: 0.4 }), "pavements"),
-  );
-  group.add(drape(beds, surface("farm_soil", { color: "#8a7a6a", normalScale: 1.2 }), "beds"));
-  group.add(drape([plazaGeometry(plan)], surface("cobblestone_floor_04", { normalScale: 1.5 }), "plaza"));
-  return group;
+  return {
+    asphalt: merged(asphalt, "asphalt"),
+    tracks: merged(gravel, "tracks"),
+    pavements: merged(kerbs, "pavements"),
+    beds: merged(beds, "beds"),
+    plaza: plazaGeometry(plan),
+  };
 }
 
-function drape(parts: THREE.BufferGeometry[], material: THREE.Material, name: string): THREE.Mesh {
-  const merged = mergeGeometries(parts);
-  if (!merged) throw new Error(`${name}: ribbons have different attributes`);
-  const mesh = new THREE.Mesh(merged, material);
-  mesh.name = name;
-  mesh.receiveShadow = true;
-  return mesh;
+function merged(parts: THREE.BufferGeometry[], name: string): THREE.BufferGeometry {
+  const geometry = mergeGeometries(parts);
+  if (!geometry) throw new Error(`${name}: ribbons have different attributes`);
+  for (const part of parts) part.dispose();
+  return geometry;
 }
 
 /** A point of a ribbon's cross-section: metres left of the centre line, and height above the ground. */
@@ -200,8 +227,8 @@ function plazaGeometry(plan: Plan): THREE.BufferGeometry {
 }
 
 /** Asphalt with a dashed centre line and solid edge lines where `lane.y` is within the road. */
-function markings(): THREE.MeshStandardNodeMaterial {
-  const m = new THREE.MeshStandardNodeMaterial().copy(surface("asphalt_02", { normalScale: 0.8 }));
+function markings(library: Library): THREE.MeshStandardNodeMaterial {
+  const m = new THREE.MeshStandardNodeMaterial().copy(surface(library, "asphalt_02", { normalScale: 0.8 }));
   const lane = attribute<"vec2">("lane", "vec2");
   const across = abs(lane.y);
   const centre = step(across, 0.07).mul(step(fract(lane.x.div(9)), 0.36));

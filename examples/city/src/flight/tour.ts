@@ -18,7 +18,8 @@ export interface Key {
  */
 export class Tour {
   readonly duration: number;
-  private readonly channels: MonotoneCurve[];
+  private readonly channels: [MonotoneCurve, MonotoneCurve, MonotoneCurve, MonotoneCurve, MonotoneCurve, MonotoneCurve];
+  private readonly target = new THREE.Vector3();
 
   constructor(readonly keys: Key[]) {
     const last = keys[keys.length - 1];
@@ -38,11 +39,11 @@ export class Tour {
 
   /** Puts `camera` where the tour is at `time` seconds; returns the distance to what it looks at. */
   pose(time: number, camera: THREE.Camera): number {
-    const [x, y, z, logDistance, heading, pitch] = this.channels.map((c) => c.at(time));
-    if (x === undefined || y === undefined || z === undefined || logDistance === undefined || heading === undefined || pitch === undefined)
-      throw new Error("tour channel missing");
-    const distance = Math.exp(logDistance);
-    const target = new THREE.Vector3(x, y, z);
+    const [x, y, z, zoom, turn, tilt] = this.channels;
+    const distance = Math.exp(zoom.at(time));
+    const heading = turn.at(time);
+    const pitch = tilt.at(time);
+    const target = this.target.set(x.at(time), y.at(time), z.at(time));
     camera.position
       .set(Math.cos(pitch) * Math.cos(heading), Math.sin(pitch), Math.cos(pitch) * Math.sin(heading))
       .multiplyScalar(distance)

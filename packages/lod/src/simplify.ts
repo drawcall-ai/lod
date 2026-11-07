@@ -1,12 +1,14 @@
-import { BufferAttribute, BufferGeometry, type InterleavedBufferAttribute, type Object3D } from "three/webgpu";
+import { BufferAttribute, BufferGeometry, type InterleavedBufferAttribute, type Material, type Mesh, type Object3D } from "three/webgpu";
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
 import { MeshoptSimplifier } from "meshoptimizer";
 import { detailed } from "./bounds.js";
-import { recordError } from "./levels.js";
-import { measureError } from "./source/error.js";
+import { borrowMaterials } from "./dispose.js";
+import { recordDeviation } from "./levels.js";
+import { measureDeviation } from "./source/deviation.js";
 import { readSource } from "./source/source.js";
 import { merge } from "./source/surface.js";
-import { isImpostorMesh, isInstancedLod, isMesh, isSkinnedMesh } from "./three.js";
+import { thin } from "./thin.js";
+import { isImpostorMesh, isInstancedLod, isMesh, isSkinnedMesh, isTexture } from "./three.js";
 
 export interface SimplifyOptions {
   /** share of each mesh's triangles to keep, in (0, 1]; default 0.5 */
@@ -24,6 +26,9 @@ export interface SimplifyOptions {
  *
  * Per material group it keeps UV and normal seams; if that cannot reach the target it
  * lets seams collapse, and as a last resort ignores topology (meshopt's sloppy mode).
+ * A group drawn with an alpha-tested texture (foliage cards) is thinned instead: about
+ * `ratio` of its cards are kept whole, spread evenly, and enlarged to cover what all
+ * covered (see `thin`).
  *
  * How far the copy's surface is from `object`'s (the 99.9th percentile of the distance
  * between the two, by area, over the parts seen from outside; ImpostorMeshes left out)
@@ -31,7 +36,7 @@ export interface SimplifyOptions {
  */
 export async function simplify(object: Object3D, options: SimplifyOptions = {}): Promise<Object3D> {
   const copy = await decimate(object, options.ratio ?? 0.5);
-  recordError(copy, measureError(readSource(object, "simplify", "measure"), merge(copy, "simplify")).error);
+  recordDeviation(copy, measureDeviation(readSource(object, "simplify", "measure"), merge(copy, "simplify")).deviation);
   return copy;
 }
 
@@ -47,20 +52,32 @@ export async function decimate(object: Object3D, ratio: number): Promise<Object3
   });
   const copy = object.clone(true);
   decimateTree(copy, ratio, new Map());
+  borrowMaterials(copy);
   return copy;
 }
 
-/** Decimate the meshes of `node` drawn at full detail; `done` maps each geometry to its simplified one. */
-function decimateTree(node: Object3D, ratio: number, done: Map<BufferGeometry, BufferGeometry>): void {
+/**
+ * Decimate the meshes of `node` drawn at full detail; `done` maps each geometry, with
+ * which of its material indices are cards, to its simplified one.
+ */
+function decimateTree(node: Object3D, ratio: number, done: Map<string, BufferGeometry>): void {
   if (isMesh(node) && !isImpostorMesh(node)) {
-    let geometry = done.get(node.geometry);
-    if (!geometry) done.set(node.geometry, (geometry = simplifyGeometry(node.geometry, ratio)));
+    const cards = cardMaterials(node);
+    const key = `${node.geometry.uuid} ${cards.join()}`;
+    let geometry = done.get(key);
+    if (!geometry) done.set(key, (geometry = simplifyGeometry(node.geometry, ratio, cards)));
     node.geometry = geometry;
   }
   for (const child of detailed(node)) decimateTree(child, ratio, done);
 }
 
-function simplifyGeometry(source: BufferGeometry, ratio: number): BufferGeometry {
+/** Per material of `mesh`, whether it alpha-tests a texture, so draws cards (needles, leaves). */
+function cardMaterials(mesh: Mesh): boolean[] {
+  const materials: Material[] = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  return materials.map((m) => m.alphaTest > 0 && ["map" in m && m.map, "alphaMap" in m && m.alphaMap].some(isTexture));
+}
+
+function simplifyGeometry(source: BufferGeometry, ratio: number, cards: boolean[]): BufferGeometry {
   const geometry = source.index ? source : mergeVertices(source);
   const index = geometry.index;
   if (!index) throw new Error("simplify: geometry could not be indexed");
@@ -69,11 +86,18 @@ function simplifyGeometry(source: BufferGeometry, ratio: number): BufferGeometry
   const groups = geometry.groups.length > 0 ? geometry.groups : [{ start: 0, count: index.count, materialIndex: 0 }];
 
   const parts: Array<{ indices: Uint32Array; materialIndex: number }> = [];
+  let thinned = false;
   for (const group of groups) {
     const indices = new Uint32Array(Math.min(group.count, index.count - group.start));
     for (let i = 0; i < indices.length; i++) indices[i] = index.getX(group.start + i);
-    const [simplified] = simplifyIndices(indices, positions, attributes, stride, weights, Math.floor((indices.length / 3) * ratio) * 3);
-    parts.push({ indices: simplified, materialIndex: group.materialIndex ?? 0 });
+    const materialIndex = group.materialIndex ?? 0;
+    // A single material draws every group.
+    const card = (cards.length === 1 ? cards[0] : cards[materialIndex]) ?? false;
+    if (card) thinned = true;
+    const simplified = card
+      ? thin(indices, positions, ratio)
+      : simplifyIndices(indices, positions, attributes, stride, weights, Math.floor((indices.length / 3) * ratio) * 3)[0];
+    parts.push({ indices: simplified, materialIndex });
   }
 
   const all = new Uint32Array(parts.reduce((n, p) => n + p.indices.length, 0));
@@ -85,7 +109,11 @@ function simplifyGeometry(source: BufferGeometry, ratio: number): BufferGeometry
     offset += part.indices.length;
   }
   const [remap, unique] = MeshoptSimplifier.compactMesh(all); // rewrites `all` in place
-  for (const [name, attribute] of Object.entries(geometry.attributes)) out.setAttribute(name, compactAttribute(attribute, remap, unique));
+  for (const [name, attribute] of Object.entries(geometry.attributes)) {
+    // Thinning moved the kept cards' vertices, past the range a quantized position may hold.
+    const from = name === "position" && thinned ? new BufferAttribute(positions, 3) : attribute;
+    out.setAttribute(name, compactAttribute(from, remap, unique));
+  }
   out.setIndex(new BufferAttribute(all, 1));
   out.computeBoundingBox();
   out.computeBoundingSphere();

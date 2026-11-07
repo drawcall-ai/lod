@@ -1,5 +1,5 @@
 import * as THREE from "three/webgpu";
-import type { Random } from "../content/random.ts";
+import type { Random } from "../../public/content/random.ts";
 import { smooth } from "./country.ts";
 import { type Land, Use } from "./land.ts";
 import { type Spot, spot } from "./plan.ts";

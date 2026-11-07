@@ -1,0 +1,22 @@
+import { loadingManager, onDispose, scene } from "@drawcall/glts";
+import { greenhouse, letterbox, patioSet, shed, swing, washingLine } from "../content/garden.ts";
+import { choice } from "../content/parameters.ts";
+import { Library } from "../content/materials.ts";
+
+const library = new Library(loadingManager, new URL("../assets/", import.meta.url).href);
+onDispose(() => library.dispose());
+const models = new Map([
+  ["shed", (library: Library) => shed(library, "#d9d4c8")],
+  ["letterbox", letterbox],
+  ["greenhouse", greenhouse],
+  ["swing", swing],
+  ["washing line", washingLine],
+  ["patio set", patioSet],
+]);
+const name = choice(new URL(import.meta.url).searchParams, "name", [...models.keys()], "shed");
+const make = models.get(name);
+if (!make) throw new Error(`Unknown garden model ${name}`);
+await library.load();
+const object = library.own(make(library));
+scene.add(object);
+await library.ready(object);

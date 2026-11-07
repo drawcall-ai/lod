@@ -1,0 +1,18 @@
+import * as THREE from "three/webgpu";
+import { onDispose, scene } from "@drawcall/glts";
+import { grassClump, grassMaterial, type ClumpShape } from "../content/grass.ts";
+import { dispose } from "../content/dispose.ts";
+import { choice, number } from "../content/parameters.ts";
+
+onDispose(() => dispose(scene));
+const query = new URL(import.meta.url).searchParams;
+const kind = choice(query, "kind", ["lawn", "meadow"], "lawn");
+const shape: ClumpShape =
+  kind === "meadow" ? { size: 0.5, blades: 125, height: [0.12, 0.45], width: 0.01 } : { size: 0.5, blades: 170, height: [0.05, 0.11], width: 0.008 };
+const variant = number(query, "variant", 0, 0, 0xffffffff, true);
+// Seeds start at 1, which keeps the clumps the variants were first tuned with.
+const geometry = grassClump(variant + 1, shape);
+const material = grassMaterial();
+const object = new THREE.Mesh(geometry, material);
+object.receiveShadow = true;
+scene.add(object);

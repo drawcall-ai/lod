@@ -1,5 +1,6 @@
+import type { Library } from "../../public/content/materials.ts";
 import * as THREE from "three/webgpu";
-import { terrain } from "../content/terrain.ts";
+import { terrain } from "../render/ground/material.ts";
 import { loadSky } from "../render/sky.ts";
 
 /**
@@ -13,7 +14,7 @@ export class Stage {
   private readonly ground: THREE.Mesh<THREE.PlaneGeometry, THREE.Material>;
   private sunDirection = new THREE.Vector3(0.5, 0.8, 0.3).normalize();
 
-  constructor() {
+  constructor(private readonly library: Library) {
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(4096, 4096);
     this.scene.add(this.sun, this.sun.target);
@@ -22,14 +23,14 @@ export class Stage {
     const plane = new THREE.PlaneGeometry(size, size).rotateX(-Math.PI / 2);
     const uv = plane.getAttribute("uv");
     for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getX(i) - 0.5) * size, (uv.getY(i) - 0.5) * size);
-    this.ground = new THREE.Mesh(plane, terrain());
+    this.ground = new THREE.Mesh(plane, terrain(library));
     this.ground.receiveShadow = true;
     this.scene.add(this.ground);
   }
 
   async loadSky(renderer: THREE.Renderer): Promise<void> {
     // turn the sky so the sun rakes across content facing +z from the front left
-    const sky = await loadSky(renderer, Math.atan2(0.8, -0.6));
+    const sky = await loadSky(this.library, renderer, Math.atan2(0.8, -0.6));
     this.sunDirection = sky.sun;
     this.sun.intensity = sky.irradiance;
     this.scene.environment = sky.environment;

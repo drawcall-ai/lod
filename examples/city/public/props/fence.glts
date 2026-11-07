@@ -1,0 +1,12 @@
+import { loadingManager, onDispose, scene } from "@drawcall/glts";
+import { picketFence } from "../content/fence.ts";
+import { Library } from "../content/materials.ts";
+import { number } from "../content/parameters.ts";
+
+const library = new Library(loadingManager, new URL("../assets/", import.meta.url).href);
+onDispose(() => library.dispose());
+const query = new URL(import.meta.url).searchParams;
+await library.load();
+const object = library.own(picketFence(library, number(query, "length", 2.4, 0.1, 100)));
+scene.add(object);
+await library.ready(object);

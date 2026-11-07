@@ -20,7 +20,7 @@ export interface Breeze {
 }
 
 /** How one mesh sways. */
-export interface Sway {
+interface Sway {
   breeze: Breeze;
   /** sideways displacement per unit of height at full swing, and the base's height, in the root's space */
   shape: Vector2;

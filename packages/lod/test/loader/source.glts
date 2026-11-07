@@ -1,0 +1,8 @@
+import { onDispose, scene } from "@drawcall/glts";
+import { BoxGeometry, Mesh, MeshStandardMaterial } from "three/webgpu";
+import { dimension } from "./source.ts";
+globalThis.dispatchEvent(new Event("lod-source-constructed"));
+const size = dimension(new URL(import.meta.url).searchParams.get("size"));
+const mesh = new Mesh(new BoxGeometry(size, size, size), new MeshStandardMaterial());
+onDispose(() => { mesh.geometry.dispose(); mesh.material.dispose(); });
+scene.add(mesh);

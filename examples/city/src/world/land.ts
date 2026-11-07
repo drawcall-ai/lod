@@ -15,7 +15,7 @@ export const Use = {
 export type Use = (typeof Use)[keyof typeof Use];
 const USES: readonly Use[] = [Use.Lawn, Use.Paved, Use.Field, Use.Forest, Use.Crop, Use.Water];
 
-/** What a farmland parcel holds; the terrain shader colours each (keep the numbers in step with content/terrain.ts). */
+/** What a farmland parcel holds; the terrain shader colours each. */
 export const Crop = { None: 0, Pasture: 1, Wheat: 2, Rapeseed: 3, Ploughed: 4, Stubble: 5 } as const;
 export type Crop = (typeof Crop)[keyof typeof Crop];
 

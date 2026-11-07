@@ -7,29 +7,15 @@ export type Vec3 = [number, number, number];
 // The octahedral maps. Frame (col, row) of an N x N atlas sits at grid point
 // (col, row) / (N - 1), so the outer frames lie exactly on the edge of the map:
 // the horizon for "hemi", the nadir seam for "full". The bake and the shader both
-// derive every direction from these two functions; the node versions below mirror them.
+// derive every direction from the same map; the node versions below mirror it.
 
 /** Grid position in [0, 1]^2 to a unit direction. */
-export function octDecode(layout: ImpostorLayout, u: number, v: number): Vec3 {
+function octDecode(layout: ImpostorLayout, u: number, v: number): Vec3 {
   let [x, z] = layout === "hemi" ? [u - v, u + v - 1] : [u * 2 - 1, v * 2 - 1];
   const y = 1 - Math.abs(x) - Math.abs(z);
   if (layout === "full" && y < 0) [x, z] = fold(x, z);
   const length = Math.hypot(x, y, z);
   return [x / length, y / length, z / length];
-}
-
-/**
- * Unit direction to grid position in [0, 1]^2. "hemi" clamps directions below the
- * horizon onto it (straight down has no horizon point and maps to the zenith).
- */
-export function octEncode(layout: ImpostorLayout, d: Vec3): [number, number] {
-  const [dx, dy, dz] = d;
-  const y = layout === "hemi" ? Math.max(dy, 0) : dy;
-  const sum = Math.abs(dx) + Math.abs(y) + Math.abs(dz) || 1;
-  let [x, z] = [dx / sum, dz / sum];
-  if (layout === "hemi") return [(1 + x + z) / 2, (1 + z - x) / 2];
-  if (y < 0) [x, z] = fold(x, z);
-  return [(x + 1) / 2, (z + 1) / 2];
 }
 
 /** The lower half of the full octahedron, folded over the upper one's diagonal edges. */
@@ -75,7 +61,7 @@ export function decodeNode(layout: ImpostorLayout, uv: Node<"vec2">): Node<"vec3
   return normalize(vec3(folded.x, y, folded.y));
 }
 
-/** `octEncode` in the shaders, for `layout`: unit direction to grid position. */
+/** Unit direction to grid position; hemi clamps directions below the horizon. */
 export function encodeNode(layout: ImpostorLayout, d: Node<"vec3">): Node<"vec2"> {
   if (layout === "hemi") {
     const up = vec3(d.x, max(d.y, 0), d.z);

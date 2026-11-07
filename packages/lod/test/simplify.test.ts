@@ -1,13 +1,17 @@
 import {
+  Box3,
   BoxGeometry,
+  BufferAttribute,
+  BufferGeometry,
   CompressedTexture,
+  DataTexture,
   Group,
   InstancedMesh,
   Matrix4,
   Mesh,
   MeshStandardMaterial,
+  RGBAFormat,
   SphereGeometry,
-  type BufferGeometry,
   type Object3D,
 } from "three";
 import { describe, expect, it, vi } from "vitest";
@@ -18,6 +22,7 @@ import { InstancedLod } from "../src/instanced/index.js";
 import { Lod } from "../src/lod.js";
 import { simplify } from "../src/simplify.js";
 import { isImpostorMesh, isInstancedMesh, isLOD, isMesh } from "../src/three.js";
+import { area } from "../src/source/surface.js";
 import { must } from "./must.js";
 
 const triangles = (geometry: BufferGeometry) => (geometry.index?.count ?? 0) / 3;
@@ -25,10 +30,11 @@ const meshes = (root: Object3D) => root.children.filter(isMesh);
 const sphere = (material = new MeshStandardMaterial()) => new Mesh(new SphereGeometry(1, 64, 32), material);
 
 /** How far `copy` is from `source`, in `source`'s units, read back from the default maxPixels it gets in a Lod. */
-const error = (source: Object3D, copy: Object3D) => (2 * boundingSphere(source).radius) / must(new Lod([source.clone(), copy]).levels[1]).maxPixels;
+const deviation = (source: Object3D, copy: Object3D) =>
+  (2 * boundingSphere(source).radius) / must(new Lod([{ object: source.clone() }, { object: copy }]).levels[1]).maxPixels;
 
 describe("simplify", () => {
-  it("reduces triangles, keeps materials and shared geometry shared, and measures its error in the source's units", async () => {
+  it("reduces triangles, keeps materials and shared geometry shared, and measures its deviation in the source's units", async () => {
     const geometry = new SphereGeometry(1, 64, 32);
     const material = new MeshStandardMaterial();
     const scaled = new Mesh(geometry, material);
@@ -42,32 +48,32 @@ describe("simplify", () => {
     expect(meshes(copy).every((mesh) => mesh.material === material)).toBe(true);
     // The scaled copy, most of the area, moved three times as far.
     const single = new Mesh(geometry, material);
-    expect(error(source, copy) / (3 * error(single, await simplify(single, { ratio: 0.1 })))).toBeCloseTo(1, 1);
+    expect(deviation(source, copy) / (3 * deviation(single, await simplify(single, { ratio: 0.1 })))).toBeCloseTo(1, 1);
     await expect(simplify(source, { ratio: 0 })).rejects.toThrow(/ratio/);
   });
 
   it("simplifies a nested Lod's source whatever it shows, and leaves its other levels", async () => {
     const material = new MeshStandardMaterial();
     const far = new Mesh(new SphereGeometry(1, 8, 4), material);
-    const inner = new Lod([sphere(material), far]);
-    inner.levels.forEach((level, i) => (level.object.visible = i === 1));
+    const inner = new Lod([{ object: sphere(material) }, { object: far }]);
+    inner.levels.forEach((level, i) => (must(level.object).visible = i === 1));
     const [nested] = (await simplify(new Group().add(inner), { ratio: 0.1 })).children;
     if (!nested || !isLOD(nested)) throw new Error("expected the nested Lod");
-    const [source, cheap] = nested.levels.map((level) => (isMesh(level.object) ? triangles(level.object.geometry) : 0));
+    const [source, cheap] = nested.levels.map((level) => (level.object && isMesh(level.object) ? triangles(level.object.geometry) : 0));
     expect(source).toBeLessThan(64 * 32 * 2 * 0.15);
     expect(cheap).toBe(triangles(far.geometry));
   });
 
   it("simplifies an InstancedMesh's geometry, keeps ImpostorMeshes and refuses an InstancedLod", async () => {
     const impostor: Impostor = {
-      version: 3,
+      version: 4,
       layout: "full",
       frames: 4,
       size: 16,
       box: [-1, 0, -1, 1, 2, 1],
       halfSize: 1.5,
       maps: ["base", "normalDepth", "orm"],
-      layers: [0, 1, 2].map(() => [16, 8, 4].map((size) => new Uint8Array(size * size * 4))),
+      layers: [0, 1, 2].map(() => ({ format: RGBAFormat, mipmaps: [16, 8, 4].map((size) => new Uint8Array(size * size * 4)) })),
     };
     const instanced = new InstancedMesh(new SphereGeometry(1, 64, 32), new MeshStandardMaterial(), 2);
     instanced.setMatrixAt(1, new Matrix4().makeTranslation(3, 0, 0));
@@ -79,7 +85,7 @@ describe("simplify", () => {
     expect(triangles(many.geometry)).toBeLessThan(triangles(instanced.geometry) * 0.15);
     expect(many.count).toBe(2);
     expect(kept.impostor).toBe(impostor);
-    const crowd = new InstancedLod([sphere()], 2);
+    const crowd = new InstancedLod([{ object: sphere() }]);
     const clone = vi.spyOn(crowd, "clone");
     const source = new Group().add(sphere(), crowd);
     try {
@@ -92,6 +98,42 @@ describe("simplify", () => {
       clone.mockRestore();
       crowd.dispose();
     }
+  });
+
+  it("thins alpha-tested cards whole, spread evenly, keeping their coverage", async () => {
+    // 20 x 20 separate quads on a wavy sheet, as a crown's needle cards.
+    const positions: number[] = [];
+    const index: number[] = [];
+    for (let i = 0; i < 400; i++) {
+      const [x, y] = [(i % 20) - 9.5, Math.floor(i / 20) - 9.5];
+      const z = Math.sin(x) * Math.cos(y);
+      const v = positions.length / 3;
+      for (const [dx, dy] of [[0, 0], [0.4, 0], [0.4, 0.4], [0, 0.4]]) positions.push(x + (dx ?? 0), y + (dy ?? 0), z);
+      index.push(v, v + 1, v + 2, v, v + 2, v + 3);
+    }
+    const geometry = new BufferGeometry().setAttribute("position", new BufferAttribute(new Float32Array(positions), 3)).setIndex(index);
+    geometry.computeVertexNormals();
+    const needles = new MeshStandardMaterial({ map: new DataTexture(new Uint8Array(4).fill(255), 1, 1), alphaTest: 0.5 });
+    const source = new Mesh(geometry, needles);
+    const copy = await simplify(source, { ratio: 0.05 });
+    if (!isMesh(copy)) throw new Error("expected a mesh");
+    const kept = copy.geometry;
+    const surface = (g: BufferGeometry) => area({ positions: Float32Array.from(g.getAttribute("position").array), index: Uint32Array.from(must(g.index).array), normals: new Float32Array() });
+    // About 5% of the 400 cards (meshopt's point simplifier keeps at most its target), each whole.
+    expect(triangles(kept) / 2).toBeGreaterThanOrEqual(15);
+    expect(triangles(kept) / 2).toBeLessThanOrEqual(20);
+    expect(triangles(kept) % 2).toBe(0);
+    expect(surface(kept) / surface(geometry)).toBeCloseTo(1, 2);
+    // Every quarter of the sheet keeps its share; a quad's six corners average to its centre.
+    const corner = (i: number, axis: number) => kept.getAttribute("position").getComponent(must(kept.index).getX(i), axis);
+    const centres = Array.from({ length: triangles(kept) / 2 }, (_, c) => [0, 1].map((axis) => Array.from({ length: 6 }, (_, k) => corner(c * 6 + k, axis)).reduce((sum, v) => sum + v) / 6));
+    for (const [sx, sy] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+      expect(centres.filter(([x = 0, y = 0]) => Math.sign(x) === sx && Math.sign(y) === sy).length).toBeGreaterThanOrEqual(3);
+    }
+    // A level must stay inside its source's bounds, though the cards at the edge grow too.
+    const bounds = new Box3().setFromObject(source).expandByScalar(1e-6);
+    for (const level of [copy, await simplify(source, { ratio: 0.5 })]) expect(bounds.containsBox(new Box3().setFromObject(level))).toBe(true);
+    expect(deviation(source, copy)).toBeGreaterThan(0);
   });
 
   it("measures a source whose cut-out textures the CPU cannot read, as opaque", async () => {

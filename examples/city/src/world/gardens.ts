@@ -1,12 +1,10 @@
 import * as THREE from "three/webgpu";
-import type { HouseParams } from "../content/house/index.ts";
-import type { Random } from "../content/random.ts";
+import type { HouseParams } from "../../public/content/house/params.ts";
+import { HEDGE, type GardenItem } from "../../public/content/ladders.ts";
+import type { Random } from "../../public/content/random.ts";
 import { spot, type Spot } from "./plan.ts";
 import type { Terrain } from "./terrain.ts";
 import { STREET_WIDTH, type Town } from "./town.ts";
-
-/** Length of one clipped hedge section (m). */
-export const HEDGE = 2;
 
 /** A lot's position along its street: `at(t, offset)` maps along-street and out-from-the-centre-line metres to x/z. */
 interface Lot {
@@ -130,8 +128,8 @@ export function garden(town: Town, add: (id: string, at: Spot) => void, terrain:
   }
 }
 
-/** Adds a garden thing (see `content/garden.ts`) by name. */
-function item(town: Town, name: string, at: Spot): void {
+/** Adds a garden thing (see `public/content/garden.ts`) by name. */
+function item(town: Town, name: GardenItem, at: Spot): void {
   town.garden.set(name, [...(town.garden.get(name) ?? []), at]);
 }
 
@@ -157,7 +155,7 @@ export function frontHedge(
     }
 }
 
-/** Fence bays along the lot front, leaving a gate in the middle. */ /** Fence bays along the lot front, leaving a gate in the middle. */
+/** Fence bays along the lot front, leaving a gate in the middle. */
 export function fence(
   fences: Spot[],
   terrain: Terrain,

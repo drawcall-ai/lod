@@ -1,7 +1,7 @@
 import * as THREE from "three/webgpu";
-import { houseParams, type HouseParams } from "../content/house/index.ts";
-import { Random } from "../content/random.ts";
-import { forestClearings, forestEdge, type Zones } from "../content/terrain.ts";
+import { HOUSE_VARIANTS, houseParams, type HouseParams } from "../../public/content/house/params.ts";
+import { Random } from "../../public/content/random.ts";
+import { type Forest, forestClearings, forestEdge } from "./zones.ts";
 import { country, crossRoad } from "./country.ts";
 import { banks, CREEK, crossings } from "./creek.ts";
 import { farmland } from "./farmland.ts";
@@ -38,11 +38,9 @@ export interface Rect {
 }
 
 export type Field = Rect;
-export type Forest = Zones["forests"][number];
 
 /** Pavement width on each side of a town-core street, and the kerb height. */
 export const PAVEMENT = { width: 2.2, kerb: 0.12 };
-const HOUSE_VARIANTS = 10;
 
 /**
  * Everything the world holds and where, decided once from a seed. Counts per kind are
@@ -55,11 +53,10 @@ export interface Plan {
   plaza: Rect;
   fields: Field[];
   forests: Forest[];
-  variants: HouseParams[];
   houses: { variant: number; spot: Spot }[];
   /** Fence bays (2.4 m, running along the spot's +x). */
   fences: Spot[];
-  /** Garden things by name (see `content/garden.ts`). */
+  /** Garden things by name (see `public/content/garden.ts`). */
   garden: Map<string, Spot[]>;
   hedges: Spot[];
   church: Spot;
@@ -120,7 +117,7 @@ export function plan(seed: number): Plan {
   for (const f of FORESTS)
     land.paint(Use.Forest, f.x - f.radius * 1.6, f.z - f.radius * 1.6, f.x + f.radius * 1.6, f.z + f.radius * 1.6, (x, z) => inForest(f, x, z));
 
-  const variants = houseVariants();
+  const variants = Array.from({ length: HOUSE_VARIANTS }, (_, i) => houseParams(i));
   const built = town(TOWN, variants, terrain, r);
   const roads = [...built.roads, ...country(TOWN, built.mainRoad, FIELDS), ...built.paths];
   for (const road of roads) {
@@ -157,7 +154,6 @@ export function plan(seed: number): Plan {
     plaza,
     fields: FIELDS,
     forests: FORESTS,
-    variants,
     houses,
     fences: built.fences,
     garden: built.garden,
@@ -167,8 +163,6 @@ export function plan(seed: number): Plan {
     models,
   };
 }
-
-export const houseVariants = (): HouseParams[] => Array.from({ length: HOUSE_VARIANTS }, (_, i) => houseParams(i + 1));
 
 /** A spot on the ground at x, z. */
 export function spot(terrain: Terrain, x: number, z: number, angle: number, scale = 1): Spot {
