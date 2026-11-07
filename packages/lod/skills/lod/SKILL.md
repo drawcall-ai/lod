@@ -93,6 +93,18 @@ grass.removeChunk(chunk);
 const covered = 1 - keptFraction(distanceToCamera, grass.range);
 ```
 
+## Sit copies on the ground with contact shadows
+
+Give a crowd a `contact` to draw a soft dark disc under each copy it draws near the camera, so that trees, rocks or props stand on the ground instead of floating over it. A contact shows exactly when its copy does, through the frustum, the `range` and a level that draws nothing alike, so a thinned crowd never leaves rings behind; it needs no change to the ground's material, since it darkens whatever opaque surface is drawn beneath it. Place each copy with its origin where it meets the ground and its local y axis up: the disc lies in the copy's own y = 0 plane, its radius in the copy's units, so it scales with the copy. Size the radius to the footprint you want darkened, such as a crown's for a tree and a little beyond the base for a rock, and keep the distance short where the ground's own shading takes over; contacts fade out before it.
+
+The disc holds on gentle slopes, up to about 17°, wherever the copy stands upright on them. On steeper ground or under a copy tilted away from the ground, part of it sinks out of sight or hangs over a drop; tilt such copies to the ground's normal or leave them without contacts. The disc can also darken whatever stands just above the ground within its radius, the copy's own base included, and a copy just outside the view loses the part of its contact that reaches into it. Contacts draw in views, not into shadow maps.
+
+```ts
+trees.contact = { radius: 3, strength: 0.6, distance: 120 };
+// Off again:
+trees.contact = null;
+```
+
 ## Assemble levels you already have
 
 Pass levels in finest-to-coarsest order. An empty object can be a deliberate culled level. A ladder needs measurable bounds; when all levels are deferred, it draws nothing until a level is ready.
