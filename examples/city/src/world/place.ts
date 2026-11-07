@@ -1,10 +1,24 @@
 import * as THREE from "three/webgpu";
-import { InstancedLod, type LodLevel } from "@drawcall/lod";
+import { InstancedLod, type ChunkData, type LodLevel } from "@drawcall/lod";
 
-/** Places instance `i` of `lod` at a spot: on the ground, turned and scaled. */
-export function place(lod: InstancedLod, i: number, at: { x: number; y: number; z: number; angle: number; scale: number }): void {
-  matrix.compose(position.set(at.x, at.y, at.z), turn.setFromAxisAngle(UP, at.angle), size.setScalar(at.scale));
-  lod.setMatrixAt(i, matrix);
+/** A spot on the ground, with the turn and scale of what stands there. */
+export interface Spot {
+  x: number;
+  y: number;
+  z: number;
+  angle: number;
+  scale: number;
+}
+
+/** A chunk of copies standing at `spots`: on the ground, turned and scaled, coloured by `tint` when given. */
+export function chunkAt(spots: readonly Spot[], tint?: (at: Spot, index: number, color: THREE.Color) => THREE.Color): ChunkData {
+  const matrices = new Float32Array(spots.length * 16);
+  const colors = tint && new Float32Array(spots.length * 3);
+  spots.forEach((at, i) => {
+    matrix.compose(position.set(at.x, at.y, at.z), turn.setFromAxisAngle(UP, at.angle), size.setScalar(at.scale)).toArray(matrices, i * 16);
+    if (tint && colors) tint(at, i, color.setRGB(1, 1, 1)).toArray(colors, i * 3);
+  });
+  return { matrices, colors };
 }
 
 const UP = new THREE.Vector3(0, 1, 0);
@@ -12,6 +26,7 @@ const matrix = new THREE.Matrix4();
 const position = new THREE.Vector3();
 const turn = new THREE.Quaternion();
 const size = new THREE.Vector3();
+const color = new THREE.Color();
 
 /** Edge of the square regions copies are grouped in: each InstancedLod covers one, so whole regions out of view are culled. */
 const REGION = 1000;
@@ -23,11 +38,10 @@ const REGION = 1000;
 export function spread(
   name: string,
   variants: readonly (readonly LodLevel[])[],
-  spots: { x: number; y: number; z: number; angle: number; scale: number }[],
+  spots: Spot[],
   tint?: (i: number, color: THREE.Color) => THREE.Color,
 ): InstancedLod[] {
   const lods: InstancedLod[] = [];
-  const color = new THREE.Color();
   const regions = variants.map(() => new Map<string, typeof spots>());
   for (const [index, at] of spots.entries()) {
     const variant = ((index * 2654435761) % 4294967296) % variants.length;
@@ -42,12 +56,9 @@ export function spread(
     const levels = variants[variant];
     if (!levels) throw new Error(`${name}: missing levels ${variant}`);
     for (const [key, group] of groups) {
-      const lod = new InstancedLod(levels, group.length);
+      const lod = new InstancedLod(levels);
       lod.name = `${name} ${variant} ${key}`;
-      group.forEach((at, index) => {
-        place(lod, index, at);
-        if (tint) lod.setColorAt(index, tint(Math.round(at.x * 7 + at.z * 13), color));
-      });
+      lod.addChunk(chunkAt(group, tint && ((at, _, color) => tint(Math.round(at.x * 7 + at.z * 13), color))));
       lods.push(lod);
     }
   }

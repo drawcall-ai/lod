@@ -12,7 +12,8 @@ import { cornLadder } from "../../../public/content/ladders.ts";
 import { BLOCK, DESIGNS, layout, VARIANTS } from "../../../public/content/corn/layout.ts";
 import { TOP } from "../../../public/content/corn/cover/shapes.ts";
 
-const CHUNKS = 128;
+/** Field blocks whose plants are drawn at once. */
+const ROOM = 128;
 const RAMP = 2;
 const LEAD = 0.5;
 const FLAT_PIXELS = 60;
@@ -48,15 +49,10 @@ export class Corn extends THREE.Object3D {
       coverBake("axis=z"),
     ]);
     const skirt = skirtUniform();
-    const perTile = Array.from({ length: VARIANTS }, (_, variant) =>
-      Math.max(...designs.map((design) => design.filter((plant) => plant.variant === variant).length)),
-    );
     const plants = await Promise.all(
       Array.from({ length: VARIANTS }, async (_, variant) => {
-        const count = perTile[variant];
-        if (count === undefined) throw new Error("Missing corn variant tile capacity");
         const levels = await loader.loadAsync(plantRequest(cornLadder(variant)));
-        const lod = new InstancedLod(levels, CHUNKS * count);
+        const lod = new InstancedLod(levels);
         lod.name = `corn plant ${variant}`;
         const box = sourceBox(lod.levels);
         return { lod, size: box.getSize(new THREE.Vector3()).length() };
@@ -66,8 +62,7 @@ export class Corn extends THREE.Object3D {
     let corn: Corn | undefined;
     const patches = new Patches(
       plants.map(({ lod }) => lod),
-      perTile,
-      CHUNKS,
+      ROOM,
       new FieldTiles(tiles, designs, plan.terrain, spot),
       () => {
         if (!corn) throw new Error("Corn tiles requested before initialization");
@@ -104,7 +99,7 @@ export class Corn extends THREE.Object3D {
     const gone = cutoff(this.squeeze);
     this.fadeFrom = (this.plantSize * scale) / gone;
     this.plants.update(camera);
-    const over = this.plants.wanted / CHUNKS;
+    const over = this.plants.wanted / ROOM;
     this.squeeze = over > 1 ? Math.min(this.squeeze * Math.max(1.02, Math.sqrt(over)), 4) : Math.max(1, this.squeeze / 1.02);
     for (const lod of this.active) setCutoff(lod.levels, gone);
     const risen = Math.max(this.fadeFrom - LEAD, RAMP);

@@ -28,10 +28,10 @@ export async function groundCover(library: Library, plan: Plan, zones: Zones, wi
       const boxes = models.map(sourceBox);
       const size = Math.max(...boxes.map((box) => box.getSize(new THREE.Vector3()).length())) * kind.scale[1];
       const cull = reachFor(reference, size, kind.reach, 800, 1);
-      const chunks = Math.ceil((Math.PI * (2 * kind.reach + TILE) ** 2) / (TILE * TILE));
+      const room = Math.ceil((Math.PI * (2 * kind.reach + TILE) ** 2) / (TILE * TILE));
       const tiles = new GroundTiles(plan, kind.density, where(plan, kind.ground), kind.scale, models.length);
       const lods = models.map((model, variant) => {
-        const lod = new InstancedLod(model, chunks * tiles.perVariant);
+        const lod = new InstancedLod(model);
         const middle = lod.levels[1];
         const empty = lod.levels.at(-1);
         const box = boxes[variant];
@@ -46,8 +46,7 @@ export async function groundCover(library: Library, plan: Plan, zones: Zones, wi
       });
       const patches = new Patches(
         lods,
-        lods.map(() => tiles.perVariant),
-        chunks,
+        room,
         tiles,
         (camera) => reachFor(camera, size, cull, Patches.height, Lod.quality),
       );
@@ -119,8 +118,6 @@ class GroundTiles implements Tiles {
   private readonly size = new THREE.Vector3();
   /** Tufts per tile side, on a jittered grid. */
   private readonly side: number;
-  /** The most tufts of one variant a tile holds. */
-  readonly perVariant: number;
 
   constructor(
     private readonly plan: Plan,
@@ -130,7 +127,6 @@ class GroundTiles implements Tiles {
     private readonly variants: number,
   ) {
     this.side = Math.max(1, Math.round(TILE * Math.sqrt(density)));
-    this.perVariant = Math.ceil((this.side * this.side) / variants);
   }
 
   near(eye: THREE.Vector3, reach: number, visit: (tile: number, distance: number) => void): void {

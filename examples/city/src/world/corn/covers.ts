@@ -96,14 +96,11 @@ function rising(material: THREE.MeshStandardNodeMaterial, skirt: Skirt): THREE.M
 
 /** `levels` of a baked cover over `places`, after an empty level 0 (the plants show there); thresholds are set by `Corn.update`. */
 function coverLod(name: string, levels: THREE.Mesh[], places: { matrix: THREE.Matrix4; at: THREE.Vector3 }[]): InstancedLod {
-  const lod = new InstancedLod(
-    [new THREE.Object3D(), ...levels].map((object) => ({ object })),
-    places.length,
-  );
+  const lod = new InstancedLod([new THREE.Object3D(), ...levels].map((object) => ({ object })));
   lod.name = name;
-  places.forEach(({ matrix, at }, i) => {
-    lod.setMatrixAt(i, matrix);
-    lod.setColorAt(i, tint(at));
+  lod.addChunk({
+    matrices: places.flatMap(({ matrix }) => matrix.elements),
+    colors: places.flatMap(({ at }) => tint(at).toArray()),
   });
   // drawn before the plants, which then skip the pixels it hides
   lod.traverse((node) => (node.renderOrder = -1));

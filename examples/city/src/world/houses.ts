@@ -4,7 +4,7 @@ import { HOUSE_VARIANTS } from "../../public/content/house/params.ts";
 import { CHURCH, houseLadder, type Ladder } from "../../public/content/ladders.ts";
 import { Random } from "../../public/content/random.ts";
 import { loader } from "../loading.ts";
-import { place } from "./place.ts";
+import { chunkAt } from "./place.ts";
 import type { Plan } from "./plan.ts";
 
 const WARMER = new THREE.Color(1.05, 0.98, 0.88);
@@ -16,14 +16,14 @@ export async function houses(plan: Plan): Promise<THREE.Group> {
     const spots = plan.houses.filter((house) => house.variant === variant).map((house) => house.spot);
     if (!spots.length) return [];
     const levels = await loader.loadAsync(request(houseLadder(variant)));
-    const lod = new InstancedLod(levels, spots.length);
+    const lod = new InstancedLod(levels);
     lod.name = `house ${variant}`;
-    const color = new THREE.Color();
-    spots.forEach((at, index) => {
-      place(lod, index, at);
-      const random = new Random(index * 31 + variant);
-      lod.setColorAt(index, color.setRGB(1, 1, 1).multiplyScalar(random.range(0.88, 1.04)).lerp(WARMER, random.range(0, 0.4)));
-    });
+    lod.addChunk(
+      chunkAt(spots, (_, index, color) => {
+        const random = new Random(index * 31 + variant);
+        return color.multiplyScalar(random.range(0.88, 1.04)).lerp(WARMER, random.range(0, 0.4));
+      }),
+    );
     return [lod];
   });
   const [variants, levels] = await Promise.all([Promise.all(homes), loader.loadAsync(request(CHURCH))]);
