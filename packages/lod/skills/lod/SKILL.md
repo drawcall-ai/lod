@@ -7,7 +7,7 @@ description: Use @drawcall/lod for cached, progressively loaded levels of detail
 
 ## Start with the loader
 
-Give the host's `LodLoader` an asset URL and the representations to derive from it. Use `.glb` or `.gltf` for stored models and `.glts` for procedural assets. Put generation parameters in the asset URL's query: each distinct query is a distinct cache identity. Build a `Lod` from the returned levels for an independently placed object, or an `InstancedLod` for repeated objects, whose instances arrive and leave in chunks of matrices, colours and keep ratios.
+Give the host's `LodLoader` an asset URL and the representations to derive from it. Use `.glb` or `.gltf` for stored models and `.glts` for procedural assets. Put generation parameters in the asset URL's query: each distinct query is a distinct cache identity. Build a `Lod` from the returned levels for an independently placed object, or an `InstancedLod` for repeated objects, whose instances arrive and leave in chunks of matrices, colours and keep ratios, or of records a GPU pass of yours wrote.
 
 `loadAsync` resolves with the ladder before its levels load; each level loads when a view first selects it, and a level still loading draws as a ready coarser one, as the level a copy already showed, or not at all. On a cold cache a derived level is built when it first loads, so a cold far view builds only the coarse levels it selects. Give simplified and baked levels an explicit `maxPixels`: without one, a level is built with the ladder to measure its default. A simplified level also loads the source for its original materials; a source-only ladder loads its source eagerly. Prefer baked or impostor middle levels for an expensive `.glts`: a simplified level brings the script run forward to that viewing range.
 
@@ -91,6 +91,44 @@ const chunk = grass.addChunk({ matrices, keeps: spots.map((spot) => hash(spot.x,
 grass.removeChunk(chunk);
 // The same thinning elsewhere, such as the coverage a ground shader paints:
 const covered = 1 - keptFraction(distanceToCamera, grass.range);
+```
+
+## Produce copies on the GPU
+
+When the copies come out of a compute pass of your own, such as plants scattered over ground tiles on the GPU, hand them over as GPU chunks so that no count or record ever travels back to the CPU. Make the `InstancedLod` with `gpuChunks`: it then takes GPU chunks only, and its copies have no index, so `setMatrixAt`, `levelOf`, raycasting and `copy` do not reach them; keep CPU-placed copies in a separate crowd. Range thinning, culling, levels, shadows and contacts work as for CPU chunks.
+
+Your pass writes each chunk's records into one shared buffer of `vec4u` words, a fixed number per record, and the record count into one shared `u32` buffer, then you add the chunk with where its records and count lie and a box around every copy's origin. Your instance function, a [TypeGPU](https://docs.swmansion.com/TypeGPU/) function taking a record's words, unpacks one record into its matrix, colour and keep ratio. Keep a record to what varies per place, such as a position, a normal and a hash, and derive scale, rotation, tint and keep ratio from the hash in the instance function: records arrive in any order, and the same hash then keeps the same copy on every refill. Declare the least and most scale your function gives, as levels load by them over the chunk's box, and make the box tight: it is all the crowd knows of where a chunk's copies stand.
+
+Copies live in a pool of fixed pages, one page of 256 copies at least per non-empty chunk. Its memory is the pages × 256 × about 84 bytes, plus what every crowd keeps per copy and view; size `pages` for the copies within reach at once and `capacity` for the most records one chunk can hold. A chunk's records are taken in on the GPU before the next draw that needs the crowd, so they must stay unchanged until the chunk is removed or `drained` says every chunk is complete. When the pool runs out, a chunk draws the copies it got pages for and takes the rest once removed chunks give theirs back; remove far chunks before adding near ones to avoid it. `drained` reads the GPU's progress back: await it only before a capture, never every frame, and expect false for as long as a chunk lacks pages.
+
+```ts
+import * as t3 from "@typegpu/three";
+import { d, std, tgpu } from "typegpu";
+import { GpuInstance, InstancedLod } from "@drawcall/lod";
+
+// Two words per record: position and hash, then a packed normal and spare room.
+const records = t3.instancedArray(TILES * MAX_PER_TILE * 2, d.vec4u);
+const counts = t3.instancedArray(TILES, d.u32);
+const plant = tgpu.fn([d.vec4u, d.vec4u], GpuInstance)((spot, extra) => {
+  "use gpu";
+  const p = std.bitcastU32toF32(spot.xyz);
+  const s = 0.8 + d.f32(spot.w % 64) / 100;
+  return GpuInstance({
+    matrix: d.mat4x4f(s, 0, 0, 0, 0, s, 0, 0, 0, 0, s, 0, p.x, p.y, p.z, 1),
+    color: d.vec3f(1),
+    keep: d.f32(std.intdiv(spot.w, 64) % 1024) / 1024,
+  });
+});
+const grass = new InstancedLod(levels, {
+  gpuChunks: { instance: plant, records: records.node.value, counts: counts.node.value, capacity: MAX_PER_TILE, scales: [0.8, 1.43] },
+});
+
+// When tile `t` comes into reach: run your pass for it, then
+const chunk = grass.addGpuChunk({ box: tileBox, first: t * MAX_PER_TILE, counter: t });
+// When it leaves:
+grass.removeGpuChunk(chunk);
+// Before a capture:
+while (!(await grass.drained(renderer))) await frame();
 ```
 
 ## Sit copies on the ground with contact shadows
