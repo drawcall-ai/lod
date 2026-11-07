@@ -13,7 +13,7 @@ import { at } from "../at.js";
 import { ARGS_BYTES, args, type ArgsSlice } from "./args.js";
 import { upload } from "./dirty.js";
 import { Kernel, type IndirectDraw, type Pass, type RangeAim, type Target } from "./kernel.js";
-import type { Places } from "./places.js";
+import type { Places, Seed } from "./places.js";
 import type { BlockView } from "./blocks.js";
 import type { View } from "../view.js";
 
@@ -87,8 +87,9 @@ export class Selection {
     private draws: readonly IndirectDraw[],
     fallback: readonly number[],
   ) {
-    this.buffers = buffers(places, drawing);
-    if (places.colors) this.useColors(places.colors);
+    const seed = places.seed();
+    this.buffers = buffers(places.capacity, seed, drawing);
+    if (seed.colors) this.useColors(seed.colors);
     this.kernel = new Kernel(sphere, this.buffers.first, fallback, places.occupied);
     this.progress = this.kernel.progress;
     this.reach = this.kernel.reach;
@@ -122,8 +123,9 @@ export class Selection {
     const old = [this.matrices, this.keeps, this.colors, this.scaled];
     const survivors = this.scaled !== null;
     this.colors = null;
-    this.buffers = buffers(places, this.drawing);
-    if (places.colors) this.useColors(places.colors);
+    const seed = places.seed();
+    this.buffers = buffers(places.capacity, seed, this.drawing);
+    if (seed.colors) this.useColors(seed.colors);
     this.scaled = survivors ? scaledMatrices(this.capacity) : null;
     this.bind();
     for (const view of this.views.values()) {
@@ -336,15 +338,14 @@ interface Buffers {
   slotCount: number;
 }
 
-/** Buffers for `places`, with slots for every level that is `drawing`. */
-function buffers(places: Places, drawing: readonly boolean[]): Buffers {
-  const { capacity } = places;
+/** Buffers for `capacity` places starting from `seed`, with slots for every level that is `drawing`. */
+function buffers(capacity: number, seed: Seed, drawing: readonly boolean[]): Buffers {
   let next = 0;
   const first = drawing.map((draws) => (draws ? next++ * capacity : null));
   return {
     capacity,
-    matrices: new StorageInstancedBufferAttribute(padded(places.matrices, 16), 16),
-    keeps: new StorageBufferAttribute(padded(places.keeps, 1), 1),
+    matrices: new StorageInstancedBufferAttribute(padded(seed.matrices, 16), 16),
+    keeps: new StorageBufferAttribute(padded(seed.keeps, 1), 1),
     first,
     slotCount: Math.max(next * capacity, 1),
   };

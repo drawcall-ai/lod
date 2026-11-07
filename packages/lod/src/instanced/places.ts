@@ -19,6 +19,13 @@ export interface Occupied {
   readonly dispatch: IndirectStorageBufferAttribute;
 }
 
+/** Per place: 16 floats of matrix, one keep ratio, and 4 floats of colour, or no colours for white. */
+export interface Seed {
+  readonly matrices: Float32Array;
+  readonly keeps: Float32Array;
+  readonly colors: Float32Array | null;
+}
+
 /**
  * Where an InstancedLod's instances live: a fixed number of places, filled from the CPU by chunks of matrices (see
  * store.ts) or on the GPU from records (see pages/index.ts). The selection holds the places' matrices, keep ratios and
@@ -30,10 +37,8 @@ export interface Places {
   /** One past the last place in use: the selection visits only the places before it, unless `occupied` says which. */
   readonly end: number;
   readonly occupied: Occupied | null;
-  /** What the selection's buffers start from: 16 floats a place, one, and 4 or none for white. */
-  readonly matrices: Float32Array;
-  readonly keeps: Float32Array;
-  readonly colors: Float32Array | null;
+  /** What the selection's buffers start from, read once each time they are made. */
+  seed(): Seed;
   /** Blocks around the instances, measured; with `survivors`, each instance may draw as much larger as its keep ratio lets it. */
   blocks(frame: BlockFrame, survivors: boolean): Blocks;
   /** Fill `selection`'s buffers from now on; null stops. */

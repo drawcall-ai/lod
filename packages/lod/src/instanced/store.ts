@@ -2,7 +2,7 @@ import type { Color, Matrix4 } from "three/webgpu";
 import { at } from "../at.js";
 import { Blocks, type BlockView } from "./blocks.js";
 import { Dirty, upload } from "./dirty.js";
-import type { BlockFrame, Places } from "./places.js";
+import type { BlockFrame, Places, Seed } from "./places.js";
 import { Runs } from "./runs.js";
 import type { Selection } from "./select.js";
 
@@ -156,6 +156,11 @@ export class Store implements Places {
   }
 
   /** Upload edits to `selection` from now on, colours included once there are any; null stops uploading. */
+  /** The store's own arrays: the selection's buffers share them, and the store uploads what it changes. */
+  seed(): Seed {
+    return { matrices: this.matrices, keeps: this.keeps, colors: this.colors };
+  }
+
   attach(selection: Selection | null): void {
     this.selection = selection;
     if (selection && this.colors) selection.useColors(this.colors);

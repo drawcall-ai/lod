@@ -3,7 +3,7 @@ import { type TgpuFn, d } from "typegpu";
 import { at } from "../../at.js";
 import { Blocks } from "../blocks.js";
 import { upload } from "../dirty.js";
-import type { BlockFrame, Places } from "../places.js";
+import type { BlockFrame, Places, Seed } from "../places.js";
 import type { Selection } from "../select.js";
 import { allocatePass, clearPass, copyPass, countPass, listPass, occupyPass, type Pool } from "./passes.js";
 import { Records } from "./records.js";
@@ -95,7 +95,7 @@ export class Pages implements Places {
   /** Bumped whenever chunks change. */
   private version = 0;
   /** Whether the selection's buffers dropped the CPU arrays they were made from. */
-  private seeded = false;
+  private released = false;
 
   constructor(private readonly options: GpuRecords) {
     const { capacity, scales, records, counts, instance } = options;
@@ -143,26 +143,17 @@ export class Pages implements Places {
     for (let slot = slots - 1; slot >= 0; slot--) this.free.push(slot);
   }
 
-  /** The most chunks held at once. */
-  get slotCount(): number {
-    return this.pool.slots;
-  }
-
   get scales(): readonly [number, number] {
     return this.options.scales;
   }
 
-  // Zeros: places hold an instance only once the copy pass wrote one. Fresh arrays, which the selection's buffers own.
-  get matrices(): Float32Array {
-    return new Float32Array(this.capacity * 16);
-  }
-
-  get keeps(): Float32Array {
-    return new Float32Array(this.capacity);
-  }
-
-  get colors(): Float32Array {
-    return new Float32Array(this.capacity * 4);
+  /**
+   * Zeros, which the selection's buffers own: a place holds an instance only once the copy pass wrote one. `release`
+   * empties them once the GPU holds them.
+   */
+  seed(): Seed {
+    const { capacity } = this;
+    return { matrices: new Float32Array(capacity * 16), keeps: new Float32Array(capacity), colors: new Float32Array(capacity * 4) };
   }
 
   /** A leaf per chunk slot, around the origins in its box at its scales; a chunk's survivors may draw as large as any. */
@@ -239,17 +230,19 @@ export class Pages implements Places {
       clear.shown.value = shown;
       renderer.compute(clear.pass, pool.freshDispatch);
     }
-    this.seed(renderer, selection);
+    this.release(renderer, selection);
   }
 
   /**
    * Drop the CPU arrays the selection's instance buffers were made from, once the GPU holds them: only the GPU writes
    * them, so they are never read again, and they are most of what a pool costs on the CPU. A buffer keeps its count.
+   * This relies on three never uploading these attributes again: nothing marks them for an update, and a buffer is
+   * made once.
    */
-  private seed(renderer: Renderer, selection: Selection): void {
+  private release(renderer: Renderer, selection: Selection): void {
     // An initialised renderer creates a pass's buffers as it runs the pass.
-    if (this.seeded || !renderer.initialized) return;
-    this.seeded = true;
+    if (this.released || !renderer.initialized) return;
+    this.released = true;
     for (const attribute of [selection.matrices, selection.keeps, selection.colors]) if (attribute) attribute.array = new Float32Array(0);
   }
 
