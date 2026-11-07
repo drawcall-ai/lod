@@ -5,7 +5,7 @@ Level of detail for Three.js. Build simplified meshes, baked low-poly meshes, an
 Requires Three.js `WebGPURenderer` (`three/webgpu`).
 
 ```sh
-npm install @drawcall/lod three
+npm install @drawcall/lod three typegpu
 ```
 
 Load a model into an existing Three.js scene. Each level loads once the view needs it, finer ones as the camera approaches:

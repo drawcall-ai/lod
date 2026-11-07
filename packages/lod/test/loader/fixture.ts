@@ -110,7 +110,9 @@ export function sourceFixture(make: (url: string) => unknown, extension = /\.(gl
 
 /** A scene holding `objects`, as GLTSLoader loads it: with its `source` provenance and a `dispose` that frees what it holds. */
 export function gltsScene(source: unknown, ...objects: Object3D[]): Scene {
-  const scene = new Scene().add(...objects);
+  // Object3D.add with no object logs an error.
+  const scene = new Scene();
+  for (const object of objects) scene.add(object);
   const dispose = () =>
     scene.traverse((node) => {
       if (!(node instanceof Mesh)) return;
