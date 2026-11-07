@@ -19,13 +19,13 @@ import {
 import { CSMShadowNode } from "three/addons/csm/CSMShadowNode.js";
 import { describe, expect, it } from "vitest";
 import { bakeMesh } from "../../../src/baked/index.js";
-import { InstancedLod } from "../../../src/instanced/index.js";
 import { Lod } from "../../../src/lod.js";
 import { house, interior, low } from "../../house.js";
 import { InteriorMaterial } from "../../../src/baked/interior/material.js";
 import { isStandardNode } from "../../../src/three.js";
 import { GPU_TIMEOUT, render as draw, renderer } from "../../gpu.js";
 import { must } from "../../must.js";
+import { oneChunk } from "../../crowd.js";
 
 const SIZE = 96;
 
@@ -120,7 +120,7 @@ describe("interiors", { timeout: GPU_TIMEOUT }, () => {
     const turn = new Matrix4().makeRotationY(0.4);
     const lod = new Lod([{ object: source.clone() }, { object: baked.clone() }]);
     lod.quaternion.setFromRotationMatrix(turn);
-    const instanced = new InstancedLod([{ object: source.clone() }, { object: baked.clone() }], 1);
+    const instanced = oneChunk([{ object: source.clone() }, { object: baked.clone() }], 1);
     instanced.forceLevel = 1;
     instanced.setMatrixAt(0, turn);
     const window = new Vector3(0.3, 0, 1).applyMatrix4(turn);

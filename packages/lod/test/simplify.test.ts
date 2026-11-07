@@ -85,7 +85,7 @@ describe("simplify", () => {
     expect(triangles(many.geometry)).toBeLessThan(triangles(instanced.geometry) * 0.15);
     expect(many.count).toBe(2);
     expect(kept.impostor).toBe(impostor);
-    const crowd = new InstancedLod([{ object: sphere() }], 2);
+    const crowd = new InstancedLod([{ object: sphere() }]);
     const clone = vi.spyOn(crowd, "clone");
     const source = new Group().add(sphere(), crowd);
     try {

@@ -73,7 +73,7 @@ it("stands in the nearest ready coarser level that draws for a missing one, neve
   expect(drawn(culled, 1)).toEqual([]);
   culled.dispose();
   must(lod.levels[2]).maxPixels = 50;
-  const crowd = new InstancedLod(input, 1);
+  const crowd = new InstancedLod(input);
   expect(crowd.levels[2]?.maxPixels).toBe(100);
   expect(input[2]?.maxPixels).toBe(100);
   lod.dispose();

@@ -23,11 +23,11 @@ import { describe, expect, it } from "vitest";
 import { bakeMesh } from "../../src/baked/index.js";
 import type { Impostor } from "../../src/impostor/impostor.js";
 import { ImpostorMesh } from "../../src/impostor/mesh/index.js";
-import { InstancedLod } from "../../src/instanced/index.js";
 import { Lod } from "../../src/lod.js";
 import { must } from "../must.js";
 import { isStandardNode } from "../../src/three.js";
 import { GPU_TIMEOUT, render as draw } from "../gpu.js";
+import { oneChunk } from "../crowd.js";
 
 /** A pattern of 8×8 colour blocks. */
 function blocks(): DataTexture {
@@ -127,7 +127,7 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
       box.matrix.fromArray(Float32Array.from(spot.elements));
       plain.add(box);
     }
-    const lod = new InstancedLod([{ object: new Mesh(geometry, material) }, { object: new Mesh(new SphereGeometry(), material) }], spots.length);
+    const lod = oneChunk([{ object: new Mesh(geometry, material) }, { object: new Mesh(new SphereGeometry(), material) }], spots.length);
     const instanced = new InstancedMesh(geometry, material, spots.length);
     spots.forEach((spot, i) => (lod.setMatrixAt(i, spot), instanced.setMatrixAt(i, spot)));
     const low = () => new Mesh(new BoxGeometry(3.2, 1.6, 3.2));
@@ -156,7 +156,7 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
     const lod = new Lod([{ object: new Mesh(new BoxGeometry()) }, { object: baked.clone() }]);
     lod.forceLevel = 1;
     lod.quaternion.setFromRotationMatrix(turn);
-    const instanced = new InstancedLod([{ object: new Mesh(new BoxGeometry()) }, { object: baked.clone() }], 1);
+    const instanced = oneChunk([{ object: new Mesh(new BoxGeometry()) }, { object: baked.clone() }], 1);
     instanced.forceLevel = 1;
     instanced.setMatrixAt(0, turn);
     const eye: [number, number, number] = [2, 1.5, 2.5];

@@ -3,6 +3,7 @@ import { FADE, lastFitting } from "../levels.js";
 import { at } from "../at.js";
 import { stretch } from "../three.js";
 import { Dirty } from "./dirty.js";
+import { survivorScale } from "./range.js";
 
 // Cover float32 matrix products, distances and threshold arithmetic: near a switch,
 // uncertain blocks keep both levels.
@@ -66,6 +67,8 @@ export class Blocks {
     draws: number,
     /** Radius enclosing every placed level about source.center. */
     private readonly rest: { readonly radius: number },
+    /** The instances' keep ratios when survivors scale (see `InstancedRange`): each may draw that much larger. */
+    private readonly survivors: Float32Array | null = null,
   ) {
     const count = matrices.length / 16;
     // Fine leaves avoid many empty draws in small, multipart crowds. Large crowds
@@ -155,12 +158,13 @@ export class Blocks {
       if (radius === 0 && !at(this.unsafe, i)) continue;
       node.unsafe ||= Boolean(at(this.unsafe, i));
       const roundoff = at(this.roundoff, i);
-      const reach = at(this.radii, i) * (1 + this.padding) + roundoff;
+      const grow = this.survivors ? survivorScale(at(this.survivors, i)) : 1;
+      const reach = at(this.radii, i) * grow * (1 + this.padding) + roundoff;
       point.fromArray(this.spheres, i * 4);
       expand(node.centers, point, roundoff);
       expand(node.geometry, point, reach);
       node.smallest = Math.min(node.smallest, radius);
-      node.largest = Math.max(node.largest, radius);
+      node.largest = Math.max(node.largest, radius * grow);
       node.reach = Math.max(node.reach, reach);
     }
     enclosing(node.centers, node.sphere);

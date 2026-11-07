@@ -27,12 +27,14 @@ import { drawOf } from "../../src/fade.js";
 import { ARGS_BYTES } from "../../src/instanced/args.js";
 import { Instances } from "../../src/instanced/meshes.js";
 import { InstancedLod } from "../../src/instanced/index.js";
+import { keptFraction } from "../../src/instanced/range.js";
 import { Lod } from "../../src/lod.js";
 import { HANDOVER_MS } from "../../src/residency.js";
 import { Wind } from "../../src/wind/index.js";
 import { isMesh } from "../../src/three.js";
 import { setViewportHeight } from "../../src/view.js";
 import { GPU_TIMEOUT, render, renderer, nextLevel } from "../gpu.js";
+import { oneChunk } from "../crowd.js";
 import { must } from "../must.js";
 
 const box = (name: string) => Object.assign(new Mesh(new BoxGeometry(2, 2, 2), new MeshBasicMaterial()), { name });
@@ -45,9 +47,9 @@ const at = (pixels: number) => (DIAMETER * SIZE) / (2 * tan * pixels);
 
 /** Camera at the origin looking down -z; instance i at the distance where it is `heights[i]` px tall. */
 function setup(heights: number[]) {
-  const lod = new InstancedLod([{ object: box("source") }, { object: box("simplified") }, { object: box("impostor") }], heights.length);
+  const lod = new InstancedLod([{ object: box("source") }, { object: box("simplified") }, { object: box("impostor") }]);
   lod.levels.forEach((level, i) => (level.maxPixels = [Infinity, 40, 10][i] ?? level.maxPixels));
-  heights.forEach((pixels, i) => lod.setMatrixAt(i, new Matrix4().makeTranslation(0, 0, -at(pixels))));
+  lod.addChunk({ matrices: heights.flatMap((pixels) => new Matrix4().makeTranslation(0, 0, -at(pixels)).elements) });
   const camera = new PerspectiveCamera(60, 1, 0.1, 1e5);
   return { lod, camera };
 }
@@ -102,7 +104,7 @@ afterEach(() => {
 describe("InstancedLod", { timeout: GPU_TIMEOUT }, () => {
   it("can keep every tier culled before the first draw and recover after an explicit resize", () => {
     const source = box("source");
-    const lod = new InstancedLod([{ object: source }, { object: new Group() }], 1);
+    const lod = oneChunk([{ object: source }, { object: new Group() }], 1);
     const camera = new PerspectiveCamera(60, 1, 0.1, 1e5);
     const empty = lod.levels[1];
     if (!empty) throw new Error("Missing empty level");
@@ -156,7 +158,7 @@ describe("InstancedLod", { timeout: GPU_TIMEOUT }, () => {
   });
 
   it("measures an empty level 0 by the first level that draws, and draws nothing of it", async () => {
-    const lod = new InstancedLod([{ object: new Group() }, { object: box("baked") }], 2);
+    const lod = oneChunk([{ object: new Group() }, { object: box("baked") }], 2);
     lod.levels.forEach((level, i) => (level.maxPixels = [Infinity, 40][i] ?? level.maxPixels));
     lod.setMatrixAt(0, new Matrix4().makeTranslation(0, 0, -at(100)));
     lod.setMatrixAt(1, new Matrix4().makeTranslation(0, 0, -at(20)));
@@ -164,7 +166,7 @@ describe("InstancedLod", { timeout: GPU_TIMEOUT }, () => {
     await select(lod, camera);
     expect([lod.levelOf(0), lod.levelOf(1)]).toEqual([0, 1]);
     expect(await distances(lod, camera)).toEqual([[Math.round(at(20))]]);
-    expect(() => new InstancedLod([{ object: new Group() }], 1)).toThrow(/no level has visible geometry/);
+    expect(() => new InstancedLod([{ object: new Group() }])).toThrow(/no level has visible geometry/);
   });
 
   it("scales heights by Lod.quality, draws only forceLevel, and nothing of an instance at scale 0", async () => {
@@ -239,8 +241,8 @@ it("installs shared decoded detail only in crowds near enough to draw it", { tim
   const load = vi.fn(async () => mesh());
   const deferred = { load, maxPixels: Infinity, box: new Box3(new Vector3(-1, -1, -1), new Vector3(1, 1, 1)) };
   const levels = [deferred, { object: mesh(), maxPixels: 5 }];
-  const near = new InstancedLod(levels, 1);
-  const away = new InstancedLod(levels, 1);
+  const near = oneChunk(levels, 1);
+  const away = oneChunk(levels, 1);
   near.setMatrixAt(0, new Matrix4().makeTranslation(0, 0, -5));
   away.setMatrixAt(0, new Matrix4().makeTranslation(0, 0, -1000));
   const camera = new PerspectiveCamera(60, 1, 0.1, 2000);
@@ -269,7 +271,7 @@ it("installs shared decoded detail only in crowds near enough to draw it", { tim
 it("draws far instances whose coarse level is still loading as nothing, never as the installed source", { timeout: GPU_TIMEOUT }, async () => {
   const bounds = new Box3(new Vector3(-1, -1, -1), new Vector3(1, 1, 1));
   const coarse = { load: () => new Promise<Mesh>(() => {}), maxPixels: 5, box: bounds };
-  const crowd = new InstancedLod([{ load: async () => mesh(), maxPixels: Infinity, box: bounds }, coarse], 100);
+  const crowd = oneChunk([{ load: async () => mesh(), maxPixels: Infinity, box: bounds }, coarse], 100);
   for (let i = 0; i < 100; i++) crowd.setMatrixAt(i, new Matrix4().makeTranslation(0, 0, i < 10 ? -5 : -1000));
   const camera = new PerspectiveCamera(60, 1, 0.1, 2000);
   const scene = new Scene().add(crowd);
@@ -289,7 +291,7 @@ it("keeps drawing the level each instance showed while the one it walked away to
   let release = () => {};
   const gate = new Promise<void>((resolve) => (release = resolve));
   const coarse = { load: async () => (await gate, mesh()), maxPixels: 5, box: bounds };
-  const crowd = new InstancedLod([{ object: mesh() }, coarse], 4);
+  const crowd = oneChunk([{ object: mesh() }, coarse], 4);
   const place = (near: number) => {
     for (let i = 0; i < 4; i++) crowd.setMatrixAt(i, new Matrix4().makeTranslation(0, 0, i < near ? -5 : -1000));
   };
@@ -315,7 +317,7 @@ it("keeps drawing the level each instance showed while the one it walked away to
 });
 
 it("gives back the slots of a camera that stopped rendering it", { timeout: GPU_TIMEOUT }, async () => {
-  const crowd = new InstancedLod([{ object: mesh() }], 1);
+  const crowd = oneChunk([{ object: mesh() }], 1);
   crowd.setMatrixAt(0, new Matrix4().makeTranslation(0, 0, -5));
   const scene = new Scene().add(crowd);
   const camera = new PerspectiveCamera(60, 1, 0.1, 100);
@@ -339,7 +341,7 @@ it("loads the levels its shadow map draws, for casters in view and behind it", {
   const source = mesh();
   source.castShadow = true;
   const coarse = { load: async () => mesh(), maxPixels: 20, box: bounds };
-  const crowd = new InstancedLod([{ object: source }, coarse], 2);
+  const crowd = oneChunk([{ object: source }, coarse], 2);
   // One in view, near enough for its source; one behind the camera, casting into the view.
   crowd.setMatrixAt(0, new Matrix4().makeTranslation(0, 0, -5));
   crowd.setMatrixAt(1, new Matrix4().makeTranslation(0, 0, 5));
@@ -377,7 +379,7 @@ it("loads the levels its shadow map draws, for casters in view and behind it", {
 it("still selects an offscreen crowd when its shadow reaches the visible ground", { timeout: GPU_TIMEOUT }, async () => {
   const source = mesh();
   source.castShadow = true;
-  const crowd = new InstancedLod([{ object: source }], 1);
+  const crowd = oneChunk([{ object: source }], 1);
   crowd.position.set(4, 4, 0);
   // Lit ground under a sun, a world of its own for each render: one shadow map never stands in for another's.
   const made: { dispose(): void }[] = [];
@@ -445,7 +447,7 @@ it("bounds all placed levels and template shear without changing source-based LO
   const coarse = new Mesh(new BoxGeometry(20, 10, 2), material);
   coarse.position.set(30, 10, 0);
   coarse.geometry.computeTangents();
-  const lod = new InstancedLod([{ object: source }, { object: coarse }], 1);
+  const lod = oneChunk([{ object: source }, { object: coarse }], 1);
   const translated = lod.children[1];
   if (!(translated instanceof Instances)) throw new Error("Missing translated level mesh");
   expect(new Vector3().fromBufferAttribute(translated.geometry.getAttribute("position"), 0).toArray()).toEqual([40, 15, 1]);
@@ -475,7 +477,7 @@ it("bounds wind on taller coarse levels and cloned crowds", () => {
   const source = new Mesh(new BoxGeometry(2, 0, 2), material);
   const coarse = new Mesh(new BoxGeometry(2, 100, 2), material);
   coarse.position.y = 50;
-  const lod = new InstancedLod([{ object: source }, { object: coarse }], 1);
+  const lod = oneChunk([{ object: source }, { object: coarse }], 1);
   const wind = new Wind();
   wind.apply(lod, { amplitude: 1, baseY: 0, height: 1 });
   lod.setMatrixAt(0, shear);
@@ -501,7 +503,7 @@ it("raycasts source faces outside the max-axis sphere of a sheared template", ()
   // Three's delegated Mesh.raycast also uses max-axis sphere scaling. A consumer
   // can supply a conservative sphere; our outer broadphase must not reject it first.
   source.geometry.boundingSphere = new Sphere(new Vector3(), 4);
-  const lod = new InstancedLod([{ object: source }], 1);
+  const lod = oneChunk([{ object: source }], 1);
   const face = new Vector3(0.8, 0.9, 1).applyMatrix4(shear);
   const ray = new Raycaster(face.clone().add(new Vector3(0, 0, 10)), new Vector3(0, 0, -1));
   const hits: Intersection[] = [];
@@ -513,7 +515,7 @@ it("raycasts source faces outside the max-axis sphere of a sheared template", ()
 });
 
 it("builds identical vertex WGSL for equal material structures across independently created crowds", { timeout: GPU_TIMEOUT }, async () => {
-  const first = new InstancedLod([{ object: mesh() }], 1);
+  const first = oneChunk([{ object: mesh() }], 1);
   first.setColorAt(0, new Color("red"));
   const scene = new Scene().add(first);
   const camera = new PerspectiveCamera(60, 1, 0.1, 100);
@@ -523,7 +525,7 @@ it("builds identical vertex WGSL for equal material structures across independen
   const before = await renderer.debug.getShaderAsync(scene, camera, draw);
   // Unrelated asynchronous asset arrivals allocate nodes between equivalent crowds.
   for (let i = 0; i < 23; i++) uniform(i);
-  const second = new InstancedLod([{ object: mesh() }], 17);
+  const second = oneChunk([{ object: mesh() }], 17);
   second.setColorAt(0, new Color("blue"));
   scene.add(second);
   const autoReset = renderer.info.autoReset;
@@ -538,8 +540,8 @@ it("builds identical vertex WGSL for equal material structures across independen
     renderer.info.autoReset = false;
     renderer.info.reset();
     await render(scene, camera);
-    // Indirect draws report capacity, even though the GPU chooses each level's actual count.
-    expect(renderer.info.render.triangles).toBe((first.count + second.count) * 12);
+    // Indirect draws report capacity, a power of two, even though the GPU chooses each level's actual count.
+    expect(renderer.info.render.triangles).toBe((1 + 32) * 12);
   } finally {
     renderer.info.autoReset = autoReset;
     first.dispose();
@@ -548,7 +550,7 @@ it("builds identical vertex WGSL for equal material structures across independen
 });
 
 it("draws colours set after a crowd drew, with the shaders it has", { timeout: GPU_TIMEOUT }, async () => {
-  const lod = new InstancedLod([{ object: mesh() }], 1);
+  const lod = oneChunk([{ object: mesh() }], 1);
   const scene = new Scene().add(lod);
   const camera = new PerspectiveCamera(60, 1, 0.1, 100);
   camera.position.z = 5;
@@ -564,4 +566,160 @@ it("draws colours set after a crowd drew, with the shaders it has", { timeout: G
     vi.restoreAllMocks();
     lod.dispose();
   }
+});
+
+/** A chunk of instances on the -z axis, at distances `distances` from the origin, with keep ratios `keeps`. */
+const row = (distances: number[], keeps?: number[]) => ({
+  matrices: distances.flatMap((distance) => new Matrix4().makeTranslation(0, 0, -distance).elements),
+  keeps,
+});
+
+describe("chunks", { timeout: GPU_TIMEOUT }, () => {
+  it("adds and removes chunks at stable indices, reusing freed places and growing past them", async () => {
+    const lod = new InstancedLod([{ object: box("source") }]);
+    const camera = new PerspectiveCamera(60, 1, 0.1, 1e5);
+    try {
+      const a = lod.addChunk(row([10, 11]));
+      const b = lod.addChunk(row([20]));
+      expect([a.start, b.start]).toEqual([0, 2]);
+      await select(lod, camera);
+      expect(await distances(lod, camera)).toEqual([[10, 11, 20]]);
+      lod.removeChunk(a);
+      expect(() => lod.removeChunk(a)).toThrow(/not one of its own/);
+      expect(() => lod.getMatrixAt(0, new Matrix4())).toThrow(/not an instance of a chunk/);
+      // Into the first free place; then, with no run of three left, past the end.
+      const c = lod.addChunk({ ...row([30]), colors: [1, 0, 0] });
+      const d = lod.addChunk(row([40, 41, 42]));
+      expect([c.start, d.start]).toEqual([0, 3]);
+      expect(lod.count).toBe(5);
+      expect([...lod.chunks]).toEqual([b, c, d]);
+      await select(lod, camera);
+      expect(await distances(lod, camera)).toEqual([[20, 30, 40, 41, 42]]);
+      // A chunk's colours, and white for those of chunks without.
+      const colours = (await slots(lod, camera))[0]?.map(({ distance, color }): [number, number | null] => [distance, color]);
+      expect(new Map(colours)).toEqual(new Map([[20, 0xffffff], [30, 0xff0000], [40, 0xffffff], [41, 0xffffff], [42, 0xffffff]]));
+      expect(lod.levelOf(d.start + 2)).toBe(0);
+      expect(lod.getMatrixAt(d.start + 1, new Matrix4()).elements[14]).toBe(-41);
+      for (const chunk of [b, c, d]) lod.removeChunk(chunk);
+      await select(lod, camera);
+      expect(await distances(lod, camera)).toEqual([[]]);
+    } finally {
+      lod.dispose();
+    }
+  });
+
+  it("uploads only an added chunk's instances while it fits, keeping the buffers the draws hold", async () => {
+    const lod = new InstancedLod([{ object: box("source") }]);
+    const camera = new PerspectiveCamera(60, 1, 0.1, 1e5);
+    try {
+      lod.addChunk(row([10, 11, 12]));
+      await select(lod, camera);
+      const draw = must(meshes(lod)[0]);
+      if (!(draw instanceof Instances)) throw new Error("not a level mesh");
+      const matrices = draw.instanceMatrix;
+      const added = lod.addChunk(row([13]));
+      // levelOf measures pending edits, as a selection does.
+      lod.levelOf(added.start);
+      expect(draw.instanceMatrix).toBe(matrices);
+      expect(matrices.updateRanges).toEqual([{ start: 3 * 16, count: 16 }]);
+      await select(lod, camera);
+      expect(await distances(lod, camera)).toEqual([[10, 11, 12, 13]]);
+    } finally {
+      lod.dispose();
+    }
+  });
+});
+
+describe("range", { timeout: GPU_TIMEOUT }, () => {
+  const keeps = [0.05, 0.9, 0.3, 0.6, 0.1, 0.75, 0.45, 0.2, 0.95, 0.5];
+  const spots = keeps.map((_, i) => 10 * (i + 1));
+  /** The distances of the instances `range` keeps, measured from `eye` on the z axis. */
+  const kept = (eye: number, range: { radius: number; ramp: number }) =>
+    spots.filter((distance, i) => (keeps[i] ?? 1) < keptFraction(distance + eye, range));
+
+  it("keeps an instance iff its keep ratio is below the fraction kept at its distance: nested subsets as the camera recedes", async () => {
+    const lod = new InstancedLod([{ object: box("source") }]);
+    lod.addChunk(row(spots, keeps));
+    const camera = new PerspectiveCamera(60, 1, 0.1, 1e5);
+    const range = { camera, radius: 80, ramp: 60 };
+    lod.range = range;
+    try {
+      let previous: number[] | null = null;
+      for (const eye of [0, 15, 30]) {
+        camera.position.z = eye;
+        camera.updateMatrixWorld();
+        await select(lod, camera);
+        const [drawn = []] = await distances(lod, camera);
+        expect(drawn).toEqual(kept(eye, range));
+        expect(drawn.length).toBeGreaterThan(0);
+        if (previous) expect(previous).toEqual(expect.arrayContaining(drawn));
+        previous = drawn;
+      }
+      expect(spots.map((_, i) => lod.levelOf(i) !== null)).toEqual(spots.map((spot) => kept(30, range).includes(spot)));
+      lod.range = null;
+      await select(lod, camera);
+      expect((await distances(lod, camera))[0]).toHaveLength(spots.length);
+    } finally {
+      lod.dispose();
+    }
+  });
+
+  it("measures distances from the range's camera in shadow maps too, so an instance and its shadow go together", async () => {
+    const source = box("source");
+    source.castShadow = true;
+    const lod = new InstancedLod([{ object: source }]);
+    // In view at 10 and 30, behind the view at the same distances, and two beyond the range.
+    lod.addChunk({ ...row([10, 30, 50, -10, -30, -50]), keeps: [0.2, 0.2, 0.2, 0.2, 0.2, 0.2] });
+    const camera = new PerspectiveCamera(60, 1, 0.1, 1e5);
+    lod.range = { camera, radius: 50, ramp: 40 };
+    // The sun is about 50 from every instance: measured from it, none would draw.
+    const sun = new DirectionalLight();
+    sun.position.set(0, 50, 0);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(256, 256);
+    Object.assign(sun.shadow.camera, { left: -60, right: 60, top: 60, bottom: -60, near: 1, far: 100 });
+    sun.shadow.camera.updateProjectionMatrix();
+    const ground = new Mesh(new PlaneGeometry(200, 200).rotateX(-Math.PI / 2), new MeshStandardMaterial());
+    ground.position.y = -2;
+    ground.receiveShadow = true;
+    const scene = new Scene().add(lod, ground, sun, sun.target);
+    renderer.shadowMap.enabled = true;
+    try {
+      for (let i = 0; i < 2; i++) await render(scene, camera, SIZE);
+      expect(await distances(lod, camera)).toEqual([[10, 30]]);
+      expect(await distances(lod, sun.shadow.camera)).toEqual([[-30, -10, 10, 30]]);
+    } finally {
+      renderer.shadowMap.enabled = false;
+      lod.dispose();
+      sun.dispose();
+      ground.geometry.dispose();
+      ground.material.dispose();
+    }
+  });
+
+  it("scales survivors by 1 / sqrt of the kept fraction when asked, choosing their level at that size", async () => {
+    const lod = new InstancedLod([{ object: box("source") }, { object: box("simplified") }]);
+    must(lod.levels[1]).maxPixels = 40;
+    // 30 px tall unscaled: the simplified level; where a quarter is kept, twice that: the source.
+    const distance = at(30);
+    lod.addChunk(row([distance]));
+    const camera = new PerspectiveCamera(60, 1, 0.1, 1e5);
+    lod.range = { camera, radius: distance + 2.5, ramp: 10 };
+    try {
+      await select(lod, camera);
+      expect(lod.levelOf(0)).toBe(1);
+      expect((await distances(lod, camera)).map((level) => level.length)).toEqual([0, 1]);
+      lod.range = { ...lod.range, scaleSurvivors: true };
+      await select(lod, camera);
+      expect(lod.levelOf(0)).toBe(0);
+      expect((await distances(lod, camera)).map((level) => level.length)).toEqual([1, 0]);
+      const draw = must(meshes(lod)[0]);
+      if (!(draw instanceof Instances)) throw new Error("not a level mesh");
+      const scaled = new Matrix4().fromArray(new Float32Array(await read(draw.instanceMatrix)));
+      expect(scaled.getMaxScaleOnAxis()).toBeCloseTo(2, 4);
+      expect(scaled.elements[14]).toBeCloseTo(-distance, 3);
+    } finally {
+      lod.dispose();
+    }
+  });
 });

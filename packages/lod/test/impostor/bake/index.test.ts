@@ -28,8 +28,8 @@ import { bakeImpostor } from "../../../src/impostor/bake/index.js";
 import { texelPixels, type Impostor } from "../../../src/impostor/impostor.js";
 import { frameDirection } from "../../../src/impostor/octahedral.js";
 import { ImpostorMesh } from "../../../src/impostor/mesh/index.js";
-import { InstancedLod } from "../../../src/instanced/index.js";
 import { GPU_TIMEOUT, renderer } from "../../gpu.js";
+import { oneChunk } from "../../crowd.js";
 
 const bake = (object: Object3D, layout: Impostor["layout"] = "full") => bakeImpostor(object, { layout, resolution: 32 });
 
@@ -276,7 +276,7 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
       plain.add(box);
     }
     // Its level 1 would draw a sphere, at any height.
-    const field = new InstancedLod([{ object: new Mesh(new BoxGeometry(), material) }, { object: new Mesh(new SphereGeometry(), material) }], spots.length);
+    const field = oneChunk([{ object: new Mesh(new BoxGeometry(), material) }, { object: new Mesh(new SphereGeometry(), material) }], spots.length);
     spots.forEach((spot, i) => field.setMatrixAt(i, spot));
     field.forceLevel = 1;
     const [a, b] = [await bake(plain), await bake(new Group().add(field))];

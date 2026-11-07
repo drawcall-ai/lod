@@ -17,11 +17,11 @@ import {
 import { describe, expect, it } from "vitest";
 import { bakeImpostor } from "../src/impostor/bake/index.js";
 import { ImpostorMesh } from "../src/impostor/mesh/index.js";
-import { InstancedLod } from "../src/instanced/index.js";
 import { Lod } from "../src/lod.js";
 import { isMesh } from "../src/three.js";
 import { Wind } from "../src/wind/index.js";
 import { GPU_TIMEOUT, render, renderer } from "./gpu.js";
+import { oneChunk } from "./crowd.js";
 
 // Casters narrower than a texel of a directional light's shadow map draw nothing into
 // it. Here the light shines straight down onto a ground the camera sees from above, and
@@ -100,7 +100,7 @@ describe("casters smaller than a shadow texel", { timeout: GPU_TIMEOUT }, () => 
   });
 
   it("cast nothing: an InstancedLod's instances, each by its own size", async () => {
-    const lod = new InstancedLod([{ object: box() }], 2);
+    const lod = oneChunk([{ object: box() }], 2);
     lod.setMatrixAt(0, at(SMALL));
     lod.setMatrixAt(1, at(LARGE, 3));
     const [small, large] = await shadowAt(lod, SMALL, LARGE);
@@ -128,7 +128,7 @@ describe("casters smaller than a shadow texel", { timeout: GPU_TIMEOUT }, () => 
 describe("instance fades", { timeout: GPU_TIMEOUT }, () => {
   it("preserves coverage and instance colors when neighbouring levels split the pixels", async () => {
     const box = () => new Mesh(new BoxGeometry(2, 2, 2), new MeshBasicMaterial());
-    const lod = new InstancedLod([{ object: box() }, { object: box() }], 2);
+    const lod = oneChunk([{ object: box() }, { object: box() }], 2);
     const coarse = lod.levels[1];
     if (!coarse) throw new Error("Missing coarse level");
     coarse.maxPixels = 40;

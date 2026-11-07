@@ -25,12 +25,12 @@ import { drawOf } from "../../src/fade.js";
 import { bakeImpostor } from "../../src/impostor/bake/index.js";
 import type { Impostor } from "../../src/impostor/impostor.js";
 import { ImpostorMesh } from "../../src/impostor/mesh/index.js";
-import { InstancedLod } from "../../src/instanced/index.js";
 import { Lod } from "../../src/lod.js";
 import { readBytes } from "../../src/renderer.js";
 import { isMesh } from "../../src/three.js";
 import { Wind } from "../../src/wind/index.js";
 import { GPU_TIMEOUT, render as draw, renderer } from "../gpu.js";
+import { oneChunk } from "../crowd.js";
 
 /** Asymmetric, with a child transform: every part must use the same root-space sway. */
 function plant(): Group {
@@ -182,7 +182,7 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
       maxPixels: Infinity,
       box: new Box3(new Vector3(-0.35, 0, -0.35), new Vector3(0.35, 3, 0.35)),
     };
-    const owner = kind === "Lod" ? new Lod([level]) : new InstancedLod([level], 1);
+    const owner = kind === "Lod" ? new Lod([level]) : oneChunk([level], 1);
     const wind = new Wind({ direction: [1, 0], speed: 0.25 });
     wind.apply(owner, { amplitude: 0.9, baseY: 0, height: 3 });
     wind.time = 1;
@@ -228,7 +228,7 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
       maxPixels: Infinity,
       box: new Box3(new Vector3(-0.5, -0.5, -0.5), new Vector3(0.5, 0.5, 0.5)),
     };
-    const owner = kind === "Lod" ? new Lod([level]) : new InstancedLod([level], 1);
+    const owner = kind === "Lod" ? new Lod([level]) : oneChunk([level], 1);
     const camera = new PerspectiveCamera(30, 1, 0.1, 100);
     camera.position.z = 5;
     try {
@@ -272,7 +272,7 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
 
   it("keeps a fade whole when the instances sway", async () => {
     const mesh = () => new Mesh(new BoxGeometry(0.7, 3, 0.7).translate(0, 1.5, 0), new MeshStandardMaterial());
-    const lod = new InstancedLod([{ object: mesh() }, { object: mesh() }], 2);
+    const lod = oneChunk([{ object: mesh() }, { object: mesh() }], 2);
     const coarse = lod.levels[1];
     if (!coarse) throw new Error("missing coarse level");
     coarse.maxPixels = 60;
@@ -322,7 +322,7 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
     source.matrixAutoUpdate = false;
     source.matrix.makeTranslation(0, 10, 0);
     source.matrixWorldNeedsUpdate = true;
-    const lod = new InstancedLod([{ object: source }], 1);
+    const lod = oneChunk([{ object: source }], 1);
     wind.apply(lod, { amplitude: 0.9 });
     wind.time = 1;
     const reference = plant();
@@ -386,7 +386,7 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
     const wind = new Wind({ direction: [1, 0.4], speed: 0.6 });
     const objects = [
       placed(new Lod([{ object: plant() }, { object: new ImpostorMesh(data) }])),
-      placed(new InstancedLod([{ object: plant() }, { object: new ImpostorMesh(data) }], 1)),
+      placed(oneChunk([{ object: plant() }, { object: new ImpostorMesh(data) }], 1)),
       placed(new ImpostorMesh(data)),
     ];
     for (const object of objects) {

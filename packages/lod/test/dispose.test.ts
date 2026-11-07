@@ -35,7 +35,7 @@ it.each([Lod, InstancedLod])("lets the GLTS source release its resources while p
     mesh.geometry.addEventListener("dispose", geometryDisposed);
     mesh.material.addEventListener("dispose", materialDisposed);
     const coarse = await decodeMeshAsync(await encodeMeshAsync(source, [mesh.material]), [mesh.material]);
-    const owner = new Type([{ object: source }, { object: coarse }], 2);
+    const owner = new Type([{ object: source }, { object: coarse }]);
     const clone = owner.clone();
     owner.dispose();
     clone.dispose();

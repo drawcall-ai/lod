@@ -1,4 +1,4 @@
-import { StorageBufferAttribute, type StorageInstancedBufferAttribute, Vector3, Vector4, type ComputeNode, type Node, type Sphere } from "three/webgpu";
+import { StorageBufferAttribute, StorageInstancedBufferAttribute, Vector3, Vector4, type ComputeNode, type Node, type Sphere } from "three/webgpu";
 import {
   Fn,
   If,
@@ -7,13 +7,17 @@ import {
   atomicAdd,
   atomicLoad,
   atomicStore,
+  clamp,
   distance,
   dot,
   float,
   instanceIndex,
   int,
+  mat4,
   max,
+  min,
   smoothstep,
+  sqrt,
   storage,
   uint,
   uniform,
@@ -21,8 +25,9 @@ import {
 } from "three/tsl";
 import { at } from "../at.js";
 import { FADE } from "../levels.js";
-import { maxScale, stretch } from "../tsl.js";
+import { column, maxScale, stretch } from "../tsl.js";
 import { ARGS_BYTES, type ArgsSlice } from "./args.js";
+import { MAX_SURVIVOR_SCALE } from "./range.js";
 
 // Sorting the instances of an InstancedLod into its levels, on the GPU, once per view.
 //
@@ -36,7 +41,18 @@ import { ARGS_BYTES, type ArgsSlice } from "./args.js";
 // start there (their first instance), so all levels share one pass, within WebGPU's
 // default limit of 8 storage buffers per stage. A second pass hands each level's count to
 // the indirect draws of its meshes and clears the counts for the next view. Instances at
-// scale 0 draw in no level.
+// scale 0, free places among them included, draw in no level. With a range, an instance
+// draws only if its keep ratio is below the fraction kept at its distance from the range's
+// camera, the same in every view; survivors that scale write their scaled matrix, which
+// the level draws read instead, and are measured and culled at that size.
+
+/** What every view of a crowd selects with alongside its own aim: its range, in the crowd's space. */
+export interface RangeAim {
+  readonly eye: Vector3;
+  radius: number;
+  ramp: number;
+  survivors: boolean;
+}
 
 /** A view to select for: its aim, and the slots and draws to fill. */
 export interface Target {
@@ -85,6 +101,14 @@ export class Kernel {
   private readonly starts: Array<{ value: number } & Node<"uint">>;
   private readonly bounds = uniform(new Vector4());
   private readonly drawCount = uniform(0, "uint");
+  private readonly ranged = uniform(0, "uint");
+  private readonly rangeEye = uniform(new Vector3());
+  private readonly rangeRadius = uniform(0);
+  private readonly rangeRamp = uniform(1);
+  private readonly survivors = uniform(0, "uint");
+  private readonly source = storage(new StorageInstancedBufferAttribute(new Float32Array(16), 16), "mat4", 0).setName("lodSourceMatrices").toReadOnly();
+  private readonly keeps = storage(new StorageBufferAttribute(new Float32Array(1), 1), "float", 0).setName("lodKeeps").toReadOnly();
+  private readonly scaled = storage(new StorageInstancedBufferAttribute(new Float32Array(16), 16), "mat4", 0).setName("lodScaledMatrices");
   private readonly records = storage(new StorageBufferAttribute(new Uint32Array(4), 4), "uvec4", 0)
     .setName("lodDraws")
     .toReadOnly();
@@ -101,11 +125,9 @@ export class Kernel {
   private kernels: ComputeNode[] | null = null;
 
   constructor(
-    private readonly matrices: StorageInstancedBufferAttribute,
-    private readonly count: number,
     /** One instance's bounding sphere, in its own space. */
     sphere: Sphere,
-    /** Per level, its first slot, or null for a level that draws nothing. */
+    /** Per level, its first slot, or null for a level that draws nothing; only which ones are null stays fixed. */
     private readonly first: readonly (number | null)[],
     fallback: readonly number[],
   ) {
@@ -129,6 +151,29 @@ export class Kernel {
     this.progress.value = fade ? 0 : 1;
   }
 
+  /** Select from these instances: their matrices, keep ratios and scaled survivors' matrices, into levels starting at `first`. */
+  bind(
+    matrices: StorageInstancedBufferAttribute,
+    keeps: StorageBufferAttribute,
+    scaled: StorageInstancedBufferAttribute,
+    first: readonly (number | null)[],
+  ): void {
+    this.source.value = matrices;
+    this.keeps.value = keeps;
+    this.scaled.value = scaled;
+    first.forEach((start, level) => (at(this.starts, level).value = start ?? 0));
+  }
+
+  /** Every view's range from now on, or none. */
+  range(aim: RangeAim | null): void {
+    this.ranged.value = Number(aim !== null);
+    this.survivors.value = Number(aim?.survivors ?? false);
+    if (!aim) return;
+    this.rangeEye.value.copy(aim.eye);
+    this.rangeRadius.value = aim.radius;
+    this.rangeRamp.value = aim.ramp;
+  }
+
   writeDraws(draws: readonly IndirectDraw[]): void {
     const values = new Uint32Array(Math.max(draws.length, 1) * 4);
     draws.forEach((draw, i) => values.set([draw.level, draw.count, draw.start, Number(draw.indexed)], i * 4));
@@ -138,8 +183,8 @@ export class Kernel {
     previous.dispose();
   }
 
-  /** The passes, pointed at `target`: its aim in the uniforms, its slots and draws in the storage. */
-  load(target: Target): ComputeNode[] {
+  /** The passes over the first `end` instances, pointed at `target`: its aim in the uniforms, its slots and draws in the storage. */
+  load(target: Target, end: number): ComputeNode[] {
     this.eye.value.copy(target.eye);
     this.scale.value = target.scale;
     this.ortho.value = Number(target.ortho);
@@ -153,6 +198,7 @@ export class Kernel {
     this.out.arguments.value = target.args.attribute;
     this.argsStart.value = target.args.offset / 4;
     this.kernels ??= [this.selectPass(), this.argumentsPass()];
+    at(this.kernels, 0).count = Math.max(end, 1);
     return this.kernels;
   }
 
@@ -165,11 +211,10 @@ export class Kernel {
 
   /** The pass that fills the slots. */
   private selectPass(): ComputeNode {
-    const { count, out } = this;
-    const matrices = storage(this.matrices, "mat4", 0).setName("lodSourceMatrices").toReadOnly();
+    const { out } = this;
     const counts = storage(this.counts, "uint", 0).setName("lodCounts").toAtomic();
     return Fn(() => {
-      const m = matrices.element(instanceIndex).toVar();
+      const m = this.source.element(instanceIndex).toVar();
       const r = this.bounds.w.mul(maxScale(m)).toVar();
       // What it drew last, which it keeps drawing in place of a missing level; one out of view drew nothing.
       const shown = out.shown.element(instanceIndex);
@@ -178,9 +223,21 @@ export class Kernel {
         Return();
       };
       If(r.equal(0), hide);
-      const centre = m.mul(vec4(this.bounds.xyz, 1)).xyz.toVar();
+      const grow = float(1).toVar();
+      If(this.ranged.equal(uint(1)), () => {
+        const origin = column(m, 3).xyz;
+        const kept = clamp(this.rangeRadius.sub(distance(origin, this.rangeEye)).div(this.rangeRamp), 0, 1).toVar();
+        If(this.keeps.element(instanceIndex).greaterThanEqual(kept), hide);
+        If(this.survivors.equal(uint(1)), () => {
+          grow.assign(min(float(1).div(sqrt(kept)), MAX_SURVIVOR_SCALE));
+          const scaled = mat4(column(m, 0).mul(grow), column(m, 1).mul(grow), column(m, 2).mul(grow), column(m, 3));
+          this.scaled.element(instanceIndex).assign(scaled);
+        });
+      });
+      r.mulAssign(grow);
+      const centre = m.mul(vec4(this.bounds.xyz.mul(grow), 1)).xyz.toVar();
       // Outside the view: wholly behind one of its planes, with every level and its sway.
-      const extent = this.reach.mul(stretch(m)).mul(1 + 1e-4).negate();
+      const extent = this.reach.mul(stretch(m)).mul(grow).mul(1 + 1e-4).negate();
       for (const plane of this.planes) If(dot(plane.xyz, centre).add(plane.w).lessThan(extent), hide);
       const size = r.mul(2).mul(this.scale);
       const height = this.ortho
@@ -268,7 +325,7 @@ export class Kernel {
         // The finer neighbour fading out with it.
         If(finer.equal(level).and(t.greaterThan(0)), () => emit(level, start, t.negate()));
       });
-    })().compute(count);
+    })().compute(1);
   }
 
   private argumentsPass(): ComputeNode {

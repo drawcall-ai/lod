@@ -11,7 +11,8 @@ import {
 } from "three/webgpu";
 import { at } from "../at.js";
 import { ARGS_BYTES, args, type ArgsSlice } from "./args.js";
-import { Kernel, type IndirectDraw, type Target } from "./kernel.js";
+import { Kernel, type IndirectDraw, type RangeAim, type Target } from "./kernel.js";
+import type { Store } from "./store.js";
 import type { BlockView } from "./blocks.js";
 import type { View } from "../view.js";
 
@@ -58,52 +59,126 @@ interface Selected extends Slots, Target {
   taken: number;
 }
 
+/** What a selection selects from: a store's instances (see store.ts). */
+export type Instances = Pick<Store, "capacity" | "matrices" | "keeps" | "colors">;
+
 /** The slots of each view of an InstancedLod's instances, and when its kernel has to fill them again (see kernel.ts). */
 export class Selection {
-  /** The instances' matrices, as `setMatrixAt` writes them; level draws read them through their slots. */
-  readonly matrices: StorageInstancedBufferAttribute;
   /** The instances' colours (RGB, padded to four floats), once there are any. */
   colors: StorageInstancedBufferAttribute | null = null;
-  readonly count: number;
-  /** Per level, its first slot, or null for a level that draws nothing. */
-  readonly first: Array<number | null>;
+  /** One past the last place in use: the kernel visits only the places before it. */
+  end = 0;
   readonly progress: Kernel["progress"];
   /** The radius around an instance's centre, in its own space, that every level and its sway stay within. */
   readonly reach: Kernel["reach"];
   private readonly kernel: Kernel;
   private readonly views = new Map<Camera, Selected>();
-  private readonly slotCount: number;
-  /** Whether a selection was taken, and one with colours. */
+  private buffers: Buffers;
+  /** Survivors' scaled matrices, while survivors scale. */
+  private scaled: StorageInstancedBufferAttribute | null = null;
+  private readonly ranged: RangeAim = { eye: new Vector3(), radius: 0, ramp: 0, survivors: false };
+  private hasRange = false;
+  /** Whether a selection was taken from these buffers, and one with colours. */
   private started = false;
   private coloured = false;
 
   constructor(
-    /** 16 floats per instance */
-    matrices: Float32Array,
+    instances: Instances,
     /** One instance's bounding sphere, in its own space. */
     sphere: Sphere,
     /** Per level, whether it draws anything. */
-    drawing: readonly boolean[],
+    private readonly drawing: readonly boolean[],
     private draws: readonly IndirectDraw[],
     fallback: readonly number[],
   ) {
-    const count = matrices.length / 16;
-    this.count = count;
-    this.matrices = new StorageInstancedBufferAttribute(matrices, 16);
-    let next = 0;
-    this.first = drawing.map((draws) => (draws ? next++ * count : null));
-    this.slotCount = Math.max(next * count, 1);
-    this.kernel = new Kernel(this.matrices, count, sphere, this.first, fallback);
+    this.buffers = buffers(instances, drawing);
+    this.kernel = new Kernel(sphere, this.buffers.first, fallback);
     this.progress = this.kernel.progress;
     this.reach = this.kernel.reach;
+    this.bind();
     this.kernel.writeDraws(draws);
+  }
+
+  /** The instances' matrices, as the CPU writes them. */
+  get matrices(): StorageInstancedBufferAttribute {
+    return this.buffers.matrices;
+  }
+
+  /** The instances' keep ratios. */
+  get keeps(): StorageBufferAttribute {
+    return this.buffers.keeps;
+  }
+
+  /** Places for instances in every buffer: the store's capacity. */
+  get capacity(): number {
+    return this.buffers.capacity;
+  }
+
+  /** The matrices level draws read: the scaled ones while survivors scale. */
+  get drawn(): StorageInstancedBufferAttribute {
+    return this.scaled ?? this.matrices;
+  }
+
+  /** Select from `instances`, whose capacity changed, from now on: every buffer sized by it is replaced. */
+  resize(instances: Instances): void {
+    const old = [this.matrices, this.keeps, this.colors, this.scaled];
+    const survivors = this.scaled !== null;
+    this.colors = null;
+    this.buffers = buffers(instances, this.drawing);
+    if (instances.colors) this.useColors(instances.colors);
+    this.scaled = survivors ? scaledMatrices(this.capacity) : null;
+    this.bind();
+    for (const view of this.views.values()) {
+      for (const attribute of [view.indices, view.fades, view.shown]) attribute.dispose();
+      view.args.dispose();
+      Object.assign(view, this.slots());
+    }
+    this.started = this.coloured = false;
+    this.changed();
+    for (const attribute of old) attribute?.dispose();
+  }
+
+  /** Select with `range`, in the crowd's space, in every view from now on, or with none. */
+  range(range: RangeAim | null): void {
+    const { ranged } = this;
+    const same = range
+      ? this.hasRange && ranged.eye.equals(range.eye) && ranged.radius === range.radius && ranged.ramp === range.ramp && ranged.survivors === range.survivors
+      : !this.hasRange;
+    if (same) return;
+    this.hasRange = range !== null;
+    if (range) {
+      ranged.eye.copy(range.eye);
+      Object.assign(ranged, { radius: range.radius, ramp: range.ramp, survivors: range.survivors });
+    }
+    const survivors = range?.survivors ?? false;
+    if (survivors !== (this.scaled !== null)) {
+      this.scaled?.dispose();
+      this.scaled = survivors ? scaledMatrices(this.capacity) : null;
+      this.bind();
+    }
+    this.kernel.range(range);
+    this.changed();
+  }
+
+  private bind(): void {
+    this.kernel.bind(this.matrices, this.keeps, this.scaled ?? unscaled, this.buffers.first);
+  }
+
+  /** A view's slots and draws for the current capacity. */
+  private slots(): Pick<Selected, "indices" | "fades" | "shown" | "args"> {
+    return {
+      indices: new StorageBufferAttribute(new Uint32Array(this.buffers.slotCount), 1),
+      fades: new StorageBufferAttribute(new Float32Array(this.buffers.slotCount), 1),
+      shown: new StorageBufferAttribute(new Uint32Array(Math.max(this.capacity, 1)), 1),
+      args: this.allocate(this.draws),
+    };
   }
 
   private allocate(draws: readonly IndirectDraw[]): ArgsSlice {
     const values = new Uint32Array((draws.length * ARGS_BYTES) / 4);
     draws.forEach((draw, k) => {
       const base = (k * ARGS_BYTES) / 4;
-      const first = at(this.first, draw.level);
+      const first = at(this.buffers.first, draw.level);
       if (first === null) throw new Error("InstancedLod: a draw of a level that draws nothing");
       // indexed: count, instances, first index, base vertex, first instance;
       // else: count, instances, first vertex, first instance.
@@ -119,10 +194,7 @@ export class Selection {
     let view = this.views.get(camera);
     if (view) return view;
     view = {
-      indices: new StorageBufferAttribute(new Uint32Array(this.slotCount), 1),
-      fades: new StorageBufferAttribute(new Float32Array(this.slotCount), 1),
-      shown: new StorageBufferAttribute(new Uint32Array(Math.max(this.count, 1)), 1),
-      args: this.allocate(this.draws),
+      ...this.slots(),
       aimed: false,
       eye: new Vector3(),
       scale: 0,
@@ -130,7 +202,7 @@ export class Selection {
       fading: false,
       forced: -1,
       planes: Array.from({ length: 6 }, () => new Vector4()),
-      maxPixels: this.first.map(() => 0),
+      maxPixels: this.drawing.map(() => 0),
       revision: 0,
       taken: -1,
     };
@@ -203,7 +275,7 @@ export class Selection {
     view.revision++;
   }
 
-  /** The instances, their routes or their handover changed since the last selection of every view. */
+  /** The instances, their range, routes or handover changed since the last selection of every view. */
   changed(): void {
     for (const view of this.views.values()) view.revision++;
   }
@@ -222,7 +294,7 @@ export class Selection {
       this.colors.clearUpdateRanges();
     }
     view.taken = view.revision;
-    return this.kernel.load(view);
+    return this.kernel.load(view, this.end);
   }
 
   /** Carry `colors` (4 floats per instance) with the instances from now on. */
@@ -234,8 +306,40 @@ export class Selection {
 
   /** Frees its buffers and passes. */
   dispose(): void {
-    for (const attribute of [this.matrices, this.colors]) attribute?.dispose();
+    for (const attribute of [this.matrices, this.keeps, this.colors, this.scaled]) attribute?.dispose();
     this.forget(() => false);
     this.kernel.dispose();
   }
 }
+
+/** What a selection holds per place for instances, and where each level's slots start. */
+interface Buffers {
+  capacity: number;
+  matrices: StorageInstancedBufferAttribute;
+  keeps: StorageBufferAttribute;
+  /** Per level, its first slot, or null for a level that draws nothing. */
+  first: Array<number | null>;
+  slotCount: number;
+}
+
+/** Buffers for `instances`, with slots for every level that is `drawing`. */
+function buffers(instances: Instances, drawing: readonly boolean[]): Buffers {
+  const { capacity } = instances;
+  let next = 0;
+  const first = drawing.map((draws) => (draws ? next++ * capacity : null));
+  return {
+    capacity,
+    matrices: new StorageInstancedBufferAttribute(padded(instances.matrices, 16), 16),
+    keeps: new StorageBufferAttribute(padded(instances.keeps, 1), 1),
+    first,
+    slotCount: Math.max(next * capacity, 1),
+  };
+}
+
+/** A binding for the scaled matrices while survivors do not scale: nothing writes or reads it. */
+const unscaled = new StorageInstancedBufferAttribute(new Float32Array(16), 16);
+
+const scaledMatrices = (capacity: number) => new StorageInstancedBufferAttribute(new Float32Array(Math.max(capacity, 1) * 16), 16);
+
+/** `array`, or one empty item for an empty one: a storage buffer is never empty. */
+const padded = (array: Float32Array, size: number): Float32Array => (array.length > 0 ? array : new Float32Array(size));

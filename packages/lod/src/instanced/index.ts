@@ -1,4 +1,4 @@
-import { type Color, Frustum, type Matrix4, type Object3D, Sphere, Vector3, type Camera, type Intersection, type Raycaster } from "three/webgpu";
+import { type Color, Frustum, Matrix4, type Object3D, Sphere, Vector3, type Camera, type Intersection, type Raycaster } from "three/webgpu";
 import { at } from "../at.js";
 import { disposeCopies } from "../dispose.js";
 import { Level, cloneLevels, estimate, fadeProgress, levelAt, tintLevels, validate, type LodLevel } from "../levels.js";
@@ -13,13 +13,18 @@ import { parts } from "./parts.js";
 import { Blocks } from "./blocks.js";
 import { Extent } from "./extent.js";
 import { Probes } from "./raycast.js";
+import type { RangeAim } from "./kernel.js";
+import { checkRange, keptFraction, survivorScale, type InstancedRange } from "./range.js";
 import { Selection, sight, type Aim } from "./select.js";
-import { Store } from "./store.js";
+import { Store, type ChunkData, type InstancedChunk } from "./store.js";
 
 const view = new View();
+const inverse = new Matrix4();
+const origin = new Vector3();
 
 /**
- * Independently selected copies of one object, batched into indirect draws per view.
+ * Independently selected copies of one object, batched into indirect draws per view. Copies
+ * arrive and leave in chunks (see `addChunk`); a `range` thins them out with distance.
  * Thresholds, fades and global settings follow Lod. Each view draws only the instances in
  * its frustum, and each shadow map is a view of its own: it draws the casters in its
  * frustum, each at the level its texels resolve, as an orthographic view would (an
@@ -36,7 +41,8 @@ const view = new View();
  */
 export class InstancedLod extends Owner {
   readonly isInstancedLod = true;
-  readonly count: number;
+  /** How far from a camera its instances draw, thinning out before it, in every view; null draws them at any distance. */
+  range: InstancedRange | null = null;
 
   private readonly probes: Probes;
   private selection: Selection | null = null;
@@ -46,21 +52,72 @@ export class InstancedLod extends Owner {
   /** Around every instance; each level may use tighter bounds. */
   readonly bounds = new Sphere();
   private blocks: Blocks;
+  /** Indirect draws of every level, which decide the blocks' leaf size. */
+  private draws = 0;
+  /** The blocks' wind padding (see `Blocks.pad`). */
+  private padding = 0;
+  /** The range selected with last, in this crowd's space, or none. */
+  private ranged: RangeAim | null = null;
+  private readonly rangeAim: RangeAim = { eye: new Vector3(), radius: 0, ramp: 0, survivors: false };
   /** The last view `update` selected for, for `levelOf`, once there was one. */
   private readonly last: Aim = { eye: new Vector3(), scale: 0, ortho: false, fades: false, forced: null, frustum: new Frustum() };
   private selected = false;
   /** The shadow map `update` last selected for. */
   private readonly shadowView: Aim = { eye: new Vector3(), scale: 0, ortho: true, fades: false, forced: null, frustum: new Frustum() };
 
-  /** `levels[0]` is the source. Empty only as the target of `copy`. */
-  constructor(levels: readonly LodLevel[] = [], count = 0, options: LodOptions = {}) {
+  /** `levels[0]` is the source. Empty only as the target of `copy`. It holds no instances until chunks are added. */
+  constructor(levels: readonly LodLevel[] = [], options: LodOptions = {}) {
     super("InstancedLod", options);
-    if (!Number.isInteger(count) || count < 0) throw new Error(`InstancedLod: count must be an integer >= 0, got ${count}`);
-    this.count = count;
-    this.store = new Store(count);
-    this.probes = new Probes(this.store.matrices, this.extent.rest);
-    const draws = levels.length > 0 ? this.build(levels) : 0;
-    this.blocks = new Blocks(this.store.matrices, this.store.spheres, this.extent.source, this.bounds, draws, this.extent.rest);
+    this.store = new Store();
+    this.probes = new Probes(this.store, this.extent.rest);
+    this.draws = levels.length > 0 ? this.build(levels) : 0;
+    this.blocks = this.makeBlocks();
+  }
+
+  /** Instances in its chunks. */
+  get count(): number {
+    return this.store.count;
+  }
+
+  /** Its chunks, in the order they were added. */
+  get chunks(): ReadonlySet<InstancedChunk> {
+    return this.store.chunks;
+  }
+
+  /**
+   * Add `data`'s instances as one chunk: instance `i` of it is instance `chunk.start + i` of this InstancedLod until the
+   * chunk is removed. Adding and removing chunks costs about what they hold, a few per frame included.
+   */
+  addChunk(data: ChunkData): InstancedChunk {
+    const { capacity, colors } = this.store;
+    const chunk = this.store.add(data);
+    this.fit(capacity, colors);
+    return chunk;
+  }
+
+  /** Remove `chunk`'s instances; its indices may go to a chunk added later. */
+  removeChunk(chunk: InstancedChunk): void {
+    const { capacity, colors } = this.store;
+    this.store.remove(chunk);
+    this.fit(capacity, colors);
+  }
+
+  /** Follow the store to a new capacity, or to colours it has begun to carry. */
+  private fit(capacity: number, colors: Float32Array | null): void {
+    const { store } = this;
+    if (store.capacity !== capacity) {
+      this.blocks = this.makeBlocks();
+      this.selection?.resize(store);
+    }
+    if (store.capacity !== capacity || store.colors !== colors) this.meshes?.rebind();
+  }
+
+  private makeBlocks(): Blocks {
+    const { store } = this;
+    const survivors = this.ranged?.survivors ? store.keeps : null;
+    const blocks = new Blocks(store.matrices, store.spheres, this.extent.source, this.bounds, this.draws, this.extent.rest, survivors);
+    blocks.pad(this.padding);
+    return blocks;
   }
 
   private build(inputs: readonly LodLevel[]): number {
@@ -73,13 +130,14 @@ export class InstancedLod extends Owner {
     this.probes.add(templates[0] ?? []);
     const draws = templates.flatMap((parts) => parts.map((part) => part.draw));
     const selection = new Selection(
-      this.store.matrices,
+      this.store,
       extent.source,
       templates.map((parts, i) => parts.length > 0 || at(inputs, i).box?.isEmpty() === false),
       draws,
       this.residency.fallback,
     );
     selection.reach.value = extent.rest.radius;
+    selection.end = this.store.end;
     this.selection = selection;
     this.store.attach(selection);
     const meshes = new Meshes(selection, extent.reaches, extent.drawRadius, {
@@ -110,6 +168,7 @@ export class InstancedLod extends Owner {
     for (const mesh of loaded.made) this.add(mesh);
   }
 
+  /** Move instance `index`, an instance of one of its chunks. */
   setMatrixAt(index: number, matrix: Matrix4): void {
     this.store.setMatrix(index, matrix);
   }
@@ -122,7 +181,7 @@ export class InstancedLod extends Owner {
   setColorAt(index: number, color: Color): void {
     const first = this.store.colors === null;
     this.store.setColor(index, color);
-    if (first) this.meshes?.recolor();
+    if (first) this.meshes?.rebind();
   }
 
   /** Instance `index`'s colour: white unless set. */
@@ -132,15 +191,20 @@ export class InstancedLod extends Owner {
 
   /**
    * The finest level instance `index` drew in the last update, or null before the first
-   * (or at scale 0). Inside a fade the next coarser level draws too.
+   * (or at scale 0, or out of range). Inside a fade the next coarser level draws too.
    */
   levelOf(index: number): number | null {
-    const { last, store } = this;
+    const { last, store, ranged } = this;
     store.check(index);
     if (!this.selected) return null;
     store.measure(this.blocks);
-    const height = store.height(index, last);
+    let height = store.height(index, last);
     if (height === null) return null;
+    if (ranged) {
+      const kept = keptFraction(origin.fromArray(store.matrices, index * 16 + 12).distanceTo(ranged.eye), ranged);
+      if (at(store.keeps, index) >= kept) return null;
+      if (ranged.survivors) height *= survivorScale(kept);
+    }
     const level = levelAt(this.entries, height, last.forced);
     const selected = last.fades && fadeProgress(this.entries, level, height) > 0 ? level.index - 1 : level.index;
     const ready = at(this.residency.fallback, selected);
@@ -150,6 +214,7 @@ export class InstancedLod extends Owner {
   protected sway(padding: number, slope: number, baseY: number): void {
     const sway = this.extent.wind(padding, slope, baseY);
     this.meshes?.setRadius(this.extent.drawRadius);
+    this.padding = sway;
     this.blocks.pad(sway);
     this.blocks.refit();
     if (this.selection) this.selection.reach.value = this.extent.rest.radius * (1 + sway);
@@ -162,6 +227,7 @@ export class InstancedLod extends Owner {
     if (!selection || !meshes) return;
     validate(entries);
     if (this.forceLevel !== null && !entries[this.forceLevel]) throw new Error(`Lod: forceLevel ${this.forceLevel} is not a level`);
+    this.aimRange(selection, meshes);
     this.store.measure(this.blocks);
     const height = viewportHeight(camera);
     view.begin(camera, height ?? TYPICAL_HEIGHT, this.forceLevel);
@@ -182,6 +248,30 @@ export class InstancedLod extends Owner {
     // keeps its last selection.
     meshes.schedule(meshes.show(camera, this.matrixWorld));
     residency.sync();
+  }
+
+  /** Select every view with the current `range`, measured from its camera, in this crowd's space. */
+  private aimRange(selection: Selection, meshes: Meshes): void {
+    const { range } = this;
+    const survived = this.ranged?.survivors ?? false;
+    this.ranged = null;
+    if (range) {
+      checkRange(range);
+      const aim = this.rangeAim;
+      const scale = this.matrixWorld.getMaxScaleOnAxis();
+      aim.eye.setFromMatrixPosition(range.camera.matrixWorld).applyMatrix4(inverse.copy(this.matrixWorld).invert());
+      aim.radius = range.radius / scale;
+      aim.ramp = range.ramp / scale;
+      aim.survivors = range.scaleSurvivors ?? false;
+      this.ranged = aim;
+    }
+    selection.range(this.ranged);
+    if ((this.ranged?.survivors ?? false) === survived) return;
+    // Survivors draw larger than the blocks bounded them, or no longer do.
+    this.blocks = this.makeBlocks();
+    this.blocks.measure(0, this.store.end);
+    this.blocks.refit();
+    meshes.rebind();
   }
 
   /**
@@ -209,22 +299,22 @@ export class InstancedLod extends Owner {
   }
 
   /**
-   * Copies `source`'s levels, instances and settings into this empty InstancedLod of the
-   * same count (it throws otherwise); the copy shares geometry and textures with `source`.
+   * Copies `source`'s levels, chunks and settings into this empty InstancedLod, one without levels or chunks (it throws
+   * otherwise); the copy shares geometry and textures with `source`. Its chunks are its own, at the same indices.
    */
   override copy(source: InstancedLod): this {
-    if (this.entries.length > 0 || this.count !== source.count) throw new Error("InstancedLod.copy: copy into an empty InstancedLod of the same count");
+    if (this.entries.length > 0 || this.store.chunks.size > 0) throw new Error("InstancedLod.copy: copy into an InstancedLod without levels or chunks");
     super.copy(source, false);
     this.store.copy(source.store);
-    const draws = source.entries.length > 0 ? this.build(cloneLevels(source.entries)) : 0;
-    this.blocks = new Blocks(this.store.matrices, this.store.spheres, this.extent.source, this.bounds, draws, this.extent.rest);
+    this.range = source.range && { ...source.range };
+    this.draws = source.entries.length > 0 ? this.build(cloneLevels(source.entries)) : 0;
+    this.blocks = this.makeBlocks();
     this.copySettings(source);
     return this;
   }
 
   override clone(): this {
-    // three's clone builds `new this.constructor()`, which has no count.
-    const clone = new InstancedLod([], this.count).copy(this);
+    const clone = new InstancedLod().copy(this);
     if (!sameClass(this, clone)) throw new Error("InstancedLod.clone: a subclass must override clone");
     return clone;
   }

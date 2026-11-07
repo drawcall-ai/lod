@@ -1,8 +1,8 @@
 import { ACESFilmicToneMapping, BoxGeometry, LoadingManager, Mesh, MeshBasicNodeMaterial, NodeMaterial, NoToneMapping, PerspectiveCamera, Scene } from "three/webgpu";
 import { expect, it, vi } from "vitest";
-import { InstancedLod } from "../src/instanced/index.js";
 import { Lod } from "../src/lod.js";
 import { GPU_TIMEOUT, renderer } from "./gpu.js";
+import { oneChunk } from "./crowd.js";
 
 const box = () => new Mesh(new BoxGeometry(), new MeshBasicNodeMaterial());
 
@@ -13,7 +13,7 @@ it.each(["Lod", "InstancedLod"])(
     const own = vi.fn();
     const scene = new Scene();
     scene.onBeforeRender = own;
-    const owner = kind === "Lod" ? new Lod([{ object: box() }]) : new InstancedLod([{ object: box() }], 1);
+    const owner = kind === "Lod" ? new Lod([{ object: box() }]) : oneChunk([{ object: box() }], 1);
     owner.position.z = -5;
     scene.add(owner);
     const camera = new PerspectiveCamera(60, 1, 0.1, 100);
@@ -42,7 +42,7 @@ it.each(["Lod", "InstancedLod"])(
     const failed = vi.fn();
     manager.onError = failed;
     const levels = [{ object: box() }];
-    const owner = kind === "Lod" ? new Lod(levels, { manager }) : new InstancedLod(levels, 1, { manager });
+    const owner = kind === "Lod" ? new Lod(levels, { manager }) : oneChunk(levels, 1, { manager });
     owner.position.z = -5;
     owner.forceLevel = 3;
     const scene = new Scene().add(owner);

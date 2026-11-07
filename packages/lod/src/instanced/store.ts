@@ -1,41 +1,124 @@
-import { Matrix4, type Color } from "three/webgpu";
+import type { Color, Matrix4 } from "three/webgpu";
 import { at } from "../at.js";
 import type { BlockView, Blocks } from "./blocks.js";
 import { Dirty, upload } from "./dirty.js";
+import { Runs } from "./runs.js";
 import type { Selection } from "./select.js";
 
-const IDENTITY = new Matrix4();
+/** Instances added to an InstancedLod in one call and removed whole: those from index `start`, `count` of them. */
+export interface InstancedChunk {
+  readonly start: number;
+  readonly count: number;
+}
 
-/** The CPU side of every instance, as `setMatrixAt` and `setColorAt` write it, and its edits not yet measured and uploaded. */
+/** The instances of a chunk to add. */
+export interface ChunkData {
+  /** 16 floats per instance, as `Matrix4.elements`; the instance count. */
+  matrices: ArrayLike<number>;
+  /** Red, green and blue per instance, as `setColorAt` takes them; white without. */
+  colors?: ArrayLike<number>;
+  /** Per instance, its keep ratio in [0, 1) (see `InstancedRange`); 0 without. */
+  keeps?: ArrayLike<number>;
+}
+
+/**
+ * The CPU side of every instance: the chunks holding it, what `add` and `setMatrixAt` wrote, and the edits not yet
+ * measured and uploaded. Chunks keep their indices; capacity doubles as they need it and halves once a quarter of it
+ * is used, keeping the places in use.
+ */
 export class Store {
-  /** Instance matrices, 16 floats each: the selection uploads them from here. */
-  readonly matrices: Float32Array;
-  /** Instance colours, 4 floats each, once `setColor` was called. */
+  /** Instance matrices, 16 floats each; a free place holds zeros, which draw nothing. */
+  matrices: Float32Array;
+  /** Instance keep ratios. */
+  keeps: Float32Array;
+  /** Instance colours, 4 floats each, once some instance has one. */
   colors: Float32Array | null = null;
-  /** Each instance's bounding sphere, centre and radius, in the InstancedLod's space. */
-  readonly spheres: Float32Array;
-  private readonly matrixChanges: Dirty;
-  private readonly colorChanges: Dirty;
+  /** Each instance's bounding sphere, centre and radius, in the InstancedLod's space, as `measure` last left it. */
+  spheres: Float32Array;
+  readonly chunks = new Set<InstancedChunk>();
+  /** Instances in chunks. */
+  count = 0;
+  private readonly runs = new Runs();
+  private live: Uint8Array;
+  private changes: Dirty;
+  private colorChanges: Dirty;
   /** Where edits upload to, while there is one. */
   private selection: Selection | null = null;
 
-  constructor(readonly count: number) {
-    this.matrices = new Float32Array(count * 16);
-    this.spheres = new Float32Array(count * 4);
-    for (let i = 0; i < count; i++) IDENTITY.toArray(this.matrices, i * 16);
-    this.matrixChanges = new Dirty(count);
-    this.colorChanges = new Dirty(count);
-    this.matrixChanges.all();
+  constructor() {
+    this.matrices = new Float32Array(0);
+    this.keeps = new Float32Array(0);
+    this.spheres = new Float32Array(0);
+    this.live = new Uint8Array(0);
+    this.changes = new Dirty(0);
+    this.colorChanges = new Dirty(0);
+  }
+
+  get capacity(): number {
+    return this.runs.capacity;
+  }
+
+  /** One past the last place in use: the selection visits only the places before it. */
+  get end(): number {
+    return this.runs.end;
   }
 
   check(index: number): void {
-    if (!Number.isInteger(index) || index < 0 || index >= this.count) throw new Error(`InstancedLod: index ${index} is not in 0..${this.count - 1}`);
+    if (!Number.isInteger(index) || this.live[index] !== 1) throw new Error(`InstancedLod: index ${index} is not an instance of a chunk`);
+  }
+
+  /** Place `data`'s instances, growing the capacity if they need it. */
+  add(data: ChunkData): InstancedChunk {
+    const { matrices, colors, keeps } = data;
+    const count = matrices.length / 16;
+    if (!Number.isInteger(count)) throw new Error(`InstancedLod: a chunk's matrices hold 16 floats per instance, got ${matrices.length}`);
+    if (colors && colors.length !== count * 3) throw new Error(`InstancedLod: a chunk of ${count} instances needs ${count * 3} colour floats, got ${colors.length}`);
+    if (keeps && keeps.length !== count) throw new Error(`InstancedLod: a chunk of ${count} instances needs ${count} keep ratios, got ${keeps.length}`);
+    for (let i = 0; keeps && i < count; i++) {
+      const keep = at(keeps, i);
+      if (!(keep >= 0 && keep < 1)) throw new RangeError(`InstancedLod: keep ratio ${keep} of instance ${i} is not in [0, 1)`);
+    }
+    let start = this.runs.take(count);
+    if (start === null) {
+      let capacity = Math.max(this.capacity, 1);
+      while (capacity < this.end + count) capacity *= 2;
+      this.resize(capacity);
+      start = this.runs.take(count);
+      if (start === null) throw new Error("InstancedLod: no room after growing");
+    }
+    const chunk: InstancedChunk = { start, count };
+    this.chunks.add(chunk);
+    this.count += count;
+    this.matrices.set(matrices, start * 16);
+    this.keeps.fill(0, start, start + count);
+    if (keeps) this.keeps.set(keeps, start);
+    this.live.fill(1, start, start + count);
+    const tints = colors ? this.useColors() : this.colors;
+    tints?.fill(1, start * 4, (start + count) * 4);
+    for (let i = 0; tints && colors && i < count; i++) {
+      for (let c = 0; c < 3; c++) tints[(start + i) * 4 + c] = at(colors, i * 3 + c);
+    }
+    this.changed(chunk);
+    return chunk;
+  }
+
+  remove(chunk: InstancedChunk): void {
+    if (!this.chunks.delete(chunk)) throw new Error("InstancedLod: the chunk is not one of its own");
+    const { start, count } = chunk;
+    this.count -= count;
+    this.matrices.fill(0, start * 16, (start + count) * 16);
+    this.live.fill(0, start, start + count);
+    this.changed(chunk);
+    this.runs.give(start, count);
+    let capacity = this.capacity;
+    while (capacity > 1 && this.end <= capacity / 4) capacity /= 2;
+    if (capacity !== this.capacity) this.resize(capacity);
   }
 
   setMatrix(index: number, matrix: Matrix4): void {
     this.check(index);
     matrix.toArray(this.matrices, index * 16);
-    this.matrixChanges.add(index);
+    this.changes.add(index);
   }
 
   getMatrix(index: number, matrix: Matrix4): Matrix4 {
@@ -45,14 +128,7 @@ export class Store {
 
   setColor(index: number, color: Color): void {
     this.check(index);
-    if (!this.colors) {
-      this.colors = new Float32Array(this.count * 4).fill(1);
-      if (this.selection) {
-        this.selection.useColors(this.colors);
-        this.colorChanges.all();
-      }
-    }
-    color.toArray(this.colors, index * 4);
+    color.toArray(this.useColors(), index * 4);
     this.colorChanges.add(index);
   }
 
@@ -81,17 +157,24 @@ export class Store {
     if (selection && this.colors) selection.useColors(this.colors);
   }
 
-  /** Take `source`'s matrices and colours, all of them pending. */
+  /** Take `source`'s chunks, matrices, keep ratios and colours, all of them pending. */
   copy(source: Store): void {
+    if (this.chunks.size > 0) throw new Error("InstancedLod: copy into an InstancedLod without chunks");
+    this.resize(source.capacity);
     this.matrices.set(source.matrices);
-    this.colors = source.colors?.slice() ?? null;
-    this.matrixChanges.all();
-    if (this.colors) this.colorChanges.all();
+    this.keeps.set(source.keeps);
+    if (source.colors) this.useColors().set(source.colors);
+    for (const { start, count } of source.chunks) {
+      if (this.runs.take(count) !== start) throw new Error("InstancedLod: copied chunks out of order");
+      this.chunks.add({ start, count });
+      this.live.fill(1, start, start + count);
+      this.count += count;
+    }
   }
 
-  /** Measure only changed matrices into `blocks`; matrix and colour uploads have separate ranges. */
+  /** Measure only changed instances into `blocks`; instance and colour uploads have separate ranges. */
   measure(blocks: Blocks): void {
-    if (this.matrixChanges.empty && this.colorChanges.empty) return;
+    if (this.changes.empty && this.colorChanges.empty) return;
     this.measureChanges(blocks);
   }
 
@@ -99,15 +182,57 @@ export class Store {
   // lexical context on entry even when a function returns before its callbacks.
   private measureChanges(blocks: Blocks): void {
     const { selection } = this;
-    const matricesChanged = !this.matrixChanges.empty;
-    this.matrixChanges.drain((start, end) => {
+    const changed = !this.changes.empty;
+    this.changes.drain((start, end) => {
       blocks.measure(start, end);
-      if (selection) upload(selection.matrices, start, end);
+      if (!selection) return;
+      upload(selection.matrices, start, end);
+      upload(selection.keeps, start, end);
     });
     this.colorChanges.drain((start, end) => {
       if (selection?.colors) upload(selection.colors, start, end);
     });
-    selection?.changed();
-    if (matricesChanged) blocks.refit();
+    if (selection) {
+      selection.end = this.end;
+      selection.changed();
+    }
+    if (changed) blocks.refit();
+  }
+
+  /** `chunk`'s places, changed. */
+  private changed({ start, count }: InstancedChunk): void {
+    for (let i = start; i < start + count; i++) this.changes.add(i);
+    if (!this.colors) return;
+    for (let i = start; i < start + count; i++) this.colorChanges.add(i);
+  }
+
+  /** The colours, made white for every instance the first time. */
+  private useColors(): Float32Array {
+    if (this.colors) return this.colors;
+    const colors = new Float32Array(this.capacity * 4).fill(1);
+    this.colors = colors;
+    this.colorChanges.all();
+    this.selection?.useColors(colors);
+    return colors;
+  }
+
+  /** Move every instance to arrays of `capacity` places, all of them pending: the caller rebuilds what holds the old ones. */
+  private resize(capacity: number): void {
+    const end = this.end;
+    this.runs.resize(capacity);
+    const grown = <T extends Float32Array | Uint8Array>(old: T, make: (length: number) => T, size: number): T => {
+      const array = make(capacity * size);
+      array.set(old.subarray(0, end * size));
+      return array;
+    };
+    this.matrices = grown(this.matrices, (n) => new Float32Array(n), 16);
+    this.keeps = grown(this.keeps, (n) => new Float32Array(n), 1);
+    this.spheres = grown(this.spheres, (n) => new Float32Array(n), 4);
+    this.live = grown(this.live, (n) => new Uint8Array(n), 1);
+    if (this.colors) this.colors = grown(this.colors, (n) => new Float32Array(n).fill(1), 4);
+    this.changes = new Dirty(capacity);
+    this.colorChanges = new Dirty(capacity);
+    this.changes.all();
+    if (this.colors) this.colorChanges.all();
   }
 }

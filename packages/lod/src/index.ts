@@ -7,6 +7,8 @@ export { Lod } from "./lod.js";
 export { type LodOptions } from "./owner.js";
 export { Wind, type WindOptions, type SwayOptions } from "./wind/index.js";
 export { InstancedLod } from "./instanced/index.js";
+export { type ChunkData, type InstancedChunk } from "./instanced/store.js";
+export { type InstancedRange, keptFraction, MAX_SURVIVOR_SCALE } from "./instanced/range.js";
 export { type LevelView, type LodLevel } from "./levels.js";
 export { type SimplifyOptions, simplify } from "./simplify.js";
 export { type BakeMeshOptions, bakeMesh } from "./baked/index.js";

@@ -46,7 +46,7 @@ export class Instances extends Mesh<BufferGeometry, NodeMaterial> {
 
   constructor(geometry: BufferGeometry, material: NodeMaterial, selection: Selection) {
     super(geometry, material);
-    this.instanceMatrix = selection.matrices;
+    this.instanceMatrix = selection.drawn;
     this.instanceColor = selection.colors ?? white;
   }
 }
@@ -143,9 +143,13 @@ export class Meshes {
     mesh.geometry.dispose();
   }
 
-  /** Every level's meshes draw the instance colours the selection has begun to carry, with the shaders they have. */
-  recolor(): void {
-    for (const mesh of this.byLevel.flat()) mesh.instanceColor = this.selection.colors ?? white;
+  /** Every level's meshes draw the selection's current buffers, colours it has begun to carry included, with the shaders they have. */
+  rebind(): void {
+    for (const mesh of this.byLevel.flat()) {
+      mesh.instanceMatrix = this.selection.drawn;
+      mesh.instanceColor = this.selection.colors ?? white;
+      if (mesh.geometry instanceof InstancedBufferGeometry) mesh.geometry.instanceCount = this.selection.capacity;
+    }
   }
 
   /** Show only levels whose conservative bounds contain a possible selected instance; whether any may draw for `camera`. */
@@ -227,7 +231,7 @@ function card(template: ImpostorMesh, placement: Matrix4, selection: Selection):
   // Indirect arguments supply the actual count. A card's public count is otherwise
   // used by Three to specialize its shader for one object's storage bindings.
   mesh.count = 1;
-  mesh.instanceMatrix = selection.matrices;
+  mesh.instanceMatrix = selection.drawn;
   mesh.instanceColor = selection.colors ?? white;
   return mesh;
 }
@@ -236,7 +240,7 @@ function card(template: ImpostorMesh, placement: Matrix4, selection: Selection):
 function instanced(geometry: BufferGeometry, selection: Selection): BufferGeometry {
   const view = new InstancedBufferGeometry();
   // Capacity belongs to the geometry's statistics, not the object's shader cache key.
-  view.instanceCount = selection.count;
+  view.instanceCount = selection.capacity;
   view.index = geometry.index;
   for (const [name, attribute] of Object.entries(geometry.attributes)) view.setAttribute(name, attribute);
   view.morphAttributes = geometry.morphAttributes;

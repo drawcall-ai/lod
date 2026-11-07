@@ -13,10 +13,23 @@ const everywhere = new Frustum(...Array.from({ length: 6 }, () => new Plane(new 
 const aim = (selection: Selection, eye: Vector3, scale: number, ortho: boolean, forced: number | null, thresholds: { maxPixels: number }[], frustum = everywhere) =>
   selection.aim(camera, { eye, scale, ortho, fades: !ortho && forced === null, forced, frustum }, thresholds);
 
+/** What a selection selects from: `matrices`, 16 floats per instance, each kept. */
+function instances(matrices: Float32Array) {
+  return { capacity: matrices.length / 16, matrices, keeps: new Float32Array(matrices.length / 16), colors: null };
+}
+
+/** A selection of `levels` over `matrices`, visiting every instance. */
+function over(matrices: Float32Array, ...rest: Tail<ConstructorParameters<typeof Selection>>): Selection {
+  const selection = new Selection(instances(matrices), ...rest);
+  selection.end = matrices.length / 16;
+  return selection;
+}
+type Tail<T extends unknown[]> = T extends [unknown, ...infer U] ? U : never;
+
 function selection(count: number, indexed: boolean, start: number, sphere = new Sphere(new Vector3(), 1)): Selection {
   const matrices = new Float32Array(count * 16);
   for (let i = 0; i < count; i++) new Matrix4().makeTranslation(i + 1, 0, 0).toArray(matrices, i * 16);
-  const selection = new Selection(
+  const selection = over(
     matrices,
     sphere,
     [true, true],
@@ -61,7 +74,7 @@ it("shares native shader modules across crowd capacities, spheres and slot offse
 
 it("installs lazy draws without replacing storage buffers already bound by render and shadow shaders", { timeout: GPU_TIMEOUT }, async () => {
   const draw = { level: 0, count: 6, start: 0, indexed: true };
-  const a = new Selection(new Float32Array(new Matrix4().makeTranslation(3, 0, 0).elements), new Sphere(new Vector3(), 1), [true, true], [draw], [0, 0]);
+  const a = over(new Float32Array(new Matrix4().makeTranslation(3, 0, 0).elements), new Sphere(new Vector3(), 1), [true, true], [draw], [0, 0]);
   a.useColors(new Float32Array([0.25, 0.5, 0.75, 1]));
   const { matrices, colors } = a;
   const { indices, fades } = a.view(camera);
@@ -86,7 +99,7 @@ it("installs lazy draws without replacing storage buffers already bound by rende
 });
 
 it("draws pending levels through a solid finer fallback and fades ready coarse levels against that fallback", { timeout: GPU_TIMEOUT }, async () => {
-  const a = new Selection(
+  const a = over(
     new Float32Array(new Matrix4().elements),
     new Sphere(new Vector3(), 1),
     [true, false, true],
@@ -149,7 +162,7 @@ it("initializes appended and reused GPU slices without overwriting live draws or
 
 it("hands over an arriving fade neighbour without a jump at either end of the height fade", { timeout: GPU_TIMEOUT }, async () => {
   const draw = { level: 0, count: 6, start: 0, indexed: true };
-  const a = new Selection(new Float32Array(new Matrix4().elements), new Sphere(new Vector3(), 1), [true, true, true], [draw, { ...draw, level: 2 }], [0, 0, 2]);
+  const a = over(new Float32Array(new Matrix4().elements), new Sphere(new Vector3(), 1), [true, true, true], [draw, { ...draw, level: 2 }], [0, 0, 2]);
   const thresholds = [{ maxPixels: Infinity }, { maxPixels: 100 }, { maxPixels: 10 }];
   try {
     aim(a, new Vector3(0, 0, 2), 9.5, false, null, thresholds);

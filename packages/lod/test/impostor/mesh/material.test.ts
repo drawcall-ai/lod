@@ -21,9 +21,9 @@ import { drawOf, setDraw } from "../../../src/fade.js";
 import { args } from "../../../src/instanced/args.js";
 import { bakeImpostor } from "../../../src/impostor/bake/index.js";
 import { ImpostorMesh, impostorInstances } from "../../../src/impostor/mesh/index.js";
-import { InstancedLod } from "../../../src/instanced/index.js";
 import { Lod } from "../../../src/lod.js";
 import { GPU_TIMEOUT, render, renderer } from "../../gpu.js";
+import { oneChunk } from "../../crowd.js";
 
 const at = (x: number, y: number, z = 0) => new Matrix4().makeTranslation(x, y, z);
 const camera = () => {
@@ -54,8 +54,8 @@ it.each([false, true])("shares one impostor shader across crowd/single bindings 
   const template = new ImpostorMesh(await bakeImpostor(source, { frames: 4, resolution: 16 }));
   const disposed = vi.fn();
   template.material.addEventListener("dispose", disposed);
-  const left = new InstancedLod([{ object: template }], 2);
-  const right = new InstancedLod([{ object: template }], 3);
+  const left = oneChunk([{ object: template }], 2);
+  const right = oneChunk([{ object: template }], 3);
   left.setMatrixAt(0, at(-2, 1));
   left.setMatrixAt(1, at(-2, -1));
   for (let index = 0; index < 3; index++) right.setMatrixAt(index, at(2, 2 - index * 2));
@@ -130,8 +130,8 @@ it("shares shadow shader builds while each crowd and single card keeps its own m
   const source = new Mesh(new BoxGeometry(1.5, 1.5, 1.5), new MeshStandardMaterial());
   const template = new ImpostorMesh(await bakeImpostor(source, { frames: 4, resolution: 16 }));
   template.castShadow = true;
-  const left = new InstancedLod([{ object: template }], 2);
-  const right = new InstancedLod([{ object: template }], 3);
+  const left = oneChunk([{ object: template }], 2);
+  const right = oneChunk([{ object: template }], 3);
   left.setMatrixAt(0, at(-3, 0));
   left.setMatrixAt(1, at(-3, 0, 2));
   for (let index = 0; index < 3; index++) right.setMatrixAt(index, at(3, 0, 2 - index * 2));
@@ -245,8 +245,8 @@ it("keeps shared crowds' compiled main and shadow bindings valid when a deferred
     maxPixels: 100,
     box: new Box3().setFromArray(data.box),
   };
-  const a = new InstancedLod([{ object: template }, deferred], 1),
-    b = new InstancedLod([{ object: template }, deferred], 1);
+  const a = oneChunk([{ object: template }, deferred], 1),
+    b = oneChunk([{ object: template }, deferred], 1);
   a.setMatrixAt(0, new Matrix4().makeScale(3, 3, 3).setPosition(-6, 0, 2));
   b.setMatrixAt(0, new Matrix4().makeScale(3, 3, 3).setPosition(6, 0, 2));
   a.forceLevel = b.forceLevel = 0;

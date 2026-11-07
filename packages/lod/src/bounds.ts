@@ -1,4 +1,5 @@
 import { Box3, Matrix4, Sphere, Vector3, type Mesh, type Object3D } from "three/webgpu";
+import type { InstancedLod } from "./instanced/index.js";
 import { isBatchedMesh, isImpostorMesh, isInstancedLod, isInstancedMesh, isLOD, isMesh } from "./three.js";
 
 // What an object is at full detail: its meshes, where they sit and the vertices they draw.
@@ -22,7 +23,7 @@ function walk(node: Object3D, placement: Matrix4, visit: (mesh: Mesh, placement:
     const source = node.levels[0]?.object;
     if (!source) return;
     const instance = new Matrix4();
-    for (let i = 0; i < node.count; i++) walk(source, local(source).premultiply(node.getMatrixAt(i, instance)).premultiply(placement), visit);
+    for (const i of instancesOf(node)) walk(source, local(source).premultiply(node.getMatrixAt(i, instance)).premultiply(placement), visit);
     return;
   }
   if (isInstancedMesh(node) || isImpostorMesh(node)) {
@@ -102,7 +103,7 @@ function boxes(node: Object3D, placement: Matrix4, box: Box3): void {
     if (!source) return;
     const own = levelBox(source);
     const instance = new Matrix4();
-    for (let i = 0; i < node.count; i++) box.union(own.clone().applyMatrix4(node.getMatrixAt(i, instance).premultiply(placement)));
+    for (const i of instancesOf(node)) box.union(own.clone().applyMatrix4(node.getMatrixAt(i, instance).premultiply(placement)));
     return;
   }
   if (isLOD(node) && !node.levels[0]?.object) {
@@ -167,4 +168,9 @@ export function prepareBounds(root: Object3D, box: Box3): void {
     for (const child of node.children) visit(child, local(child).premultiply(placement));
   };
   visit(root, local(root));
+}
+
+/** The index of every instance of `lod`'s chunks. */
+function* instancesOf(lod: InstancedLod): Generator<number> {
+  for (const { start, count } of lod.chunks) for (let i = start; i < start + count; i++) yield i;
 }

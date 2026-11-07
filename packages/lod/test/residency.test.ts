@@ -24,6 +24,7 @@ import { Lod } from "../src/lod.js";
 import { HANDOVER_MS } from "../src/residency.js";
 import { InstancedLod } from "../src/instanced/index.js";
 import { GPU_TIMEOUT, render, renderer, nextLevel } from "./gpu.js";
+import { oneChunk } from "./crowd.js";
 
 const box = () => new Mesh(new BoxGeometry(2, 2, 2), new MeshBasicNodeMaterial());
 
@@ -36,7 +37,7 @@ async function deferredImpostor(kind: string) {
   const source = new ImpostorMesh(await bakeImpostor(new Mesh(new BoxGeometry(2, 2, 2), new MeshBasicMaterial()), { frames: 4, resolution: 16 }));
   const deferred = { load: async () => source, maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) };
   const levels = [deferred, { object: box() }];
-  const owner = kind === "Lod" ? new Lod(levels) : new InstancedLod(levels, 1);
+  const owner = kind === "Lod" ? new Lod(levels) : oneChunk(levels, 1);
   owner.forceLevel = 0;
   owner.position.z = -5;
   const freed = new Promise<void>((resolve) => source.geometry.addEventListener("dispose", () => resolve()));
@@ -148,7 +149,7 @@ it.each(["Lod", "InstancedLod"].flatMap((kind) => [false, true].map((empty) => (
     const load = vi.fn(async () => new Mesh(new BoxGeometry(), new MeshBasicNodeMaterial()));
     const deferred = { load: load, maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) };
     const levels = empty ? [deferred, { object: new Object3D() }] : [deferred];
-    const owner = kind === "Lod" ? new Lod(levels) : new InstancedLod(levels, 1);
+    const owner = kind === "Lod" ? new Lod(levels) : oneChunk(levels, 1);
     owner.forceLevel = 0;
     owner.position.set(1000, 0, -5);
     const camera = new PerspectiveCamera(60, 1, 0.1, 100);
@@ -178,7 +179,7 @@ it.each(["Lod", "InstancedLod"].flatMap((kind) => [false, true].map((empty) => (
 it.each(["Lod", "InstancedLod"])("shares a failed decode with a cloned %s without retrying", { timeout: GPU_TIMEOUT }, async (kind) => {
   const load = vi.fn<() => Promise<Object3D>>().mockRejectedValue(undefined);
   const levels = [{ load, maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) }];
-  const owner = kind === "Lod" ? new Lod(levels) : new InstancedLod(levels, 1);
+  const owner = kind === "Lod" ? new Lod(levels) : oneChunk(levels, 1);
   const clone = owner.clone();
   const camera = new PerspectiveCamera(60, 1, 0.1, 100);
   const scene = new Scene();
@@ -252,7 +253,7 @@ it.each(["Lod", "InstancedLod"].flatMap((kind) => placements.map((placement) => 
     // The box is about 40 px tall: the view selects the deferred source.
     const levels = [level, { object: box(), maxPixels: 1 }];
     const manager = new LoadingManager();
-    const owner = kind === "Lod" ? new Lod(levels, { manager }) : new InstancedLod(levels, 1, { manager });
+    const owner = kind === "Lod" ? new Lod(levels, { manager }) : oneChunk(levels, 1, { manager });
     owner.position.z = shadow ? 5 : -5;
     const camera = new PerspectiveCamera(60, 1, 0.1, 100);
     // Demand follows position, not the frustum.
@@ -426,7 +427,7 @@ it.each(["Lod", "InstancedLod"])(
   async (kind) => {
     const make = (manager: LoadingManager) => {
       const levels = [gatedBox().level, { object: box(), maxPixels: 1 }];
-      const owner = kind === "Lod" ? new Lod(levels, { manager }) : new InstancedLod(levels, 1, { manager });
+      const owner = kind === "Lod" ? new Lod(levels, { manager }) : oneChunk(levels, 1, { manager });
       owner.position.z = -5;
       return owner;
     };
@@ -437,7 +438,7 @@ it.each(["Lod", "InstancedLod"])(
     const manager = new LoadingManager();
     const { level, release } = gatedBox();
     const levels = [level, { object: box(), maxPixels: 1 }];
-    const nested = kind === "Lod" ? new Lod(levels, { manager }) : new InstancedLod(levels, 1, { manager });
+    const nested = kind === "Lod" ? new Lod(levels, { manager }) : oneChunk(levels, 1, { manager });
     nested.position.z = -5;
     const inner = new Scene().add(nested);
     new Scene().add(inner);
@@ -460,7 +461,7 @@ it.each(["Lod", "InstancedLod"])(
 it("ends an InstancedLod's item whose camera also renders another scene into a target each frame", { timeout: GPU_TIMEOUT }, async () => {
   const { level, release } = gatedBox();
   const manager = new LoadingManager();
-  const owner = new InstancedLod([level, { object: box(), maxPixels: 1 }], 1, { manager });
+  const owner = oneChunk([level, { object: box(), maxPixels: 1 }], 1, { manager });
   owner.position.z = -5;
   const camera = new PerspectiveCamera(60, 1, 0.1, 100);
   const scene = new Scene().add(owner);
@@ -501,7 +502,7 @@ it.each(["Lod", "InstancedLod"])(
   async (kind) => {
     const other = new WebGPURenderer({ antialias: false });
     await other.init();
-    const owner = kind === "Lod" ? new Lod([{ object: box() }]) : new InstancedLod([{ object: box() }], 1);
+    const owner = kind === "Lod" ? new Lod([{ object: box() }]) : oneChunk([{ object: box() }], 1);
     const scene = new Scene().add(owner);
     const camera = new PerspectiveCamera(60, 1, 0.1, 100);
     camera.position.z = 5;
