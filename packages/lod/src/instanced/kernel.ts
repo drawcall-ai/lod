@@ -27,6 +27,7 @@ import { at } from "../at.js";
 import { FADE } from "../levels.js";
 import { column, maxScale, stretch } from "../tsl.js";
 import { ARGS_BYTES, type ArgsSlice } from "./args.js";
+import { PAGE } from "./pages.js";
 import { MAX_SURVIVOR_SCALE } from "./range.js";
 
 // Sorting the instances of an InstancedLod into its levels, on the GPU, once per view.
@@ -48,7 +49,8 @@ import { MAX_SURVIVOR_SCALE } from "./range.js";
 // an instance that drew in some level and stands within the contact distance of the
 // view's eye also appends itself to the contact slots, after every level's, with the
 // strength of its contact as its fade: the contact draw is one more indirect draw, so
-// it shows exactly the instances the view draws, with no pass of its own.
+// it shows exactly the instances the view draws, with no pass of its own. Instances in pages (see pages.ts) run one
+// workgroup per page, and a place past its page's fill draws in no level.
 
 /** The fraction of the contact distance over which contacts fade out before it. */
 export const CONTACT_FADE = 0.2;
@@ -149,6 +151,8 @@ export class Kernel {
     /** Per level, its first slot, or null for a level that draws nothing; only which ones are null stays fixed. */
     private readonly first: readonly (number | null)[],
     fallback: readonly number[],
+    /** Per page of `PAGE` instances, how many of its places hold one; null for instances not in pages. */
+    private readonly fills: StorageBufferAttribute | null,
   ) {
     this.starts = first.map((start) => uniform(start ?? 0, "uint"));
     this.bounds.value.set(sphere.center.x, sphere.center.y, sphere.center.z, sphere.radius);
@@ -251,6 +255,10 @@ export class Kernel {
         shown.assign(0);
         Return();
       };
+      if (this.fills) {
+        const fills = storage(this.fills, "uint", this.fills.count).setName("lodPageFills").toReadOnly();
+        If(instanceIndex.mod(PAGE).greaterThanEqual(fills.element(instanceIndex.div(PAGE))), hide);
+      }
       If(r.equal(0), hide);
       const grow = float(1).toVar();
       If(this.ranged.equal(uint(1)), () => {
@@ -368,7 +376,7 @@ export class Kernel {
           emit(contactCount, this.contactStart, strength);
         });
       });
-    })().compute(1);
+    })().compute(1, this.fills ? [PAGE] : undefined);
   }
 
   private argumentsPass(): ComputeNode {

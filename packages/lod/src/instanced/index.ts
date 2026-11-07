@@ -1,4 +1,4 @@
-import { type Color, Frustum, Matrix4, type Object3D, Sphere, Vector3, type Camera, type Intersection, type Raycaster } from "three/webgpu";
+import { Box3, type Color, Frustum, Matrix4, type Object3D, Sphere, Vector3, type Camera, type Intersection, type Raycaster, type Renderer } from "three/webgpu";
 import { at } from "../at.js";
 import { disposeCopies } from "../dispose.js";
 import { Level, cloneLevels, estimate, fadeProgress, levelAt, tintLevels, validate, type LodLevel } from "../levels.js";
@@ -18,14 +18,26 @@ import type { RangeAim } from "./kernel.js";
 import { checkRange, keptFraction, survivorScale, type InstancedRange } from "./range.js";
 import { Selection, sight, type Aim } from "./select.js";
 import { Store, type ChunkData, type InstancedChunk } from "./store.js";
+import { Pages, type GpuChunk, type GpuChunkData, type GpuChunks } from "./pages.js";
+
+/** How an InstancedLod is made. */
+export interface InstancedLodOptions extends LodOptions {
+  /**
+   * Take chunks from the app's GPU passes (see `addGpuChunk`) instead of the CPU. Its instances then live only on the
+   * GPU: they have no index, so `setMatrixAt`, `levelOf`, raycasting and `copy` do not apply to them.
+   */
+  gpuChunks?: GpuChunks;
+}
 
 const view = new View();
+const empty = new Box3();
 const inverse = new Matrix4();
 const origin = new Vector3();
 
 /**
  * Independently selected copies of one object, batched into indirect draws per view. Copies
- * arrive and leave in chunks (see `addChunk`); a `range` thins them out with distance.
+ * arrive and leave in chunks (see `addChunk`, or `addGpuChunk` for copies the app's GPU passes
+ * produce); a `range` thins them out with distance.
  * Thresholds, fades and global settings follow Lod. Each view draws only the instances in
  * its frustum, and each shadow map is a view of its own: it draws the casters in its
  * frustum, each at the level its texels resolve, as an orthographic view would (an
@@ -54,6 +66,8 @@ export class InstancedLod extends Owner {
   private selection: Selection | null = null;
   private meshes: Meshes | null = null;
   private readonly store: Store;
+  /** The page pool, while GPU chunks feed it. */
+  private readonly pages: Pages | null;
   private readonly extent = new Extent();
   /** Around every instance; each level may use tighter bounds. */
   readonly bounds = new Sphere();
@@ -72,22 +86,28 @@ export class InstancedLod extends Owner {
   private readonly shadowView: Aim = { eye: new Vector3(), scale: 0, ortho: true, fades: false, forced: null, frustum: new Frustum() };
 
   /** `levels[0]` is the source. Empty only as the target of `copy`. It holds no instances until chunks are added. */
-  constructor(levels: readonly LodLevel[] = [], options: LodOptions = {}) {
+  constructor(levels: readonly LodLevel[] = [], options: InstancedLodOptions = {}) {
     super("InstancedLod", options);
     this.store = new Store();
+    this.pages = options.gpuChunks ? new Pages(options.gpuChunks) : null;
     this.probes = new Probes(this.store, this.extent.rest);
     this.draws = levels.length > 0 ? this.build(levels) : 0;
     this.blocks = this.makeBlocks();
   }
 
-  /** Instances in its chunks. */
+  /** Instances in its chunks from the CPU. */
   get count(): number {
     return this.store.count;
   }
 
-  /** Its chunks, in the order they were added. */
+  /** Its chunks from the CPU, in the order they were added. */
   get chunks(): ReadonlySet<InstancedChunk> {
     return this.store.chunks;
+  }
+
+  /** Its chunks from the GPU, in the order they were added. */
+  get gpuChunks(): ReadonlySet<GpuChunk> {
+    return this.pages?.chunks ?? new Set();
   }
 
   /**
@@ -95,6 +115,7 @@ export class InstancedLod extends Owner {
    * chunk is removed. Adding and removing chunks costs about what they hold, a few per frame included.
    */
   addChunk(data: ChunkData): InstancedChunk {
+    if (this.pages) throw new Error("InstancedLod: one made with gpuChunks takes chunks from the GPU only (see addGpuChunk)");
     const { capacity, colors } = this.store;
     const chunk = this.store.add(data);
     this.fit(capacity, colors);
@@ -108,6 +129,46 @@ export class InstancedLod extends Owner {
     this.fit(capacity, colors);
   }
 
+  /**
+   * Add the instances of the records an app's GPU pass wrote for `data` as one chunk, in an InstancedLod made with
+   * `gpuChunks`. Its records and count are read on the GPU before the next draw, and nothing is read back: they must
+   * hold until it is removed, or until `drained` says every chunk got its instances. A chunk the pool has no pages
+   * for draws the instances it got, and gets the rest once chunks are removed.
+   */
+  addGpuChunk(data: GpuChunkData): GpuChunk {
+    const pages = this.gpuPages();
+    const chunk = pages.add(data);
+    this.blocks.place(chunk.slot, chunk.box, pages.scales);
+    this.blocks.refit();
+    this.selection?.changed();
+    return chunk;
+  }
+
+  /** Remove `chunk`'s instances; its pages return to the pool before the next draw. */
+  removeGpuChunk(chunk: GpuChunk): void {
+    const pages = this.gpuPages();
+    pages.remove(chunk);
+    this.blocks.place(chunk.slot, empty, pages.scales);
+    this.blocks.refit();
+    this.selection?.changed();
+  }
+
+  /**
+   * Whether every GPU chunk has all its instances on `renderer`, taking in the chunks' changes first, as the next draw
+   * would. It reads the GPU's progress back, so call it only to wait for it, say before a capture; a chunk short of
+   * pages waits until others are removed. Always true without GPU chunks.
+   */
+  async drained(renderer: Renderer): Promise<boolean> {
+    if (!this.pages) return true;
+    this.selection?.prepare(renderer);
+    return this.pages.drained(renderer);
+  }
+
+  private gpuPages(): Pages {
+    if (!this.pages) throw new Error("InstancedLod: GPU chunks need an InstancedLod made with gpuChunks");
+    return this.pages;
+  }
+
   /** Follow the store to a new capacity, or to colours it has begun to carry. */
   private fit(capacity: number, colors: Float32Array | null): void {
     const { store } = this;
@@ -119,8 +180,18 @@ export class InstancedLod extends Owner {
   }
 
   private makeBlocks(): Blocks {
-    const { store } = this;
-    const survivors = this.ranged?.survivors ? store.keeps : null;
+    const { store, pages } = this;
+    const scaling = this.ranged?.survivors ?? false;
+    if (pages) {
+      // A leaf per chunk slot; a chunk's survivors may draw as large as any.
+      const slots = pages.slotCount;
+      const blocks = new Blocks(slots, new Float32Array(slots * 4), this.extent.source, this.bounds, this.draws, this.extent.rest, scaling ? new Float32Array(slots) : null, 1);
+      blocks.pad(this.padding);
+      for (const chunk of pages.chunks) blocks.place(chunk.slot, chunk.box, pages.scales);
+      blocks.refit();
+      return blocks;
+    }
+    const survivors = scaling ? store.keeps : null;
     const blocks = new Blocks(store.capacity, store.spheres, this.extent.source, this.bounds, this.draws, this.extent.rest, survivors);
     blocks.pad(this.padding);
     return blocks;
@@ -135,17 +206,20 @@ export class InstancedLod extends Owner {
     const templates = this.entries.map(({ object }, i) => (object ? parts(object, i) : []));
     this.probes.add(templates[0] ?? []);
     const draws = templates.flatMap((parts) => parts.map((part) => part.draw));
+    const { pages } = this;
     const selection = new Selection(
-      this.store,
+      pages ?? this.store,
       extent.source,
       templates.map((parts, i) => parts.length > 0 || at(inputs, i).box?.isEmpty() === false),
       draws,
       this.residency.fallback,
+      pages,
     );
     selection.reach.value = extent.rest.radius;
-    selection.end = this.store.end;
+    selection.end = pages ? pages.capacity : this.store.end;
     this.selection = selection;
     this.store.attach(selection);
+    if (pages) selection.useColors(pages.colors);
     const meshes = new Meshes(selection, extent.reaches, extent.drawRadius, {
       live: () => !this.disposed,
       drawn: (camera, mesh) => this.residency.drawn(camera, mesh),
@@ -325,6 +399,7 @@ export class InstancedLod extends Owner {
    */
   override copy(source: InstancedLod): this {
     if (this.entries.length > 0 || this.store.chunks.size > 0) throw new Error("InstancedLod.copy: copy into an InstancedLod without levels or chunks");
+    if (this.pages || source.pages) throw new Error("InstancedLod.copy: an InstancedLod made with gpuChunks cannot be copied");
     super.copy(source, false);
     this.store.copy(source.store);
     this.range = source.range && { ...source.range };
@@ -344,6 +419,7 @@ export class InstancedLod extends Owner {
   protected release(): void {
     this.meshes?.dispose();
     this.selection?.dispose();
+    this.pages?.dispose();
     this.store.attach(null);
     for (const { object } of this.entries) if (object) disposeCopies(object);
   }

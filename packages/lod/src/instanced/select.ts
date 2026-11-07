@@ -7,12 +7,14 @@ import {
   Vector3,
   Vector4,
   type ComputeNode,
+  type Renderer,
   type Sphere,
 } from "three/webgpu";
 import { at } from "../at.js";
 import { ARGS_BYTES, args, type ArgsSlice } from "./args.js";
 import { CONTACT_INDICES } from "./contact.js";
 import { Kernel, type IndirectDraw, type RangeAim, type Target } from "./kernel.js";
+import type { Pages } from "./pages.js";
 import type { Store } from "./store.js";
 import type { BlockView } from "./blocks.js";
 import type { View } from "../view.js";
@@ -93,9 +95,11 @@ export class Selection {
     private readonly drawing: readonly boolean[],
     private draws: readonly IndirectDraw[],
     fallback: readonly number[],
+    /** The pool the instances live in when GPU chunks feed them, or null. */
+    private readonly pages: Pages | null = null,
   ) {
     this.buffers = buffers(instances, drawing, false);
-    this.kernel = new Kernel(sphere, this.buffers.first, fallback);
+    this.kernel = new Kernel(sphere, this.buffers.first, fallback, pages?.fills ?? null);
     this.progress = this.kernel.progress;
     this.reach = this.kernel.reach;
     this.bind();
@@ -320,6 +324,11 @@ export class Selection {
   /** The instances, their range, routes or handover changed since the last selection of every view. */
   changed(): void {
     for (const view of this.views.values()) view.revision++;
+  }
+
+  /** Bring the instances up to date on `renderer` before any view takes its passes: GPU chunks' changes run first. */
+  prepare(renderer: Renderer): void {
+    this.pages?.run(renderer, this);
   }
 
   /** The passes the renderer has to run for `camera`'s slots to be current in its buffers, or none. */

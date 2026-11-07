@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { playwright } from "@vitest/browser-playwright";
 import { defineConfig } from "vitest/config";
 import { vitecache } from "vitecache/vite";
+import typegpu from "unplugin-typegpu/vite";
 
 const publicDir = mkdtempSync(join(tmpdir(), "lod-test-"));
 
@@ -13,7 +14,9 @@ const publicDir = mkdtempSync(join(tmpdir(), "lod-test-"));
 // when a second adapter is requested after drawing to a canvas.
 export default defineConfig({
   publicDir,
+  // Tests write their own GPU code as TypeGPU functions, as an app does.
   plugins: [
+    typegpu(),
     vitecache({ basePath: join(publicDir, "_vitecache") }),
     {
       name: "test-files",

@@ -44,11 +44,15 @@
   },
   "peerDependencies": {
     "@drawcall/glts": "^4.1.0",
-    "three": ">=0.186.0"
+    "@typegpu/three": "^0.12.2",
+    "three": ">=0.186.0",
+    "typegpu": "^0.12.9"
   },
   "devDependencies": {
     "@drawcall/glts": "^4.1.0",
     "@drawcall/lod": "link:",
+    "@typegpu/gl": "^0.12.9",
+    "@typegpu/three": "^0.12.2",
     "@types/node": "^24.13.6",
     "@types/three": "^0.186.0",
     "@vitest/browser-playwright": "4.1.11",
@@ -56,7 +60,9 @@
     "ktx2-encoder": "0.6.0",
     "playwright": "1.63.0",
     "three": "^0.186.1",
+    "typegpu": "0.12.9",
     "typescript": "^5.9.3",
+    "unplugin-typegpu": "^0.12.8",
     "vitest": "^4.0.17",
     "xatlas-wasm": "0.1.3"
   },

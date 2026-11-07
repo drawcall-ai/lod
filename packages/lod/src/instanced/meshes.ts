@@ -254,6 +254,7 @@ function runDue(renderer: unknown, camera: Camera, selection: Selection): void {
   // Each level's draws start at its slots (see select.ts).
   if (!gpu.hasFeature("indirect-first-instance")) throw new Error("InstancedLod: needs the GPU feature indirect-first-instance, which this device lacks");
   passes.length = 0;
+  for (const each of due) each.prepare(gpu);
   for (const each of due) passes.push(...each.take(camera));
   due.clear();
   if (passes.length > 0) gpu.compute(passes);
