@@ -184,7 +184,7 @@ export class Store {
     const { selection } = this;
     const changed = !this.changes.empty;
     this.changes.drain((start, end) => {
-      blocks.measure(start, end);
+      blocks.measure(this.matrices, start, end);
       if (!selection) return;
       upload(selection.matrices, start, end);
       upload(selection.keeps, start, end);

@@ -121,7 +121,7 @@ export class InstancedLod extends Owner {
   private makeBlocks(): Blocks {
     const { store } = this;
     const survivors = this.ranged?.survivors ? store.keeps : null;
-    const blocks = new Blocks(store.matrices, store.spheres, this.extent.source, this.bounds, this.draws, this.extent.rest, survivors);
+    const blocks = new Blocks(store.capacity, store.spheres, this.extent.source, this.bounds, this.draws, this.extent.rest, survivors);
     blocks.pad(this.padding);
     return blocks;
   }
@@ -290,7 +290,7 @@ export class InstancedLod extends Owner {
     if ((this.ranged?.survivors ?? false) === survived) return;
     // Survivors draw larger than the blocks bounded them, or no longer do.
     this.blocks = this.makeBlocks();
-    this.blocks.measure(0, this.store.end);
+    this.blocks.measure(this.store.matrices, 0, this.store.end);
     this.blocks.refit();
     meshes.rebind();
   }

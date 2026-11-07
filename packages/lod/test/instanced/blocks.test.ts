@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Matrix4, Sphere, Vector3 } from "three/webgpu";
+import { Box3, Matrix4, Sphere, Vector3 } from "three/webgpu";
 import { Blocks } from "../../src/instanced/blocks.js";
 import type { BlockView } from "../../src/instanced/blocks.js";
 
@@ -9,12 +9,12 @@ function setup(count: number) {
   const matrices = new Float32Array(count * 16);
   const spheres = new Float32Array(count * 4);
   const source = new Sphere(new Vector3(), 1);
-  const blocks = new Blocks(matrices, spheres, source, new Sphere(), 0, source);
+  const blocks = new Blocks(count, spheres, source, new Sphere(), 0, source);
   const reaches = levels.map(() => new Sphere());
   const view: BlockView = { eye: new Vector3(), scale: 100, ortho: false, fades: true, forced: null };
   const set = (index: number, matrix: Matrix4) => matrix.toArray(matrices, index * 16);
   const refit = (start = 0, end = count) => {
-    blocks.measure(start, end);
+    blocks.measure(matrices, start, end);
     blocks.refit();
   };
   const select = () => blocks.select(levels, view, reaches, true, identity);
@@ -32,6 +32,24 @@ describe("instance blocks", () => {
     s.refit(0, 64);
     s.select();
     expect(s.reaches.map((sphere) => !sphere.isEmpty())).toEqual([false, false, true]);
+  });
+
+  it("bounds the levels of a box of origins by its nearest and farthest point and its scale range", () => {
+    const s = setup(4);
+    const drawn = () => s.reaches.map((sphere) => !sphere.isEmpty());
+    // 66 to 100 pixels tall at scale 1: the source only; down to 0.67 pixels at scale 0.01: every level.
+    const near = new Box3(new Vector3(-1, 0, -3), new Vector3(1, 0, -2));
+    s.blocks.place(2, near, [1, 1]);
+    s.blocks.refit();
+    s.select();
+    expect(drawn()).toEqual([true, false, false]);
+    s.blocks.place(2, near, [0.01, 1]);
+    s.blocks.refit();
+    s.select();
+    expect(drawn()).toEqual([true, true, true]);
+    s.blocks.place(2, new Box3(), [1, 1]);
+    s.blocks.refit();
+    expect(s.select()).toEqual([]);
   });
 
   it("bounds an orthographic view's levels by its scale wherever it looks from, and follows changed instances", () => {

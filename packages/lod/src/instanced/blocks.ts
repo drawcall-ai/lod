@@ -10,6 +10,7 @@ import { survivorScale } from "./range.js";
 const ROUND = 1e-5;
 const matrix = new Matrix4();
 const point = new Vector3();
+const half = new Vector3();
 const extent = new Vector3();
 
 interface Branch {
@@ -42,13 +43,21 @@ export interface BlockView {
   forced: number | null;
 }
 
-/** Cached spatial blocks: instance edits refit leaves; moving views visit only blocks. */
+/**
+ * Cached spatial blocks of items: instance edits refit leaves; moving views visit only blocks. An item is an instance,
+ * measured from its matrix, or a box of instance origins whose scales lie in a range (see `place`).
+ */
 export class Blocks {
   private readonly block: number;
   private readonly leaves: number;
   private readonly tree: Branch[];
   private readonly dirty: Dirty;
+  /** Per item, how far every level and its sway reach from an origin. */
   private readonly radii: Float64Array;
+  /** Per item, the largest bounding radius of its instances; `spheres` holds the smallest. */
+  private readonly largest: Float64Array;
+  /** Per item, half the size of its box of origins along each axis: 0 for an instance. */
+  private readonly halves: Float64Array;
   private readonly roundoff: Float64Array;
   private readonly unsafe: Uint8Array;
   private readonly levelBoxes: Box3[] = [];
@@ -59,7 +68,8 @@ export class Blocks {
   private padding = 0;
 
   constructor(
-    private readonly matrices: Float32Array,
+    count: number,
+    /** Per item, the centre of its origins and its smallest bounding radius, as `measure` and `place` leave them. */
     private readonly spheres: Float32Array,
     private readonly source: Sphere,
     /** Set to enclose every instance on refit. */
@@ -67,13 +77,14 @@ export class Blocks {
     draws: number,
     /** Radius enclosing every placed level about source.center. */
     private readonly rest: { readonly radius: number },
-    /** The instances' keep ratios when survivors scale (see `InstancedRange`): each may draw that much larger. */
+    /** The items' keep ratios when survivors scale (see `InstancedRange`): each may draw that much larger. */
     private readonly survivors: Float32Array | null = null,
+    /** Items per leaf; by default one in small, multipart crowds, else 64. */
+    block?: number,
   ) {
-    const count = matrices.length / 16;
     // Fine leaves avoid many empty draws in small, multipart crowds. Large crowds
     // retain bounded block traversal rather than inspecting every instance per view.
-    this.block = count <= 4096 && draws >= 8 ? 1 : 64;
+    this.block = block ?? (count <= 4096 && draws >= 8 ? 1 : 64);
     this.leaves = 2 ** Math.ceil(Math.log2(Math.max(1, Math.ceil(count / this.block))));
     this.tree = Array.from({ length: this.leaves * 2 }, () => ({
       geometry: new Box3(),
@@ -86,21 +97,25 @@ export class Blocks {
     }));
     this.dirty = new Dirty(Math.ceil(count / this.block));
     this.radii = new Float64Array(count);
+    this.largest = new Float64Array(count);
+    this.halves = new Float64Array(count * 3);
     this.roundoff = new Float64Array(count);
     this.unsafe = new Uint8Array(count);
   }
 
-  /** Measure changed matrices, retaining the GPU's max-axis radius for LOD selection. */
-  measure(start: number, end: number): void {
+  /** Measure the instances from `start` to `end` from their `matrices`, retaining the GPU's max-axis radius for LOD selection. */
+  measure(matrices: Float32Array, start: number, end: number): void {
     const { center, radius } = this.source;
     for (let i = start; i < end; i++) {
-      matrix.fromArray(this.matrices, i * 16);
+      matrix.fromArray(matrices, i * 16);
       point
         .copy(center)
         .applyMatrix4(matrix)
         .toArray(this.spheres, i * 4);
       const axis = matrix.getMaxScaleOnAxis();
       this.spheres[i * 4 + 3] = radius * axis;
+      this.largest[i] = radius * axis;
+      this.halves.fill(0, i * 3, i * 3 + 3);
       this.radii[i] = this.rest.radius * stretch(matrix);
       const e = matrix.elements;
       // Absolute terms also cover cancellation in the shader's transformed center.
@@ -117,6 +132,29 @@ export class Blocks {
       this.unsafe[i] = Number(unsafe(axis) || unsafe(radius) || terms > 1e15 || !Number.isFinite(terms));
       this.dirty.add(Math.floor(i / this.block));
     }
+  }
+
+  /**
+   * Item `index` holds instances whose origins lie in `box` and whose matrices scale by at most `scales[1]` along any
+   * axis and at least `scales[0]` along their longest one; an empty box holds none.
+   */
+  place(index: number, box: Box3, scales: readonly [number, number]): void {
+    this.dirty.add(Math.floor(index / this.block));
+    if (box.isEmpty()) {
+      this.spheres[index * 4 + 3] = 0;
+      this.unsafe[index] = 0;
+      return;
+    }
+    const { radius } = this.source;
+    box.getCenter(point).toArray(this.spheres, index * 4);
+    box.getSize(extent).multiplyScalar(0.5).toArray(this.halves, index * 3);
+    this.spheres[index * 4 + 3] = radius * scales[0];
+    this.largest[index] = radius * scales[1];
+    this.radii[index] = this.rest.radius * scales[1];
+    const { min, max } = box;
+    const terms = Math.max(...min.toArray().map(Math.abs), ...max.toArray().map(Math.abs), radius * scales[1], this.rest.radius * scales[1]);
+    this.roundoff[index] = ROUND * Math.sqrt(3) * terms;
+    this.unsafe[index] = Number(unsafe(scales[0]) || unsafe(scales[1]) || terms > 1e15 || !Number.isFinite(terms));
   }
 
   pad(padding: number): void {
@@ -161,10 +199,11 @@ export class Blocks {
       const grow = this.survivors ? survivorScale(at(this.survivors, i)) : 1;
       const reach = at(this.radii, i) * grow * (1 + this.padding) + roundoff;
       point.fromArray(this.spheres, i * 4);
-      expand(node.centers, point, roundoff);
-      expand(node.geometry, point, reach);
+      half.fromArray(this.halves, i * 3);
+      expand(node.centers, point, half, roundoff);
+      expand(node.geometry, point, half, reach);
       node.smallest = Math.min(node.smallest, radius);
-      node.largest = Math.max(node.largest, radius * grow);
+      node.largest = Math.max(node.largest, at(this.largest, i) * grow);
       node.reach = Math.max(node.reach, reach);
     }
     enclosing(node.centers, node.sphere);
@@ -290,9 +329,10 @@ export class Blocks {
   }
 }
 
-function expand(box: Box3, center: Vector3, radius: number): void {
-  box.expandByPoint(extent.copy(center).addScalar(-radius));
-  box.expandByPoint(extent.copy(center).addScalar(radius));
+/** Grow `box` by the box `half` around `center`, padded by `radius`. */
+function expand(box: Box3, center: Vector3, half: Vector3, radius: number): void {
+  box.expandByPoint(extent.copy(center).sub(half).addScalar(-radius));
+  box.expandByPoint(extent.copy(center).add(half).addScalar(radius));
 }
 
 // These broad limits stay well inside float32's squared-length and product range.
