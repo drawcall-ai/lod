@@ -37,8 +37,8 @@ import { MAX_SURVIVOR_SCALE } from "./range.js";
 // finer level fading out with it (see fade.ts), and appends itself to each level it draws:
 // its index and signed fade go to that level's next free slot. A shadow map is a view of
 // its own, measured in its texels: each one draws only its casters, each at the level its
-// texels resolve. Every level has `count` slots of one buffer, from its `first`; its draws
-// start there (their first instance), so all levels share one pass, within WebGPU's
+// texels resolve. Every level has a slot per place for an instance, from its `first`; its
+// draws start there (their first instance), so all levels share one pass, within WebGPU's
 // default limit of 8 storage buffers per stage. A second pass hands each level's count to
 // the indirect draws of its meshes and clears the counts for the next view. Instances at
 // scale 0, free places among them included, draw in no level. With a range, an instance
