@@ -28,12 +28,11 @@ export async function trees(plan: Plan, wind?: Wind): Promise<THREE.Group> {
         }),
       );
       const crowds = spread(species.id, models, spots, foliageTint);
-      for (const crowd of crowds) {
-        const box = sourceBox(crowd.levels);
-        // A soft shadow under the crown where the trunk meets the ground.
-        crowd.contact = { radius: Math.max(box.max.x - box.min.x, box.max.z - box.min.z) * 0.4, strength: 0.55, distance: 80 };
-        if (wind) wind.apply(crowd, { amplitude: (box.max.y - box.min.y) * 0.025 });
-      }
+      if (wind)
+        for (const crowd of crowds) {
+          const box = sourceBox(crowd.levels);
+          wind.apply(crowd, { amplitude: (box.max.y - box.min.y) * 0.025 });
+        }
       return crowds;
     }),
   );

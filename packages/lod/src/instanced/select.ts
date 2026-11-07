@@ -12,7 +12,6 @@ import {
 } from "three/webgpu";
 import { at } from "../at.js";
 import { ARGS_BYTES, args, type ArgsSlice } from "./args.js";
-import { CONTACT_INDICES } from "./contact.js";
 import { Kernel, type IndirectDraw, type RangeAim, type Target } from "./kernel.js";
 import type { Pages } from "./pages.js";
 import type { Store } from "./store.js";
@@ -81,8 +80,6 @@ export class Selection {
   private scaled: StorageInstancedBufferAttribute | null = null;
   private readonly ranged: RangeAim = { eye: new Vector3(), radius: 0, ramp: 0, survivors: false };
   private hasRange = false;
-  /** The contact distance in the crowd's space, or null without contacts. */
-  private contactDistance: number | null = null;
   /** Whether a selection was taken from these buffers, and one with colours. */
   private started = false;
   private coloured = false;
@@ -98,17 +95,12 @@ export class Selection {
     /** The pool the instances live in when GPU chunks feed them, or null. */
     private readonly pages: Pages | null = null,
   ) {
-    this.buffers = buffers(instances, drawing, false);
+    this.buffers = buffers(instances, drawing);
     this.kernel = new Kernel(sphere, this.buffers.first, fallback, pages?.fills ?? null);
     this.progress = this.kernel.progress;
     this.reach = this.kernel.reach;
     this.bind();
-    this.kernel.writeDraws([...draws, this.contactDraw()]);
-  }
-
-  /** The draw of the contacts, which draws none while there are no contacts. */
-  private contactDraw(): IndirectDraw {
-    return { level: this.drawing.length, count: CONTACT_INDICES, start: 0, indexed: true };
+    this.kernel.writeDraws(draws);
   }
 
   /** The instances' matrices, as the CPU writes them. */
@@ -126,11 +118,6 @@ export class Selection {
     return this.buffers.capacity;
   }
 
-  /** The byte offset, in each view's draws, of the contact draw: after every level's. */
-  get contactOffset(): number {
-    return this.draws.length * ARGS_BYTES;
-  }
-
   /** The matrices level draws read: the scaled ones while survivors scale. */
   get drawn(): StorageInstancedBufferAttribute {
     return this.scaled ?? this.matrices;
@@ -141,7 +128,7 @@ export class Selection {
     const old = [this.matrices, this.keeps, this.colors, this.scaled];
     const survivors = this.scaled !== null;
     this.colors = null;
-    this.buffers = buffers(instances, this.drawing, this.contactDistance !== null);
+    this.buffers = buffers(instances, this.drawing);
     if (instances.colors) this.useColors(instances.colors);
     this.scaled = survivors ? scaledMatrices(this.capacity) : null;
     this.bind();
@@ -150,27 +137,9 @@ export class Selection {
       view.args.dispose();
       Object.assign(view, this.slots());
     }
-    this.changed();
     this.started = this.coloured = false;
-    for (const attribute of old) attribute?.dispose();
-  }
-
-  /** Give every view contacts within `distance`, in the crowd's space, of its eye from now on, or none. */
-  contact(distance: number | null): void {
-    if (distance === this.contactDistance) return;
-    const toggled = (distance === null) !== (this.contactDistance === null);
-    this.contactDistance = distance;
-    if (toggled) {
-      Object.assign(this.buffers, layout(this.capacity, this.drawing, distance !== null));
-      // Only the slots change size: each view keeps its draws and what its instances showed.
-      for (const view of this.views.values()) {
-        view.indices.dispose();
-        view.fades.dispose();
-        Object.assign(view, this.slotBuffers());
-      }
-    }
-    this.bind();
     this.changed();
+    for (const attribute of old) attribute?.dispose();
   }
 
   /** Select with `range`, in the crowd's space, in every view from now on, or with none. */
@@ -196,35 +165,24 @@ export class Selection {
   }
 
   private bind(): void {
-    const { first, contactFirst } = this.buffers;
-    this.kernel.bind(this.matrices, this.keeps, this.scaled ?? unscaled, first);
-    const distance = this.contactDistance;
-    this.kernel.contact(distance === null || contactFirst === null ? null : { distance, first: contactFirst });
+    this.kernel.bind(this.matrices, this.keeps, this.scaled ?? unscaled, this.buffers.first);
   }
 
   /** A view's slots and draws for the current capacity. */
   private slots(): Pick<Selected, "indices" | "fades" | "shown" | "args"> {
     return {
-      ...this.slotBuffers(),
+      indices: new StorageBufferAttribute(new Uint32Array(this.buffers.slotCount), 1),
+      fades: new StorageBufferAttribute(new Float32Array(this.buffers.slotCount), 1),
       shown: new StorageBufferAttribute(new Uint32Array(Math.max(this.capacity, 1)), 1),
       args: this.allocate(this.draws),
     };
   }
 
-  /** A view's slots for the current layout. */
-  private slotBuffers(): Pick<Selected, "indices" | "fades"> {
-    return {
-      indices: new StorageBufferAttribute(new Uint32Array(this.buffers.slotCount), 1),
-      fades: new StorageBufferAttribute(new Float32Array(this.buffers.slotCount), 1),
-    };
-  }
-
   private allocate(draws: readonly IndirectDraw[]): ArgsSlice {
-    const all = [...draws, this.contactDraw()];
-    const values = new Uint32Array((all.length * ARGS_BYTES) / 4);
-    all.forEach((draw, k) => {
+    const values = new Uint32Array((draws.length * ARGS_BYTES) / 4);
+    draws.forEach((draw, k) => {
       const base = (k * ARGS_BYTES) / 4;
-      const first = draw.level === this.drawing.length ? (this.buffers.contactFirst ?? 0) : at(this.buffers.first, draw.level);
+      const first = at(this.buffers.first, draw.level);
       if (first === null) throw new Error("InstancedLod: a draw of a level that draws nothing");
       // indexed: count, instances, first index, base vertex, first instance;
       // else: count, instances, first vertex, first instance.
@@ -277,7 +235,7 @@ export class Selection {
       view.args = this.allocate(this.draws);
       previous.dispose();
     }
-    this.kernel.writeDraws([...this.draws, this.contactDraw()]);
+    this.kernel.writeDraws(this.draws);
     this.changed();
     return offset;
   }
@@ -363,37 +321,27 @@ export class Selection {
   }
 }
 
-/** Where each level's slots start in a view's slots, and the contacts' after them. */
-interface Layout {
-  /** Per level, its first slot, or null for a level that draws nothing. */
-  first: Array<number | null>;
-  /** The contacts' first slot, or null without contacts. */
-  contactFirst: number | null;
-  slotCount: number;
-}
-
-/** What a selection holds per place for instances, and its slots' layout. */
-interface Buffers extends Layout {
+/** What a selection holds per place for instances, and where each level's slots start. */
+interface Buffers {
   capacity: number;
   matrices: StorageInstancedBufferAttribute;
   keeps: StorageBufferAttribute;
+  /** Per level, its first slot, or null for a level that draws nothing. */
+  first: Array<number | null>;
+  slotCount: number;
 }
 
-/** Slots for `capacity` instances in every level that is `drawing`, and for their contacts if they have them. */
-function layout(capacity: number, drawing: readonly boolean[], contacts: boolean): Layout {
+/** Buffers for `instances`, with slots for every level that is `drawing`. */
+function buffers(instances: Instances, drawing: readonly boolean[]): Buffers {
+  const { capacity } = instances;
   let next = 0;
   const first = drawing.map((draws) => (draws ? next++ * capacity : null));
-  const contactFirst = contacts ? next++ * capacity : null;
-  return { first, contactFirst, slotCount: Math.max(next * capacity, 1) };
-}
-
-/** Buffers for `instances`, laid out as `layout` says. */
-function buffers(instances: Instances, drawing: readonly boolean[], contacts: boolean): Buffers {
   return {
-    capacity: instances.capacity,
+    capacity,
     matrices: new StorageInstancedBufferAttribute(padded(instances.matrices, 16), 16),
     keeps: new StorageBufferAttribute(padded(instances.keeps, 1), 1),
-    ...layout(instances.capacity, drawing, contacts),
+    first,
+    slotCount: Math.max(next * capacity, 1),
   };
 }
 

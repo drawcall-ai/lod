@@ -10,8 +10,6 @@ export { InstancedLod, type InstancedLodOptions } from "./instanced/index.js";
 export { GpuInstance, PAGE, type GpuChunk, type GpuChunkData, type GpuChunks } from "./instanced/pages.js";
 export { type ChunkData, type InstancedChunk } from "./instanced/store.js";
 export { type InstancedRange, keptFraction, MAX_SURVIVOR_SCALE } from "./instanced/range.js";
-export { type InstancedContact } from "./instanced/contact.js";
-export { CONTACT_FADE } from "./instanced/kernel.js";
 export { type LevelView, type LodLevel } from "./levels.js";
 export { type SimplifyOptions, simplify } from "./simplify.js";
 export { type BakeMeshOptions, bakeMesh } from "./baked/index.js";

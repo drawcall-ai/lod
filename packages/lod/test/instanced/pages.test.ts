@@ -4,12 +4,10 @@ import { Box3, BoxGeometry, Color, Matrix4, Mesh, MeshBasicMaterial, Perspective
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { drawOf } from "../../src/fade.js";
 import { ARGS_BYTES } from "../../src/instanced/args.js";
-import { ContactMesh } from "../../src/instanced/contact.js";
 import { InstancedLod } from "../../src/instanced/index.js";
 import { Instances } from "../../src/instanced/meshes.js";
 import { GpuInstance, PAGE, type GpuChunks } from "../../src/instanced/pages.js";
 import { GPU_TIMEOUT, render, renderer } from "../gpu.js";
-import { must } from "../must.js";
 
 // The app's side, as a test: a GPU pass that writes records and their count, and the instance function.
 
@@ -94,12 +92,10 @@ function crowd(gpuChunks?: Partial<GpuChunks>): InstancedLod {
   return lod;
 }
 
-/** Per draw (each level's, then the contacts'), what `camera`'s slots hold: each instance's place, scale, colour and fade. */
+/** Per level's draw, what `camera`'s slots hold: each instance's place, scale, colour and fade. */
 async function drawn(lod: InstancedLod, camera: Camera): Promise<string[][]> {
   const levels = lod.children.filter((child) => child instanceof Instances);
-  const contacts = lod.children.find((child) => child instanceof ContactMesh);
   const draws = levels.map((mesh, i) => ({ mesh, offset: i * ARGS_BYTES }));
-  if (contacts) draws.push({ mesh: must(levels[0]), offset: contacts.selection.contactOffset });
   return Promise.all(
     draws.map(async ({ mesh, offset }) => {
       const draw = drawOf(mesh);
@@ -141,12 +137,11 @@ async function frames(lod: InstancedLod, view = camera): Promise<void> {
 afterEach(() => vi.restoreAllMocks());
 
 describe("GPU chunks", { timeout: GPU_TIMEOUT }, () => {
-  it("draw, thin, select and ring the same instances as the same records given from the CPU", async () => {
+  it("draw, thin and select the same instances as the same records given from the CPU", async () => {
     const cpu = crowd();
     const gpu = crowd({});
     for (const lod of [cpu, gpu]) {
       lod.range = { camera, radius: 160, ramp: 120 };
-      lod.contact = { radius: 1, strength: 1, distance: 30 };
     }
     // Two chunks, the first over several pages.
     const parts = [
@@ -162,8 +157,8 @@ describe("GPU chunks", { timeout: GPU_TIMEOUT }, () => {
       await frames(cpu);
       await frames(gpu);
       const expected = await drawn(cpu, camera);
-      // Both levels, thinned, and contacts near the camera.
-      expect(expected.map((slots) => slots.length > 0)).toEqual([true, true, true]);
+      // Both levels, thinned.
+      expect(expected.map((slots) => slots.length > 0)).toEqual([true, true]);
       expect(expected[0]?.length).toBeLessThan(1000);
       expect(await drawn(gpu, camera)).toEqual(expected);
       expect(await gpu.drained(renderer)).toBe(true);

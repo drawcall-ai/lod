@@ -45,15 +45,8 @@ import { MAX_SURVIVOR_SCALE } from "./range.js";
 // scale 0, free places among them included, draw in no level. With a range, an instance
 // draws only if its keep ratio is below the fraction kept at its distance from the range's
 // camera, the same in every view; survivors that scale write their scaled matrix, which
-// the level draws read instead, and are measured and culled at that size. With contacts,
-// an instance that drew in some level and stands within the contact distance of the
-// view's eye also appends itself to the contact slots, after every level's, with the
-// strength of its contact as its fade: the contact draw is one more indirect draw, so
-// it shows exactly the instances the view draws, with no pass of its own. Instances in pages (see pages.ts) run one
+// the level draws read instead, and are measured and culled at that size. Instances in pages (see pages.ts) run one
 // workgroup per page, and a place past its page's fill draws in no level.
-
-/** The fraction of the contact distance over which contacts fade out before it. */
-export const CONTACT_FADE = 0.2;
 
 /** What every view of a crowd selects with alongside its own aim: its range, in the crowd's space. */
 export interface RangeAim {
@@ -61,14 +54,6 @@ export interface RangeAim {
   radius: number;
   ramp: number;
   survivors: boolean;
-}
-
-/** What a view's contacts are selected with, in the crowd's space. */
-export interface ContactAim {
-  /** Distance from the view's eye within which an instance has a contact. */
-  distance: number;
-  /** The contacts' first slot. */
-  first: number;
 }
 
 /** A view to select for: its aim, and the slots and draws to fill. */
@@ -90,7 +75,6 @@ export interface Target {
 
 /** One indirect draw: a level's mesh, drawing `count` indices (or vertices) from `start`. */
 export interface IndirectDraw {
-  /** Its level, or the number of levels for the contact draw. */
   level: number;
   count: number;
   start: number;
@@ -124,9 +108,6 @@ export class Kernel {
   private readonly rangeRadius = uniform(0);
   private readonly rangeRamp = uniform(1);
   private readonly survivors = uniform(0, "uint");
-  private readonly contacts = uniform(0, "uint");
-  private readonly contactDistance = uniform(0);
-  private readonly contactStart = uniform(0, "uint");
   private readonly source = storage(new StorageInstancedBufferAttribute(new Float32Array(16), 16), "mat4", 0).setName("lodSourceMatrices").toReadOnly();
   private readonly keeps = storage(new StorageBufferAttribute(new Float32Array(1), 1), "float", 0).setName("lodKeeps").toReadOnly();
   private readonly scaled = storage(new StorageInstancedBufferAttribute(new Float32Array(16), 16), "mat4", 0).setName("lodScaledMatrices");
@@ -158,8 +139,7 @@ export class Kernel {
     this.bounds.value.set(sphere.center.x, sphere.center.y, sphere.center.z, sphere.radius);
     this.reach.value = sphere.radius;
     this.maxPixels = first.map(() => uniform(0));
-    // Each level's count, then the contacts'.
-    this.counts = new StorageBufferAttribute(new Uint32Array(first.length + 1), 1);
+    this.counts = new StorageBufferAttribute(new Uint32Array(first.length), 1);
     this.routes = fallback.map((level) => uniform(level, "int"));
     this.previous = fallback.map((level) => uniform(level, "int"));
   }
@@ -196,14 +176,6 @@ export class Kernel {
     this.rangeEye.value.copy(aim.eye);
     this.rangeRadius.value = aim.radius;
     this.rangeRamp.value = aim.ramp;
-  }
-
-  /** Every view's contacts from now on, or none. */
-  contact(aim: ContactAim | null): void {
-    this.contacts.value = Number(aim !== null);
-    if (!aim) return;
-    this.contactDistance.value = aim.distance;
-    this.contactStart.value = aim.first;
   }
 
   writeDraws(draws: readonly IndirectDraw[]): void {
@@ -245,7 +217,6 @@ export class Kernel {
   private selectPass(): ComputeNode {
     const { out } = this;
     const counts = storage(this.counts, "uint", 0).setName("lodCounts").toAtomic();
-    const contactCount = this.first.length;
     return Fn(() => {
       const m = this.source.element(instanceIndex).toVar();
       const r = this.bounds.w.mul(maxScale(m)).toVar();
@@ -350,7 +321,6 @@ export class Kernel {
           });
         If(selected.equal(finer), () => void t.assign(0));
       }).Else(() => void shown.assign(uint(selected.add(1))));
-      const drew = uint(0).toVar();
       const emit = (level: number, first: Node<"uint">, fade: Node<"float">) => {
         const slot = atomicAdd(counts.element(level), uint(1)).add(first).toVar();
         out.indices.element(slot).assign(instanceIndex);
@@ -359,22 +329,9 @@ export class Kernel {
       this.first.forEach((first, level) => {
         if (first === null) return;
         const start = at(this.starts, level);
-        If(selected.equal(level), () => {
-          emit(level, start, t);
-          drew.assign(1);
-        });
+        If(selected.equal(level), () => emit(level, start, t));
         // The finer neighbour fading out with it.
-        If(finer.equal(level).and(t.greaterThan(0)), () => {
-          emit(level, start, t.negate());
-          drew.assign(1);
-        });
-      });
-      If(this.contacts.equal(uint(1)).and(drew.equal(uint(1))), () => {
-        const d = distance(column(m, 3).xyz, this.eye);
-        If(d.lessThan(this.contactDistance), () => {
-          const strength = clamp(this.contactDistance.sub(d).div(this.contactDistance.mul(CONTACT_FADE)), 0, 1);
-          emit(contactCount, this.contactStart, strength);
-        });
+        If(finer.equal(level).and(t.greaterThan(0)), () => emit(level, start, t.negate()));
       });
     })().compute(1, this.fills ? [PAGE] : undefined);
   }
@@ -386,7 +343,6 @@ export class Kernel {
         const draw = this.records.element(i).toVar();
         const first = uint(0).toVar();
         this.starts.forEach((value, level) => If(draw.x.equal(level), () => void first.assign(value)));
-        If(draw.x.equal(this.first.length), () => void first.assign(this.contactStart));
         const base = this.argsStart.add(i.mul(ARGS_BYTES / 4));
         const words = this.out.arguments;
         words.element(base).assign(draw.y);
@@ -395,7 +351,7 @@ export class Kernel {
         words.element(base.add(3)).assign(draw.w.equal(1).select(uint(0), first));
         words.element(base.add(4)).assign(draw.w.equal(1).select(first, uint(0)));
       });
-      for (let l = 0; l <= this.first.length; l++) atomicStore(counts.element(l), uint(0));
+      this.first.forEach((_, l) => atomicStore(counts.element(l), uint(0)));
     })().compute(1);
   }
 }
