@@ -19,6 +19,7 @@ import { checkRange, keptFraction, survivorScale, type InstancedRange } from "./
 import { Selection, sight, type Aim } from "./select.js";
 import { Store, type ChunkData, type InstancedChunk } from "./store.js";
 import { Pages, type GpuChunk, type GpuChunkData, type GpuChunks } from "./pages.js";
+import { meeting } from "../residency.js";
 
 /** How an InstancedLod is made. */
 export interface InstancedLodOptions extends LodOptions {
@@ -93,6 +94,9 @@ export class InstancedLod extends Owner {
     this.probes = new Probes(this.store, this.extent.rest);
     this.draws = levels.length > 0 ? this.build(levels) : 0;
     this.blocks = this.makeBlocks();
+    // Every render takes in the GPU chunks' changes first, whether or not any instance draws, so a producer can
+    // reuse its records once it has rendered.
+    if (this.pages) this.add(meeting((renderer) => this.residency.guard(() => this.selection?.prepare(renderer))));
   }
 
   /** Instances in its chunks from the CPU. */
@@ -131,9 +135,9 @@ export class InstancedLod extends Owner {
 
   /**
    * Add the instances of the records an app's GPU pass wrote for `data` as one chunk, in an InstancedLod made with
-   * `gpuChunks`. Its records and count are read on the GPU before the next draw, and nothing is read back: they must
-   * hold until it is removed, or until `drained` says every chunk got its instances. A chunk the pool has no pages
-   * for draws the instances it got, and gets the rest once chunks are removed.
+   * `gpuChunks`. The next render that reaches this InstancedLod copies them into its pages, and nothing is read back:
+   * the records and count need to hold only until that render, after which the producer may overwrite them. A chunk
+   * the pool lacks pages for draws the instances it got until it is removed, and `drained` throws.
    */
   addGpuChunk(data: GpuChunkData): GpuChunk {
     const pages = this.gpuPages();
@@ -154,9 +158,9 @@ export class InstancedLod extends Owner {
   }
 
   /**
-   * Whether every GPU chunk has all its instances on `renderer`, taking in the chunks' changes first, as the next draw
-   * would. It reads the GPU's progress back, so call it only to wait for it, say before a capture; a chunk short of
-   * pages waits until others are removed. Always true without GPU chunks.
+   * Whether every GPU chunk has been taken in on `renderer`, taking in the chunks' changes first, as the next render
+   * would. Throws if a chunk lacks pages, naming the shortfall. It reads the GPU's progress back, so call it only to
+   * wait for it, say before a capture. Always true without GPU chunks.
    */
   async drained(renderer: Renderer): Promise<boolean> {
     if (!this.pages) return true;

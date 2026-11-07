@@ -7,13 +7,13 @@ import { upload } from "./dirty.js";
 // Instances a GPU pass of the app produces, never read back: each chunk's records are turned into instances on the
 // GPU, into fixed-size pages of a pool, and the selection reads them where they land (see kernel.ts).
 //
-// Once per frame in which chunks were added or removed, before the selection, one workgroup walks the chunk slots:
-// first every removed or replaced chunk pushes its pages back on the free stack, then every chunk that holds fewer
-// pages than its count needs pops more, writes each page's fill and lists it as a job. A second pass, dispatched
-// indirectly with one workgroup per job, runs the app's instance function on each record of the page and writes the
-// instance. A chunk that finds the stack empty keeps the pages it got, its count clamped to them, and pops the rest
-// the next time chunks change: only a removal frees pages. The CPU never learns a count: it knows only which slots
-// hold chunks, and the GPU knows how far each got.
+// In the first render after chunks were added or removed, ahead of any selection, one workgroup walks the chunk
+// slots: first every removed or replaced chunk pushes its pages back on the free stack, then every new chunk pops the
+// pages its count needs, writes each page's fill and lists it as a job. A second pass, dispatched indirectly with one
+// workgroup per job, runs the app's instance function on each record of the page and writes the instance. That is
+// the only time a chunk's records are read, so the producer may reuse them right after. A chunk that finds the stack
+// short keeps the pages it got, its count clamped to them, until it is removed; `drained` reports it. The CPU never
+// learns a count: it knows only which slots hold chunks, and the GPU knows what each got.
 
 /** Instances per page: the selection runs one workgroup per page. */
 export const PAGE = 256;
@@ -39,15 +39,15 @@ export interface GpuChunks {
    * tint, keep ratio) from a hash the record carries, not from where it lies: records arrive in any order.
    */
   instance: TgpuFn<(...words: d.Vec4u[]) => typeof GpuInstance>;
-  /** Every chunk's records, `vec4u` items, a record's words in a row. */
+  /** Where chunks' records lie, `vec4u` items, a record's words in a row; read only in the render that takes a chunk in. */
   records: Storage;
-  /** Every chunk's record count, `u32` items. */
+  /** Where chunks' record counts lie, `u32` items; read only in the render that takes a chunk in. */
   counts: Storage;
   /** The most records a chunk holds: more are ignored. */
   capacity: number;
   /** The least and the most any instance matrix scales along its longest axis: what level loading is judged by. */
   scales: readonly [number, number];
-  /** Pages of `PAGE` instances in the pool: its instances at most. 512 by default. */
+  /** Pages of `PAGE` instances in the pool: its instances at most; a chunk added to a full pool lacks instances. 512 by default. */
   pages?: number;
   /** The most chunks held at once. 256 by default. */
   slots?: number;
@@ -182,7 +182,7 @@ export class Pages {
     this.version++;
   }
 
-  /** Take in the chunks' changes on `renderer`, writing instances into `targets`, if they changed since the last run. */
+  /** Take in the chunks' changes on `renderer`, writing instances into `targets`, if they changed since the last run: in the render after they change. */
   run(renderer: Renderer, targets: Targets): void {
     if (!this.pending) return;
     this.pending = false;
@@ -191,16 +191,31 @@ export class Pages {
     renderer.compute(this.kernels.copy, this.dispatch);
   }
 
-  /** Whether every chunk has all its instances: none waits for the passes or for pages. Reads the GPU's progress back. */
+  /**
+   * Whether every chunk has been taken in: false while changes wait for the passes or chunks changed meanwhile. Throws
+   * if a chunk lacks pages. Reads the GPU's progress back.
+   */
   async drained(renderer: Renderer): Promise<boolean> {
     if (this.pending) return false;
     if (this.chunks.size === 0) return true;
     const version = this.version;
     const states = new Uint32Array(await renderer.getArrayBufferAsync(this.states));
     if (version !== this.version) return false;
+    let short = 0;
+    let held = 0;
+    let needed = 0;
     for (const { slot } of this.chunks) {
       const base = slot * 4;
-      if (states[base] !== this.generations[slot] || at(states, base + 1) < at(states, base + 3)) return false;
+      if (states[base] !== this.generations[slot]) return false;
+      if (at(states, base + 1) === at(states, base + 3)) continue;
+      short++;
+      held += at(states, base + 1);
+      needed += at(states, base + 3);
+    }
+    if (short > 0) {
+      throw new Error(
+        `InstancedLod: ${short} GPU chunk${short === 1 ? "" : "s"} lack pages, holding ${held} of the ${needed} pages they need: raise gpuChunks.pages (now ${this.fills.count})`,
+      );
     }
     return true;
   }
@@ -252,12 +267,12 @@ export class Pages {
       eachSlot((slot) => {
         const source = sources.element(slot).toVar();
         const state = states.element(slot).toVar();
-        // A new chunk, or one short of pages.
-        If(source.x.equal(1).and(state.x.notEqual(source.w).or(state.y.lessThan(state.w))), () => {
+        // A new chunk: the only time its records are read.
+        If(source.x.equal(1).and(state.x.notEqual(source.w)), () => {
           const records = least(counts.element(source.z), uint(this.options.capacity)).toVar();
           const need = records.add(PAGE - 1).div(PAGE).toVar();
-          const held = state.y.toVar();
-          Loop({ start: held, end: need, type: "uint", condition: "<" }, ({ i }) => {
+          const held = uint(0).toVar();
+          Loop({ start: uint(0), end: need, type: "uint", condition: "<" }, ({ i }) => {
             // The page under the top before taking it; none when the stack ran dry, its count wrapped past 0.
             const before = atomicSub(top, uint(1)).toVar();
             If(before.sub(1).greaterThanEqual(pages), () => {

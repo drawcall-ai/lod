@@ -44,6 +44,23 @@ const probeMaterial = new MeshBasicNodeMaterial({ colorWrite: false, depthWrite:
 // Drawn as itself under any scene.overrideMaterial, so that three hands its draw on once: the call skipped.
 probeMaterial.allowOverride = false;
 
+/**
+ * A mesh that meets every render or compile reaching it, ahead of the draws that render shadow maps, with its renderer,
+ * and draws nothing.
+ */
+export function meeting(meet: (renderer: Renderer, scene: Object3D, camera: Camera) => void): Mesh {
+  const mesh = new Mesh(probeGeometry, probeMaterial);
+  mesh.frustumCulled = false;
+  mesh.layers.enableAll();
+  mesh.renderOrder = -Infinity;
+  mesh.onBeforeRender = (renderer, scene, camera) => {
+    const gpu = gpuRenderer(renderer);
+    skipDraw(gpu);
+    meet(gpu, scene, camera);
+  };
+  return mesh;
+}
+
 /** Decode is shared by load function; readiness and handover belong to each owner. */
 export class Residency {
   readonly installed = new Set<Level>();
@@ -171,22 +188,16 @@ export class Residency {
    */
   private ask(): void {
     if (this.probe) return;
-    const probe = (this.probe = new Mesh(probeGeometry, probeMaterial));
-    probe.frustumCulled = false;
-    probe.layers.enableAll();
-    // Ahead of the draws that render shadow maps, so that the owner's updates in them are its renderer's.
-    probe.renderOrder = -Infinity;
-    probe.onBeforeRender = (renderer, scene, camera) =>
+    const probe: Mesh = (this.probe = meeting((gpu, scene, camera) =>
       this.guard(() => {
-        const gpu = gpuRenderer(renderer);
-        skipDraw(gpu);
         if (this.probe !== probe) return;
         this.probe = undefined;
         probe.removeFromParent();
         this.renderer ??= gpu;
         if (gpu !== this.renderer) throw new Error(`${this.name}: a second renderer drew it; an owner draws with the first renderer that drew it only`);
         if (isScene(scene)) recordRender(gpu, scene, camera);
-      });
+      }),
+    ));
     this.owner.add(probe);
   }
 

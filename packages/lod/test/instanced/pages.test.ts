@@ -19,15 +19,16 @@ const counts = t3.instancedArray(4, d.u32);
 const first = t3.uniform(0, d.u32);
 const count = t3.uniform(0, d.u32);
 const counter = t3.uniform(0, d.u32);
+const shift = t3.uniform(0, d.f32);
 
-/** Record k: a spot on a grid ahead of a camera at the origin looking down -z, and its hash. */
+/** Record k: a spot on a grid ahead of a camera at the origin looking down -z, moved by `shift` along x, and its hash. */
 const emit = t3
   .toTSL(() => {
     "use gpu";
     const i = t3.instanceIndex.$;
     if (i >= count.$) return;
     const k = first.$ + i;
-    const position = d.vec3f(d.f32(k % 8) * 3 - 10.5, 0, -(5 + d.f32(std.intdiv(k, 8)) * 2));
+    const position = d.vec3f(d.f32(k % 8) * 3 - 10.5 + shift.$, 0, -(5 + d.f32(std.intdiv(k, 8)) * 2));
     records.$[k * 2] = d.vec4u(std.bitcastF32toU32(position), (k + 1) * 2654435761);
     records.$[k * 2 + 1] = d.vec4u(0);
     if (i === 0) counts.$[counter.$] = count.$;
@@ -61,11 +62,12 @@ function cpuChunk(from: number, n: number) {
   return { matrices, colors, keeps };
 }
 
-/** Write records `from` to `from + n` and their count into counter `index`, on the GPU. */
-function produce(from: number, n: number, index: number): void {
+/** Write records `from` to `from + n`, moved by `by`, and their count into counter `index`, on the GPU. */
+function produce(from: number, n: number, index: number, by = 0): void {
   first.node.value = from;
   count.node.value = n;
   counter.node.value = index;
+  shift.node.value = by;
   void renderer.compute(emit);
 }
 
@@ -108,6 +110,9 @@ async function drawn(lod: InstancedLod, camera: Camera): Promise<string[][]> {
     }),
   );
 }
+
+/** The places of the instances drawn, each once: a fade draws one in two levels. */
+const distinct = (draws: string[][]) => new Set(draws.flat().map((slot) => slot.split(" ")[0] ?? ""));
 
 const camera = new PerspectiveCamera(60, 1, 0.1, 1e4);
 /** Sees every record from above. */
@@ -157,10 +162,39 @@ describe("GPU chunks", { timeout: GPU_TIMEOUT }, () => {
     }
   });
 
-  it("clamp a chunk the pool lacks pages for, then give it the rest once removed chunks return theirs", async () => {
+  it("take a chunk in during the first render after it is added, seen or not, so its records can be reused at once", async () => {
+    const lod = crowd({});
+    const away = new PerspectiveCamera(60, 1, 0.1, 1e4);
+    away.rotation.y = Math.PI;
+    away.updateMatrixWorld();
+    const scene = new Scene().add(lod);
+    try {
+      produce(0, 300, 0);
+      lod.addGpuChunk({ box: everywhere, first: 0, counter: 0 });
+      await render(scene, away);
+      // The same records and counter, overwritten for the next chunk, moved by a quarter along x.
+      produce(0, 200, 0, 0.25);
+      lod.addGpuChunk({ box: everywhere, first: 0, counter: 0 });
+      await render(scene, away);
+      // Overwritten again: what is drawn stays.
+      produce(0, 50, 0, 0.5);
+      await frames(lod, above);
+      // x's fraction: 0.5 for the first chunk's records, 0.75 for the second's, 0 for the last write's.
+      const xs = [...distinct(await drawn(lod, above))].map((spot) => {
+        const x = Number(spot.split(",")[0]);
+        return x - Math.floor(x);
+      });
+      expect(xs.filter((x) => x === 0.5).length).toBe(300);
+      expect(xs.filter((x) => x === 0.75).length).toBe(200);
+      expect(xs.length).toBe(500);
+    } finally {
+      lod.dispose();
+    }
+  });
+
+  it("clamp a chunk the pool lacks pages for until it is removed, failing drained, and take back removed chunks' pages", async () => {
     const lod = crowd({ pages: 4 });
-    /** The instances drawn, each once, a fade's two levels included. */
-    const total = async () => new Set((await drawn(lod, above)).flat().map((slot) => slot.split(" ")[0])).size;
+    const total = async () => distinct(await drawn(lod, above)).size;
     produce(0, 600, 0);
     produce(CAPACITY, 300, 1);
     const a = lod.addGpuChunk({ box: everywhere, first: 0, counter: 0 });
@@ -170,14 +204,15 @@ describe("GPU chunks", { timeout: GPU_TIMEOUT }, () => {
       const b = lod.addGpuChunk({ box: everywhere, first: CAPACITY, counter: 1 });
       await frames(lod, above);
       expect(await total()).toBe(600 + PAGE);
-      expect(await lod.drained(renderer)).toBe(false);
-      // Asking takes in the removal, as the next draw would.
+      await expect(lod.drained(renderer)).rejects.toThrow("1 GPU chunk lack pages, holding 1 of the 2 pages they need: raise gpuChunks.pages (now 4)");
+      // Pages freed later do not complete it.
       lod.removeGpuChunk(a);
-      expect(await lod.drained(renderer)).toBe(true);
       await frames(lod, above);
-      expect(await total()).toBe(300);
-      // Every page is back: a chunk needing all of them gets them, in the slot just freed.
+      expect(await total()).toBe(PAGE);
+      await expect(lod.drained(renderer)).rejects.toThrow("lack pages");
+      // Every page is back: a chunk needing all of them gets them.
       lod.removeGpuChunk(b);
+      expect(await lod.drained(renderer)).toBe(true);
       produce(CAPACITY, 4 * PAGE, 2);
       lod.addGpuChunk({ box: everywhere, first: CAPACITY, counter: 2 });
       await frames(lod, above);

@@ -99,7 +99,7 @@ When the copies come out of a compute pass of your own, such as plants scattered
 
 Your pass writes each chunk's records into one shared buffer of `vec4u` words, a fixed number per record, and the record count into one shared `u32` buffer, then you add the chunk with where its records and count lie and a box around every copy's origin. Your instance function, a [TypeGPU](https://docs.swmansion.com/TypeGPU/) function taking a record's words, unpacks one record into its matrix, colour and keep ratio. Keep a record to what varies per place, such as a position, a normal and a hash, and derive scale, rotation, tint and keep ratio from the hash in the instance function: records arrive in any order, and the same hash then keeps the same copy on every refill. Declare the least and most scale your function gives, as levels load by them over the chunk's box, and make the box tight: it is all the crowd knows of where a chunk's copies stand.
 
-Copies live in a pool of fixed pages, one page of 256 copies at least per non-empty chunk. Its memory is the pages × 256 × about 84 bytes, plus what every crowd keeps per copy and view; size `pages` for the copies within reach at once and `capacity` for the most records one chunk can hold. A chunk's records are taken in on the GPU before the next draw that needs the crowd, so they must stay unchanged until the chunk is removed or `drained` says every chunk is complete. When the pool runs out, a chunk draws the copies it got pages for and takes the rest once removed chunks give theirs back; remove far chunks before adding near ones to avoid it. `drained` reads the GPU's progress back: await it only before a capture, never every frame, and expect false for as long as a chunk lacks pages.
+The next render that reaches the crowd copies a chunk's records into its pages, whether or not any copy is in view; after that render nothing reads them, so your pass can write the next chunk's records over them, such as in a small ring of buffers reused every few frames. Copies live in a pool of fixed pages, one page of 256 copies at least per non-empty chunk. Its memory is the pages × 256 × about 84 bytes, plus what every crowd keeps per copy and view. Size `pages` for the copies within reach at once, with room for the chunks you add before removing the ones they replace, and `capacity` for the most records one chunk can hold. A chunk added to a full pool keeps the pages it got and lacks the rest of its copies until you remove it: in a live view that shows as missing copies, so remove far chunks before adding near ones and raise `pages` if it happens. `drained` reads the GPU's progress back and throws while any chunk lacks pages, so a capture fails instead of showing gaps: await it only before a capture, never every frame.
 
 ```ts
 import * as t3 from "@typegpu/three";
@@ -107,8 +107,8 @@ import { d, std, tgpu } from "typegpu";
 import { GpuInstance, InstancedLod } from "@drawcall/lod";
 
 // Two words per record: position and hash, then a packed normal and spare room.
-const records = t3.instancedArray(TILES * MAX_PER_TILE * 2, d.vec4u);
-const counts = t3.instancedArray(TILES, d.u32);
+const records = t3.instancedArray(RING * MAX_PER_TILE * 2, d.vec4u);
+const counts = t3.instancedArray(RING, d.u32);
 const plant = tgpu.fn([d.vec4u, d.vec4u], GpuInstance)((spot, extra) => {
   "use gpu";
   const p = std.bitcastU32toF32(spot.xyz);
@@ -123,8 +123,9 @@ const grass = new InstancedLod(levels, {
   gpuChunks: { instance: plant, records: records.node.value, counts: counts.node.value, capacity: MAX_PER_TILE, scales: [0.8, 1.43] },
 });
 
-// When tile `t` comes into reach: run your pass for it, then
-const chunk = grass.addGpuChunk({ box: tileBox, first: t * MAX_PER_TILE, counter: t });
+// When a tile comes into reach: run your pass into ring slot `r`, then
+const chunk = grass.addGpuChunk({ box: tileBox, first: r * MAX_PER_TILE, counter: r });
+// Slot `r` is free again once a frame has rendered.
 // When it leaves:
 grass.removeGpuChunk(chunk);
 // Before a capture:
