@@ -102,28 +102,39 @@ it.each([
   mesh.dispose();
 });
 
+/** The blue, at the centre, of an impostor all of `normalDepth` under a strong sun at `from`, the camera on +z. */
+async function blueLit(normalDepth: number[], from: [number, number, number], term?: (mesh: ImpostorMesh, direction: Node<"vec3">) => Node<"float">) {
+  const mesh = new ImpostorMesh(atlas(normalDepth), 1, { parallax: 0 });
+  if (term) mesh.material.directTerm = (direction) => vec3(term(mesh, direction));
+  const sun = new DirectionalLight(0xffffff, 20);
+  sun.position.set(...from);
+  const camera = new PerspectiveCamera(50, 1, 0.1, 100);
+  camera.position.z = 6;
+  camera.updateMatrixWorld();
+  try {
+    const pixels = await render(new Scene().add(mesh, sun), camera);
+    return pixels[(32 * 64 + 32) * 4 + 2] ?? 0;
+  } finally {
+    mesh.dispose();
+  }
+}
+
 it("gives a lighting term of an app's own how far a texel's normals agree", { timeout: GPU_TIMEOUT }, async () => {
   // Normals agreeing 0.3 toward the camera, the sun straight behind: a share of the leaves is back-lit, not all.
-  const shade = async (term: (mesh: ImpostorMesh, direction: Node<"vec3">) => Node<"float">) => {
-    const mesh = new ImpostorMesh(atlas([128, 128, 166, 128]), 1, { parallax: 0 });
-    mesh.material.directTerm = (direction) => vec3(term(mesh, direction));
-    const sun = new DirectionalLight(0xffffff, 20);
-    sun.position.set(0, 0, -5);
-    const camera = new PerspectiveCamera(50, 1, 0.1, 100);
-    camera.position.z = 6;
-    camera.updateMatrixWorld();
-    try {
-      const pixels = await render(new Scene().add(mesh, sun), camera);
-      return pixels[(32 * 64 + 32) * 4 + 2] ?? 0;
-    } finally {
-      mesh.dispose();
-    }
-  };
+  const shade = (term: (mesh: ImpostorMesh, direction: Node<"vec3">) => Node<"float">) => blueLit([128, 128, 166, 128], [0, 0, -5], term);
   const unit = await shade((_mesh, direction) => saturate(dot(normalView, direction).negate()));
   const spread = await shade((mesh, direction) => cosine(mesh.material.spread, direction.negate()));
   expect(unit).toBeGreaterThan(200);
   expect(spread).toBeGreaterThan(40);
   expect(spread).toBeLessThan(unit * 0.75);
+});
+
+it("glares in a low sun ahead only where a texel's normals agree", { timeout: GPU_TIMEOUT }, async () => {
+  // Straight up, as a flat surface and as grass, whose normals agree 0.6: blue, scarce in the colour, is the specular.
+  const flat = await blueLit([128, 255, 128, 128], [0, 2, -5]);
+  const grass = await blueLit([128, 204, 128, 128], [0, 2, -5]);
+  expect(flat).toBeGreaterThan(100);
+  expect(grass).toBeLessThan(flat / 2);
 });
 
 it.each([false, true])("occludes at its reconstructed surface (reversed depth: %s)", { timeout: GPU_TIMEOUT }, async (reversedDepthBuffer) => {

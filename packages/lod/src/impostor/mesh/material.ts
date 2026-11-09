@@ -54,7 +54,7 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
   /** Mip bias of every atlas read: see `ImpostorMeshOptions.mipBias`, which it starts at. */
   readonly mipBias: Node<"float"> & { value: number };
   /**
-   * The view-space normal × how far the normals it averages agree. A lighting term of its own reads this with
+   * The view-space mean of the normals a texel averages, its length how far they agree. A lighting term of its own reads this with
    * `cosine` rather than `normalView`, a single unit normal that would light every averaged leaf one way.
    */
   readonly spread: Node<"vec3"> = Fn((builder: NodeBuilder) => this.lit(builder).spread)();
@@ -212,7 +212,7 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
  * Direct diffuse light by `cosine` instead of the clamped cosine of the mean normal. That
  * one leaves a canopy unlit wherever its mean normal is side-on to the sun, where the real
  * leaves, tilted every which way, catch a good part of it; renormalised, the mean lights
- * the canopy as one smooth surface. Specular keeps three's terms: its roughness widens
+ * the canopy as one smooth surface. Specular keeps three's terms, on the leaned normal (see surface.ts): its roughness widens
  * with the spread instead.
  */
 class SpreadLighting extends PhysicalLightingModel {
