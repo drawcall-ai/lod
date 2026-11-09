@@ -192,6 +192,20 @@ describe("LodLoader", () => {
     expect(disposed).toHaveBeenCalledOnce();
   });
 
+  it("loads the source level once when its load is called directly, the level reading its materials included", async () => {
+    const { manager, load } = sourceFixture(() => new Mesh(new SphereGeometry(1, 12, 8), new MeshStandardMaterial()));
+    const loader = new LodLoader(manager);
+    const request: LodRequest = { url: "/direct.glb", levels: [{ type: "simplify", ratio: 0.5, maxPixels: 100 }] };
+    await (await loader.loadAsync(request))[1]?.load?.();
+    load.mockClear();
+    const [source, detail] = await loader.loadAsync(request);
+    if (!source?.load || !detail?.load) throw new Error("Expected deferred mesh levels");
+    const object = await source.load();
+    await detail.load();
+    expect(await source.load()).toBe(object);
+    expect(load).toHaveBeenCalledOnce();
+  });
+
   it("preloads a placed source when it is the only drawable, on cold and warm loads", async () => {
     const { manager, load } = sourceFixture(() => new Mesh(new BoxGeometry(), new MeshStandardMaterial()).translateX(7), /\.glb$/);
     const request: LodRequest = { url: "/source.glb", levels: [{ type: "empty", maxPixels: 1 }] };

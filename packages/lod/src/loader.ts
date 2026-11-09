@@ -88,8 +88,12 @@ export class LodLoader extends Loader<LodLevel[], LodRequest> {
         return materialsOf(level.object ?? (await loadOnce(level.load).promise));
       };
       const { dispose } = session;
+      const loadSourceLevel = async () => session.arrive((session.take() ?? (await this.loadSource(url))).source, 0);
+      // Once, however often it is asked for: a caller of `load` and the levels reading its materials share one object. Started
+      // synchronously, not through `loadOnce`, so it takes the spare before a coarser level demanded in the same tick.
+      let sourceLevel: Promise<Object3D> | undefined;
       const deferred: DeferredLevel[] = [
-        { load: async () => session.arrive((session.take() ?? (await this.loadSource(url))).source, 0), maxPixels: Infinity, box, dispose },
+        { load: () => (sourceLevel ??= loadSourceLevel()), maxPixels: Infinity, box, dispose },
         ...requests.map((level, position): DeferredLevel => {
           const index = position + 1;
           const maxPixels = at(thresholds, index);
