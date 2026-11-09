@@ -59,6 +59,41 @@ async function mergeAlpha(texture: Texture, alphaPath: string) {
     .setURI(texture.getURI().replace(/\.jpg$/, ".png"));
 }
 
+/**
+ * Fills a cut-out's transparent texels with its kept texels' mean colour, as PNG. Mips average those texels in: left
+ * dark they darken every distant leaf, while an impostor, baked from the kept texels alone, keeps that mean. Lossy webp
+ * drops the colour of transparent texels, so this runs after it.
+ */
+export async function fillCutOuts(doc: Document) {
+  const filled = new Set<Texture>();
+  for (const material of doc.getRoot().listMaterials()) {
+    const base = material.getBaseColorTexture();
+    if (material.getAlphaMode() !== "MASK" || !base || filled.has(base)) continue;
+    filled.add(base);
+    const name = `${material.getName()}/${base.getName()}`;
+    const image = base.getImage();
+    if (!image) throw new Error(`${name}: no image data`);
+    const { data, info } = await sharp(image).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    const cutoff = material.getAlphaCutoff() * 255;
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    let kept = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data.readUInt8(i + 3) < cutoff) continue;
+      kept++;
+      r += data.readUInt8(i);
+      g += data.readUInt8(i + 1);
+      b += data.readUInt8(i + 2);
+    }
+    if (kept === 0) throw new Error(`${name}: no kept texels`);
+    const mean = [r, g, b].map((total) => Math.round(total / kept));
+    for (let i = 0; i < data.length; i += 4) if (data.readUInt8(i + 3) < cutoff) data.set(mean, i);
+    const png = await sharp(data, { raw: info }).png().toBuffer();
+    base.setImage(new Uint8Array(png)).setMimeType("image/png");
+  }
+}
+
 function triangles(doc: Document): number {
   let count = 0;
   for (const node of doc.getRoot().listNodes()) {
@@ -119,6 +154,7 @@ export async function model(id: string, io: NodeIO, out: string): Promise<Manife
     doc.createExtension(EXTMeshoptCompression).setRequired(true).setEncoderOptions({ method: EXTMeshoptCompression.EncoderMethod.FILTER });
     await writeFile(source, await io.writeBinary(doc));
   }
+  await fillCutOuts(doc);
   const bounds = checkFrame(id, doc, info);
   const parts = props[id];
   const selections = parts

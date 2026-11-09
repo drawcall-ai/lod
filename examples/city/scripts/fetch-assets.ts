@@ -1,6 +1,6 @@
 // Downloads the city's CC0 assets from Poly Haven and ambientCG into public/assets/ (gitignored):
 // models become individual, centred variant GLBs (meshopt-compressed, with encoded
-// images shared per model and copied unchanged from the prepared source). PBR sets become webp, plus one HDRI. Writes
+// images shared per model: the prepared source's, with cut-outs filled as PNG). PBR sets become webp, plus one HDRI. Writes
 // public/assets/manifest.json with sizes, triangle counts and credits.
 //
 //   pnpm --filter @drawcall/lod-example-city assets
