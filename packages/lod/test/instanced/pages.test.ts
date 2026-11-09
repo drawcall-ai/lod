@@ -5,6 +5,7 @@ import {
   BoxGeometry,
   Color,
   DirectionalLight,
+  LoadingManager,
   Matrix4,
   Mesh,
   MeshBasicMaterial,
@@ -101,7 +102,7 @@ const box = () => new Mesh(new BoxGeometry(2, 2, 2), new MeshBasicMaterial());
 const read = (attribute: Parameters<typeof renderer.getArrayBufferAsync>[0]) => renderer.getArrayBufferAsync(attribute);
 
 function crowd(gpuRecords?: Partial<GpuRecords>): InstancedLod {
-  const options = gpuRecords && { gpuRecords: { instance: place, records: records.node.value, counts: counts.node.value, capacity: CAPACITY, scales: [1, 1.75], ...gpuRecords } as const };
+  const options = gpuRecords && { gpuRecords: { instance: place, records: records.node.value, counters: counts.node.value, capacity: CAPACITY, scales: [1, 1.75], ...gpuRecords } as const };
   const lod = new InstancedLod([{ object: box() }, { object: box() }], options);
   lod.levels.forEach((level, i) => (level.maxPixels = [Infinity, 6][i] ?? level.maxPixels));
   return lod;
@@ -202,7 +203,6 @@ describe("GPU chunks", { timeout: GPU_TIMEOUT }, () => {
       const cast = await drawn(cpu, sun.shadow.camera);
       expect(cast.flat().length).toBeGreaterThan(0);
       expect(await drawn(gpu, sun.shadow.camera)).toEqual(cast);
-      expect(await gpu.drained(renderer)).toBe(true);
     } finally {
       renderer.shadowMap.enabled = false;
       cpu.dispose();
@@ -215,7 +215,7 @@ describe("GPU chunks", { timeout: GPU_TIMEOUT }, () => {
     // 235 of the first chunk's 700 records pick the first variant, 99 of the second's 300: a page each, where all
     // records would take five.
     const cpu = crowd();
-    const gpu = crowd({ instance: firstVariant, pages: 2 });
+    const gpu = crowd({ instance: firstVariant, chunks: 2, instances: PAGE });
     const parts = [
       [0, 700],
       [CAPACITY, 300],
@@ -231,7 +231,6 @@ describe("GPU chunks", { timeout: GPU_TIMEOUT }, () => {
       const expected = await drawn(cpu, above);
       expect(distinct(expected).size).toBe(235 + 99);
       expect(await drawn(gpu, above)).toEqual(expected);
-      expect(await gpu.drained(renderer)).toBe(true);
     } finally {
       cpu.dispose();
       gpu.dispose();
@@ -241,7 +240,7 @@ describe("GPU chunks", { timeout: GPU_TIMEOUT }, () => {
   it("give a chunk replacing another in one frame its slot and pages, never the levels their instances showed", async () => {
     // The coarse level never loads: an instance that selects it keeps the level it showed, or draws nothing.
     const bounds = new Box3(new Vector3(-1, -1, -1), new Vector3(1, 1, 1));
-    const gpuRecords = { instance: place, records: records.node.value, counts: counts.node.value, capacity: CAPACITY, scales: [1, 1.75] as const };
+    const gpuRecords = { instance: place, records: records.node.value, counters: counts.node.value, capacity: CAPACITY, scales: [1, 1.75] as const };
     const lod = new InstancedLod([{ object: box() }, { load: () => new Promise<Mesh>(() => {}), maxPixels: 6, box: bounds }], { gpuRecords });
     // Sees all eight records of the first row.
     const view = new PerspectiveCamera(60, 1, 0.1, 1e4);
@@ -260,14 +259,13 @@ describe("GPU chunks", { timeout: GPU_TIMEOUT }, () => {
       view.updateMatrixWorld();
       for (let i = 0; i < 2; i++) await render(scene, view);
       expect((await drawn(lod, view)).flat()).toEqual([]);
-      expect(await lod.drained(renderer)).toBe(true);
     } finally {
       lod.dispose();
     }
   });
 
   it("refuse a crowd without levels and the API of instance indices", () => {
-    const gpuRecords = { instance: place, records: records.node.value, counts: counts.node.value, capacity: CAPACITY, scales: [1, 1.75] as const };
+    const gpuRecords = { instance: place, records: records.node.value, counters: counts.node.value, capacity: CAPACITY, scales: [1, 1.75] as const };
     expect(() => new InstancedLod([], { gpuRecords })).toThrow("needs its levels from the start");
     const lod = crowd({});
     try {
@@ -309,9 +307,12 @@ describe("GPU chunks", { timeout: GPU_TIMEOUT }, () => {
     }
   });
 
-  it("clamp a chunk the pool lacks pages for until it is removed, failing drained, and take back removed chunks' pages", async () => {
-    const lod = crowd({ pages: 4 });
+  it("clamp a chunk the pool lacks pages for until it is removed, reporting it, and take back removed chunks' pages", async () => {
+    const lod = crowd({ chunks: 2, instances: 2 * PAGE });
+    const { manager, items } = watched();
+    lod.manager = manager;
     const total = async () => distinct(await drawn(lod, above)).size;
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     produce(0, 600, 0);
     produce(CAPACITY, 300, 1);
     const a = lod.addGpuChunk({ box: everywhere, first: 0, counter: 0 });
@@ -321,26 +322,25 @@ describe("GPU chunks", { timeout: GPU_TIMEOUT }, () => {
       const b = lod.addGpuChunk({ box: everywhere, first: CAPACITY, counter: 1 });
       await frames(lod, above);
       expect(await total()).toBe(600 + PAGE);
-      await expect(lod.drained(renderer)).rejects.toThrow("1 GPU chunk lack pages, holding 1 of the 2 pages they need: raise gpuRecords.pages (now 4)");
+      expect(await until(new Scene().add(lod), () => items.failed.length > 0)).toBe(true);
+      expect(lod.error?.message).toContain("1 GPU chunk lack pages, holding 1 of the 2 pages they need: raise gpuRecords.instances (the pool has 4 pages)");
+      expect(logged).toHaveBeenCalled();
       // Pages freed later do not complete it.
       lod.removeGpuChunk(a);
       await frames(lod, above);
       expect(await total()).toBe(PAGE);
-      await expect(lod.drained(renderer)).rejects.toThrow("lack pages");
       // Every page is back: a chunk needing all of them gets them.
       lod.removeGpuChunk(b);
-      expect(await lod.drained(renderer)).toBe(true);
       produce(CAPACITY, 4 * PAGE, 2);
       lod.addGpuChunk({ box: everywhere, first: CAPACITY, counter: 2 });
       await frames(lod, above);
       expect(await total()).toBe(4 * PAGE);
-      expect(await lod.drained(renderer)).toBe(true);
     } finally {
       lod.dispose();
     }
   });
 
-  it("read nothing back while chunks come and go and views move", async () => {
+  it("read nothing back while chunks come and go and views move, and only once they rest", async () => {
     const lod = crowd({});
     const readback = vi.spyOn(GPUBuffer.prototype, "mapAsync");
     const scene = new Scene().add(lod);
@@ -355,12 +355,97 @@ describe("GPU chunks", { timeout: GPU_TIMEOUT }, () => {
       }
       renderer.render(scene, camera);
       expect(readback).not.toHaveBeenCalled();
-      // Only asking whether it drained reads back.
-      expect(await lod.drained(renderer)).toBe(true);
+      for (let i = 0; i < 8; i++) renderer.render(scene, camera);
       expect(readback).toHaveBeenCalled();
     } finally {
+      readback.mockRestore();
       camera.position.set(0, 0, 0);
       camera.updateMatrixWorld();
+      lod.dispose();
+    }
+  });
+
+  /** A manager that counts the items open and keeps those that failed. */
+  function watched() {
+    const manager = new LoadingManager();
+    const items = { open: 0, started: 0, failed: [] as string[] };
+    const { itemStart, itemEnd, itemError } = manager;
+    manager.itemStart = (url) => {
+      items.open++;
+      items.started++;
+      itemStart.call(manager, url);
+    };
+    manager.itemEnd = (url) => {
+      items.open--;
+      itemEnd.call(manager, url);
+    };
+    manager.itemError = (url) => {
+      items.failed.push(url);
+      itemError.call(manager, url);
+    };
+    return { manager, items };
+  }
+
+  /** Renders `scene` until `done`, for ten seconds at most (levels compile meanwhile), and whether it came to be. */
+  async function until(scene: Scene, done: () => boolean): Promise<boolean> {
+    const end = performance.now() + 10_000;
+    while (performance.now() < end && !done()) {
+      // On the canvas: a target of its own for each render would compile the levels for it again.
+      renderer.render(scene, camera);
+      await new Promise((resolve) => setTimeout(resolve, 8));
+    }
+    return done();
+  }
+
+  it("hold their item from a chunk's change until the GPU shows it taken in", async () => {
+    const lod = crowd({});
+    const { manager, items } = watched();
+    lod.manager = manager;
+    const scene = new Scene().add(lod);
+    try {
+      produce(0, 300, 0);
+      const chunk = lod.addGpuChunk({ box: everywhere, first: 0, counter: 0 });
+      await Promise.resolve();
+      expect(items.open).toBe(1);
+      expect(await until(scene, () => items.open === 0)).toBe(true);
+      // A chunk taking its slot over in one frame: its own generation must reach the GPU's state.
+      lod.removeGpuChunk(chunk);
+      const again = lod.addGpuChunk({ box: everywhere, first: 0, counter: 0 });
+      expect(again.slot).toBe(chunk.slot);
+      await Promise.resolve();
+      expect(items.open).toBe(1);
+      expect(await until(scene, () => items.open === 0)).toBe(true);
+      lod.removeGpuChunk(again);
+      await Promise.resolve();
+      expect(items.open).toBe(1);
+      expect(await until(scene, () => items.open === 0)).toBe(true);
+      expect(lod.error).toBeUndefined();
+      expect(items.failed).toEqual([]);
+    } finally {
+      lod.dispose();
+    }
+  });
+
+  it("report a chunk the pool lacks pages for as their error, on the manager", async () => {
+    const lod = crowd({ chunks: 1, instances: PAGE });
+    const { manager, items } = watched();
+    lod.manager = manager;
+    const errors: Error[] = [];
+    lod.addEventListener("levelserror", ({ error }) => errors.push(error));
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const scene = new Scene().add(lod);
+    try {
+      produce(0, 3 * PAGE, 0);
+      lod.addGpuChunk({ box: everywhere, first: 0, counter: 0 });
+      expect(await until(scene, () => lod.error !== undefined)).toBe(true);
+      expect(lod.error?.message).toContain("lack pages");
+      expect(errors).toEqual([lod.error]);
+      expect(log).toHaveBeenCalledWith(lod.error);
+      await Promise.resolve();
+      expect(items.failed.length).toBe(1);
+      expect(items.open).toBe(0);
+    } finally {
+      log.mockRestore();
       lod.dispose();
     }
   });

@@ -1,24 +1,31 @@
 import {
   AmbientLight,
   BoxGeometry,
+  DirectionalLight,
   Mesh,
   MeshStandardMaterial,
   PerspectiveCamera,
+  PlaneGeometry,
   RenderTarget,
   RGBAFormat,
   Scene,
   TorusKnotGeometry,
   Vector3,
+  WebGPURenderer,
+  type Node,
   type Object3D,
 } from "three/webgpu";
+import { dot, normalView, saturate, vec3 } from "three/tsl";
 import { expect, it } from "vitest";
 import { bakeImpostor } from "../../../src/impostor/bake/index.js";
 import type { Impostor } from "../../../src/impostor/impostor.js";
 import { ImpostorMesh } from "../../../src/impostor/mesh/index.js";
+import { cosine } from "../../../src/impostor/mesh/surface.js";
 import { readBytes } from "../../../src/renderer.js";
 import { GPU_TIMEOUT, render, renderer } from "../../gpu.js";
+import { oneChunk } from "../../crowd.js";
 
-function atlas(): Impostor {
+function atlas(normalDepth = [128, 128, 255, 128]): Impostor {
   return {
     version: 4,
     layout: "full",
@@ -29,7 +36,7 @@ function atlas(): Impostor {
     maps: ["base", "normalDepth", "orm"],
     layers: [
       [32, 200, 64, 255],
-      [128, 128, 255, 128],
+      normalDepth,
       [255, 191, 0, 255],
     ].map((pixel) => ({
       format: RGBAFormat,
@@ -93,4 +100,73 @@ it.each([
   const either = real.filter((a, i) => a || fake[i]).length;
   expect(both / either).toBeGreaterThan(0.9);
   mesh.dispose();
+});
+
+it("gives a lighting term of an app's own how far a texel's normals agree", { timeout: GPU_TIMEOUT }, async () => {
+  // Normals agreeing 0.3 toward the camera, the sun straight behind: a share of the leaves is back-lit, not all.
+  const shade = async (term: (mesh: ImpostorMesh, direction: Node<"vec3">) => Node<"float">) => {
+    const mesh = new ImpostorMesh(atlas([128, 128, 166, 128]), 1, { parallax: 0 });
+    mesh.material.directTerm = (direction) => vec3(term(mesh, direction));
+    const sun = new DirectionalLight(0xffffff, 20);
+    sun.position.set(0, 0, -5);
+    const camera = new PerspectiveCamera(50, 1, 0.1, 100);
+    camera.position.z = 6;
+    camera.updateMatrixWorld();
+    try {
+      const pixels = await render(new Scene().add(mesh, sun), camera);
+      return pixels[(32 * 64 + 32) * 4 + 2] ?? 0;
+    } finally {
+      mesh.dispose();
+    }
+  };
+  const unit = await shade((_mesh, direction) => saturate(dot(normalView, direction).negate()));
+  const spread = await shade((mesh, direction) => cosine(mesh.material.spread, direction.negate()));
+  expect(unit).toBeGreaterThan(200);
+  expect(spread).toBeGreaterThan(40);
+  expect(spread).toBeLessThan(unit * 0.75);
+});
+
+it.each([false, true])("occludes at its reconstructed surface (reversed depth: %s)", { timeout: GPU_TIMEOUT }, async (reversedDepthBuffer) => {
+  const view = new WebGPURenderer({ reversedDepthBuffer });
+  await view.init();
+  const target = new RenderTarget(64, 64);
+  const source = new Mesh(new BoxGeometry(2, 2, 2), new MeshStandardMaterial({ color: 0xe04020 }));
+  const impostor = new ImpostorMesh(await bakeImpostor(source, { frames: 4, resolution: 32 }));
+  const crowd = oneChunk([{ object: impostor }], 1);
+  const wall = new Mesh(new PlaneGeometry(4, 4), new MeshStandardMaterial({ color: 0x2040e0 }));
+  const camera = new PerspectiveCamera(40, 1, 0.1, 20);
+  camera.position.z = 6;
+  const light = new AmbientLight(0xffffff, Math.PI);
+  const scene = new Scene();
+  const redAtCentre = async (object: Object3D) => {
+    scene.clear().add(object, wall, light);
+    view.setRenderTarget(target);
+    view.render(scene, camera);
+    const pixels = await readBytes(view, target, 0);
+    view.setRenderTarget(null);
+    const offset = (32 * 64 + 32) * 4;
+    const red = pixels[offset], blue = pixels[offset + 2];
+    if (red === undefined || blue === undefined) throw new Error("Missing centre pixel");
+    return red > blue;
+  };
+  try {
+    for (const z of [0.5, 1.5]) {
+      wall.position.z = z;
+      const real = await redAtCentre(source);
+      const proxy = await redAtCentre(impostor);
+      // A card at z=0 is hidden by both walls; the box's front at z=1 is hidden only by the second.
+      expect(real).toBe(z < 1);
+      expect(proxy).toBe(z < 1);
+      expect(await redAtCentre(crowd)).toBe(z < 1);
+    }
+  } finally {
+    crowd.dispose();
+    impostor.dispose();
+    source.geometry.dispose();
+    source.material.dispose();
+    wall.geometry.dispose();
+    wall.material.dispose();
+    target.dispose();
+    view.dispose();
+  }
 });

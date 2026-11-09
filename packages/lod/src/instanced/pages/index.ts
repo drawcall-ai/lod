@@ -51,15 +51,15 @@ export interface GpuRecords {
   /** Where chunks' records lie, `vec4u` items, a record's words in a row; read only in the render that takes a chunk in. */
   records: Storage;
   /** Where chunks' record counts lie, `u32` items; read only in the render that takes a chunk in. */
-  counts: Storage;
+  counters: Storage;
   /** The most records a chunk holds: more are ignored. */
   capacity: number;
   /** The least and the most any instance matrix scales along its longest axis: what level loading is judged by. */
   scales: readonly [number, number];
-  /** Pages of `PAGE` instances in the pool: its instances at most; a chunk added to a full pool lacks instances. 512 by default. */
-  pages?: number;
+  /** The most instances held at once: the pool has pages for them and a part-filled page per chunk; a chunk added to a full pool lacks instances. `256 * PAGE` by default. */
+  instances?: number;
   /** The most chunks held at once. 256 by default. */
-  slots?: number;
+  chunks?: number;
 }
 
 /** A GPU chunk to add: where its records and count lie, and where its instances stand. */
@@ -68,7 +68,7 @@ export interface GpuChunkData {
   box: Box3;
   /** Its first record in `GpuRecords.records`, counted in records. */
   first: number;
-  /** Its count's index in `GpuRecords.counts`. */
+  /** Its count's index in `GpuRecords.counters`. */
   counter: number;
 }
 
@@ -98,19 +98,18 @@ export class Pages implements Places {
   private released = false;
 
   constructor(private readonly options: GpuRecords) {
-    const { capacity, scales, records, counts, instance } = options;
-    const pages = options.pages ?? 512;
-    const slots = options.slots ?? 256;
+    const { capacity, scales, records, counters, instance, instances = 256 * PAGE, chunks: slots = 256 } = options;
     for (const [name, value] of [
-      ["pages", pages],
-      ["slots", slots],
+      ["instances", instances],
+      ["chunks", slots],
       ["capacity", capacity],
     ] as const) {
       if (!Number.isInteger(value) || value < 1) throw new RangeError(`InstancedLod: gpuRecords.${name} must be a positive integer, got ${value}`);
     }
     if (!(scales[0] > 0 && scales[0] <= scales[1] && Number.isFinite(scales[1]))) throw new RangeError(`InstancedLod: gpuRecords.scales must be 0 < min <= max, got ${scales.join(", ")}`);
     if (!(records.array instanceof Uint32Array) || records.itemSize !== 4) throw new TypeError("InstancedLod: gpuRecords.records must hold vec4u items");
-    if (!(counts.array instanceof Uint32Array) || counts.itemSize !== 1) throw new TypeError("InstancedLod: gpuRecords.counts must hold u32 items");
+    if (!(counters.array instanceof Uint32Array) || counters.itemSize !== 1) throw new TypeError("InstancedLod: gpuRecords.counters must hold u32 items");
+    const pages = slots + Math.ceil(instances / PAGE);
     this.records = new Records(instance, records);
     this.capacity = this.end = pages * PAGE;
     const perSlot = Math.ceil(capacity / PAGE);
@@ -136,7 +135,7 @@ export class Pages implements Places {
       freshDispatch: dispatch(),
       occupied: words(pages),
       occupiedDispatch: dispatch(),
-      counts,
+      counters,
     };
     this.occupied = { pages: this.pool.occupied, dispatch: this.pool.occupiedDispatch };
     this.generations = new Uint32Array(slots);
@@ -178,11 +177,11 @@ export class Pages implements Places {
     const { box, first, counter } = data;
     if (!Number.isInteger(first) || first < 0) throw new RangeError(`InstancedLod: a GPU chunk's first record must be an integer >= 0, got ${first}`);
     if (!Number.isInteger(counter) || counter < 0) throw new RangeError(`InstancedLod: a GPU chunk's counter must be an integer >= 0, got ${counter}`);
-    const { records, counts, capacity } = this.options;
+    const { records, counters, capacity } = this.options;
     if ((first + capacity) * this.records.words > records.count) throw new RangeError(`InstancedLod: a GPU chunk's records from ${first} on, up to gpuRecords.capacity of them, pass the end of gpuRecords.records`);
-    if (counter >= counts.count) throw new RangeError(`InstancedLod: a GPU chunk's counter ${counter} passes the end of gpuRecords.counts`);
+    if (counter >= counters.count) throw new RangeError(`InstancedLod: a GPU chunk's counter ${counter} passes the end of gpuRecords.counters`);
     const slot = this.free.pop();
-    if (slot === undefined) throw new Error(`InstancedLod: all ${this.pool.slots} GPU chunk slots are taken (see gpuRecords.slots)`);
+    if (slot === undefined) throw new Error(`InstancedLod: all ${this.pool.slots} GPU chunk slots are taken (see gpuRecords.chunks)`);
     const generation = at(this.generations, slot) + 1;
     this.generations[slot] = generation;
     this.write(slot, [1, first, counter, generation]);
@@ -269,7 +268,7 @@ export class Pages implements Places {
     }
     if (short > 0) {
       throw new Error(
-        `InstancedLod: ${short} GPU chunk${short === 1 ? "" : "s"} lack pages, holding ${held} of the ${needed} pages they need: raise gpuRecords.pages (now ${this.pool.pages})`,
+        `InstancedLod: ${short} GPU chunk${short === 1 ? "" : "s"} lack pages, holding ${held} of the ${needed} pages they need: raise gpuRecords.instances (the pool has ${this.pool.pages} pages)`,
       );
     }
     return true;

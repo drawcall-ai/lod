@@ -41,7 +41,8 @@ export class LodLoader extends Loader<LodLevel[], LodRequest> {
 
   /**
    * Describes the ladder from the cache, else from its source, which the first level loaded then takes. Empty levels
-   * load with it, as does the source when it is the only drawable; other levels load when a view selects them, and
+   * load with it, as does the source when it is the only drawable; other levels load when a view needs them, including
+   * a coarse stand-in while its first detail arrives, and
    * each derived level is cached on its own and built when first loaded. A level whose default threshold is measured
    * from it is built with the ladder, as is every level in a `vite build` warmup.
    */

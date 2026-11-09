@@ -1,6 +1,6 @@
 import { Sphere, type Camera, type Intersection, type Object3D, type Raycaster } from "three/webgpu";
 import { at } from "./at.js";
-import { compileLevel } from "./compile.js";
+import { compileLevel } from "./compile/index.js";
 import { measureLevels, prepareBounds } from "./bounds.js";
 import { disposeCopies } from "./dispose.js";
 import { setDraw, type Draw } from "./fade.js";

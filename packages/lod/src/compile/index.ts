@@ -1,6 +1,7 @@
-import type { Material, Mesh, Object3D, Renderer, Texture } from "three/webgpu";
-import { isMesh, isNode, isTexture } from "./three.js";
-import { shadowPassesOf, type RenderContext } from "./view.js";
+import type { Mesh, Object3D, Renderer, Texture } from "three/webgpu";
+import { isMesh, isNode, isTexture } from "../three.js";
+import { compileMesh, frame, type Pass } from "./pipelines.js";
+import { shadowPassesOf, type RenderContext } from "../view.js";
 
 /**
  * Prepare the same target and MRT as the viewing draw, even if normal rendering has since restored the canvas, and the
@@ -12,7 +13,7 @@ import { shadowPassesOf, type RenderContext } from "./view.js";
 export async function compileLevel(object: Object3D, context: RenderContext): Promise<void> {
   const { renderer } = context;
   let work = renderers.get(renderer);
-  if (!work) renderers.set(renderer, (work = { uploaded: 0, uploads: Promise.resolve(), compiling: new Set(), builds: new Map() }));
+  if (!work) renderers.set(renderer, (work = { uploaded: 0, uploads: Promise.resolve(), builds: new Map() }));
   const { memory } = renderer.info;
   for (const texture of textures(object))
     await paced(work, () => {
@@ -35,17 +36,7 @@ export async function compileLevel(object: Object3D, context: RenderContext): Pr
     const parts = Array.isArray(mesh.material) ? mesh.geometry.groups.map((group) => [group]) : [mesh.geometry.groups];
     for (const pass of passes) for (const part of parts) draws.push(compileDraw(work, mesh, pass, part));
   }
-  const { compiling } = work;
-  const earlier = [...compiling];
-  const own = Promise.all(draws);
-  const settled = own.then(
-    () => {},
-    () => {},
-  );
-  compiling.add(settled);
-  void settled.then(() => compiling.delete(settled));
-  await own;
-  await Promise.all(earlier);
+  await Promise.all(draws);
 }
 
 /**
@@ -61,13 +52,6 @@ interface Preparing {
   uploaded: number;
   /** The last upload: uploads run in turn. */
   uploads: Promise<void>;
-  /**
-   * Levels whose draws are being compiled, settled either way. A draw whose pipeline another level's already started creating finds it in
-   * three's cache and resolves at once, though three skips it until the pipeline is ready: a level is done once those
-   * started before it are. Which of them creates it is not known: draws built apart share a pipeline when their
-   * programs come out alike, so `builds` cannot tell.
-   */
-  compiling: Set<Promise<void>>;
   /**
    * The last draw compiled for each shader build: material, attributes, target, pass and nesting. three starts a
    * build for each draw that misses its cache, even one another draw is building, so a draw that builds alike waits
@@ -167,86 +151,6 @@ function bytesIn(image: unknown): number {
   return dimension("width") * dimension("height") * dimension("depth") * 4;
 }
 
-/** A pass a level's draws are prepared for: the viewing draw, or a shadow map with the material three overrides with. */
-interface Pass {
-  context: RenderContext;
-  material: Material | null;
-}
-
-/**
- * What r186's renderObject gives an override material for one draw, and puts back once it has handed the draw on.
- * This and `DRAWN` mirror three 0.186.1's Renderer.renderObject; a three that sets other keys builds shadow shaders
- * in the frame again.
- */
-const DRAW_STATE = ["colorNode", "depthNode", "positionNode", "side", "displacementMap", "displacementScale", "displacementBias"];
-/** The keys a draw adds to an override material that lacks them, in the order it adds them. */
-const DRAWN = ["alphaMap", "displacementMap", "displacementScale", "displacementBias"];
-
-/**
- * A copy of the shadow pass's override material for compiling one draw. r186's compileAsync builds the draw only after
- * renderObject has put back the per-draw state it gave the override (the caster's shadow nodes and side), so with the
- * shared material it would prepare a pipeline the shadow pass never draws with. The copy keeps the state of the draw.
- * It is not disposed: that would release the pipeline before the shadow pass draws with it.
- */
-function keepingDrawState(material: Material): Material {
-  const copy = material.clone();
-  // The build's cache key lists a material's keys in order. clone() leaves out those three adds to its shadow material,
-  // its flag and those its draws set, which the copy gets in the order the shared material has them once it drew.
-  for (const key of [...Object.keys(material), ...DRAWN])
-    if (!key.startsWith("_") && !Object.hasOwn(copy, key)) Reflect.set(copy, key, Reflect.get(material, key) ?? null);
-  for (const key of DRAW_STATE) {
-    let value: unknown = Reflect.get(copy, key);
-    let given = false;
-    Object.defineProperty(copy, key, {
-      get: () => value,
-      set: (next: unknown) => {
-        if (given) return;
-        given = true;
-        value = next;
-      },
-    });
-  }
-  return copy;
-}
-
-const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-
-function compileMesh(mesh: Mesh, { context, material }: Pass): Promise<void> {
-  const { renderer, camera, scene } = context;
-  const target = renderer.getRenderTarget();
-  const mrt = renderer.getMRT();
-  const cubeFace = renderer.getActiveCubeFace();
-  const mipLevel = renderer.getActiveMipmapLevel();
-  const culled = mesh.frustumCulled;
-  const visible = mesh.visible;
-  const children = mesh.children;
-  const background = scene.background;
-  const backgroundNode = scene.backgroundNode;
-  const override = scene.overrideMaterial;
-  try {
-    renderer.setRenderTarget(context.target, context.cubeFace, context.mipLevel);
-    renderer.setMRT(context.mrt);
-    scene.overrideMaterial = material && keepingDrawState(material);
-    // Demanded levels can still be hidden or outside the last view.
-    mesh.frustumCulled = false;
-    mesh.visible = true;
-    mesh.children = [];
-    // r186 compiles backgrounds first, which would postpone this mesh until after renderer state is restored.
-    scene.background = null;
-    scene.backgroundNode = null;
-    return atDepth(renderer, context.depth, () => renderer.compileAsync(mesh, camera, scene));
-  } finally {
-    scene.background = background;
-    scene.backgroundNode = backgroundNode;
-    scene.overrideMaterial = override;
-    mesh.children = children;
-    mesh.frustumCulled = culled;
-    mesh.visible = visible;
-    renderer.setRenderTarget(target, cubeFace, mipLevel);
-    renderer.setMRT(mrt);
-  }
-}
-
 /**
  * The textures `object`'s meshes draw: their materials', those their nodes sample, and those a material keeps in plain
  * objects and arrays for nodes it makes while it builds (an impostor's atlases, a baked mesh's rooms).
@@ -271,50 +175,4 @@ function textures(object: Object3D): Set<Texture> {
     for (const material of [node.material].flat()) for (const [key, value] of Object.entries(material)) if (key !== "userData") visit(value);
   });
   return found;
-}
-
-/** three's render contexts, which a compile takes at depth 0. */
-interface RenderContexts {
-  get(target: unknown, mrt: unknown, depth?: number): unknown;
-}
-
-const isRenderContexts = (value: unknown): value is RenderContexts =>
-  typeof value === "object" && value !== null && typeof Reflect.get(value, "get") === "function";
-
-/**
- * Run `compile`, which starts a compileAsync, so that it prepares draws for renders `depth` deep. Mirrors three r186
- * (0.186.1): compileAsync takes its render context, as a render of its own, with the first `_renderContexts.get` of
- * its synchronous start. Only that call is given `depth`; renders the compile starts meanwhile take their own. A three
- * that no longer makes that call fails here rather than compiling for the wrong depth.
- */
-export function atDepth(renderer: Renderer, depth: number, compile: () => Promise<void>): Promise<void> {
-  if (depth === 0) return compile();
-  const contexts: unknown = Reflect.get(renderer, "_renderContexts");
-  if (!isRenderContexts(contexts)) throw new Error("Lod: three's renderer keeps no render contexts");
-  const own = Object.hasOwn(contexts, "get");
-  const get = contexts.get;
-  let taken = false;
-  const restore = () => {
-    if (own) contexts.get = get;
-    else Reflect.deleteProperty(contexts, "get");
-  };
-  contexts.get = (target, mrt) => {
-    taken = true;
-    restore();
-    return get.call(contexts, target, mrt, depth);
-  };
-  let result: Promise<void>;
-  try {
-    result = compile();
-  } finally {
-    if (!taken) restore();
-  }
-  // compileAsync returns at once on a lost device, which is no fault of three's version.
-  if (taken || Reflect.get(renderer, "_isDeviceLost") === true) return result;
-  void result.catch(() => {});
-  throw new Error(
-    Reflect.get(renderer, "_initialized") === false
-      ? "Lod: initialise the renderer before levels compile"
-      : "Lod: three's compileAsync took no render context as it started (lod mirrors three r186)",
-  );
 }

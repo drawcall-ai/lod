@@ -13,12 +13,13 @@ import {
 import { uniform } from "three/tsl";
 import { MAPS, PAD, boundingRadius, texelPixels, validateImpostor, type Impostor, type ImpostorLayout, type ImpostorMap } from "../impostor.js";
 import { frameBasis, frameDirection, type Vec3 } from "../octahedral.js";
-import { boundingBox, forEachVertex, showDetail } from "../../bounds.js";
+import { boundingBox, showDetail } from "../../bounds.js";
 import { pause } from "../../pause.js";
 import { borrow, readFloats, sharedRenderer } from "../../renderer.js";
 import { Atlas } from "./atlas.js";
 import { OUTPUTS, swapMaterials, type BakeSettings, type Output } from "./materials.js";
 import { sourceForBake } from "./source.js";
+import { fittedHalfSize } from "./fit.js";
 
 export interface BakeImpostorOptions {
   /**
@@ -268,23 +269,4 @@ function renderTile(
     target.scissorTest = false;
     restore();
   }
-}
-
-/**
- * The smallest square half-size that holds the object in every frame: the largest
- * extent of any vertex along any frame's image axes. Tighter than the bounding
- * sphere, which wastes about a third of every frame on a tree.
- */
-function fittedHalfSize(source: Object3D, centre: Vector3, directions: Vec3[]): number {
-  const axes = directions.flatMap((n) => {
-    const { tangent, bitangent } = frameBasis(n);
-    return [tangent, bitangent];
-  });
-  let half = 0;
-  forEachVertex(source, (p) => {
-    p.sub(centre);
-    for (const a of axes) half = Math.max(half, Math.abs(p.x * a[0] + p.y * a[1] + p.z * a[2]));
-  });
-  if (half === 0) throw new Error("bakeImpostor: object has no extent (every vertex is at one point)");
-  return half;
 }

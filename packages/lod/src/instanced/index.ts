@@ -1,4 +1,4 @@
-import { Box3, type Color, Frustum, Matrix4, type Object3D, Sphere, Vector3, type Camera, type Intersection, type Raycaster, type Renderer } from "three/webgpu";
+import { Box3, type Color, Frustum, Matrix4, type Object3D, Sphere, Vector3, type Camera, type Intersection, type Raycaster } from "three/webgpu";
 import { at } from "../at.js";
 import { disposeCopies } from "../dispose.js";
 import { Level, cloneLevels, estimate, fadeProgress, levelAt, tintLevels, validate, type LodLevel } from "../levels.js";
@@ -6,7 +6,7 @@ import { Lod } from "../lod.js";
 import { Owner, type LodOptions } from "../owner.js";
 import { inShadowPass, sameClass } from "../three.js";
 import { TYPICAL_HEIGHT, View, viewportHeight, type RenderContext } from "../view.js";
-import { compileLevel } from "../compile.js";
+import { compileLevel } from "../compile/index.js";
 import { refreshWind } from "../wind/index.js";
 import { Meshes } from "./meshes.js";
 import { parts } from "./parts.js";
@@ -18,6 +18,7 @@ import { checkRange, keptFraction, survivorScale, type InstancedRange } from "./
 import { Selection, sight, type Aim } from "./select.js";
 import { Store, type ChunkData, type InstancedChunk } from "./store.js";
 import { Pages, type GpuChunk, type GpuChunkData, type GpuRecords } from "./pages/index.js";
+import { Intake } from "./pages/intake.js";
 import { meeting } from "../residency.js";
 
 /** How an InstancedLod is made. */
@@ -61,6 +62,8 @@ export class InstancedLod extends Owner {
 
   /** Raycasts its CPU instances; GPU instances have none to hit. */
   private readonly probes: Probes | null;
+  /** Holds its item while GPU chunks wait to be taken in. */
+  private readonly intake: Intake | null = null;
   private selection: Selection | null = null;
   private meshes: Meshes | null = null;
   private readonly places: Store | Pages;
@@ -98,7 +101,17 @@ export class InstancedLod extends Owner {
     this.blocks = this.makeBlocks();
     // Every render takes GPU chunks in first, whether or not any instance draws, so a producer can reuse its records
     // once it has rendered. CPU chunks are sent as they are measured.
-    if (this.places instanceof Pages) this.add(meeting((renderer) => this.residency.guard(() => this.selection?.prepare(renderer))));
+    if (this.places instanceof Pages) {
+      const intake = (this.intake = new Intake(this.places, this.residency));
+      this.add(
+        meeting((renderer) =>
+          this.residency.guard(() => {
+            this.selection?.prepare(renderer);
+            intake.rendered(renderer);
+          }),
+        ),
+      );
+    }
   }
 
   /** Instances in its chunks from the CPU. */
@@ -122,9 +135,10 @@ export class InstancedLod extends Owner {
     throw new Error("InstancedLod: one made with gpuRecords holds GPU chunks, whose instances have no index");
   }
 
-  /** Its page pool for GPU chunks. */
-  private get pages(): Pages {
-    if (this.places instanceof Pages) return this.places;
+  /** Its page pool for GPU chunks, and what takes them in. */
+  private get gpu(): { pages: Pages; intake: Intake } {
+    const { places, intake } = this;
+    if (places instanceof Pages && intake) return { pages: places, intake };
     throw new Error("InstancedLod: GPU chunks need an InstancedLod made with gpuRecords");
   }
 
@@ -150,35 +164,28 @@ export class InstancedLod extends Owner {
   /**
    * Add the instances of the records an app's GPU pass wrote for `data` as one chunk, in an InstancedLod made with
    * `gpuRecords`. The next render that reaches this InstancedLod copies them into its pages, and nothing is read back:
-   * the records and count need to hold only until that render, after which the producer may overwrite them. A chunk
-   * the pool lacks pages for draws the instances it got until it is removed, and `drained` throws.
+   * the records and count need to hold only until that render, after which the producer may overwrite them. Its item
+   * stays held until the GPU shows the chunk taken in. A chunk the pool lacks pages for draws the instances it got until
+   * it is removed, and is this InstancedLod's error (see `error`).
    */
   addGpuChunk(data: GpuChunkData): GpuChunk {
-    const { pages } = this;
+    const { pages, intake } = this.gpu;
     const chunk = pages.add(data);
     this.blocks.place(chunk.slot, chunk.box, pages.scales);
     this.blocks.refit();
     this.selection?.changed();
+    intake.changed();
     return chunk;
   }
 
   /** Remove `chunk`'s instances; its pages return to the pool before the next draw. */
   removeGpuChunk(chunk: GpuChunk): void {
-    const { pages } = this;
+    const { pages, intake } = this.gpu;
     pages.remove(chunk);
     this.blocks.place(chunk.slot, empty, pages.scales);
     this.blocks.refit();
     this.selection?.changed();
-  }
-
-  /**
-   * Whether every GPU chunk has been taken in on `renderer`, taking in the chunks' changes first, as the next render
-   * would. Throws if a chunk lacks pages, naming the shortfall. It reads the GPU's progress back, so call it only to
-   * wait for it, say before a capture. Always true without GPU chunks.
-   */
-  async drained(renderer: Renderer): Promise<boolean> {
-    this.selection?.prepare(renderer);
-    return this.places.drained(renderer);
+    intake.changed();
   }
 
   /** Follow the store to a new capacity, or to colours it has begun to carry. */

@@ -193,11 +193,6 @@ export class Store implements Places {
   /** Nothing to prepare: `measure` sends edits as they are measured. */
   prepare(): void {}
 
-  /** Always: chunks are taken in as they are added. */
-  drained(): Promise<boolean> {
-    return Promise.resolve(true);
-  }
-
   dispose(): void {}
 
   /** Measure only changed instances into `blocks`; instance and colour uploads have separate ranges. */

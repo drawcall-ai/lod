@@ -1,8 +1,17 @@
-import { BufferGeometry, Float32BufferAttribute, Mesh, MeshBasicNodeMaterial, type Camera, type Object3D, type Object3DEventMap, type Renderer } from "three/webgpu";
+import {
+  BufferGeometry,
+  Float32BufferAttribute,
+  Mesh,
+  MeshBasicNodeMaterial,
+  type Camera,
+  type Object3D,
+  type Object3DEventMap,
+  type Renderer,
+} from "three/webgpu";
 import { Item } from "./item.js";
 import { busy, gpuRenderer, inShadowPass, isScene, rootOf, skipDraw } from "./three.js";
 import { at } from "./at.js";
-import { compileLevel } from "./compile.js";
+import { compileLevel } from "./compile/index.js";
 import { pause } from "./pause.js";
 import { disposeTree } from "./dispose.js";
 import { loadOnce, loading } from "./deferred.js";
@@ -67,8 +76,10 @@ export class Residency {
   fallback: number[] = [];
   previous: number[] = [];
   private start: number | undefined;
-  /** What the owner is preparing: draws of levels it was given and the loaded levels it installs, all at once. */
-  private task: { done: Promise<void>; levels: readonly Level[] } | undefined;
+  /** Independent preparations: a slow level never holds another level's first drawable. */
+  private readonly tasks = new Map<Level | Object3D, Promise<void>>();
+  /** Compiled arrivals waiting for the current handover to end before changing its routes. */
+  private readonly ready = new Set<Level>();
   /** Each camera's last demand, and the pass it was made in. */
   private readonly demands = new Map<Camera, Demand>();
   /** Whether a view updated the owner before its renderer was known while levels are missing: it loads what it needs once it is. */
@@ -117,6 +128,8 @@ export class Residency {
 
   /** Whether a render has updated the owner: its shaders are being or have been built. */
   started = false;
+  /** Whether the owner's GPU chunks wait to be taken in, which holds the item as pending levels do (see `Intake`). */
+  taking = false;
 
   get progress(): number {
     if (this.start === undefined) return 1;
@@ -127,7 +140,7 @@ export class Residency {
 
   get pending(): boolean {
     if (this.disposed || this.error) return false;
-    if (this.waiting || this.task?.levels.length) return true;
+    if (this.waiting || this.tasks.size > 0 || this.ready.size > 0) return true;
     for (const level of this.needed()) if (!this.installed.has(level)) return true;
     return false;
   }
@@ -209,7 +222,8 @@ export class Residency {
     this.started = true;
     if (this.disposed || this.error) return;
     if (!isScene(rootOf(this.owner))) {
-      if (indices.some((index) => !this.installed.has(at(this.levels, index)))) throw new Error("Lod: render a Scene that holds it to load the levels it needs");
+      if (indices.some((index) => !this.installed.has(at(this.levels, index))))
+        throw new Error("Lod: render a Scene that holds it to load the levels it needs");
       return;
     }
     const { renderer } = this;
@@ -226,6 +240,13 @@ export class Residency {
       demand.levels.add(level);
       const fallback = at(this.fallback, index);
       if (fallback >= 0) demand.levels.add(at(this.levels, fallback));
+      else if (!level.empty) {
+        // The first view need not wait for its most expensive detail to draw anything.
+        const coarsest = this.levels.slice(index + 1).reverse().find((candidate) => !candidate.empty);
+        if (coarsest) demand.levels.add(coarsest);
+      }
+    }
+    for (const level of demand.levels) {
       const load = level.input.load;
       if (!load || this.requested.has(load)) continue;
       this.requested.add(load);
@@ -235,7 +256,7 @@ export class Residency {
 
   drawn(camera: Camera, object: Object3D): void {
     // compileAsync also runs draw callbacks; its task records success itself.
-    if (this.task) return;
+    if (this.tasks.size > 0) return;
     const context = renderContext(camera);
     if (!context) return;
     compiledIn(context).add(object);
@@ -243,49 +264,52 @@ export class Residency {
 
   update(camera: Camera, meshes?: readonly (readonly Object3D[])[]): void {
     const context = renderContext(camera);
-    if (!context || this.disposed || this.task || this.error || this.progress < 1) return;
+    if (!context || this.disposed || this.error) return;
+    this.flush();
     const compiled = compiledIn(context);
     const needed = this.needed();
     const given = this.levels.flatMap((level, index) =>
-      !level.input.load && needed.has(level) ? (meshes?.[index] ?? []).filter((mesh) => !compiled.has(mesh)) : [],
+      !level.input.load && needed.has(level) ? (meshes?.[index] ?? []).filter((mesh) => !compiled.has(mesh) && !this.tasks.has(mesh)) : [],
     );
     const arriving = this.levels.flatMap((level) => {
       const object = level.input.load && loading(level.input.load)?.object;
-      return object && needed.has(level) && !this.installed.has(level) ? [{ level, object }] : [];
+      return object && needed.has(level) && !this.installed.has(level) && !this.ready.has(level) && !this.tasks.has(level) ? [{ level, object }] : [];
     });
-    if (given.length === 0 && arriving.length === 0) return;
-    this.run(async () => {
-      const prepared = await Promise.allSettled([
-        ...given.map(async (mesh) => {
-          await compileLevel(mesh, context);
-          compiled.add(mesh);
-        }),
-        ...arriving.map(({ level, object }) => this.install(level, object, context)),
-      ]);
-      if (this.disposed) return;
-      const before = this.fallback;
-      arriving.forEach(({ level }, i) => {
-        if (prepared[given.length + i]?.status === "fulfilled") this.installed.add(level);
+    for (const mesh of given)
+      this.run(mesh, async () => {
+        await compileLevel(mesh, context);
+        compiled.add(mesh);
       });
-      this.fallback = fallbacks(this.levels, this.installed);
-      // The first levels to arrive draw at once. Later ones hand over from what drew in their place: their route's
-      // level, or where that drew nothing, the level each instance kept drawing (the owner knows which).
-      if (at(before, 0) >= 0 && this.fallback.some((index, i) => index !== before[i])) {
-        this.previous = before;
-        this.start = performance.now();
-      }
-      const failed = prepared.find((result) => result.status === "rejected");
-      if (failed) throw failed.reason;
-    }, arriving.map(({ level }) => level));
+    for (const { level, object } of arriving)
+      this.run(level, async () => {
+        await this.install(level, object, context);
+        if (!this.disposed) this.ready.add(level);
+      });
+  }
+
+  /** Ready levels join between handovers; a route never changes halfway through its fade. */
+  private flush(): void {
+    if (this.disposed || this.ready.size === 0 || this.progress < 1) return;
+    const before = this.fallback;
+    for (const level of this.ready) this.installed.add(level);
+    this.ready.clear();
+    this.fallback = fallbacks(this.levels, this.installed);
+    if (at(before, 0) >= 0 && this.fallback.some((index, i) => index !== before[i])) {
+      this.previous = before;
+      this.start = performance.now();
+    }
+    queueMicrotask(() => {
+      if (!this.disposed) this.changed();
+    });
   }
 
   /**
-   * Holds the item while the levels the views need load, install, compile or hand over, and ends it once they are done,
-   * so a host waiting for its manager renders the views complete. Called at the end of each update. Levels stay
+   * Holds the item while the levels the views need load, install, compile or hand over, or GPU chunks wait to be taken
+   * in, and ends it once they are done, so a host waiting for its manager renders the views complete. Called at the end of each update. Levels stay
    * installed once loaded, until the owner is disposed: nothing is evicted.
    */
   sync(): void {
-    this.item.held = !this.disposed && !this.error && (this.pending || this.task !== undefined || this.progress < 1);
+    this.item.held = !this.disposed && !this.error && (this.pending || this.taking || this.progress < 1);
     if (!this.item.held || !this.renderer || this.looking) return;
     // The first look only counts the renders: those still to come in this render are not without an update.
     this.updated = true;
@@ -314,19 +338,17 @@ export class Residency {
   }
 
   /** Run `action` outside the render that asked for it, which may still be walking the scene. */
-  private run(action: () => Promise<void>, levels: readonly Level[]): void {
+  private run(key: Level | Object3D, action: () => Promise<void>): void {
     const done = pause()
       .then(async () => {
         if (!this.disposed) await action();
       })
       .catch((error: unknown) => this.report(error))
       .finally(() => {
-        this.task = undefined;
-      })
-      .then(() => {
-        if (!this.disposed && levels.some((level) => this.installed.has(level))) this.changed();
+        this.tasks.delete(key);
+        this.flush();
       });
-    this.task = { done, levels };
+    this.tasks.set(key, done);
   }
 
   /**
@@ -374,7 +396,7 @@ export class Residency {
       if (pending.length) void Promise.allSettled(pending).then(free);
       else free();
     };
-    if (this.task) void this.task.done.then(finish);
+    if (this.tasks.size > 0) void Promise.all(this.tasks.values()).then(finish);
     else finish();
   }
 }

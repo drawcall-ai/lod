@@ -16,6 +16,7 @@ export { type BakeMeshOptions, bakeMesh } from "./baked/index.js";
 export { encodeBakedMeshAsync, decodeBakedMeshAsync } from "./baked/codec.js";
 export { type BakeImpostorOptions, bakeImpostor } from "./impostor/bake/index.js";
 export { type ImpostorMeshOptions, ImpostorMesh } from "./impostor/mesh/index.js";
+export { cosine } from "./impostor/mesh/surface.js";
 export { type Impostor, type ImpostorLayout, type ImpostorMap } from "./impostor/impostor.js";
 export { encodeImpostorAsync, decodeImpostorAsync } from "./impostor/codec.js";
 export { boundingBox } from "./bounds.js";

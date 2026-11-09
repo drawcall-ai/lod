@@ -47,7 +47,5 @@ export interface Places {
   measure(blocks: Blocks): void;
   /** Bring the selection's buffers up to date on `renderer`, before any view selects. */
   prepare(renderer: Renderer): void;
-  /** Whether what `prepare` ran has taken every instance in on `renderer`; throws if some never will be. */
-  drained(renderer: Renderer): Promise<boolean>;
   dispose(): void;
 }

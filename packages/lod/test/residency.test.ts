@@ -28,6 +28,76 @@ import { oneChunk } from "./crowd.js";
 
 const box = () => new Mesh(new BoxGeometry(2, 2, 2), new MeshBasicNodeMaterial());
 
+it.each(["Lod", "InstancedLod"].flatMap((kind) => ["load", "compile", "staggered"].map((waiting) => ({ kind, waiting }))))(
+  "shows a coarse level of $kind while its first fine level waits to $waiting",
+  { timeout: GPU_TIMEOUT },
+  async ({ kind, waiting }) => {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fine = vi.fn(async () => {
+      if (waiting === "load") await gate;
+      const mesh = box();
+      mesh.name = "fine first";
+      return mesh;
+    });
+    let releaseCoarse = () => {};
+    const coarseGate = new Promise<void>((resolve) => {
+      releaseCoarse = resolve;
+    });
+    const coarse = vi.fn(async () => {
+      if (waiting === "staggered") await coarseGate;
+      return box();
+    });
+    const bounds = new Box3().setFromArray([-1, -1, -1, 1, 1, 1]);
+    const levels = [
+      { load: fine, maxPixels: Infinity, box: bounds },
+      { load: coarse, maxPixels: 8, box: bounds },
+      { object: new Object3D(), maxPixels: 1 },
+    ];
+    const owner = kind === "Lod" ? new Lod(levels) : oneChunk(levels, 1);
+    owner.position.z = -5;
+    const camera = new PerspectiveCamera(60, 1, 0.1, 100);
+    const scene = new Scene().add(owner);
+    const compile = renderer.compileAsync.bind(renderer);
+    let compiling = false;
+    if (waiting !== "load") {
+      await loadOnce(fine).promise;
+      if (waiting === "compile") await loadOnce(coarse).promise;
+      vi.spyOn(renderer, "compileAsync").mockImplementation(async (...args) => {
+        await compile(...args);
+        if (args[0].name === "fine first") {
+          compiling = true;
+          await gate;
+        }
+      });
+    }
+    try {
+      // The view asks for the fine level, but its first drawable should not await that load.
+      for (let frame = 0; frame < 30 && !owner.levels[1]?.object; frame++) {
+        renderer.render(scene, camera);
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        if (compiling) releaseCoarse();
+      }
+      expect(fine).toHaveBeenCalledOnce();
+      expect(coarse).toHaveBeenCalledOnce();
+      expect(owner.levels[0]?.object).toBeUndefined();
+      expect(owner.levels[1]?.object).toBeDefined();
+      expect((await render(scene, camera)).some((byte) => byte > 0)).toBe(true);
+      release();
+      releaseCoarse();
+      await nextLevel(owner, camera);
+      expect(owner.levels[0]?.object).toBeDefined();
+    } finally {
+      release();
+      releaseCoarse();
+      owner.dispose();
+      vi.restoreAllMocks();
+    }
+  },
+);
+
 /**
  * `kind` with a deferred impostor of a box above a box fallback. `freed` settles once
  * the owner has released the impostor; its material is then disposed only if every

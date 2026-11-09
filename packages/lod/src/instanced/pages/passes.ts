@@ -39,7 +39,7 @@ export interface Pool {
   /** One workgroup per occupied page. */
   readonly occupiedDispatch: IndirectStorageBufferAttribute;
   /** The app's record counts. */
-  readonly counts: StorageBufferAttribute | StorageInstancedBufferAttribute;
+  readonly counters: StorageBufferAttribute | StorageInstancedBufferAttribute;
 }
 
 /** The selection's buffers the copy pass writes. */
@@ -51,7 +51,7 @@ export interface Targets {
 
 /** `pool`'s buffers as one pass uses them: a node each, since a pass may not bind a buffer it writes twice. */
 function nodes(pool: Pool) {
-  const { slots, perSlot, pages, counts } = pool;
+  const { slots, perSlot, pages, counters } = pool;
   const first = (dispatch: IndirectStorageBufferAttribute) => storage(dispatch, "uint", 3).toAtomic().element(0);
   return {
     stack: storage(pool.stack, "uint", pages + 1).toAtomic(),
@@ -65,7 +65,7 @@ function nodes(pool: Pool) {
     freshCount: first(pool.freshDispatch),
     occupied: storage(pool.occupied, "uint", pages),
     occupiedCount: first(pool.occupiedDispatch),
-    counts: storage(counts, "uint", counts.count).toReadOnly(),
+    counters: storage(counters, "uint", counters.count).toReadOnly(),
   };
 }
 
@@ -83,7 +83,7 @@ function eachSlot(pool: Pool, body: (slot: Node<"uint">) => void): void {
 function ifNew(pool: Pool, n: Nodes, slot: Node<"uint">, body: (source: Node<"uvec4">, records: Node<"uint">) => void): void {
   const source = n.sources.element(slot).toVar();
   const state = n.states.element(slot).toVar();
-  If(source.x.equal(1).and(state.x.notEqual(source.w)), () => body(source, least(n.counts.element(source.z), uint(pool.capacity)).toVar()));
+  If(source.x.equal(1).and(state.x.notEqual(source.w)), () => body(source, least(n.counters.element(source.z), uint(pool.capacity)).toVar()));
 }
 
 /** The windows of `PAGE` records that `records` make. */

@@ -8,7 +8,7 @@ import { copyWind } from "./wind/index.js";
 
 export interface LodOptions {
   /**
-   * Gets an item while the levels the views need load, install, compile or fade in, ended once they are complete. Without
+   * Gets an item while the levels the views need load, install, compile or fade in, or GPU chunks wait to be taken in, ended once they are complete. Without
    * one, an owner nested in another's level reports to that owner's, any other to three's `DefaultLoadingManager`. Wait
    * for a quiet frame, one in which no item started or ended, rendering (or compiling) the Scene that holds the owner a
    * frame apart meanwhile, to capture a view complete. An object its renderer rendered around for a frame without

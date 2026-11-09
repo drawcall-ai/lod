@@ -1,6 +1,6 @@
 import { ACESFilmicToneMapping, BoxGeometry, Mesh, MeshBasicMaterial, NoToneMapping, PerspectiveCamera, Scene } from "three/webgpu";
 import { expect, it } from "vitest";
-import { compileLevel } from "../src/compile.js";
+import { compileLevel } from "../src/compile/index.js";
 import { renderContext, setViewportHeight, viewportHeight } from "../src/view.js";
 import { GPU_TIMEOUT, render, renderer } from "./gpu.js";
 import { Lod } from "../src/lod.js";

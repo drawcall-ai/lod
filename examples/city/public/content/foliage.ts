@@ -1,6 +1,6 @@
 import * as THREE from "three/webgpu";
 import { Fn, color, dFdx, dFdy, dot, log2, materialOpacity, max, normalView, positionViewDirection, pow, saturate, uv, vec2, vec3, vec4 } from "three/tsl";
-import { ImpostorMesh } from "@drawcall/lod";
+import { ImpostorMesh, cosine } from "@drawcall/lod";
 import { baseColor } from "./materials.ts";
 
 export interface FoliageOptions {
@@ -18,12 +18,14 @@ export const MODEL_FOLIAGE: FoliageOptions = { translucency: 0.6 };
  * the direct-light term, so it is shadowed exactly like front light. Set up by `foliage`.
  * Its own class so that the copies the package draws levels with (clones) keep it.
  */
-export class Foliage extends THREE.MeshPhysicalNodeMaterial {
+export class Foliage extends THREE.MeshStandardNodeMaterial {
   translucency = 0;
   readonly tint = new THREE.Color(1, 1, 1);
 
   override copy(source: THREE.Material): this {
     super.copy(source);
+    // NodeMaterial.copy skips Material accessors, including the cutout threshold.
+    this.alphaTest = source.alphaTest;
     if (source instanceof Foliage) {
       this.translucency = source.translucency;
       this.tint.copy(source.tint);
@@ -32,7 +34,7 @@ export class Foliage extends THREE.MeshPhysicalNodeMaterial {
   }
 
   override setupLightingModel(): THREE.PhysicalLightingModel {
-    return new Translucent(super.setupLightingModel(), this.translucency, this.tint);
+    return new Translucent(transmitted(leafBehind, this.translucency, this.tint));
   }
 
   // The lighting model is no node: materials alike in their nodes would share a shader.
@@ -77,20 +79,14 @@ export function foliageModel(root: THREE.Object3D, options: FoliageOptions): voi
   });
 }
 
-const shaded = Symbol("city foliage");
-
-/** Restores leaf translucency on a decoded impostor before its material is compiled. */
+/** Adds leaf translucency to a decoded impostor's lighting: the bake holds no light passing through a leaf. */
 export function foliageLevels(root: THREE.Object3D, { translucency, tint = "#e4ff8a" }: FoliageOptions): void {
   const shade = new THREE.Color(tint);
   root.traverse((o) => {
     if (!(o instanceof ImpostorMesh)) return;
     const m = o.material;
-    if (Reflect.has(m, shaded)) return;
-    Object.defineProperty(m, shaded, { value: true });
-    const lighting = m.setupLightingModel.bind(m);
-    const key = m.customProgramCacheKey.bind(m);
-    m.setupLightingModel = () => new Translucent(lighting(), translucency, shade);
-    m.customProgramCacheKey = () => `${key()}|${foliageKey(translucency, shade)}`;
+    // The mean over the leaves a texel averages: its one unit normal would light them all one way.
+    m.directTerm = transmitted((direction) => cosine(m.spread, direction.negate()), translucency, shade);
   });
 }
 
@@ -111,51 +107,39 @@ function boostOf(map: THREE.Texture) {
   return mip.mul(0.25).add(1);
 }
 
-/** `lighting` with the translucency added to its direct light. */
+/** The share of a leaf's sunlight arriving on its far side, by its normal. */
+const leafBehind = (direction: THREE.Node<"vec3">) => saturate(dot(normalView, direction).negate());
+
+/**
+ * The light passing through a leaf from a direct light in `direction`, of that light × the leaf's colour: `behind` the
+ * share arriving on its far side.
+ */
+function transmitted(behind: (direction: THREE.Node<"vec3">) => THREE.Node<"float">, share: number, tint: THREE.Color) {
+  return (direction: THREE.Node<"vec3">): THREE.Node<"vec3"> => {
+    // light scatters forward through the leaf: strongest when looking toward the sun
+    const forward = pow(saturate(dot(positionViewDirection, direction.negate())), 3)
+      .mul(0.65)
+      .add(0.35);
+    return behind(direction).mul(forward).mul(share).mul(color(tint));
+  };
+}
+
+/** Three's lighting with `term` of each direct light's direction added, of that light × the surface's colour. */
 class Translucent extends THREE.PhysicalLightingModel {
-  constructor(
-    private readonly lighting: THREE.PhysicalLightingModel,
-    private readonly share: number,
-    private readonly tint: THREE.Color,
-  ) {
+  constructor(private readonly term: (direction: THREE.Node<"vec3">) => THREE.Node<"vec3">) {
     super();
   }
 
   override direct(input: Parameters<THREE.PhysicalLightingModel["direct"]>[0], builder: THREE.NodeBuilder): void {
-    this.lighting.direct(input, builder);
+    super.direct(input, builder);
     const { lightDirection, lightColor, reflectedLight } = input;
     const { directDiffuse } = reflectedLight;
-    if (!isNodeOf(lightDirection, "vec3", builder) || !isNodeOf(lightColor, "color", builder) || !isNodeOf(directDiffuse, "vec3", builder))
-      throw new Error("foliage: three's direct light is not a direction, a colour and a sum");
-    const behind = saturate(dot(normalView, lightDirection).negate());
-    // light scatters forward through the leaf: strongest when looking toward the sun
-    const forward = pow(saturate(dot(positionViewDirection, lightDirection.negate())), 3)
-      .mul(0.65)
-      .add(0.35);
-    directDiffuse.addAssign(behind.mul(forward).mul(this.share).mul(lightColor).mul(THREE.TSL.diffuseContribution).mul(color(this.tint)));
-  }
-
-  // Everything else is the wrapped model's.
-  override start(builder: THREE.NodeBuilder): void {
-    this.lighting.start(builder);
-  }
-  override finish(builder: THREE.NodeBuilder): void {
-    this.lighting.finish(builder);
-  }
-  override directRectArea(input: Parameters<THREE.PhysicalLightingModel["directRectArea"]>[0], builder: THREE.NodeBuilder): void {
-    this.lighting.directRectArea(input, builder);
-  }
-  override indirect(builder: THREE.NodeBuilder): void {
-    this.lighting.indirect(builder);
-  }
-  override indirectDiffuse(builder: THREE.NodeBuilder): void {
-    this.lighting.indirectDiffuse(builder);
-  }
-  override indirectSpecular(builder: THREE.NodeBuilder): void {
-    this.lighting.indirectSpecular(builder);
-  }
-  override ambientOcclusion(builder: THREE.NodeBuilder): void {
-    this.lighting.ambientOcclusion(builder);
+    if (!isNodeOf(lightDirection, "vec3", builder) || !isNodeOf(directDiffuse, "vec3", builder))
+      throw new Error("foliage: three's direct light is not a direction and a sum");
+    // Converted, not asked its type: asked here, before its shadow is set up, three (0.186) answers a colour, keeps
+    // that, and writes invalid WGSL for the shadow's vec4.
+    const light = vec3(new THREE.ConvertNode<"vec3">(lightColor, "vec3"));
+    directDiffuse.addAssign(this.term(lightDirection).mul(light).mul(THREE.TSL.diffuseContribution));
   }
 }
 
@@ -163,6 +147,6 @@ function isShadowPass(material: unknown): boolean {
   return typeof material === "object" && material !== null && Reflect.get(material, "isShadowPassMaterial") === true;
 }
 
-function isNodeOf<T extends "vec3" | "color">(node: THREE.Node, type: T, builder: THREE.NodeBuilder): node is THREE.Node<T> {
+function isNodeOf<T extends "vec3">(node: THREE.Node, type: T, builder: THREE.NodeBuilder): node is THREE.Node<T> {
   return node.getNodeType(builder) === type;
 }

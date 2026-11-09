@@ -15,12 +15,14 @@ import {
   RenderTarget,
   RGBAFormat,
   Scene,
+  WebGPURenderer,
 } from "three/webgpu";
 import { mrt, output, texture, vec3, vec4 } from "three/tsl";
 import { expect, it, vi } from "vitest";
 import { ImpostorMesh } from "../src/impostor/mesh/index.js";
 import * as surface from "../src/impostor/mesh/surface.js";
-import { atDepth, compileLevel } from "../src/compile.js";
+import { compileLevel } from "../src/compile/index.js";
+import { atDepth } from "../src/compile/pipelines.js";
 import { renderContext } from "../src/view.js";
 import { Lod } from "../src/lod.js";
 import { GPU_TIMEOUT, renderer } from "./gpu.js";
@@ -37,6 +39,44 @@ const contextOf = (scene = new Scene()) => ({
   cubeFace: 0,
   mipLevel: 0,
   depth: 0,
+});
+
+it("prepares a level on WebGPURenderer's WebGL backend", { timeout: GPU_TIMEOUT }, async () => {
+  const fallback = new WebGPURenderer({ forceWebGL: true });
+  await fallback.init();
+  const mesh = new Mesh(new BoxGeometry(), new MeshBasicNodeMaterial());
+  mesh.position.z = -3;
+  const scene = new Scene().add(mesh);
+  const context = { ...contextOf(scene), renderer: fallback };
+  try {
+    await compileLevel(mesh, context);
+    fallback.setRenderTarget(context.target);
+    fallback.render(scene, context.camera);
+    const pixels = await fallback.readRenderTargetPixelsAsync(context.target, 0, 0, 32, 32);
+    expect(pixels.some((byte) => byte > 0)).toBe(true);
+  } finally {
+    mesh.geometry.dispose();
+    mesh.material.dispose();
+    context.target.dispose();
+    fallback.dispose();
+  }
+});
+
+it("rejects a render pipeline that the backend could not compile", { timeout: GPU_TIMEOUT }, async () => {
+  const context = contextOf();
+  const mesh = new Mesh(new BoxGeometry(), new MeshBasicNodeMaterial({ colorNode: vec3(0.443, 0.621, 0.127) }));
+  const failure = new Error("test pipeline failure");
+  const compile = vi.spyOn(GPUDevice.prototype, "createRenderPipelineAsync").mockRejectedValueOnce(failure);
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    await expect(compileLevel(mesh, context)).rejects.toThrow("render pipeline compilation failed");
+    expect(compile).toHaveBeenCalledOnce();
+  } finally {
+    vi.restoreAllMocks();
+    mesh.geometry.dispose();
+    mesh.material.dispose();
+    context.target.dispose();
+  }
 });
 
 it(
@@ -122,19 +162,21 @@ it(
     const created = GPUDevice.prototype.createRenderPipelineAsync;
     let release = () => {};
     const held = new Promise<void>((resolve) => (release = resolve));
+    let first = true;
     const pipelines = vi.spyOn(GPUDevice.prototype, "createRenderPipelineAsync").mockImplementation(async function (this: GPUDevice, descriptor) {
+      const wait = first;
+      first = false;
       const pipeline = await created.call(this, descriptor);
-      await held;
+      if (wait) await held;
       return pipeline;
     });
     const builds = vi.spyOn(NodeMaterial.prototype, "setup");
     try {
-      let done = 0;
-      const levels = [...alike, ...alike, other].map((material) => compileLevel(new Mesh(geometry, material), context).then(() => done++));
+      const done = new Set<number>();
+      const levels = [...alike, ...alike, other].map((material, index) => compileLevel(new Mesh(geometry, material), context).then(() => done.add(index)));
       // The other shader's pipeline is requested while the first is still being created.
       await vi.waitFor(() => expect(pipelines).toHaveBeenCalledTimes(2), { timeout: 10_000 });
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      expect(done).toBe(0);
+      await vi.waitFor(() => expect([...done]).toEqual([4]), { timeout: 3000 });
       release();
       await Promise.all(levels);
       expect(builds.mock.calls.filter(([builder]) => alike.some((material) => material === builder.material))).toHaveLength(2);
