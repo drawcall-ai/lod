@@ -16,6 +16,7 @@
   "dependencies": {
     "@drawcall/glts": "^4.1.0",
     "@drawcall/lod": "workspace:*",
+    "@typegpu/three": "^0.12.2",
     "fflate": "^0.8.3",
     "three": "^0.186.1",
     "typegpu": "^0.12.9",
@@ -33,6 +34,7 @@
     "sharp": "^0.35.5",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
+    "unplugin-typegpu": "^0.12.8",
     "vite": "^8.3.5"
   }
 }

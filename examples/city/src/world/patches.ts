@@ -12,21 +12,15 @@ export interface Tiles {
 const eye = new THREE.Vector3();
 
 /**
- * Instances that exist only near the camera: grass and flowers around it, corn plants in
- * the blocks close enough to show them. A field holds millions of plants and a meadow
- * more blades, far too many for one instance list; here the nearest `room` tiles within
- * `reach` (re-measured each frame) each add a chunk of their instances to every
- * InstancedLod, and remove it when the camera moves on.
+ * Instances placed on the CPU that exist only near the camera: corn plants in the blocks
+ * close enough to show them. A field holds millions of plants, far too many for one
+ * instance list; here the nearest `room` tiles within `reach` (re-measured each frame)
+ * each add a chunk of their instances to every InstancedLod, one tile a frame, and remove
+ * it when the camera moves on. Ground cover comes from the GPU instead: see `Stream`.
  */
 export class Patches extends THREE.Object3D {
   /** View height in CSS pixels that reaches are measured on, as the package measures levels; the app sets it. */
   static height = 1080;
-  private static remaining = 8;
-
-  /** Share eight tile changes across all patch systems in this rendered frame. */
-  static beginFrame(): void {
-    Patches.remaining = 8;
-  }
   /** Tiles that wanted a chunk in the last update, filled or not. */
   wanted = 0;
   /** Tiles filled now, and the chunk each added to each InstancedLod. */
@@ -50,7 +44,7 @@ export class Patches extends THREE.Object3D {
     this.candidates.push(record);
   };
 
-  /** Diagnostics may wait for the current view without bypassing the tile budget. */
+  /** Diagnostics may wait for the current view without bypassing the one tile a frame. */
   get settled(): boolean {
     if (this.held.size !== this.keep.size) return false;
     for (const tile of this.keep) if (!this.held.has(tile)) return false;
@@ -86,12 +80,11 @@ export class Patches extends THREE.Object3D {
       if (!candidate) throw new Error("Patches: missing candidate");
       keep.add(candidate.tile);
     }
-    if (Patches.remaining === 0) return;
-    if (this.change()) Patches.remaining--;
+    this.change();
   }
 
   /** Fill one wanted tile, in place of one no longer wanted when there is no room, or else empty one no longer wanted. */
-  private change(): boolean {
+  private change(): void {
     const keep = this.keep;
     let wanted: number | undefined;
     for (const tile of keep) {
@@ -105,10 +98,8 @@ export class Patches extends THREE.Object3D {
       expired = tile;
       break;
     }
-    if (wanted === undefined && expired === undefined) return false;
     if (expired !== undefined && (wanted === undefined || this.held.size >= this.room)) this.release(expired);
     if (wanted !== undefined) this.fill(wanted);
-    return true;
   }
 
   private fill(tile: number): void {

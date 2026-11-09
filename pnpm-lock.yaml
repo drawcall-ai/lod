@@ -20,6 +20,9 @@ importers:
       '@drawcall/lod':
         specifier: workspace:*
         version: link:../../packages/lod
+      '@typegpu/three':
+        specifier: ^0.12.2
+        version: 0.12.2(@typegpu/gl@0.12.9(typegpu@0.12.9))(three@0.186.1)(typegpu@0.12.9)
       fflate:
         specifier: ^0.8.3
         version: 0.8.3
@@ -66,6 +69,9 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+      unplugin-typegpu:
+        specifier: ^0.12.8
+        version: 0.12.8(esbuild@0.28.2)(rolldown@1.2.15)(typegpu@0.12.9)(vite@8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15))
       vite:
         specifier: ^8.3.5
         version: 8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15)

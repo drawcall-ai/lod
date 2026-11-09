@@ -11,7 +11,7 @@ export interface Ladder {
   levels: LevelRequest[];
 }
 
-interface Species {
+export interface Species {
   id: string;
   variants: string[];
   maxPixels: number;

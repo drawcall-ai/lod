@@ -4,7 +4,7 @@ import { Random } from "../../public/content/random.ts";
 /** Half the edge of the detailed square of ground; the world's content lies within it. */
 export const EXTENT = 2400;
 /** Grid spacing of the detailed ground (m). */
-const CELL = 8;
+export const CELL = 8;
 /** How far the coarse ring of ground reaches, to the haze. */
 const HORIZON = 40000;
 const meshes = new WeakMap<Terrain, THREE.BufferGeometry>();

@@ -16,7 +16,6 @@ test("a tile the camera moved on from gives its chunk back to the tile that repl
   };
   const patches = new Patches([lod], 1, tiles, () => 100);
   const update = () => {
-    Patches.beginFrame();
     patches.update(new PerspectiveCamera());
   };
   update();
