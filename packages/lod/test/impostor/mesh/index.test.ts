@@ -2,8 +2,7 @@ import { Color, Matrix4, Raycaster, RGBAFormat, Vector3 } from "three/webgpu";
 import { describe, expect, it } from "vitest";
 import type { Impostor } from "../../../src/impostor/impostor.js";
 import { ImpostorMesh } from "../../../src/impostor/mesh/index.js";
-import { acquireTextures, releaseTextures } from "../../../src/impostor/mesh/textures.js";
-import { GPU_TIMEOUT } from "../../gpu.js";
+import { GPU_TIMEOUT } from "../../renderer.js";
 
 const make = (): Impostor => ({
   version: 4,
@@ -16,27 +15,17 @@ const make = (): Impostor => ({
   layers: [0, 1, 2].map(() => ({ format: RGBAFormat, mipmaps: [16, 8, 4].map((size) => new Uint8Array(size * size * 4)) })),
 });
 
-/** The textures `impostor`'s meshes share, without holding them. */
-function texturesOf(impostor: Impostor) {
-  const textures = acquireTextures(impostor);
-  releaseTextures(impostor);
-  return textures;
-}
-
 describe("ImpostorMesh", { timeout: GPU_TIMEOUT }, () => {
-  it("shares textures between meshes of one impostor until the last is disposed", () => {
-    const impostor = make();
-    const a = new ImpostorMesh(impostor);
+  it("shares its material's textures with its clones until the last is disposed", () => {
+    const a = new ImpostorMesh(make());
     const clone = a.clone();
-    const b = new ImpostorMesh(impostor);
-    const [texture] = texturesOf(impostor);
+    const [texture] = a.material.textures;
     let disposed = 0;
     texture?.addEventListener("dispose", () => disposed++);
     a.dispose();
     a.dispose();
-    clone.dispose();
     expect(disposed).toBe(0);
-    b.dispose();
+    clone.dispose();
     expect(disposed).toBe(1);
   });
 
@@ -71,7 +60,7 @@ describe("ImpostorMesh", { timeout: GPU_TIMEOUT }, () => {
     let oldColorFreed = 0;
     target.material.addEventListener("dispose", () => oldMaterialFreed++);
     target.instanceColor?.addEventListener("dispose", () => oldColorFreed++);
-    const [texture] = texturesOf(impostor);
+    const [texture] = source.material.textures;
     let texturesFreed = 0;
     texture?.addEventListener("dispose", () => texturesFreed++);
     target.copy(source);

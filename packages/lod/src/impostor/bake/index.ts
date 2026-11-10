@@ -1,38 +1,27 @@
-import {
-  HalfFloatType,
-  Matrix4,
-  NearestFilter,
-  OrthographicCamera,
-  RenderTarget,
-  RGBAFormat,
-  Scene,
-  Vector3,
-  type Object3D,
-  type Renderer,
-} from "three/webgpu";
+import { Matrix4, OrthographicCamera, RGBAFormat, Scene, Vector3, type Object3D, type Renderer } from "three/webgpu";
 import { uniform } from "three/tsl";
 import { MAPS, PAD, boundingRadius, texelPixels, validateImpostor, type Impostor, type ImpostorLayout, type ImpostorMap } from "../impostor.js";
 import { frameBasis, frameDirection, type Vec3 } from "../octahedral.js";
-import { boundingBox, showDetail } from "../../bounds.js";
-import { pause } from "../../pause.js";
-import { borrow, readFloats, sharedRenderer } from "../../renderer.js";
-import { Atlas } from "./atlas.js";
-import { OUTPUTS, swapMaterials, type BakeSettings, type Output } from "./materials.js";
+import { checkBakeRenderer, inTurn } from "../../bake.js";
+import { boundingBox, showDetail } from "../../source/detail.js";
+import { ImpostorAtlasMip } from "./atlas.js";
+import { swapMaterials, type BakeSettings } from "./materials.js";
+import { bakeMip } from "./sheet.js";
 import { sourceForBake } from "./source.js";
 import { fittedHalfSize } from "./fit.js";
 
 export interface BakeImpostorOptions {
   /**
-   * "full" (default): views from every side, so any orientation works. "hemi": views
+   * "full" (default): frames from every side, so any orientation works. "hemi": frames
    * from the horizon up only, for objects that always stand upright; the same quality
    * there with about 45% less memory.
    */
   layout?: ImpostorLayout;
-  /** views per atlas side; default 16 for full, 12 for hemi */
+  /** frames per atlas side; default 16 for full, 12 for hemi */
   frames?: number;
   /**
-   * pixels per view: the impostor stays sharp up to about this size on screen. Rounded
-   * down to a power of two so mip levels never mix two views; default 128.
+   * pixels per frame: the impostor stays sharp up to about this size on screen. Rounded
+   * down to a power of two so mip levels never mix two frames; default 128.
    */
   resolution?: number;
   /**
@@ -40,7 +29,7 @@ export interface BakeImpostorOptions {
    * drawn at, when that is above the height where it is sharp (its default maxPixels).
    * Larger, it shows its top mip magnified, which then reads the source's textures as
    * sharp as they are at this height, not with the look of their small mips. Alpha-tested
-   * materials are read at full detail at every size, which keeps their cut-out's coverage.
+   * materials are read at full detail at every size, which holds their cut-out's coverage.
    * Default: the height where it is sharp (see `texelPixels`, and `framePixels` for a
    * LodLoader level).
    */
@@ -58,9 +47,18 @@ export interface BakeImpostorOptions {
 }
 
 /**
- * Bake `object` (in its own space, ignoring its own transform) into an impostor. Nested
- * LODs are baked at their level 0, an InstancedLod with every instance at its level 0.
- * ImpostorMeshes are refused: bake from their source instead.
+ * Bake `object` (in its own space, ignoring its own transform) into an impostor, drawing
+ * with `renderer`, as three's PMREMGenerator does. Nested LODs are baked at their level 0,
+ * an InstancedLod with every instance at its level 0. ImpostorMeshes are refused: bake
+ * from their source instead.
+ *
+ * `renderer` must be one made for bakes: make one with `createBakeRenderer`, as LodLoader
+ * does for itself and a .glts script that bakes does too. Such a renderer is initialised,
+ * clears to transparent black and only when told to (`autoClear = false`), and has no MRT
+ * and no XR session; the bake throws otherwise. Nor may its canvas be a square of a frame's size (resolution ×
+ * supersample): three r186 applies a target's viewport only when it differs from the
+ * canvas's, and would draw that frame over the whole target. Bakes on one renderer run
+ * one at a time.
  *
  * Each frame is an orthographic look at the bounding-box centre, rendered once per mip
  * level at that level's size. The object's materials are rendered unlit into one target
@@ -69,25 +67,12 @@ export interface BakeImpostorOptions {
  * default specular adds the object's mean specular (see `Impostor.specular`).
  * Custom lighting behavior is not baked; the resulting surface is lit at draw time.
  */
-export function bakeImpostor(object: Object3D, options: BakeImpostorOptions = {}): Promise<Impostor> {
-  return bake(object, options);
+export function bakeImpostor(object: Object3D, renderer: Renderer, options: BakeImpostorOptions = {}): Promise<Impostor> {
+  return inTurn(renderer, () => bake(object, renderer, options));
 }
 
-/** The bake under way and those queued after it: see `bake`. */
-let baking: Promise<unknown> = Promise.resolve();
-
-/**
- * Loader entry: rooms attached for the close source are absent from distant bakes. Bakes run one at a time on the
- * shared renderer: each keeps one tile's renders in flight, and a scene's bakes all at once queued GPU work seconds
- * deep (macOS ends a device whose work keeps the display waiting).
- */
-export function bake(object: Object3D, options: BakeImpostorOptions, excluded: readonly Object3D[] = []): Promise<Impostor> {
-  const next = baking.then(() => bakeNow(object, options, excluded));
-  baking = next.catch(() => {});
-  return next;
-}
-
-async function bakeNow(object: Object3D, options: BakeImpostorOptions, excluded: readonly Object3D[]): Promise<Impostor> {
+async function bake(object: Object3D, renderer: Renderer, options: BakeImpostorOptions): Promise<Impostor> {
+  checkBakeRenderer(renderer, "bakeImpostor");
   const layout = options.layout ?? "full";
   const frames = options.frames ?? (layout === "hemi" ? 12 : 16);
   const resolution = options.resolution ?? 128;
@@ -98,7 +83,7 @@ async function bakeNow(object: Object3D, options: BakeImpostorOptions, excluded:
   if (options.maxPixels !== undefined && !(options.maxPixels > 0)) throw new Error("bakeImpostor: maxPixels must be > 0");
   const cell = 2 ** Math.floor(Math.log2(resolution));
 
-  const source = sourceForBake(object, excluded);
+  const source = sourceForBake(object);
   source.matrix.identity();
   source.matrix.decompose(source.position, source.quaternion, source.scale);
   // Bones are descendants, so this also moves them; getVertexPosition reads bone.matrixWorld.
@@ -129,15 +114,14 @@ async function bakeNow(object: Object3D, options: BakeImpostorOptions, excluded:
   // Every mip level is rendered, not filtered from the one above: the source does not look
   // the same at every size (a texture whose small mips mix in dark texels darkens with
   // distance), and filtering would freeze the look of the largest.
-  const atlases = Array.from({ length: Math.log2(cell) + 1 }, (_, m) => new Atlas(maps, frames, cell >> m, swapped.specular));
-  const renderer = await sharedRenderer();
+  const atlases = Array.from({ length: Math.log2(cell) + 1 }, (_, m) => new ImpostorAtlasMip(maps, frames, cell >> m, swapped.specular));
   const scene = new Scene();
   scene.add(source);
   const camera = new OrthographicCamera(-halfSize, halfSize, halfSize, -halfSize, 0, 4 * radius + 1e-3);
   camera.matrixAutoUpdate = false;
   // Bounds count meshes on every layer, so the bake draws them all.
   camera.layers.enableAll();
-  const views = directions.map((n) => {
+  const frameCameras = directions.map((n) => {
     const { tangent: t, bitangent: b } = frameBasis(n);
     return new Matrix4().set(
       t[0],
@@ -161,7 +145,7 @@ async function bakeNow(object: Object3D, options: BakeImpostorOptions, excluded:
   try {
     for (const [m, atlas] of atlases.entries()) {
       settings.textureBias.value = textureBias(m);
-      await bakeMip(atlas, supersample, renderer, scene, camera, views);
+      await bakeMip(atlas, supersample, renderer, scene, camera, frameCameras);
     }
   } finally {
     for (const material of swapped.materials) material.dispose();
@@ -185,88 +169,4 @@ async function bakeNow(object: Object3D, options: BakeImpostorOptions, excluded:
   if (swapped.specular) impostor.specular = top.meanSpecular();
   validateImpostor(impostor);
   return impostor;
-}
-
-/** Edge of the largest target frames render into side by side, which is read back at once. */
-const TILE = 1024;
-
-/**
- * Colour attachments one pass renders: four half-float targets fill the 32 bytes per
- * sample WebGPU guarantees.
- */
-const PER_PASS = 4;
-
-/**
- * Render every frame (`views`: camera matrices, in atlas order) into `atlas`, at its cell
- * size × `supersample`. Frames render side by side into tiles of up to TILE square, so
- * that each map is read back once per tile, in passes of up to PER_PASS outputs.
- */
-async function bakeMip(atlas: Atlas, supersample: number, renderer: Renderer, scene: Scene, camera: OrthographicCamera, views: Matrix4[]): Promise<void> {
-  const { frames, maps } = atlas;
-  const side = atlas.cell * supersample;
-  const per = Math.max(1, Math.min(frames, Math.floor(TILE / side)));
-  const width = per * side;
-  // one output per map, then the second way to store the normals (see Atlas), then the specular
-  const names: Output[] = OUTPUTS.filter((name) => (name === "emissive" ? maps.includes("emissive") : name !== "specular" || atlas.specular));
-  const passes = Array.from({ length: Math.ceil(names.length / PER_PASS) }, (_, p) => {
-    const outputs = names.slice(p * PER_PASS, (p + 1) * PER_PASS);
-    const target = new RenderTarget(width, width, {
-      count: outputs.length,
-      type: HalfFloatType,
-      minFilter: NearestFilter,
-      magFilter: NearestFilter,
-      depthBuffer: true,
-    });
-    outputs.forEach((name, i) => {
-      const texture = target.textures[i];
-      if (!texture) throw new Error("bakeImpostor: a render target lacks a texture");
-      texture.name = name;
-    });
-    return target;
-  });
-  try {
-    for (let row0 = 0; row0 < frames; row0 += per)
-      for (let col0 = 0; col0 < frames; col0 += per) {
-        const tile: Array<{ col: number; row: number; x: number; y: number }> = [];
-        for (let row = row0; row < Math.min(row0 + per, frames); row++)
-          for (let col = col0; col < Math.min(col0 + per, frames); col++) tile.push({ col, row, x: (col - col0) * side, y: (row - row0) * side });
-        const placed = tile.map(({ col, row, x, y }) => ({ view: views[row * frames + col], x, y }));
-        for (const target of passes) renderTile(renderer, target, scene, camera, placed, side);
-        const pixels = await Promise.all(passes.flatMap((target) => target.textures.map((_, i) => readFloats(renderer, target, i))));
-        for (const { col, row, x, y } of tile) atlas.write(pixels, width, supersample, col, row, x, y);
-        await pause();
-      }
-  } finally {
-    for (const target of passes) target.dispose();
-  }
-}
-
-/** Clear `target` and render each frame's view into its `side` square at (x, y), counted from the bottom left as the atlas is. */
-function renderTile(
-  renderer: Renderer,
-  target: RenderTarget,
-  scene: Scene,
-  camera: OrthographicCamera,
-  frames: Array<{ view: Matrix4 | undefined; x: number; y: number }>,
-  side: number,
-): void {
-  const restore = borrow(renderer, target);
-  try {
-    renderer.clear(true, true, true);
-    target.scissorTest = true;
-    for (const { view, x, y } of frames) {
-      if (!view) throw new Error("bakeImpostor: a frame has no view");
-      // WebGPU counts viewport rows from the top; `readFloats` turns the image over.
-      const top = target.height - y - side;
-      target.viewport.set(x, top, side, side);
-      target.scissor.set(x, top, side, side);
-      camera.matrix.copy(view);
-      camera.updateMatrixWorld(true);
-      renderer.render(scene, camera);
-    }
-  } finally {
-    // The next tile clears it whole.
-    target.scissorTest = false;
-    restore();
-  }
 }

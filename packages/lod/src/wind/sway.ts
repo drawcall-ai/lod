@@ -1,6 +1,6 @@
 import { Matrix4, Vector2, type Node, type Object3D } from "three/webgpu";
 import { Fn, dot, length, mat4, max, modelWorldMatrix, normalLocal, sin, uniform, vec2, vec3, vec4 } from "three/tsl";
-import { instanceMatrixOf } from "../fade.js";
+import { instanceMatrixOf } from "../levels/fade.js";
 import { affine, column } from "../tsl.js";
 
 // The breeze in the shaders: an affine sway, fixed at a base height and growing linearly
@@ -29,10 +29,14 @@ interface Sway {
   fromRoot: Matrix4;
 }
 
+/** How each swaying mesh sways: a side table, as the meshes are the app's. */
 const sways = new WeakMap<Object3D, Sway>();
 
 /** Sway `mesh` as `sway` says. */
 export const setSway = (mesh: Object3D, sway: Sway): void => void sways.set(mesh, sway);
+
+/** Whether a Wind sways `mesh`. */
+export const swaying = (mesh: Object3D): boolean => sways.has(mesh);
 
 const identity = new Matrix4();
 const still = new Vector2();

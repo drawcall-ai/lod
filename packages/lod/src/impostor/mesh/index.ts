@@ -11,7 +11,7 @@ import {
   type Intersection,
   type Raycaster,
 } from "three/webgpu";
-import { setDraw } from "../../fade.js";
+import { setFadeSource } from "../../levels/fade.js";
 import { sameClass } from "../../three.js";
 import { copyWind } from "../../wind/index.js";
 import { boundingRadius, validateImpostor, type Impostor } from "../impostor.js";
@@ -52,9 +52,9 @@ const sphere = new Sphere();
  * Draws an impostor once per instance, as an InstancedMesh draws a mesh: instance
  * matrices are ordinary model transforms of the source object (identity = where the
  * source was baked), set with `setMatrixAt`, and instance colours with `setColorAt`.
- * Lighting, fog, shadows and colour go through three's MeshStandardNodeMaterial; meshes
- * of the same impostor share its textures, and a clone shares its material: clones of
- * one instance draw with one shader.
+ * Lighting, fog, shadows and colour go through three's MeshStandardNodeMaterial; a clone
+ * shares its material, and with it its textures and its shader. Clone one mesh rather
+ * than make another of the same impostor, which uploads the impostor's textures again.
  *
  * It draws nothing of an instance into a directional light's shadow map whose texels are
  * wider than the instance. Like an InstancedMesh, it is culled by `boundingSphere`,
@@ -92,7 +92,7 @@ export class ImpostorMesh extends Mesh<PlaneGeometry, ImpostorMaterial> {
     this.count = count;
     this.instanceMatrix = new StorageInstancedBufferAttribute(count, 16);
     for (let i = 0; i < count; i++) scratch.identity().toArray(this.instanceMatrix.array, i * 16);
-    setDraw(this, { kind: "instances", slots: null, radius: boundingRadius(impostor.box), tint: new Color(1, 1, 1) });
+    setFadeSource(this, { kind: "instances", slots: null, radius: boundingRadius(impostor.box), tint: new Color(1, 1, 1) });
   }
 
   setMatrixAt(index: number, matrix: Matrix4): void {
@@ -191,13 +191,11 @@ const point = new Vector3();
 /**
  * An ImpostorMesh like `template` for `count` instances, its card placed by `placement`
  * within each instance's space (instance matrix × placement), as InstancedLod draws it.
- * Materials and runtime shading are shared; placement is per draw.
+ * It draws with the template's material, its tint and mip bias included; placement is
+ * per draw.
  */
 export function impostorInstances(template: ImpostorMesh, count: number, placement: Matrix4): ImpostorMesh {
   const mesh = new ImpostorMesh(template.impostor, count, template.options, template.material);
   mesh.placement.copy(placement);
-  // A tint and mip bias set on the template, as for a level drawn by a Lod.
-  mesh.material.color.copy(template.material.color);
-  mesh.material.mipBias.value = template.material.mipBias.value;
   return mesh;
 }

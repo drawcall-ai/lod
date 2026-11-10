@@ -1,5 +1,5 @@
-import type { BufferAttribute, ContextNode, Node, NodeBuilder, StorageBufferNode, TextureNode } from "three/webgpu";
-import { NodeUpdateType, context, cross, dFdx, dFdy, dot, float, length, log2, max, storage, uniform, uniformGroup, uv, vec2, vec3, vec4 } from "three/tsl";
+import type { Node, NodeBuilder } from "three/webgpu";
+import { cross, dot, max, vec3, vec4 } from "three/tsl";
 import { isNode } from "./three.js";
 
 // Matrix access for the shaders, in operations three's typings know: they type no
@@ -14,8 +14,9 @@ export const maxScale = (m: Node<"mat4">): Node<"float"> => max(column(m, 0).xyz
 
 /** An upper bound on the largest stretch `m` applies to any direction, exact for orthogonal axes (as `stretch` in three.ts). */
 export function stretch(m: Node<"mat4">): Node<"float"> {
-  const [a, b, c] = ([0, 1, 2] as const).map((i) => column(m, i).xyz);
-  if (!a || !b || !c) throw new Error("unreachable");
+  const a = column(m, 0).xyz,
+    b = column(m, 1).xyz,
+    c = column(m, 2).xyz;
   const ab = dot(a, b).abs();
   const ac = dot(a, c).abs();
   const bc = dot(b, c).abs();
@@ -68,7 +69,8 @@ export function contextNode(builder: NodeBuilder, ...path: string[]): Node {
  * An object that stays the same throughout one build of a shader, to cache per build
  * what several of a material's slots read. Each slot is handed its own proxy of the
  * builder, and three's typings expose no handle of the build itself: this is what the
- * build keeps for `anchor`.
+ * build holds for `anchor`. `getNodeProperties` is public in three, only missing from
+ * its typings.
  */
 export function buildKey(builder: NodeBuilder, anchor: Node): object {
   const properties: unknown = Reflect.apply(Reflect.get(builder, "getNodeProperties"), builder, [anchor]);
@@ -80,55 +82,9 @@ export function buildKey(builder: NodeBuilder, anchor: Node): object {
  * Whether `node` builds to a `type` value, which three's typings leave open for a
  * material's slots. Checked while a shader builds, so a slot of another type fails there.
  */
-export function isNodeOf<T extends "bool" | "float" | "vec3" | "vec4">(node: Node, type: T, builder: NodeBuilder): node is Node<T> {
+export function isNodeOf<T extends NodeType>(node: Node, type: T, builder: NodeBuilder): node is Node<T> {
   return node.getNodeType(builder) === type;
 }
 
-const bounds = new WeakMap<BufferAttribute, StorageBufferNode<"vec4">>();
-
-/** One room-bounds node per buffer; a stable name lets equal shaders share programs. */
-export function roomBounds(attribute: BufferAttribute): StorageBufferNode<"vec4"> {
-  let node = bounds.get(attribute);
-  if (!node) bounds.set(attribute, (node = storage(attribute, "vec4", 0).setName("lodRoomBounds")));
-  return node;
-}
-
-// Keep replaceable draw buffers out of texture-keyed binding caches. Each render
-// object owns this group's bindings while its shader reads the shared nodes below.
-export const instanceGroup = uniformGroup("lodInstances", 2, NodeUpdateType.OBJECT);
-
-/** The size in texels of a texture's image, or null when it has none to read. */
-function texelsOf(image: unknown): [number, number] | null {
-  if (typeof image !== "object" || image === null || !("width" in image) || !("height" in image)) return null;
-  const { width, height } = image;
-  return typeof width === "number" && typeof height === "number" ? [width, height] : null;
-}
-
-/**
- * A context in which every texture read is `bias` mip levels above the level the
- * hardware would pick: the level from the read's own texel footprint, plus `bias`. Reads
- * with uv of their own making, or with an explicit level or gradients, keep theirs.
- */
-export function biasedTextures(bias: Node<"float">): ContextNode<unknown> {
-  return context({
-    getTextureLevel: (node: TextureNode) => {
-      const texture = node.value;
-      const size = texelsOf(texture.image);
-      if (node.uvNode || !size) return null;
-      // The texture's offset, repeat and rotation, as three applies them.
-      const at = uniform(texture.matrix).mul(vec3(uv(texture.channel), 1)).xy;
-      const texels = at.mul(vec2(size[0], size[1]));
-      return log2(max(max(length(dFdx(texels)), length(dFdy(texels))), 1e-6)).add(bias);
-    },
-  });
-}
-
-/**
- * A context in which every texture read is at level 0, the full detail. Reads with uv of their own making, or with an
- * explicit level or gradients, keep theirs.
- */
-export function sharpTextures(): ContextNode<unknown> {
-  return context({
-    getTextureLevel: (node: TextureNode) => (node.uvNode || !texelsOf(node.value.image) ? null : float(0)),
-  });
-}
+/** The TSL node types `isNodeOf` tells apart. */
+export type NodeType = "bool" | "float" | "int" | "uint" | "vec2" | "vec3" | "vec4" | "mat4";

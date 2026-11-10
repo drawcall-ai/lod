@@ -15,10 +15,10 @@ import {
   type Object3D,
   type Renderer,
 } from "three/webgpu";
-import { showDetail } from "../../bounds.js";
-import { pause } from "../../pause.js";
-import { borrow, readBytes } from "../../renderer.js";
-import { linearToSrgb, srgbToLinear } from "../../source/texels.js";
+import { readBytes } from "../../bake.js";
+import { showDetail } from "../../source/detail.js";
+import { nextTask } from "../../task.js";
+import { linearToSrgb, srgbToLinear } from "../../source/sampler.js";
 
 /**
  * The six faces of a room's cube, in layer order: the direction each looks and its up.
@@ -45,13 +45,14 @@ export interface Faces {
 
 /**
  * Render each room of `interior` (placed in the source's space by `placement`) from its
- * box's centre, six square `size`-pixel views, with the exterior hidden and the other
+ * box's centre, six square `size`-pixel images, with the exterior hidden and the other
  * rooms shown, seen through doorways: once in white ambient light and once in none. The difference is how the room
  * responds to light, which the baked material scales by the light reaching its windows;
  * what shows without light is the room's glow. Layer room × 6 + face of each result,
  * sRGB, rows bottom-up: (u, v) = (0.5, 0.5) + 0.5 × (x, y) / (z × span), with x, y and z
- * along the face's right, up and forward. Each view reaches a texel past its edges, so
- * filtering at a face's border reads the neighbouring face's content.
+ * along the face's right, up and forward. Each image reaches a texel past its edges, so
+ * filtering at a face's border reads the neighbouring face's content. `renderer` is set
+ * up for bakes (see `checkBakeRenderer`).
  */
 export async function renderFaces(interior: Object3D, placement: Matrix4, boxes: readonly Box3[], size: number, renderer: Renderer): Promise<Faces> {
   const copy = interior.clone();
@@ -76,12 +77,13 @@ export async function renderFaces(interior: Object3D, placement: Matrix4, boxes:
   const centre = new Vector3();
   const extent = new Vector3();
   const shoot = async (into: Uint8Array) => {
-    const restore = borrow(renderer, target);
+    const previous = renderer.getRenderTarget();
+    renderer.setRenderTarget(target);
     try {
       renderer.clear(true, true, true);
       renderer.render(scene, camera);
     } finally {
-      restore();
+      renderer.setRenderTarget(previous);
     }
     into.set(await readBytes(renderer, target, 0));
   };
@@ -106,7 +108,8 @@ export async function renderFaces(interior: Object3D, placement: Matrix4, boxes:
         ambient.visible = false;
         await shoot(glow.subarray(at, at + face));
       }
-      await pause();
+      // Yield to the page between rooms, so that a long bake does not freeze it.
+      await nextTask();
     }
   } finally {
     target.dispose();

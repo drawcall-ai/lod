@@ -4,7 +4,7 @@ import { bakeImpostor } from "../../src/impostor/bake/index.js";
 import { decodeImpostorAsync, encodeImpostorAsync } from "../../src/impostor/codec.js";
 import type { Impostor, ImpostorMap } from "../../src/impostor/impostor.js";
 import { ImpostorMesh } from "../../src/impostor/mesh/index.js";
-import { GPU_TIMEOUT, render } from "../gpu.js";
+import { GPU_TIMEOUT, bakeRenderer, render } from "../renderer.js";
 
 /** An atlas of smooth gradients, as baked maps are, `size` square with `frames` per side. */
 function make(maps: ImpostorMap[], size = 64, frames = 8): Impostor {
@@ -27,7 +27,7 @@ function make(maps: ImpostorMap[], size = 64, frames = 8): Impostor {
 }
 
 describe("impostor codec", () => {
-  it("keeps the metadata and transcodes every map's baked levels to one GPU format", async () => {
+  it("decodes the metadata as encoded and transcodes every map's baked levels to one GPU format", async () => {
     const source = make(["base", "normalDepth", "orm", "emissive"]);
     source.specular = [0.03, 0.06, 0.08, 1];
     const { layers: _, ...meta } = source;
@@ -56,7 +56,7 @@ describe("impostor codec", () => {
 
   it("lights a decoded impostor as its bake, compressed normals included", { timeout: GPU_TIMEOUT }, async () => {
     const source = new Mesh(new IcosahedronGeometry(1, 3), new MeshStandardMaterial({ color: 0xc08060, roughness: 0.4 }));
-    const baked = await bakeImpostor(source, { frames: 8, resolution: 64 });
+    const baked = await bakeImpostor(source, bakeRenderer, { frames: 8, resolution: 64 });
     const decoded = await decodeImpostorAsync(await encodeImpostorAsync(baked));
     const camera = new PerspectiveCamera(35, 1, 0.1, 50);
     camera.position.set(2, 1.5, 4);
@@ -82,7 +82,7 @@ describe("impostor codec", () => {
       for (let c = 0; c < 3; c++) sum += Math.abs((a[i + c] ?? 0) - (b[i + c] ?? 0));
     }
     expect(covered).toBeGreaterThan(200);
-    // UASTC keeps texels within a few levels; a wrong colour space or normal decode moves them by tens.
+    // UASTC holds texels within a few levels; a wrong colour space or normal decode moves them by tens.
     expect(sum / covered / 3).toBeLessThan(3);
   });
 });

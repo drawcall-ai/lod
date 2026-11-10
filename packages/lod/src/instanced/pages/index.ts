@@ -1,297 +1,291 @@
-import { type Box3, type ComputeNode, IndirectStorageBufferAttribute, type Renderer, StorageBufferAttribute, type StorageInstancedBufferAttribute } from "three/webgpu";
-import { type TgpuFn, d } from "typegpu";
+import { type Renderer, StorageBufferAttribute, StorageInstancedBufferAttribute } from "three/webgpu";
 import { at } from "../../at.js";
-import { Blocks } from "../blocks.js";
-import { upload } from "../dirty.js";
-import type { BlockFrame, Places, Seed } from "../places.js";
-import type { Selection } from "../select.js";
-import { allocatePass, clearPass, copyPass, countPass, listPass, occupyPass, type Pool } from "./passes.js";
-import { Records } from "./records.js";
+import { PAGE_BITS, type PoolBuffers } from "./buffers.js";
+import type { Attributes, ChunkRange } from "./chunk.js";
+import { PoolPasses } from "./passes.js";
 import { PAGE } from "./workgroup.js";
 
-export { PAGE };
-
-// Instances a GPU pass of the app produces, never read back: each chunk's records are turned into instances on the
-// GPU, into fixed-size pages of a pool, and the selection visits the pages chunks hold (see kernel.ts).
+// Every instance of every InstancedLod of a LodGpu lives in its page pool: fixed pages of `PAGE` instances, which chunks,
+// from the CPU or the GPU, are copied into, and which updateInstance visits one workgroup per page (see update.ts).
 //
-// In the first render after chunks were added or removed, ahead of any selection, these passes run (see passes.ts).
-// One workgroup walks the chunk slots: every removed or replaced chunk pushes its pages back on the free stack, then
-// every new chunk lists its records, a window of up to `PAGE` per job. A pass with one workgroup per job counts the
-// window's survivors, the records whose instance has a keep ratio below 1. One workgroup then gives every new chunk the
-// pages its survivors need, turning its windows' counts into where their survivors start, and lists the pages it
-// handed out, and one lists every page chunks hold. A pass with one workgroup per job runs the app's instance function again and
-// writes each survivor into its place, so a chunk's instances fill its pages in order, a record that makes no instance
-// costs no room, and the places past its last instance draw nothing. Last, each view forgets what it drew at the pages
-// handed out. That render is the only time a chunk's records are read, so the producer may reuse them right after. A
-// chunk that finds the stack short keeps the pages it got, its instances clamped to them, until it is removed;
-// `drained` reports it. The CPU never learns a count: it knows only which slots hold chunks, and the GPU knows what
-// each got.
+// In the first render after chunks were added, changed or removed, these passes run: one workgroup
+// walks the chunk slots and pushes every removed or changed chunk's pages back on the free stack; per chunk taken in, a
+// pass with one workgroup per window of `PAGE` of its range counts the window's instances, those at a scale above 0 (an
+// app's pass marks "no instance" with scale 0); one workgroup then gives every such chunk the pages its instances need,
+// turning its windows' counts into where their instances start; per chunk again, a pass writes each instance into its
+// page, so a chunk's instances fill its pages in order, a spot without an instance costs no room, and the room past its
+// last instance draws nothing; last, one workgroup lists every page chunks hold, with its InstancedLod's row. That
+// render is the only time a chunk's attributes are read. A chunk that finds the stack short holds the pages it got, its
+// instances clamped to them, until it is removed; `status` reports it. The CPU never learns a count: it knows only
+// which slots hold chunks and which windows they count in, and the GPU knows what each got.
 
-/** What a GPU chunk's instance function returns for a record: see `GpuRecords.instance`. */
-export const GpuInstance = d.struct({
-  /** The instance's matrix in the InstancedLod's space, as `setMatrixAt` takes it. */
-  matrix: d.mat4x4f,
-  /** Its tint, as `setColorAt` takes it. */
-  color: d.vec3f,
-  /** Its keep ratio in [0, 1) (see `InstancedRange`); 1 or more makes no instance, and the record takes no room in the pool. */
-  keep: d.f32,
-});
+/** Windows of `PAGE` spots per page of instances that chunks may span: chunks hold far more spots than instances. */
+const WINDOWS_PER_PAGE = 16;
 
-/** A storage buffer the app's GPU pass writes. */
-type Storage = StorageBufferAttribute | StorageInstancedBufferAttribute;
+/** WebGPU's guaranteed maxStorageBufferBindingSize: the pool's matrices are one binding. */
+const MAX_BINDING = 128 * 2 ** 20;
 
-/** The records an InstancedLod's GPU chunks come from, which the app's GPU passes write (see `InstancedLod.addGpuChunk`). */
-export interface GpuRecords {
-  /**
-   * The instance a record stands for, a pure function of the record's words: a record is a fixed number of `vec4u`
-   * words, which the app's pass packs and this function unpacks. Derive what varies per instance (scale, rotation,
-   * tint, keep ratio) from a hash the record carries, not from where it lies: records arrive in any order.
-   */
-  instance: TgpuFn<(...words: d.Vec4u[]) => typeof GpuInstance>;
-  /** Where chunks' records lie, `vec4u` items, a record's words in a row; read only in the render that takes a chunk in. */
-  records: Storage;
-  /** Where chunks' record counts lie, `u32` items; read only in the render that takes a chunk in. */
-  counters: Storage;
-  /** The most records a chunk holds: more are ignored. */
-  capacity: number;
-  /** The least and the most any instance matrix scales along its longest axis: what level loading is judged by. */
-  scales: readonly [number, number];
-  /** The most instances held at once: the pool has pages for them and a part-filled page per chunk; a chunk added to a full pool lacks instances. `256 * PAGE` by default. */
-  instances?: number;
-  /** The most chunks held at once. 256 by default. */
-  chunks?: number;
+/** A chunk to take in: its attributes and its range of them, where its instance count lies, and its InstancedLod's row. */
+export interface PoolChunk extends Pick<ChunkRange, "start" | "count" | "countIndex"> {
+  readonly attributes: Attributes;
+  readonly row: number;
 }
 
-/** A GPU chunk to add: where its records and count lie, and where its instances stand. */
-export interface GpuChunkData {
-  /** Encloses every instance's origin, in the InstancedLod's space. */
-  box: Box3;
-  /** Its first record in `GpuRecords.records`, counted in records. */
+/** A slot's chunk and the windows it counts in. */
+interface Held {
+  readonly chunk: PoolChunk;
+  readonly base: number;
+  readonly windows: number;
+}
+
+/** A run of free windows. */
+interface Run {
   first: number;
-  /** Its count's index in `GpuRecords.counters`. */
-  counter: number;
+  count: number;
 }
 
-/** Instances added to an InstancedLod from the GPU in one call and removed whole. */
-export interface GpuChunk extends Readonly<GpuChunkData> {
-  readonly slot: number;
-}
-
-/** The page pool of an InstancedLod fed by GPU chunks, and the passes that fill and free it. */
-export class Pages implements Places {
+/** The page pool of a LodGpu, and the passes that fill and free it. */
+export class InstancePagePool {
+  /** Room for instances, in pages of `PAGE`. */
   readonly capacity: number;
-  readonly end: number;
-  readonly occupied: Places["occupied"];
-  readonly chunks = new Set<GpuChunk>();
-  private readonly pool: Pool;
-  private readonly records: Records;
-  /** Per slot, the generation of the chunk it last took: a slot reused in one frame still frees its pages. */
+  readonly pages: number;
+  /** How many pages chunks hold, then per page held its id and its InstancedLod's row (see `PAGE_BITS`). */
+  readonly occupied: StorageBufferAttribute;
+  /** Bumped whenever the passes ran: what the pages hold changed. */
+  version = 0;
+  private readonly pool: PoolBuffers;
+  private passes: PoolPasses | null = null;
+  /** Per slot, its chunk and windows, and the generation of the chunk it last took: a slot reused in one frame still frees its pages. */
+  private readonly held: (Held | null)[];
   private readonly generations: Uint32Array;
   private readonly free: number[] = [];
-  private selection: Selection | null = null;
-  private kernels: { list: ComputeNode; count: ComputeNode; allocate: ComputeNode; occupy: ComputeNode; copy: ComputeNode; clear: ReturnType<typeof clearPass> } | null = null;
-  /** Whether chunks changed since the passes last ran. */
-  private pending = false;
-  /** Bumped whenever chunks change. */
-  private version = 0;
-  /** Whether the selection's buffers dropped the CPU arrays they were made from. */
+  /** The windows no chunk counts in, and those of chunks removed, free once the passes freed their pages. */
+  private windows: Run[];
+  private releasing: Run[] = [];
+  /** The slots whose chunks are taken in at the next run, and whether a chunk was removed since the last. */
+  private readonly due = new Set<number>();
+  private removed = false;
+  /** The last read of the chunks' states, and the run it followed. */
+  private read: { version: number; promise: Promise<Uint32Array> } | null = null;
+  /** Whether the pool's CPU arrays were dropped (see `releaseArrays`). */
   private released = false;
 
-  constructor(private readonly options: GpuRecords) {
-    const { capacity, scales, records, counters, instance, instances = 256 * PAGE, chunks: slots = 256 } = options;
+  constructor(
+    /** The most instances held at once. */
+    maxInstanceCount: number,
+    /** The most chunks held at once. */
+    maxChunkCount: number,
+  ) {
     for (const [name, value] of [
-      ["instances", instances],
-      ["chunks", slots],
-      ["capacity", capacity],
+      ["maxInstanceCount", maxInstanceCount],
+      ["maxChunkCount", maxChunkCount],
     ] as const) {
-      if (!Number.isInteger(value) || value < 1) throw new RangeError(`InstancedLod: gpuRecords.${name} must be a positive integer, got ${value}`);
+      if (!Number.isInteger(value) || value < 1) throw new RangeError(`LodGpu: ${name} must be a positive integer, got ${value}`);
     }
-    if (!(scales[0] > 0 && scales[0] <= scales[1] && Number.isFinite(scales[1]))) throw new RangeError(`InstancedLod: gpuRecords.scales must be 0 < min <= max, got ${scales.join(", ")}`);
-    if (!(records.array instanceof Uint32Array) || records.itemSize !== 4) throw new TypeError("InstancedLod: gpuRecords.records must hold vec4u items");
-    if (!(counters.array instanceof Uint32Array) || counters.itemSize !== 1) throw new TypeError("InstancedLod: gpuRecords.counters must hold u32 items");
-    const pages = slots + Math.ceil(instances / PAGE);
-    this.records = new Records(instance, records);
-    this.capacity = this.end = pages * PAGE;
-    const perSlot = Math.ceil(capacity / PAGE);
+    // A part-filled page per chunk besides the pages that fill.
+    const pages = maxChunkCount + Math.ceil(maxInstanceCount / PAGE);
+    if (pages >= 2 ** PAGE_BITS)
+      throw new RangeError(`LodGpu: ${pages} pages of ${PAGE} instances outgrow the ${2 ** PAGE_BITS} a pool lists: lower maxInstanceCount or maxChunkCount`);
+    if (pages * PAGE * 64 > MAX_BINDING)
+      throw new RangeError(
+        `LodGpu: the matrices of ${pages} pages of ${PAGE} instances outgrow a storage binding of ${MAX_BINDING} bytes: lower maxInstanceCount or maxChunkCount`,
+      );
+    const windows = WINDOWS_PER_PAGE * pages;
+    this.pages = pages;
+    this.capacity = pages * PAGE;
     // Popped from the end: page 0 first.
     const stack = new Uint32Array(pages + 1);
     stack[0] = pages;
     for (let i = 0; i < pages; i++) stack[i + 1] = pages - 1 - i;
     const words = (length: number, itemSize = 1) => new StorageBufferAttribute(new Uint32Array(length * itemSize), itemSize);
-    const dispatch = () => new IndirectStorageBufferAttribute(new Uint32Array([0, 1, 1]), 1);
     this.pool = {
       pages,
-      slots,
-      perSlot,
-      capacity,
+      slots: maxChunkCount,
       stack: new StorageBufferAttribute(stack, 1),
-      table: words(slots * perSlot),
-      windows: words(slots * perSlot),
-      sources: words(slots, 4),
-      states: words(slots, 4),
-      jobs: words(slots * perSlot, 4),
-      jobDispatch: dispatch(),
-      fresh: words(pages),
-      freshDispatch: dispatch(),
-      occupied: words(pages),
-      occupiedDispatch: dispatch(),
-      counters,
+      table: words(windows),
+      windows: words(windows),
+      sources: words(maxChunkCount, 4),
+      states: words(2 * maxChunkCount, 4),
+      occupied: words(pages + 1),
+      matrices: new StorageInstancedBufferAttribute(new Float32Array(this.capacity * 16), 16),
+      colors: new StorageInstancedBufferAttribute(new Float32Array(this.capacity * 4), 4),
     };
-    this.occupied = { pages: this.pool.occupied, dispatch: this.pool.occupiedDispatch };
-    this.generations = new Uint32Array(slots);
-    for (let slot = slots - 1; slot >= 0; slot--) this.free.push(slot);
+    this.occupied = this.pool.occupied;
+    this.windows = [{ first: 0, count: windows }];
+    this.held = Array.from({ length: maxChunkCount }, () => null);
+    this.generations = new Uint32Array(maxChunkCount);
+    for (let slot = maxChunkCount - 1; slot >= 0; slot--) this.free.push(slot);
   }
 
-  get scales(): readonly [number, number] {
-    return this.options.scales;
+  /** Every pool index's instance matrix, as the level meshes draw them. */
+  get matrices(): StorageInstancedBufferAttribute {
+    return this.pool.matrices;
   }
 
-  /**
-   * Zeros, which the selection's buffers own: a place holds an instance only once the copy pass wrote one. `release`
-   * empties them once the GPU holds them.
-   */
-  seed(): Seed {
-    const { capacity } = this;
-    return { matrices: new Float32Array(capacity * 16), keeps: new Float32Array(capacity), colors: new Float32Array(capacity * 4) };
+  /** Every pool index's colour, RGB and a pad. */
+  get colors(): StorageInstancedBufferAttribute {
+    return this.pool.colors;
   }
 
-  /** A leaf per chunk slot, around the origins in its box at its scales; a chunk's survivors may draw as large as any. */
-  blocks(frame: BlockFrame, survivors: boolean): Blocks {
-    const { slots } = this.pool;
-    const blocks = new Blocks(slots, new Float32Array(slots * 4), frame.source, frame.bounds, frame.draws, frame.rest, survivors ? new Float32Array(slots) : null, 1);
-    blocks.pad(frame.padding);
-    for (const chunk of this.chunks) blocks.place(chunk.slot, chunk.box, this.scales);
-    blocks.refit();
-    return blocks;
+  /** Whether the next run takes chunks in or frees them. */
+  get pending(): boolean {
+    return this.due.size > 0 || this.removed;
   }
 
-  attach(selection: Selection | null): void {
-    this.selection = selection;
-  }
-
-  /** Nothing to measure: chunks place their boxes as they come and go. */
-  measure(): void {}
-
-  /** Take `data` into a free slot; its records turn into instances before the next selection. */
-  add(data: GpuChunkData): GpuChunk {
-    const { box, first, counter } = data;
-    if (!Number.isInteger(first) || first < 0) throw new RangeError(`InstancedLod: a GPU chunk's first record must be an integer >= 0, got ${first}`);
-    if (!Number.isInteger(counter) || counter < 0) throw new RangeError(`InstancedLod: a GPU chunk's counter must be an integer >= 0, got ${counter}`);
-    const { records, counters, capacity } = this.options;
-    if ((first + capacity) * this.records.words > records.count) throw new RangeError(`InstancedLod: a GPU chunk's records from ${first} on, up to gpuRecords.capacity of them, pass the end of gpuRecords.records`);
-    if (counter >= counters.count) throw new RangeError(`InstancedLod: a GPU chunk's counter ${counter} passes the end of gpuRecords.counters`);
+  /** Take `chunk` into a free slot at the next run; its slot. */
+  add(chunk: PoolChunk): number {
     const slot = this.free.pop();
-    if (slot === undefined) throw new Error(`InstancedLod: all ${this.pool.slots} GPU chunk slots are taken (see gpuRecords.chunks)`);
+    if (slot === undefined) throw new Error(`InstancedLod: all ${this.pool.slots} chunk slots are taken: raise LodGpu's maxChunkCount`);
+    const windows = Math.ceil(chunk.count / PAGE);
+    const base = this.take(windows);
+    if (base === null) {
+      this.free.push(slot);
+      throw new Error(`InstancedLod: chunks span more than the pool's ${this.pool.table.count} windows of ${PAGE} spots: raise LodGpu's maxInstanceCount`);
+    }
+    this.held[slot] = { chunk, base, windows };
+    this.change(slot);
+    return slot;
+  }
+
+  /** Take slot `slot`'s chunk in again at the next run: its attributes changed. */
+  change(slot: number): void {
+    const { base, windows, chunk } = this.heldAt(slot);
     const generation = at(this.generations, slot) + 1;
     this.generations[slot] = generation;
-    this.write(slot, [1, first, counter, generation]);
-    const chunk: GpuChunk = { box: box.clone(), first, counter, slot };
-    this.chunks.add(chunk);
-    return chunk;
+    this.write(slot, [base, windows, generation, chunk.row + 1]);
+    this.due.add(slot);
   }
 
-  /** Free `chunk`'s slot; its pages go back to the pool before the next selection. */
-  remove(chunk: GpuChunk): void {
-    if (!this.chunks.delete(chunk)) throw new Error("InstancedLod: the GPU chunk is not one of its own");
-    this.write(chunk.slot, [0, 0, 0, at(this.generations, chunk.slot)]);
-    this.free.push(chunk.slot);
+  /** Free slot `slot`; its chunk's pages go back to the pool at the next run, its windows after it. */
+  remove(slot: number): void {
+    const { base, windows } = this.heldAt(slot);
+    this.held[slot] = null;
+    this.releasing.push({ first: base, count: windows });
+    this.write(slot, [0, 0, at(this.generations, slot), 0]);
+    this.due.delete(slot);
+    this.free.push(slot);
+    this.removed = true;
+  }
+
+  private heldAt(slot: number): Held {
+    const held = this.held[slot];
+    if (!held) throw new Error(`InstancedLod: chunk slot ${slot} holds no chunk`);
+    return held;
   }
 
   private write(slot: number, values: readonly number[]): void {
     const { sources } = this.pool;
     sources.array.set(values, slot * 4);
-    upload(sources, slot, slot + 1);
-    this.pending = true;
-    this.version++;
+    sources.addUpdateRange(slot * 4, 4);
+    sources.needsUpdate = true;
   }
 
-  /** Take in the chunks' changes on `renderer`, if they changed since the last run: in the render after they change. */
+  /** The first of `count` free windows, taken; null if no run of them is free. */
+  private take(count: number): number | null {
+    if (count === 0) return 0;
+    const run = this.windows.find((each) => each.count >= count);
+    if (!run) return null;
+    const first = run.first;
+    run.first += count;
+    run.count -= count;
+    if (run.count === 0) this.windows.splice(this.windows.indexOf(run), 1);
+    return first;
+  }
+
+  /** Free the windows of `freed`, merging runs that meet. */
+  private giveBack(freed: readonly Run[]): void {
+    if (freed.length === 0) return;
+    const runs = [...this.windows, ...freed.filter((run) => run.count > 0)].sort((a, b) => a.first - b.first);
+    const merged: Run[] = [];
+    for (const run of runs) {
+      const last = merged.at(-1);
+      if (last && last.first + last.count === run.first) last.count += run.count;
+      else merged.push({ ...run });
+    }
+    this.windows = merged;
+  }
+
+  /** Take the chunks' changes in on `renderer`, if they changed since the last run. */
   prepare(renderer: Renderer): void {
     if (!this.pending) return;
-    const { selection, pool } = this;
-    if (!selection) throw new Error("InstancedLod: GPU chunks need a selection to fill");
-    this.pending = false;
-    this.kernels ??= {
-      list: listPass(pool),
-      count: countPass(pool, this.records),
-      allocate: allocatePass(pool),
-      occupy: occupyPass(pool),
-      copy: copyPass(pool, this.records, selection),
-      clear: clearPass(pool),
-    };
-    const { list, count, allocate, occupy, copy, clear } = this.kernels;
-    renderer.compute(list);
-    renderer.compute(count, pool.jobDispatch);
-    renderer.compute(allocate);
-    renderer.compute(occupy);
-    renderer.compute(copy, pool.jobDispatch);
-    for (const shown of selection.shown()) {
-      clear.shown.value = shown;
-      renderer.compute(clear.pass, pool.freshDispatch);
-    }
-    this.release(renderer, selection);
-  }
-
-  /**
-   * Drop the CPU arrays the selection's instance buffers were made from, once the GPU holds them: only the GPU writes
-   * them, so they are never read again, and they are most of what a pool costs on the CPU. A buffer keeps its count.
-   * This relies on three never uploading these attributes again: nothing marks them for an update, and a buffer is
-   * made once.
-   */
-  private release(renderer: Renderer, selection: Selection): void {
-    // An initialised renderer creates a pass's buffers as it runs the pass.
-    if (this.released || !renderer.initialized) return;
+    const passes = (this.passes ??= new PoolPasses(this.pool));
+    // The free pass reads the windows of chunks removed since the last run: they serve chunks taken in after it.
+    const freed = this.releasing;
+    this.releasing = [];
+    renderer.compute(passes.free);
+    for (const slot of this.due) this.run(renderer, passes, slot, "count");
+    renderer.compute(passes.allocate);
+    for (const slot of this.due) this.run(renderer, passes, slot, "write");
+    renderer.compute(passes.occupy);
+    this.due.clear();
+    this.removed = false;
+    this.version++;
+    this.giveBack(freed);
+    if (!this.released) releaseArrays([this.pool.matrices, this.pool.colors]);
     this.released = true;
-    for (const attribute of [selection.matrices, selection.keeps, selection.colors]) if (attribute) attribute.array = new Float32Array(0);
+  }
+
+  /** Run slot `slot`'s chunk's `pass`, one workgroup per window of its range. */
+  private run(renderer: Renderer, passes: PoolPasses, slot: number, pass: "count" | "write"): void {
+    const { chunk, base, windows } = this.heldAt(slot);
+    if (windows === 0) return;
+    const { attributes, start, count, countIndex } = chunk;
+    renderer.compute(passes.chunkPass(pass, attributes, { slot, base, start, count, countIndex }), [windows, 1, 1]);
   }
 
   /**
-   * Whether every chunk has been taken in: false while changes wait for the passes or chunks changed meanwhile. Throws
-   * if a chunk lacks pages. Reads the GPU's progress back.
+   * The instances the chunks of `slots` hold, once every one has been taken in; null while changes wait for the passes
+   * or chunks changed meanwhile. Throws if a chunk lacks pages. Reads the GPU's progress back.
    */
-  async drained(renderer: Renderer): Promise<boolean> {
-    if (this.pending) return false;
-    if (this.chunks.size === 0) return true;
+  async status(renderer: Renderer, slots: readonly number[]): Promise<number | null> {
+    if (this.pending) return null;
+    if (slots.length === 0) return 0;
     const version = this.version;
-    const states = new Uint32Array(await renderer.getArrayBufferAsync(this.pool.states));
-    if (version !== this.version) return false;
+    const states = await this.statesAt(renderer, version);
+    if (version !== this.version || this.pending) return null;
+    let instances = 0;
     let short = 0;
-    let held = 0;
+    let got = 0;
     let needed = 0;
-    for (const { slot } of this.chunks) {
-      const base = slot * 4;
-      if (states[base] !== this.generations[slot]) return false;
+    for (const slot of slots) {
+      const base = slot * 8;
+      if (states[base] !== this.generations[slot]) return null;
+      instances += at(states, base + 2);
       if (at(states, base + 1) === at(states, base + 3)) continue;
       short++;
-      held += at(states, base + 1);
+      got += at(states, base + 1);
       needed += at(states, base + 3);
     }
     if (short > 0) {
       throw new Error(
-        `InstancedLod: ${short} GPU chunk${short === 1 ? "" : "s"} lack pages, holding ${held} of the ${needed} pages they need: raise gpuRecords.instances (the pool has ${this.pool.pages} pages)`,
+        `InstancedLod: ${short} chunk${short === 1 ? "" : "s"} lack pages, holding ${got} of the ${needed} pages they need: raise LodGpu's maxInstanceCount (its pool has ${this.pool.pages} pages of ${PAGE})`,
       );
     }
-    return true;
+    return instances;
+  }
+
+  /** The chunks' states as the GPU holds them after run `version`: one read back for every InstancedLod asking. */
+  private statesAt(renderer: Renderer, version: number): Promise<Uint32Array> {
+    if (this.read?.version !== version) {
+      const promise = renderer.getArrayBufferAsync(this.pool.states).then((buffer) => new Uint32Array(buffer));
+      this.read = { version, promise };
+    }
+    return this.read.promise;
   }
 
   dispose(): void {
     const { pool } = this;
-    for (const attribute of [
-      pool.stack,
-      pool.table,
-      pool.windows,
-      pool.sources,
-      pool.states,
-      pool.jobs,
-      pool.jobDispatch,
-      pool.fresh,
-      pool.freshDispatch,
-      pool.occupied,
-      pool.occupiedDispatch,
-    ])
-      attribute.dispose();
-    const kernels = this.kernels;
-    if (kernels) for (const kernel of [kernels.list, kernels.count, kernels.allocate, kernels.occupy, kernels.copy, kernels.clear.pass]) kernel.dispose();
-    this.kernels = null;
+    for (const attribute of [pool.stack, pool.table, pool.windows, pool.sources, pool.states, pool.occupied, pool.matrices, pool.colors]) attribute.dispose();
+    this.passes?.dispose();
+    this.passes = null;
   }
+}
+
+/**
+ * Drop the CPU arrays of `attributes`, buffers only the GPU writes, once a pass has run with them: they are never read
+ * again, and they are most of what they cost on the CPU. This relies on three never uploading them again (as of three
+ * r186): nothing marks them for an update, and a LodGpu's renderer, initialised, made each buffer as the pass ran.
+ */
+export function releaseArrays(attributes: readonly StorageInstancedBufferAttribute[]): void {
+  for (const attribute of attributes) attribute.array = new Float32Array(0);
 }

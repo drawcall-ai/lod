@@ -38,7 +38,7 @@ export interface CardInputs {
   extent: Node<"vec3">;
   /** bounding sphere radius: the depth channel's unit */
   radius: Node<"float">;
-  /** half the edge of every frame's view */
+  /** half the edge of every frame */
   halfSize: Node<"float">;
   /** frames per atlas side */
   frames: Node<"float">;
@@ -65,10 +65,10 @@ const neighbour = written.frames.z;
 
 /** The card as the surface reads it. */
 export const card = {
-  /** the three frames around the view direction and their barycentric weights */
+  /** the three frames around the direction to the camera and their barycentric weights */
   frames: [first, first.add(vec2(neighbour, neighbour.oneMinus())), first.add(1)],
   weights: written.weights,
-  /** the view ray through the fragment, in the object's space: from `point`, along `ray` */
+  /** the camera's ray through the fragment, in the object's space: from `point`, along `ray` */
   point: written.point,
   ray: written.ray,
   /** the same ray in world space: `ray` × s in object space is `worldRay` × s in the world */
@@ -100,10 +100,10 @@ export function buildCard(inputs: CardInputs, instance: Node<"mat4">, deform: No
   const back = column(cameraWorldMatrix, 2).xyz;
   const toEye = eye.sub(centre);
   const distance = length(toEye);
-  const view = select(ortho, normalize(toWorld.solve(back)), toEye.div(distance)).toVar();
+  const toCamera = select(ortho, normalize(toWorld.solve(back)), toEye.div(distance)).toVar();
   // Up close, perspective spreads the near side of the object past the ortho frame.
   const grow = select(ortho, float(1), min(distance.div(max(distance.sub(radius), 1e-4)), 4));
-  const { tangent, bitangent } = basisNode(view);
+  const { tangent, bitangent } = basisNode(toCamera);
   // The card covers the box as seen from here, plus the frame's empty border (the bake's
   // PAD) for the filtered edge, and no more than the frame: every pixel of it runs the
   // whole surface, and a square frame is mostly empty for a tall plant.
@@ -115,11 +115,11 @@ export function buildCard(inputs: CardInputs, instance: Node<"mat4">, deform: No
     .toVar();
 
   const last = frames.sub(1);
-  // Clamped: rounding can put a horizon view a hair outside the grid.
-  const grid = clamp(encodeNode(layout, view).mul(last), vec2(0, 0), vec2(last, last));
+  // Clamped: rounding can put a horizon direction a hair outside the grid.
+  const grid = clamp(encodeNode(layout, toCamera).mul(last), vec2(0, 0), vec2(last, last));
   const cell = min(floor(grid), vec2(last.sub(1), last.sub(1)));
   const f = grid.sub(cell);
-  const ray = select(ortho, view.negate(), point.sub(eye));
+  const ray = select(ortho, toCamera.negate(), point.sub(eye));
 
   // Every vertex of a card holds the same frames and weights, so they interpolate to themselves.
   written.frames.assign(vec3(cell, select(f.x.greaterThan(f.y), float(1), float(0))));

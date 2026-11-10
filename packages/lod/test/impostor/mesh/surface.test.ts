@@ -21,9 +21,10 @@ import { bakeImpostor } from "../../../src/impostor/bake/index.js";
 import type { Impostor } from "../../../src/impostor/impostor.js";
 import { ImpostorMesh } from "../../../src/impostor/mesh/index.js";
 import { cosine } from "../../../src/impostor/mesh/surface.js";
-import { readBytes } from "../../../src/renderer.js";
-import { GPU_TIMEOUT, render, renderer } from "../../gpu.js";
-import { oneChunk } from "../../crowd.js";
+import { readBytes } from "../../../src/bake.js";
+import { GPU_TIMEOUT, bakeRenderer, render, renderer } from "../../renderer.js";
+import { oneChunk } from "../../instances.js";
+import { LodGpu } from "../../../src/gpu.js";
 
 function atlas(normalDepth = [128, 128, 255, 128]): Impostor {
   return {
@@ -34,11 +35,7 @@ function atlas(normalDepth = [128, 128, 255, 128]): Impostor {
     box: [-1, -1, -1, 1, 1, 1],
     halfSize: 1.5,
     maps: ["base", "normalDepth", "orm"],
-    layers: [
-      [32, 200, 64, 255],
-      normalDepth,
-      [255, 191, 0, 255],
-    ].map((pixel) => ({
+    layers: [[32, 200, 64, 255], normalDepth, [255, 191, 0, 255]].map((pixel) => ({
       format: RGBAFormat,
       mipmaps: [16, 8, 4].map((size) => {
         const data = new Uint8Array(size * size * 4);
@@ -83,7 +80,7 @@ it.each([
   ["a tall thin box from the side", new BoxGeometry(0.3, 3, 0.3).rotateY(0.5), new Vector3(0, 1, 40), 6],
 ])("looks like the real object: %s", { timeout: GPU_TIMEOUT }, async (_, geometry, eye, fov) => {
   const source = new Mesh(geometry, new MeshStandardMaterial({ color: 0xd06030, roughness: 0.6 }));
-  const mesh = new ImpostorMesh(await bakeImpostor(source, { resolution: 128 }));
+  const mesh = new ImpostorMesh(await bakeImpostor(source, bakeRenderer, { resolution: 128 }));
   const camera = new PerspectiveCamera(fov, 1, 0.1, 100);
   camera.position.copy(eye);
   camera.lookAt(0, 0, 0);
@@ -138,12 +135,13 @@ it("glares in a low sun ahead only where a texel's normals agree", { timeout: GP
 });
 
 it.each([false, true])("occludes at its reconstructed surface (reversed depth: %s)", { timeout: GPU_TIMEOUT }, async (reversedDepthBuffer) => {
-  const view = new WebGPURenderer({ reversedDepthBuffer });
-  await view.init();
+  const drawing = new WebGPURenderer({ reversedDepthBuffer });
+  await drawing.init();
   const target = new RenderTarget(64, 64);
   const source = new Mesh(new BoxGeometry(2, 2, 2), new MeshStandardMaterial({ color: 0xe04020 }));
-  const impostor = new ImpostorMesh(await bakeImpostor(source, { frames: 4, resolution: 32 }));
-  const crowd = oneChunk([{ object: impostor }], 1);
+  const impostor = new ImpostorMesh(await bakeImpostor(source, bakeRenderer, { frames: 4, resolution: 32 }));
+  const on = new LodGpu(drawing);
+  const instanced = oneChunk([{ object: impostor }], 1, { on });
   const wall = new Mesh(new PlaneGeometry(4, 4), new MeshStandardMaterial({ color: 0x2040e0 }));
   const camera = new PerspectiveCamera(40, 1, 0.1, 20);
   camera.position.z = 6;
@@ -151,12 +149,13 @@ it.each([false, true])("occludes at its reconstructed surface (reversed depth: %
   const scene = new Scene();
   const redAtCentre = async (object: Object3D) => {
     scene.clear().add(object, wall, light);
-    view.setRenderTarget(target);
-    view.render(scene, camera);
-    const pixels = await readBytes(view, target, 0);
-    view.setRenderTarget(null);
+    drawing.setRenderTarget(target);
+    drawing.render(scene, camera);
+    const pixels = await readBytes(drawing, target, 0);
+    drawing.setRenderTarget(null);
     const offset = (32 * 64 + 32) * 4;
-    const red = pixels[offset], blue = pixels[offset + 2];
+    const red = pixels[offset],
+      blue = pixels[offset + 2];
     if (red === undefined || blue === undefined) throw new Error("Missing centre pixel");
     return red > blue;
   };
@@ -168,16 +167,17 @@ it.each([false, true])("occludes at its reconstructed surface (reversed depth: %
       // A card at z=0 is hidden by both walls; the box's front at z=1 is hidden only by the second.
       expect(real).toBe(z < 1);
       expect(proxy).toBe(z < 1);
-      expect(await redAtCentre(crowd)).toBe(z < 1);
+      expect(await redAtCentre(instanced)).toBe(z < 1);
     }
   } finally {
-    crowd.dispose();
+    instanced.dispose();
+    on.dispose();
     impostor.dispose();
     source.geometry.dispose();
     source.material.dispose();
     wall.geometry.dispose();
     wall.material.dispose();
     target.dispose();
-    view.dispose();
+    drawing.dispose();
   }
 });

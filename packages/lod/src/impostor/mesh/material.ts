@@ -13,13 +13,13 @@ import {
   type Texture,
 } from "three/webgpu";
 import { Fn, diffuseColor, float, materialColor, metalness, mix, specularColor, specularF90, uniform, varyingProperty, vec3, vec4 } from "three/tsl";
-import { castPosition, instanceColor, instanceMatrixOf, tint } from "../../fade.js";
+import { castPosition, instanceColor, instanceMatrixOf, tint } from "../../levels/fade.js";
 import { isImpostorMesh, isShadowPass } from "../../three.js";
 import { buildKey, isNodeOf } from "../../tsl.js";
 import { boundingRadius, boxCentre, boxExtent, type Impostor } from "../impostor.js";
 import { buildCard, card, type CardInputs } from "./card.js";
 import { buildSurface, cosine, type Lighting, type Surface, type SurfaceInputs } from "./surface.js";
-import { acquireTextures, releaseTextures } from "./textures.js";
+import { impostorTextures } from "./textures.js";
 
 const placement = uniform(new Matrix4()).onObjectUpdate(({ object }, self) =>
   object && isImpostorMesh(object) ? self.value.copy(object.placement) : self.value.identity(),
@@ -65,7 +65,7 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
    * apart here is the ids of the nodes each makes for itself, so a value it captures needs no key of its own.
    */
   directTerm: ((direction: Node<"vec3">) => Node<"vec3">) | null = null;
-  /** The impostor's atlases, one per map, shared by every material drawing it. */
+  /** The impostor's atlases, one per map: the material's own, freed with it. */
   readonly textures: readonly Texture[];
 
   private readonly inputs: CardInputs & SurfaceInputs;
@@ -73,7 +73,7 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
   /**
    * Per build, one surface for every slot that reads it, made when the fragment stage
    * first reads it: TSL adds a node's variables to the stage being built when the node
-   * is made. Keyed by what the build keeps for `anchor`: each slot gets its own proxy of
+   * is made. Keyed by what the build holds for `anchor`: each slot gets its own proxy of
    * the builder.
    */
   private readonly surfaces = new WeakMap<object, Surface>();
@@ -88,7 +88,7 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
   ) {
     super({ roughness: 1, metalness: 1, alphaToCoverage: true, side: DoubleSide });
     this.name = "impostor";
-    const textures = acquireTextures(impostor);
+    const textures = impostorTextures(impostor);
     this.textures = textures;
     this.mipBias = uniform(shading.mipBias);
     this.specular = uniform(new Vector4().fromArray(impostor.specular ?? [0.04, 0.04, 0.04, 1]));
@@ -150,12 +150,12 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
     if (--this.users === 0) this.dispose();
   }
 
-  /** Explicit disposal, including by a caller: release its texture acquisition only once. */
+  /** Explicit disposal, including by a caller: frees its textures once. */
   override dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
     super.dispose();
-    releaseTextures(this.impostor);
+    for (const texture of this.textures) texture.dispose();
   }
 
   /** The card's vertex as `builder` draws it, in the vertex stage. */
@@ -169,7 +169,7 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
 
   /**
    * The surface `builder` draws, as its pass needs it. No parallax walk in shadow passes:
-   * shadow maps cover far more impostor pixels than the view, and shadows are too soft to
+   * shadow maps cover far more impostor pixels than the camera does, and shadows are too soft to
    * show it.
    */
   private surface(builder: NodeBuilder): Surface {
@@ -196,7 +196,7 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
   }
 
   override setupLightingModel(): PhysicalLightingModel {
-    return new SpreadLighting(this.spread, this.directTerm);
+    return new ImpostorLightingModel(this.spread, this.directTerm);
   }
 
   /** Baked F0 (RGB) and F90 (A) are uniforms so different asset averages share a shader. */
@@ -215,7 +215,7 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
  * the canopy as one smooth surface. Specular keeps three's terms, on the leaned normal (see surface.ts): its roughness widens
  * with the spread instead.
  */
-class SpreadLighting extends PhysicalLightingModel {
+class ImpostorLightingModel extends PhysicalLightingModel {
   constructor(
     private readonly spread: Node<"vec3">,
     private readonly term: ImpostorMaterial["directTerm"],

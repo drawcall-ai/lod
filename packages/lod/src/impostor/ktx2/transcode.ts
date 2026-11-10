@@ -3,12 +3,13 @@ import { KTX2Loader } from "three/addons/loaders/KTX2Loader.js";
 import { LoadingManager, type CompressedTexture } from "three/webgpu";
 import type { ImpostorLayer } from "../impostor.js";
 
+/** The page's one KTX2Loader for impostor layers: process-wide, as its transcoder workers are, and freed when idle. */
 let shared: Promise<KTX2Loader> | undefined;
 /** Transcodes not yet answered, and the timer that disposes the loader once none has been for IDLE_MS. */
 let active = 0;
 let idle: ReturnType<typeof setTimeout> | undefined;
 /** How long the loader outlives its last transcode. Its workers and their transcoders are freed then, so
- *  another library's KTX2Loader (each owns one) is the page's only one but while both transcode. */
+ *  another library's KTX2Loader (each has one) is the page's only one but while both transcode. */
 const IDLE_MS = 1000;
 
 /**
@@ -72,6 +73,7 @@ function release(): void {
   void released?.then((loader) => loader.dispose());
 }
 
+/** The bundled transcoder's files, inflated once: immutable, and shared by every loader made after. */
 let carried: Promise<Map<string, string>> | undefined;
 
 /** The carried transcoder's files by the URLs the loader asks for: made once, for every loader made after. */

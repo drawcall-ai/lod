@@ -11,7 +11,7 @@ import {
   type Object3D,
 } from "three/webgpu";
 import { expect, it } from "vitest";
-import { forEachVertex } from "../../../src/bounds.js";
+import { forEachVertex } from "../../../src/source/detail.js";
 import { fittedHalfSize } from "../../../src/impostor/bake/fit.js";
 import { frameBasis, frameDirection, type Vec3 } from "../../../src/impostor/octahedral.js";
 

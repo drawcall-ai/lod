@@ -18,56 +18,65 @@ import {
   type Box3,
   type ColorSpace,
   type Object3D,
+  type MeshStandardNodeMaterialParameters,
+  type Renderer,
 } from "three/webgpu";
-import { boundingBox, forEachMesh } from "../bounds.js";
-import { recordDeviation } from "../levels.js";
-import { sharedRenderer } from "../renderer.js";
+import { checkBakeRenderer, inTurn } from "../bake.js";
+import { recordDeviation } from "../levels/index.js";
+import { boundingBox, forEachMesh } from "../source/detail.js";
 import { readSource } from "../source/source.js";
 import { area } from "../source/surface.js";
-import { mipmaps, type Mip } from "../source/texels.js";
+import { mipmaps, type Mip } from "../source/sampler.js";
 import { isImpostorMesh, placeLike } from "../three.js";
 import { renderFaces } from "./interior/faces.js";
-import { InteriorMaterial } from "./interior/material.js";
+import { InteriorMappingMaterial } from "./interior/material.js";
 import { readBoxes } from "./interior/rooms.js";
 import { layOut, simplified } from "./low.js";
 import { transfer } from "./transfer.js";
-import { keepCoverage } from "./coverage.js";
+import { preserveCoverage } from "./coverage.js";
 
 export type BakeMeshOptions = {
   /** texels per side of each baked map; default 1024, or 512 when the source cuts out (foliage) */
   textureSize?: number;
-  /**
-   * Rooms to show through the source's glass (interior mapping): each direct child is one
-   * room, which fills its bounding box; lights are refused (lamps: emissive materials).
-   * It sits in the source's space as a child of the source would, or where it is if it is
-   * inside the source; either way it is hidden from the exterior's bake. Glass is a
-   * surface that lets what is behind it show: transparent with opacity below 1, or
-   * transmissive (texture alpha is not read). Each room is captured from its box's centre
-   * as its colours and its glow; the baked material lights the colours by the indirect
-   * light reaching each window.
-   * Rooms must not overlap except at their walls. Put inward-facing walls, floors and
-   * ceilings on the box faces, with the box beginning just behind its windows. Furniture
-   * away from those faces appears flattened onto them. Glass with no nearby room stays
-   * plain; the bake fails if none of the source's glass looks into a room.
-   */
-  interior?: Object3D;
 } & (
+  | { interior?: undefined; renderer?: undefined }
   | {
       /**
-       * The mesh to bake onto, in the source's own space, such as a hand-made or generated
-       * low-poly shell of a building. Only its static geometry is used: materials are
-       * ignored, and its UVs are kept if they lie inside 0..1 without overlapping and
-       * with a texel of border between charts, else it is unwrapped again.
+       * Rooms to show through the source's glass (interior mapping): each direct child is one
+       * room, which fills its bounding box; lights are refused (lamps: emissive materials).
+       * It sits in the source's space as a child of the source would, or where it is if it is
+       * inside the source; either way it is hidden from the exterior's bake. Glass is a
+       * surface that lets what is behind it show: transparent with opacity below 1, or
+       * transmissive (texture alpha is not read). Each room is captured from its box's centre
+       * as its colours and its glow; the baked material lights the colours by the indirect
+       * light reaching each window.
+       * Rooms must not overlap except at their walls. Put inward-facing walls, floors and
+       * ceilings on the box faces, with the box beginning just behind its windows. Furniture
+       * away from those faces appears flattened onto them. Glass with no nearby room stays
+       * plain; the bake fails if none of the source's glass looks into a room.
        */
-      low: Object3D;
-      ratio?: never;
+      interior: Object3D;
+      /** What renders the rooms: one made for bakes (make one with `createBakeRenderer`; see `bakeImpostor`). */
+      renderer: Renderer;
     }
-  | {
-      low?: undefined;
-      /** share of the source's triangles the low mesh, simplified from it, keeps, in (0, 1]; default 0.05 */
-      ratio?: number;
-    }
-);
+) &
+  (
+    | {
+        /**
+         * The mesh to bake onto, in the source's own space, such as a hand-made or generated
+         * low-poly shell of a building. Only its static geometry is used: materials are
+         * ignored, and its UVs are used if they lie inside 0..1 without overlapping and
+         * with a texel of border between charts, else it is unwrapped again.
+         */
+        low: Object3D;
+        ratio?: undefined;
+      }
+    | {
+        low?: undefined;
+        /** share of the source's triangles the low mesh, simplified from it, has, in (0, 1]; default 0.05 */
+        ratio?: number;
+      }
+  );
 
 /**
  * Bake `source` (in its own space, ignoring its own transform) onto one low-poly mesh with
@@ -91,25 +100,27 @@ export type BakeMeshOptions = {
  * then.
  */
 export async function bakeMesh(source: Object3D, options: BakeMeshOptions = {}): Promise<Mesh> {
-  const { interior } = options;
+  const { interior, renderer } = options;
   if (!interior) return bake(source, options, null);
+  checkBakeRenderer(renderer, "bakeMesh");
   const placement = placementOf(interior, source);
   const boxes = readBoxes(interior, placement);
   // Hidden for the whole bake, which yields: a scene drawing it meanwhile shows it gone.
   const visible = interior.visible;
   interior.visible = false;
   try {
-    return await bake(source, options, { object: interior, placement, boxes });
+    return await bake(source, options, { object: interior, placement, boxes, renderer });
   } finally {
     interior.visible = visible;
   }
 }
 
-/** An interior to bake: its object, where it sits in the source's space and its rooms' boxes there. */
+/** An interior to bake: its object, where it sits in the source's space, its rooms' boxes there and what renders them. */
 interface Interior {
   object: Object3D;
   placement: Matrix4;
   boxes: Box3[];
+  renderer: Renderer;
 }
 
 async function bake(source: Object3D, options: BakeMeshOptions, interior: Interior | null): Promise<Mesh> {
@@ -140,9 +151,9 @@ async function bake(source: Object3D, options: BakeMeshOptions, interior: Interi
   geometry.computeBoundingSphere();
   const orm = bakedTexture({ data: maps.orm, width: size, height: size }, NoColorSpace);
   const color = { data: maps.color, width: size, height: size };
-  const material = new (interior ? InteriorMaterial : MeshStandardNodeMaterial)({
-    // Cut-outs get mips that keep their coverage; else the GPU's are as good.
-    map: bakedTexture(color, SRGBColorSpace, input.cutout ? keepCoverage(mipmaps(color, true)) : undefined),
+  const parameters: MeshStandardNodeMaterialParameters = {
+    // Cut-outs get mips that preserve their coverage; else the GPU's are as good.
+    map: bakedTexture(color, SRGBColorSpace, input.cutout ? preserveCoverage(mipmaps(color, true)) : undefined),
     normalMap: bakedTexture({ data: maps.normal, width: size, height: size }, NoColorSpace),
     aoMap: orm,
     roughnessMap: orm,
@@ -151,19 +162,26 @@ async function bake(source: Object3D, options: BakeMeshOptions, interior: Interi
     metalness: 1,
     alphaTest: input.cutout ? 0.5 : 0,
     side: input.inputs.some((inputs) => inputs.doubleSided) ? DoubleSide : FrontSide,
-  });
-  if (interior && material instanceof InteriorMaterial) {
-    const { windows } = maps;
-    if (!windows.some((value, i) => i % 2 === 0 && value > 0)) throw new Error("bakeMesh: no glass of the source looks into a room of the interior");
-    const { boxes } = interior;
-    const faces = await renderFaces(interior.object, interior.placement, boxes, faceSize(size, boxes.length), await sharedRenderer());
-    material.furnish({ ...faces, boxes, windows: windowTexture(windows, size) });
-  }
+  };
+  const material = interior ? await furnished(parameters, interior, maps.windows, size) : new MeshStandardNodeMaterial(parameters);
   const mesh = new Mesh(geometry, material);
   mesh.name = `${source.name || "object"} baked`;
   placeLike(mesh, source);
   recordDeviation(mesh, Math.max(texelSize, low.deviation));
   return mesh;
+}
+
+/** A material of `parameters` that shows `interior`'s rooms through the glass texels of `windows`. */
+async function furnished(
+  parameters: MeshStandardNodeMaterialParameters,
+  interior: Interior,
+  windows: Uint8Array,
+  size: number,
+): Promise<InteriorMappingMaterial> {
+  if (!windows.some((value, i) => i % 2 === 0 && value > 0)) throw new Error("bakeMesh: no glass of the source looks into a room of the interior");
+  const { object, placement, boxes, renderer } = interior;
+  const faces = await inTurn(renderer, () => renderFaces(object, placement, boxes, faceSize(size, boxes.length), renderer));
+  return new InteriorMappingMaterial(parameters).furnish({ ...faces, boxes, windows: windowTexture(windows, size) });
 }
 
 /**

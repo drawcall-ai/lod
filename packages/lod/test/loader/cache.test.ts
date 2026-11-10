@@ -1,7 +1,6 @@
 import { LoadingManager } from "three/webgpu";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { expect, it, vi } from "vitest";
-import { loadOnce } from "../../src/deferred.js";
 import { LodLoader, type LodRequest } from "../../src/index.js";
 
 it("resolves an alias for cache identity while loading each URL through its manager only once", async () => {
@@ -25,7 +24,7 @@ it("resolves an alias for cache identity while loading each URL through its mana
   try {
     const loader = new LodLoader(manager);
     const cold = await loader.loadAsync(request);
-    // No level is built before a view selects it: only the source's shape is saved.
+    // No level is built before a camera needs it: only the source's shape is saved.
     const [shapeWrite, ...levelWrites] = writes();
     if (!shapeWrite) throw new Error("Expected the shape's write");
     expect(levelWrites).toHaveLength(0);
@@ -44,7 +43,7 @@ it("resolves an alias for cache identity while loading each URL through its mana
       middle = warm[1];
     if (!first?.load || !middle?.load) throw new Error("Expected two lazy levels");
     expect(warm.map((level) => level.maxPixels)).toEqual([Infinity, 300, 100]);
-    await loadOnce(first.load).promise;
+    await first.load();
     expect(source).toHaveBeenCalledTimes(3);
     await middle.load();
     const [middleWrite, ...rest] = writes();

@@ -19,7 +19,7 @@ const version = "lod-level@23";
  * any level is.
  */
 export function ladderEntry(inputs: Dependencies, of: Derived | "shape", modules: Readonly<Record<string, string>>, options?: LodCacheOptions): CacheEntry {
-  // vitecache resolves URLs to file paths; keep generation parameters in the key.
+  // vitecache resolves URLs to file paths; generation parameters go in the key.
   const queries: Record<string, string> = {};
   for (const [name, dependency] of Object.entries(inputs)) {
     const query = dependency.url === undefined ? "" : urlQuery(dependency.url);

@@ -1,11 +1,10 @@
-import type { LodLevel, Wind } from "@drawcall/lod";
-import { InstancedLod } from "@drawcall/lod";
+import type { InstancedLod, LodGpu, LodLevel, Wind } from "@drawcall/lod";
 import * as THREE from "three/webgpu";
 import { Random } from "../../public/content/random.ts";
 import { loader } from "../loading.ts";
 import { foliageLevels, foliageModel, MODEL_FOLIAGE } from "../../public/content/foliage.ts";
 import { SPECIES, treeLadder, type Species } from "../../public/content/ladders.ts";
-import { plantInstance, stands } from "./ground-records.ts";
+import { planter, type Planting } from "./planting.ts";
 import { Use } from "./land.ts";
 import { spread } from "./place.ts";
 import { sourceBox } from "./bounds.ts";
@@ -34,14 +33,14 @@ const BORDER: Mix = [
   { id: "tree_small_02", share: 0.12, scale: [2.2, 3.2] },
 ];
 
-/** The forests, streamed on the GPU (`Stream.update` them before each frame), and the trees the plan placed elsewhere. */
-export async function trees(plan: Plan, renderer: THREE.WebGPURenderer, wind?: Wind): Promise<THREE.Group> {
+/** The forests, planted on the GPU in the tiles near the camera (`update` them before each frame), and the trees the plan placed elsewhere. */
+export async function trees(plan: Plan, gpu: LodGpu, wind?: Wind): Promise<THREE.Group> {
   const root = new THREE.Group();
   root.name = "trees";
-  const sway = (crowd: InstancedLod) => {
-    const box = sourceBox(crowd.levels);
-    wind?.apply(crowd, { amplitude: (box.max.y - box.min.y) * 0.025 });
-    return crowd;
+  const sway = (lod: InstancedLod) => {
+    const box = sourceBox(lod.levels);
+    wind?.apply(lod, { amplitude: (box.max.y - box.min.y) * 0.025 });
+    return lod;
   };
   const grown = new Set([...INSIDE, ...BORDER].map(({ id }) => id));
   const planted = SPECIES.filter(({ id }) => grown.has(id) || plan.models.get(id)?.length);
@@ -54,10 +53,10 @@ export async function trees(plan: Plan, renderer: THREE.WebGPURenderer, wind?: W
 
   for (const [id, models] of loaded) {
     const spots = plan.models.get(id);
-    if (spots?.length) root.add(...spread(id, models, spots, foliageTint).map(sway));
+    if (spots?.length) root.add(...spread(gpu, id, models, spots, foliageTint).map(sway));
   }
 
-  const stand = stands(plan, renderer);
+  const plant = planter(plan, gpu);
   const forest = (x: number, z: number) => plan.land.at(x, z) === Use.Forest;
   const inside = (x: number, z: number) => plan.forests.some((f) => inForest(f, x, z, -EDGE));
   const mixes: [string, Mix, (x: number, z: number) => boolean][] = [
@@ -65,21 +64,17 @@ export async function trees(plan: Plan, renderer: THREE.WebGPURenderer, wind?: W
     ["forest edge", BORDER, (x, z) => forest(x, z) && !inside(x, z)],
   ];
   for (const [name, mix, grows] of mixes) {
-    root.add(
-      stand({ name, tile: TILE, density: DENSITY, radius: RADIUS, grows }, (records) => {
-        const crowds: InstancedLod[] = [];
-        let from = 0;
-        for (const { id, share, scale } of mix)
-          modelsOf(id).forEach((levels, variant, models) => {
-            const part = share / models.length;
-            const crowd = new InstancedLod(levels, { gpuRecords: records(plantInstance(from, from + part, scale, true), scale, part) });
-            crowd.name = `${name} ${id} ${variant}`;
-            crowds.push(sway(crowd));
-            from += part;
-          });
-        return crowds;
-      }),
-    );
+    const plantings: Planting[] = [];
+    let from = 0;
+    for (const { id, share, scale } of mix)
+      modelsOf(id).forEach((levels, variant, models) => {
+        const to = from + share / models.length;
+        plantings.push({ name: `${name} ${id} ${variant}`, levels, from, to, scale, tinted: true });
+        from = to;
+      });
+    const planted = plant({ name, tile: TILE, density: DENSITY, radius: RADIUS, grows }, plantings);
+    planted.lods.forEach(sway);
+    root.add(planted);
   }
   return root;
 }

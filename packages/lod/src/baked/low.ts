@@ -1,6 +1,6 @@
 import { BufferAttribute, BufferGeometry, Mesh, type Object3D } from "three/webgpu";
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
-import { decimate } from "../simplify.js";
+import { decimate } from "../simplify/index.js";
 import { measureDeviation } from "../source/deviation.js";
 import type { Source } from "../source/source.js";
 import { merge, type Surface } from "../source/surface.js";
@@ -48,13 +48,14 @@ function charts(uvs: Float32Array, index: Uint32Array): Int32Array {
     while (parent[i] !== i) i = parent[i] = parent[parent[i] ?? i] ?? i;
     return i;
   };
-  const owner = new Map<string, number>();
+  // The first triangle with a corner at each UV point.
+  const first = new Map<string, number>();
   for (let i = 0; i < index.length; i++) {
     const v = index[i] ?? 0;
     const key = `${uvs[v * 2]},${uvs[v * 2 + 1]}`;
     const triangle = Math.floor(i / 3);
-    const other = owner.get(key);
-    if (other === undefined) owner.set(key, triangle);
+    const other = first.get(key);
+    if (other === undefined) first.set(key, triangle);
     else parent[root(triangle)] = root(other);
   }
   return parent.map((_, i) => root(i));

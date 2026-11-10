@@ -1,8 +1,8 @@
 import * as THREE from "three/webgpu";
 import { cameraPosition, distance, float, positionWorld, vec4 } from "three/tsl";
-import { ImpostorMesh, InstancedLod, Lod, type LodLevel, type Wind } from "@drawcall/lod";
+import { ImpostorMesh, Lod, type LodGpu, type LodLevel, type Wind } from "@drawcall/lod";
 import { sourceBox } from "./bounds.ts";
-import { plantInstance, stands } from "./ground-records.ts";
+import { planter } from "./planting.ts";
 import { GROUND_COVER, grassLadder, groundPlantLadder, type GroundKind, type Habitat } from "../../public/content/ladders.ts";
 import { loader } from "../loading.ts";
 import { foliageLevels, foliageModel, MODEL_FOLIAGE } from "../../public/content/foliage.ts";
@@ -10,47 +10,51 @@ import type { Library } from "../../public/content/materials.ts";
 import type { Zones } from "./zones.ts";
 import { groundShading, type Ground } from "../render/ground/shading.ts";
 import { Use } from "./land.ts";
-import { reachFor } from "./patches.ts";
+import { reachFor } from "./screen.ts";
 import { type Plan, TOWN } from "./plan.ts";
 
 /** Edge of a ground-cover tile (m). */
 const TILE = 6;
 
-/** Ground cover, streamed on the GPU around `camera`: `Stream.update` it before each frame. */
-export async function groundCover(library: Library, plan: Plan, zones: Zones, camera: THREE.Camera, renderer: THREE.WebGPURenderer, wind?: Wind): Promise<THREE.Group> {
+/** Ground cover, planted on the GPU in the tiles near `camera`: `update` them before each frame. */
+export async function groundCover(library: Library, plan: Plan, zones: Zones, camera: THREE.Camera, gpu: LodGpu, wind?: Wind): Promise<THREE.Group> {
   // Grass samples ground in the vertex stage, where pixel derivatives are unavailable.
   const ground = groundShading(library, zones, float(0));
   const root = new THREE.Group();
   root.name = "ground cover";
   const reference = new THREE.PerspectiveCamera(50);
-  const stand = stands(plan, renderer);
+  const plant = planter(plan, gpu);
   const loaded = await Promise.all(
     GROUND_COVER.map(async (kind) => {
       const models = await ("grass" in kind ? grassModels(kind, ground) : plantModels(kind));
       const boxes = models.map(sourceBox);
       const size = Math.max(...boxes.map((box) => box.getSize(new THREE.Vector3()).length())) * kind.scale[1];
       const cull = reachFor(reference, size, kind.reach, 800, 1);
-      // on a view 1080 pixels tall, where the levels end
+      // on a screen 1080 pixels tall, where the levels end
       const radius = reachFor(reference, size, cull, 1080, Lod.quality);
-      return stand({ name: kind.name, tile: TILE, density: kind.density, radius, grows: where(plan, kind.ground) }, (records) =>
-        models.map((model, variant) => {
-          const lod = new InstancedLod(model, {
-            gpuRecords: records(plantInstance(variant / models.length, (variant + 1) / models.length, kind.scale), kind.scale, 1 / models.length),
-          });
-          const middle = lod.levels[1];
-          const empty = lod.levels.at(-1);
-          const box = boxes[variant];
-          if (!middle || !empty || !box) throw new Error(`${kind.name}: incomplete ground cover levels`);
-          // The cull size follows from the loaded bounds, so the requested empty threshold is a stand-in.
-          if ("grass" in kind) middle.maxPixels = cull * 4;
-          empty.maxPixels = cull;
-
-          lod.name = `${kind.name} ${variant}`;
-          lod.range = { camera, radius, ramp: radius * 0.4 };
-          wind?.apply(lod, { amplitude: (box.max.y - box.min.y) * 0.07 });
-          return lod;
-        }),
+      const cover = plant(
+        { name: kind.name, tile: TILE, density: kind.density, radius, grows: where(plan, kind.ground) },
+        models.map((levels, variant) => ({
+          name: `${kind.name} ${variant}`,
+          levels,
+          from: variant / models.length,
+          to: (variant + 1) / models.length,
+          scale: kind.scale,
+        })),
       );
+      cover.lods.forEach((lod, variant) => {
+        const middle = lod.levels[1];
+        const empty = lod.levels.at(-1);
+        const box = boxes[variant];
+        if (!middle || !empty || !box) throw new Error(`${kind.name}: incomplete ground cover levels`);
+        // The cull size follows from the loaded bounds, so the requested empty threshold is a stand-in.
+        if ("grass" in kind) middle.maxPixels = cull * 4;
+        empty.maxPixels = cull;
+        // The field thins out over the last 40 % of the radius and ends at it, where the levels end.
+        lod.cullDistance = { camera, near: radius * 0.6, far: radius };
+        wind?.apply(lod, { amplitude: (box.max.y - box.min.y) * 0.07 });
+      });
+      return cover;
     }),
   );
   root.add(...loaded);

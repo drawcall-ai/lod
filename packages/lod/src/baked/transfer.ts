@@ -1,10 +1,10 @@
 import { Box3, Matrix3, Vector3 } from "three/webgpu";
-import { pause } from "../pause.js";
+import { nextTask } from "../task.js";
 import { tangentFrame } from "../source/frame.js";
-import { Shading } from "../source/shading.js";
+import { MaterialEvaluator } from "../source/evaluator.js";
 import type { Source } from "../source/source.js";
-import { linearToSrgb } from "../source/texels.js";
-import { Tracer } from "../source/trace.js";
+import { linearToSrgb } from "../source/sampler.js";
+import { SourceRaycaster } from "../source/raycaster.js";
 import { roomAlong, windowDepth } from "./interior/rooms.js";
 import type { Low } from "./low.js";
 
@@ -58,8 +58,8 @@ export async function transfer(source: Source, low: Low, reach: number, texelSiz
   const windows = new Uint8Array(count * 2);
   const depth = boxes ? windowDepth(boxes) : 0;
   const hit = new Vector3();
-  const shading = new Shading(source, texelSize);
-  const tracer = new Tracer(source, shading);
+  const evaluator = new MaterialEvaluator(source, texelSize);
+  const raycaster = new SourceRaycaster(source, evaluator);
   const P = new Vector3();
   const N = new Vector3();
   const F = new Vector3();
@@ -87,8 +87,9 @@ export async function transfer(source: Source, low: Low, reach: number, texelSiz
 
   let yielded = performance.now();
   for (let texel = 0; texel < count; texel++) {
+    // Yield to the page every 30 ms or so, so that a long bake does not freeze it.
     if ((texel & 1023) === 0 && performance.now() - yielded > 30) {
-      await pause();
+      await nextTask();
       yielded = performance.now();
     }
     const triangle = triangles[texel] ?? -1;
@@ -110,14 +111,14 @@ export async function transfer(source: Source, low: Low, reach: number, texelSiz
     origin.copy(P).addScaledVector(R, reach);
     direction.copy(R).negate();
     // From outside in: the outermost surface is what a viewer sees of the source here.
-    if (tracer.cast(origin, direction, through, F) !== "opaque") {
+    if (raycaster.cast(origin, direction, through, F) !== "opaque") {
       state[texel] = OPEN;
       continue;
     }
-    shading.shade(tracer.triangle, tracer.w1, tracer.w2, false);
-    const { transmittance } = shading.material(tracer.triangle);
+    evaluator.shade(raycaster.triangle, raycaster.w1, raycaster.w2, false);
+    const { transmittance } = evaluator.material(raycaster.triangle);
     if (boxes && transmittance > 0) {
-      const room = roomAlong(boxes, pointOf(source, tracer.triangle, tracer.w1, tracer.w2, hit), direction, depth);
+      const room = roomAlong(boxes, pointOf(source, raycaster.triangle, raycaster.w1, raycaster.w2, hit), direction, depth);
       if (room >= 0) {
         windows[texel * 2] = room + 1;
         windows[texel * 2 + 1] = Math.round(transmittance * 255);
@@ -125,18 +126,18 @@ export async function transfer(source: Source, low: Low, reach: number, texelSiz
     }
     state[texel] = BAKED;
     const o = texel * 4;
-    color[o] = linearToSrgb(shading.r) * 255;
-    color[o + 1] = linearToSrgb(shading.g) * 255;
-    color[o + 2] = linearToSrgb(shading.b) * 255;
-    orm[o] = shading.ao * 255;
-    orm[o + 1] = shading.roughness * 255;
-    orm[o + 2] = shading.metalness * 255;
+    color[o] = linearToSrgb(evaluator.r) * 255;
+    color[o + 1] = linearToSrgb(evaluator.g) * 255;
+    color[o + 2] = linearToSrgb(evaluator.b) * 255;
+    orm[o] = evaluator.ao * 255;
+    orm[o + 1] = evaluator.roughness * 255;
+    orm[o + 2] = evaluator.metalness * 255;
     // The normal in the frame three will rebuild here from the mesh's own normal: solve
     // (T B N) · m = n for m.
     tangentFrame(e1, e2, uv(b, 0) - uv(a, 0), uv(b, 1) - uv(a, 1), uv(c, 0) - uv(a, 0), uv(c, 1) - uv(a, 1), N, tangent, bitangent);
     frame.set(tangent.x, bitangent.x, N.x, tangent.y, bitangent.y, N.y, tangent.z, bitangent.z, N.z);
     if (frame.determinant() === 0) local.set(0, 0, 1);
-    else local.copy(shading.normal).applyMatrix3(frame.invert()).normalize();
+    else local.copy(evaluator.normal).applyMatrix3(frame.invert()).normalize();
     normal[o] = (local.x * 0.5 + 0.5) * 255;
     normal[o + 1] = (local.y * 0.5 + 0.5) * 255;
     normal[o + 2] = (local.z * 0.5 + 0.5) * 255;

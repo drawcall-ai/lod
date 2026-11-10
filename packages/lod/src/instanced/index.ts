@@ -1,406 +1,337 @@
-import { Box3, type Color, Frustum, Matrix4, type Object3D, Sphere, Vector3, type Camera, type Intersection, type Raycaster } from "three/webgpu";
+import { Box3, Object3D, Sphere, type Camera, type Intersection, type LoadingManager, type Raycaster } from "three/webgpu";
 import { at } from "../at.js";
 import { disposeCopies } from "../dispose.js";
-import { Level, cloneLevels, estimate, fadeProgress, levelAt, tintLevels, validate, type LodLevel } from "../levels.js";
-import { Lod } from "../lod.js";
-import { Owner, type LodOptions } from "../owner.js";
-import { inShadowPass, sameClass } from "../three.js";
-import { TYPICAL_HEIGHT, View, viewportHeight, type RenderContext } from "../view.js";
-import { compileLevel } from "../compile/index.js";
-import { refreshWind } from "../wind/index.js";
-import { Meshes } from "./meshes.js";
-import { parts } from "./parts.js";
-import type { Blocks } from "./blocks.js";
-import { Extent } from "./extent.js";
-import { Probes } from "./raycast.js";
-import type { RangeAim } from "./kernel.js";
-import { checkRange, keptFraction, survivorScale, type InstancedRange } from "./range.js";
-import { Selection, sight, type Aim } from "./select.js";
-import { Store, type ChunkData, type InstancedChunk } from "./store.js";
-import { Pages, type GpuChunk, type GpuChunkData, type GpuRecords } from "./pages/index.js";
-import { Intake } from "./pages/intake.js";
-import { meeting } from "../residency.js";
+import { EncodedLevels, emptyLevels, levelsFrom, type LodLevel, type ThresholdedLevel } from "../levels/index.js";
+import { fadeSourceOf } from "../levels/fade.js";
+import { levelsToLoad } from "../levels/load.js";
+import { LodLevelLoadManager, type LodEventMap } from "../levels/manager.js";
+import type { LodGpu } from "../gpu.js";
+import { Lod, type LodOptions } from "../lod.js";
+import { inShadowMap } from "../levels/renderer.js";
+import { sameClass } from "../three.js";
+import { WIND } from "../wind/hooks.js";
+import { copyWind } from "../wind/index.js";
+import type { InstancedLodChunk, InstancedLodChunkParameters } from "./chunk.js";
+import { ChunkSet } from "./chunks.js";
+import { cullIn, emptyCull, type CullDistance } from "./cull.js";
+import { MeshesByLevel, type Drawing } from "./levels.js";
+import { InstanceLists, frustumIn, listedOf } from "./lists.js";
+import { localCamera, shownBy, walk, type LocalCamera } from "./camera.js";
+import { drawMatrices } from "./meshes.js";
+import { raycastInstances } from "./raycast.js";
+import { InstanceShape } from "./shape.js";
+import { MAX_SURVIVOR_SCALE, instanceLevel } from "./measure.js";
 
 /** How an InstancedLod is made. */
 export interface InstancedLodOptions extends LodOptions {
   /**
-   * Take chunks of the records the app's GPU passes write (see `addGpuChunk`) instead of chunks from the CPU. Its
-   * instances then live only on the GPU: they have no index, so `setMatrixAt`, `levelOf`, raycasting and `copy` do not
-   * apply to them. It needs levels from the start.
+   * The most instances it draws for a camera, over all its chunks, CPU and GPU chunks alike: 16384 by default. Its
+   * lists take 8 bytes per level that draws something per instance (about 400 KB with the defaults and three levels),
+   * and every camera that draws any InstancedLod of its LodGpu, each shadow map's included, holds the lists of every
+   * InstancedLod of that LodGpu. A camera that draws only a few InstancedLods, such as a minimap's or a reflection's,
+   * is bounded by giving those a LodGpu of their own. Chunks that together outgrow it are reported (see `error`),
+   * naming it as the limit to raise. Its LodGpu's pool holds the instances themselves (see `LodGpuOptions`).
    */
-  gpuRecords?: GpuRecords;
+  maxInstanceCount?: number;
 }
 
-const view = new View();
-const empty = new Box3();
-const none: ReadonlySet<never> = new Set();
-const inverse = new Matrix4();
-const origin = new Vector3();
+const DEFAULT_INSTANCES = 16384;
 
 /**
- * Independently selected copies of one object, batched into indirect draws per view. Copies
- * arrive and leave in chunks (see `addChunk`, or `addGpuChunk` for copies the app's GPU passes
- * produce); a `range` thins them out with distance.
- * Thresholds, fades and global settings follow Lod. Each view draws only the instances in
- * its frustum, and each shadow map is a view of its own: it draws the casters in its
- * frustum, each at the level its texels resolve, as an orthographic view would (an
- * instance smaller than a texel casts nothing). Each level's bounds tighten to the region
- * where its instances can draw. Instance matrices may scale arbitrarily;
- * the crowd's own transform and its parents should scale uniformly. Scale 0 draws nothing.
+ * Independently drawn copies of one object, sorted into indirect draws per camera on the GPU. Instances arrive and
+ * leave in chunks (see `addChunk`), from the CPU or written by the app's GPU passes; `cullDistance` thins them out with
+ * distance. Thresholds, fades, loading and global settings follow Lod: each instance draws what levelsToDraw gives for
+ * its height. Each camera draws only the instances in its frustum, and each shadow map is a camera of its own: it draws
+ * the casters in its frustum, each at the level its texels resolve, as an orthographic camera would (an instance
+ * smaller than a texel casts nothing). Instance matrices may scale arbitrarily; the InstancedLod's own transform and its
+ * parents should scale uniformly. Scale 0 draws nothing.
  *
- * Level templates are cloned, then their meshes are instanced. Skinned meshes,
- * InstancedMeshes (except ImpostorMesh) and nested Lods are unsupported. For external
- * detail, leave level 0 empty and draw the instances that `levelOf` reports there.
+ * Level templates are cloned, then their meshes are instanced; it sets each level mesh's `visible` per camera, so hide
+ * the InstancedLod itself, never its level meshes. Skinned meshes, InstancedMeshes (except ImpostorMesh)
+ * and nested Lods are unsupported. For external detail, leave level 0 empty and draw the instances that
+ * `chunk.getLevelAt` reports there.
  *
- * Requires WebGPU `indirect-first-instance`. Sequential cameras are supported; nested
- * renders replace the outer selection, so exclude this crowd with camera layers.
+ * Every level mesh's `geometry.boundingBox` and `boundingSphere` bound all its instances, not one, so
+ * `new Box3().setFromObject(lod)` bounds them once a level has loaded; with `precise` it walks a level's vertices once,
+ * at no instance, as it cannot see them. Measure one instance by a level's `object`, scaled by its matrix.
+ *
+ * Instances live in its LodGpu's pool, and every InstancedLod of a LodGpu sorts for a camera in one compute call.
+ * Requires WebGPU `indirect-first-instance`. Sequential cameras are supported; a nested render with a camera that the
+ * outer render also draws with replaces that camera's instance lists, so exclude this InstancedLod from it with camera
+ * layers.
  */
-export class InstancedLod extends Owner {
+export class InstancedLod extends Object3D<LodEventMap> {
+  readonly isLOD = true;
   readonly isInstancedLod = true;
-  /** How far from a camera its instances draw, thinning out before it, in every view; null draws them at any distance. */
-  range: InstancedRange | null = null;
+  /** Let the renderer call `update` with its camera every frame. */
+  autoUpdate = true;
+  /** Draw only this level, without fades, once the coarsest level that draws something has loaded. */
+  forceLevel: number | null = null;
+  /** The levels, each `object` the template its level meshes are made from, once there is one (never in the scene). */
+  readonly levels: ThresholdedLevel[] = [];
+  /** Thins the instances out with distance from a camera, in every camera; null draws them at any distance. */
+  cullDistance: CullDistance | null = null;
 
-  /** Raycasts its CPU instances; GPU instances have none to hit. */
-  private readonly probes: Probes | null;
-  /** Holds its item while GPU chunks wait to be taken in. */
-  private readonly intake: Intake | null = null;
-  private selection: Selection | null = null;
-  private meshes: Meshes | null = null;
-  private readonly places: Store | Pages;
-  private readonly extent = new Extent();
-  /** Around every instance; each level may use tighter bounds. */
-  readonly bounds = new Sphere();
-  private blocks: Blocks;
-  /** Indirect draws of every level, which decide the blocks' leaf size. */
-  private draws = 0;
-  /** The blocks' wind padding (see `Blocks.pad`). */
-  private padding = 0;
-  /** The range selected with last, in this crowd's space, or none. */
-  private ranged: RangeAim | null = null;
-  private readonly rangeAim: RangeAim = { eye: new Vector3(), radius: 0, ramp: 0, survivors: false };
-  /** The last view `update` selected for, for `levelOf`, once there was one. */
-  private readonly last: Aim = { eye: new Vector3(), scale: 0, ortho: false, fades: false, forced: null, frustum: new Frustum() };
-  private selected = false;
-  /** The shadow map `update` last selected for. */
-  private readonly shadowView: Aim = { eye: new Vector3(), scale: 0, ortho: true, fades: false, forced: null, frustum: new Frustum() };
+  /** The levels as they were given, which a copy is made from. */
+  private inputs: readonly LodLevel[] = [];
+  /** What it is made of for its levels and sizes, which a copy makes anew. */
+  private built: Built;
+  private disposed = false;
+  /** Around every instance, survivors grown: what every level mesh is culled and boxed by. */
+  private readonly bounds = { sphere: new Sphere(), box: new Box3() };
+  /** What `cullIn` writes cullDistance into, in this InstancedLod's space. */
+  private readonly cull = emptyCull();
 
-  /** `levels[0]` is the source. Empty only as the target of `copy`. It holds no instances until chunks are added. */
-  constructor(levels: readonly LodLevel[] = [], options: InstancedLodOptions = {}) {
-    super("InstancedLod", options);
-    // Without levels it never selects, so its GPU chunks would never be taken in.
-    if (options.gpuRecords && levels.length === 0) throw new Error("InstancedLod: one made with gpuRecords needs its levels from the start");
-    if (options.gpuRecords) {
-      this.places = new Pages(options.gpuRecords);
-      this.probes = null;
-    } else {
-      const store = new Store();
-      this.places = store;
-      this.probes = new Probes(store, this.extent.rest);
-    }
-    this.draws = levels.length > 0 ? this.build(levels) : 0;
-    this.blocks = this.makeBlocks();
-    // Every render takes GPU chunks in first, whether or not any instance draws, so a producer can reuse its records
-    // once it has rendered. CPU chunks are sent as they are measured.
-    if (this.places instanceof Pages) {
-      const intake = (this.intake = new Intake(this.places, this.residency));
-      this.add(
-        meeting((renderer) =>
-          this.residency.guard(() => {
-            this.selection?.prepare(renderer);
-            intake.rendered(renderer);
-          }),
-        ),
-      );
-    }
+  /**
+   * `levels[0]` is the source. Empty only as the target of `copy`. It holds no instances until chunks are added. `gpu`
+   * is what it shares with every Lod drawing with its renderer.
+   */
+  constructor(
+    levels: readonly LodLevel[],
+    private readonly gpu: LodGpu,
+    options: InstancedLodOptions = {},
+  ) {
+    super();
+    // Each level's draws start at its list (see update.ts).
+    if (!gpu.renderer.hasFeature("indirect-first-instance"))
+      throw new Error("InstancedLod: needs the GPU feature indirect-first-instance, which this device lacks");
+    const maxInstanceCount = options.maxInstanceCount ?? DEFAULT_INSTANCES;
+    if (!Number.isInteger(maxInstanceCount) || maxInstanceCount < 1)
+      throw new RangeError(`InstancedLod: maxInstanceCount must be a positive integer, got ${maxInstanceCount}`);
+    this.built = this.init(levels, maxInstanceCount);
+    this.built.loads.item.given = options.manager;
   }
 
-  /** Instances in its chunks from the CPU. */
-  get count(): number {
-    return this.places instanceof Store ? this.places.count : 0;
+  get pending(): boolean {
+    return this.built.loads.pending;
   }
 
-  /** Its chunks from the CPU, in the order they were added. */
-  get chunks(): ReadonlySet<InstancedChunk> {
-    return this.places instanceof Store ? this.places.chunks : none;
+  get error(): Error | undefined {
+    return this.built.loads.error;
   }
 
-  /** Its chunks from the GPU, in the order they were added. */
-  get gpuChunks(): ReadonlySet<GpuChunk> {
-    return this.places instanceof Pages ? this.places.chunks : none;
+  /** Where the item of levels a camera misses goes (see `LodOptions.manager`). */
+  get manager(): LoadingManager {
+    return this.built.loads.item.manager;
+  }
+  set manager(manager: LoadingManager | undefined) {
+    this.built.loads.item.given = manager;
   }
 
-  /** Its instances from the CPU, which have indices. */
-  private get store(): Store {
-    if (this.places instanceof Store) return this.places;
-    throw new Error("InstancedLod: one made with gpuRecords holds GPU chunks, whose instances have no index");
+  /** Its chunks, in the order they were added. */
+  get chunks(): Iterable<InstancedLodChunk> {
+    return this.built.chunks.keys();
   }
 
-  /** Its page pool for GPU chunks, and what takes them in. */
-  private get gpu(): { pages: Pages; intake: Intake } {
-    const { places, intake } = this;
-    if (places instanceof Pages && intake) return { pages: places, intake };
-    throw new Error("InstancedLod: GPU chunks need an InstancedLod made with gpuRecords");
+  /** What this InstancedLod is made of for `inputs` and `maxInstanceCount`: its levels, their meshes and their loading. */
+  private init(inputs: readonly LodLevel[], maxInstanceCount: number): Built {
+    const shape = new InstanceShape(inputs);
+    const { pool, renderer } = this.gpu;
+    const lists = new InstanceLists(this.gpu.sorter, listedOf(inputs), maxInstanceCount);
+    const chunks = new ChunkSet(
+      pool,
+      lists.row,
+      this.bounds,
+      () => shape.originReach,
+      (chunk, index, camera) => this.levelAt(chunk, index, camera),
+    );
+    const drawn = { matrices: pool.matrices, colors: pool.colors };
+    const drawing = { shape, lists, drawn };
+    this.inputs = inputs;
+    if (inputs.length > 0) this.levels.push(...levelsFrom(inputs, 2 * shape.ownRadius, "InstancedLod"));
+    const encoded = new EncodedLevels(this.levels, emptyLevels(inputs), "InstancedLod");
+    const drawFor = (renderer: unknown, camera: Camera) =>
+      this.built.loads.guard(() => {
+        if (renderer !== this.gpu.renderer) throw new Error("InstancedLod: another renderer than its LodGpu's drew it");
+        lists.drawFor(camera);
+      });
+    const meshes = new MeshesByLevel(this, this.levels, drawing, this.bounds, drawFor);
+    const loads = new LodLevelLoadManager(
+      this,
+      this.gpu,
+      `InstancedLod ${this.uuid}`,
+      inputs,
+      encoded.get(null, true),
+      (level, loaded) => meshes.prepare(level, loaded),
+      (level) => meshes.of(level),
+      async () => {
+        const instances = await pool.status(renderer, chunks.slots());
+        if (instances !== null && instances > maxInstanceCount)
+          throw new Error(`InstancedLod: its chunks hold ${instances} instances, more than its lists hold: raise its maxInstanceCount (${maxInstanceCount})`);
+        return instances !== null;
+      },
+    );
+    return { maxInstanceCount, chunks, ...drawing, meshes, loads, encoded };
   }
 
   /**
-   * Add `data`'s instances as one chunk: instance `i` of it is instance `chunk.start + i` of this InstancedLod until the
-   * chunk is removed. Adding and removing chunks costs about what they hold, a few per frame included.
+   * Add `parameters`' instances as one chunk, from the CPU or the GPU (see `InstancedLodChunkParameters`). The next
+   * render that updates this InstancedLod copies them into its pages. Its item (see `LodOptions.manager`) stays held
+   * until the GPU shows every chunk copied; a chunk the pool lacks pages for draws the instances it got until it is
+   * removed, and is this InstancedLod's error (see `error`).
    */
-  addChunk(data: ChunkData): InstancedChunk {
-    const { store } = this;
-    const { capacity, colors } = store;
-    const chunk = store.add(data);
-    this.fit(capacity, colors);
+  addChunk(parameters: InstancedLodChunkParameters): InstancedLodChunk {
+    if (this.disposed) throw new Error("InstancedLod: it was disposed");
+    if (this.levels.length === 0) throw new Error("InstancedLod: give it levels before chunks");
+    const chunk = this.built.chunks.add(parameters);
+    this.measureBounds();
+    this.built.loads.chunksChanged();
     return chunk;
   }
 
-  /** Remove `chunk`'s instances; its indices may go to a chunk added later. */
-  removeChunk(chunk: InstancedChunk): void {
-    const { capacity, colors } = this.store;
-    this.store.remove(chunk);
-    this.fit(capacity, colors);
+  /** Remove `chunk`'s instances; its pages return to the pool in the next render. */
+  removeChunk(chunk: InstancedLodChunk): void {
+    this.built.chunks.remove(chunk);
+    this.measureBounds();
+    this.built.loads.chunksChanged();
   }
 
-  /**
-   * Add the instances of the records an app's GPU pass wrote for `data` as one chunk, in an InstancedLod made with
-   * `gpuRecords`. The next render that reaches this InstancedLod copies them into its pages, and nothing is read back:
-   * the records and count need to hold only until that render, after which the producer may overwrite them. Its item
-   * stays held until the GPU shows the chunk taken in. A chunk the pool lacks pages for draws the instances it got until
-   * it is removed, and is this InstancedLod's error (see `error`).
-   */
-  addGpuChunk(data: GpuChunkData): GpuChunk {
-    const { pages, intake } = this.gpu;
-    const chunk = pages.add(data);
-    this.blocks.place(chunk.slot, chunk.box, pages.scales);
-    this.blocks.refit();
-    this.selection?.changed();
-    intake.changed();
-    return chunk;
+  /** Bound every chunk's instances, survivors grown. */
+  private measureBounds(): void {
+    this.built.chunks.bound(this.cullDistance?.scaleSurvivors ? MAX_SURVIVOR_SCALE : 1);
   }
 
-  /** Remove `chunk`'s instances; its pages return to the pool before the next draw. */
-  removeGpuChunk(chunk: GpuChunk): void {
-    const { pages, intake } = this.gpu;
-    pages.remove(chunk);
-    this.blocks.place(chunk.slot, empty, pages.scales);
-    this.blocks.refit();
-    this.selection?.changed();
-    intake.changed();
-  }
-
-  /** Follow the store to a new capacity, or to colours it has begun to carry. */
-  private fit(capacity: number, colors: Float32Array | null): void {
-    const { store } = this;
-    if (store.capacity !== capacity) {
-      this.blocks = this.makeBlocks();
-      this.selection?.resize();
+  [WIND](padding: number, slope: number, baseY: number): void {
+    if (this.built.loads.started) throw new Error("InstancedLod: apply wind before the first render");
+    this.built.shape.wind(padding, slope, baseY);
+    for (const mesh of this.built.meshes.all()) {
+      const source = fadeSourceOf(mesh);
+      if (source?.kind === "instances") source.radius = this.built.shape.fadeRadius;
     }
-    if (store.capacity !== capacity || store.colors !== colors) this.meshes?.rebind();
+    this.measureBounds();
   }
 
-  private makeBlocks(): Blocks {
-    const { extent } = this;
-    const frame = { source: extent.source, bounds: this.bounds, draws: this.draws, rest: extent.rest, padding: this.padding };
-    return this.places.blocks(frame, this.ranged?.survivors ?? false);
+  /** Sort the instances into level lists for `camera`, a camera's or a shadow map's, and load the levels they need. What fails is reported (see `error`). */
+  update(camera: Camera): void {
+    if (this.disposed || this.levels.length === 0) return;
+    // A shadow map draws nothing of an InstancedLod whose levels cast nothing; one not loaded yet may.
+    const shadow = inShadowMap(this);
+    if (shadow && !this.levels.some(({ object }, i) => !object || this.built.meshes.of(i).some((mesh) => mesh.castShadow))) return;
+    this.built.loads.guard(() => this.sort(camera, shadow));
   }
 
-  private build(inputs: readonly LodLevel[]): number {
-    const { extent } = this;
-    inputs.forEach((input, i) => this.entries.push(new Level(input, i, this.entries)));
-    estimate(this.entries, 2 * extent.measure(inputs));
-    validate(this.entries);
-    this.residency.reset();
-    const templates = this.entries.map(({ object }, i) => (object ? parts(object, i) : []));
-    this.probes?.add(templates[0] ?? []);
-    const draws = templates.flatMap((parts) => parts.map((part) => part.draw));
-    const drawing = templates.map((parts, i) => parts.length > 0 || at(inputs, i).box?.isEmpty() === false);
-    const selection = new Selection(this.places, extent.source, drawing, draws, this.residency.fallback);
-    selection.reach.value = extent.rest.radius;
-    this.selection = selection;
-    this.places.attach(selection);
-    const meshes = new Meshes(selection, extent.reaches, extent.drawRadius, {
-      live: () => !this.disposed,
-      drawn: (camera, mesh) => this.residency.drawn(camera, mesh),
-      guard: (action) => this.residency.guard(action),
+  /** Sort for `camera`, a shadow map's when `shadow`. */
+  private sort(camera: Camera, shadow: boolean): void {
+    const { loads, shape, lists, chunks, drawn, encoded, meshes } = this.built;
+    const { levels, eye, scale, ortho } = this.localCamera(camera, shadow);
+    if (chunks.refresh()) this.measureBounds();
+    // The pages change before any sorts with them.
+    const { pool } = this.gpu;
+    pool.prepare(this.gpu.renderer);
+    const survivors = this.cullDistance?.scaleSurvivors ?? false;
+    if (survivors !== (drawn.matrices !== pool.matrices)) this.scaleSurvivors(survivors);
+    const cull = cullIn(this.cullDistance, this.matrixWorld, this.cull);
+    const local = { levels, eye, scale, ortho, cull };
+    const found = lists.of(camera);
+    // Outside the camera's frustum, nothing draws: a shadow map, which loads nothing by heights, walks no chunk then.
+    const seen = frustumIn(found, camera, this.matrixWorld).intersectsSphere(this.bounds.sphere);
+    if (!shadow || seen) walk(found, local, this.built);
+    // A shadow map draws from the levels its scene's cameras loaded.
+    loads.request(camera, shadow ? levelsToLoad([], encoded.heights(levels)) : found.wanted, shadow);
+    meshes.tint(Lod.debug);
+    lists.prune(camera, (other) => loads.requests.rendering(other));
+    const { loaded, before, progress } = loads;
+    // Three projects this InstancedLod's children for the camera after this update.
+    const shown = seen ? shownBy(found, levels, encoded, { loaded, before, progress }) : 0;
+    lists.sort(camera, {
+      ...local,
+      loaded,
+      before,
+      progress,
+      bounds: this.bounds.sphere,
+      box: this.bounds.box,
+      source: shape.source,
+      reach: shape.reach,
+      onlyLevel: cull === null ? found.onlyLevel : 0,
+      chunks: chunks.version,
     });
-    this.meshes = meshes;
-    for (const mesh of meshes.fill(this.entries, templates)) this.add(mesh);
-    return draws.length;
+    // Nothing draws from the camera's indirect draws before a sort writes them, which a level mesh's draw runs first.
+    meshes.show(found.written ? shown : 0);
   }
 
-  protected override arrived(): void {
-    this.selection?.route(this.residency.fallback, this.residency.progress < 1);
-    super.arrived();
+  /** `camera` in this InstancedLod's space (see `localCamera`). */
+  private localCamera(camera: Camera, shadow: boolean): LocalCamera {
+    const { loads, encoded } = this.built;
+    return localCamera(camera, loads.heightOf(camera, shadow), this.matrixWorld, encoded, this.forceLevel);
   }
 
-  /** Compile only the arriving level; bounds and instance buffers stay fixed. */
-  protected async install(level: Level, template: Object3D, context: RenderContext): Promise<void> {
-    if (!this.meshes) throw new Error("InstancedLod: missing selection");
-    const loaded = await this.meshes.load(level, template, async (staged) => {
-      refreshWind(this, staged);
-      await compileLevel(staged, context);
-    });
-    if (!loaded) return;
-    level.object = loaded.object;
-    if (level.index === 0) this.probes?.add(loaded.found);
-    for (const mesh of loaded.made) this.add(mesh);
+  /** Draw survivors' scaled matrices, or the pool's again. */
+  private scaleSurvivors(survivors: boolean): void {
+    const { pool, sorter } = this.gpu;
+    this.built.drawn.matrices = survivors ? sorter.scaledMatrices : pool.matrices;
+    drawMatrices(this.built.meshes.all(), this.built.drawn);
+    this.measureBounds();
   }
 
-  /** Move instance `index`, an instance of one of its chunks. */
-  setMatrixAt(index: number, matrix: Matrix4): void {
-    this.store.setMatrix(index, matrix);
-  }
-
-  getMatrixAt(index: number, matrix: Matrix4): Matrix4 {
-    return this.store.getMatrix(index, matrix);
-  }
-
-  /** Tint instance `index` by `color`, as InstancedMesh.setColorAt does, in every level. */
-  setColorAt(index: number, color: Color): void {
-    const first = this.store.colors === null;
-    this.store.setColor(index, color);
-    if (first) this.meshes?.rebind();
-  }
-
-  /** Instance `index`'s colour: white unless set. */
-  getColorAt(index: number, color: Color): Color {
-    return this.store.getColor(index, color);
+  /** The level instance `index` of `chunk` draws most of its pixels with for `camera` (see `InstancedLodChunk.getLevelAt`). */
+  private levelAt(chunk: InstancedLodChunk, index: number, camera: Camera): number | null {
+    const cull = cullIn(this.cullDistance, this.matrixWorld, this.cull);
+    const local = this.localCamera(camera, inShadowMap(this));
+    return instanceLevel(chunk.instanceMatrix.array, (chunk.start + index) * 16, cull, local, this.built.shape.source, this.built.loads.loaded);
   }
 
   /**
-   * The finest level instance `index` drew in the last update, or null before the first
-   * (or at scale 0, or out of range). Inside a fade the next coarser level draws too.
-   */
-  levelOf(index: number): number | null {
-    const { last, store, ranged } = this;
-    store.check(index);
-    if (!this.selected) return null;
-    store.measure(this.blocks);
-    let height = store.height(index, last);
-    if (height === null) return null;
-    if (ranged) {
-      const kept = keptFraction(origin.fromArray(store.matrices, index * 16 + 12).distanceTo(ranged.eye), ranged);
-      if (at(store.keeps, index) >= kept) return null;
-      if (ranged.survivors) height *= survivorScale(kept);
-    }
-    const level = levelAt(this.entries, height, last.forced);
-    const selected = last.fades && fadeProgress(this.entries, level, height) > 0 ? level.index - 1 : level.index;
-    const ready = at(this.residency.fallback, selected);
-    return ready < 0 ? null : ready;
-  }
-
-  protected sway(padding: number, slope: number, baseY: number): void {
-    const sway = this.extent.wind(padding, slope, baseY);
-    this.meshes?.setRadius(this.extent.drawRadius);
-    this.padding = sway;
-    this.blocks.pad(sway);
-    this.blocks.refit();
-    if (this.selection) this.selection.reach.value = this.extent.rest.radius * (1 + sway);
-  }
-
-  /** Sort instances for `camera`, a view or a shadow map's. */
-  protected pick(camera: Camera): void {
-    if (this.disposed) return;
-    const { entries, selection, meshes, residency } = this;
-    if (!selection || !meshes) return;
-    validate(entries);
-    if (this.forceLevel !== null && !entries[this.forceLevel]) throw new Error(`Lod: forceLevel ${this.forceLevel} is not a level`);
-    this.aimRange(selection, meshes);
-    this.places.measure(this.blocks);
-    const height = viewportHeight(camera);
-    view.begin(camera, height ?? TYPICAL_HEIGHT, this.forceLevel);
-    const shadow = inShadowPass(this);
-    const seen = sight(shadow ? this.shadowView : this.last, view, camera, this.matrixWorld, Lod.quality, this.forceLevel);
-    const drawn = this.blocks.select(entries, seen, this.extent.reaches, height !== null, this.matrixWorld);
-    const progress = residency.progress;
-    if (selection.progress.value !== progress) {
-      selection.progress.value = progress;
-      selection.changed();
-    }
-    this.demandLevels(camera, drawn, shadow);
-    this.extent.reroute(residency.fallback, residency.previous, progress);
-    // Cameras that stopped rendering it, as a clone made for one frame does, give their slots back.
-    selection.forget((other) => other === camera || residency.viewing(other));
-    selection.aim(camera, seen, entries);
-    // Selected only when something may draw: an InstancedLod with every level hidden
-    // keeps its last selection.
-    meshes.schedule(meshes.show(camera, this.matrixWorld));
-    residency.sync();
-  }
-
-  /** Select every view with the current `range`, measured from its camera, in this crowd's space. */
-  private aimRange(selection: Selection, meshes: Meshes): void {
-    const { range } = this;
-    const survived = this.ranged?.survivors ?? false;
-    this.ranged = null;
-    if (range) {
-      checkRange(range);
-      const aim = this.rangeAim;
-      const scale = this.matrixWorld.getMaxScaleOnAxis();
-      aim.eye.setFromMatrixPosition(range.camera.matrixWorld).applyMatrix4(inverse.copy(this.matrixWorld).invert());
-      aim.radius = range.radius / scale;
-      aim.ramp = range.ramp / scale;
-      aim.survivors = range.scaleSurvivors ?? false;
-      this.ranged = aim;
-    }
-    selection.range(this.ranged);
-    if ((this.ranged?.survivors ?? false) === survived) return;
-    // Survivors draw larger than the blocks bounded them, or no longer do.
-    this.blocks = this.makeBlocks();
-    meshes.rebind();
-  }
-
-  /**
-   * Ask for the levels `drawn` for `camera`, a view's or a shadow map's: every view demands what it draws. They install
-   * as they arrive, from a view's render context.
-   */
-  private demandLevels(camera: Camera, drawn: number[], shadow: boolean): void {
-    const { entries, meshes, residency } = this;
-    if (!meshes) return;
-    tintLevels(entries, Lod.debug);
-    if (!shadow) this.selected = true;
-    // Reusable crowds can be populated and drawn in the same frame.
-    const needed = this.bounds.isEmpty() ? entries.flatMap((level) => (level.object ? [level.index] : [])) : drawn;
-    residency.demand(camera, needed);
-    residency.update(camera, meshes.byLevel);
-  }
-
-  /**
-   * Hits every instance's source level, with `instanceId` set; `object` is this
-   * InstancedLod. Meshes of the source on layers the raycaster does not test are skipped.
+   * Hits every instance of its CPU chunks on the source level, with `instanceId` and `chunk` set (see
+   * `InstancedLodIntersection`); `object` is this InstancedLod. A GPU chunk's instances the CPU cannot see, and meshes
+   * of the source on layers the raycaster does not test, are not hit.
    */
   override raycast(raycaster: Raycaster, intersects: Intersection[]): boolean {
-    this.probes?.raycast(this, raycaster, intersects);
+    raycastInstances(this, { parts: this.built.meshes.source, rest: this.built.shape.rest }, this.built.chunks.cpu(), raycaster, intersects);
     return false;
   }
 
   /**
-   * Copies `source`'s levels, chunks and settings into this empty InstancedLod, one without levels or chunks (it throws
-   * otherwise); the copy shares geometry and textures with `source`. Its chunks are its own, at the same indices.
+   * Copies `source`'s levels, CPU chunks and settings into this empty InstancedLod, one without levels or chunks (it
+   * throws otherwise); the copy shares geometry and textures with `source`, and its chunks hold copies of the source's
+   * attributes. A GPU chunk cannot be copied: its instances live on the GPU.
    */
   override copy(source: InstancedLod): this {
-    if (!(source.places instanceof Store)) throw new Error("InstancedLod.copy: an InstancedLod made with gpuRecords cannot be copied");
-    if (this.entries.length > 0 || this.count > 0) throw new Error("InstancedLod.copy: copy into an InstancedLod without levels or chunks");
+    if (this.levels.length > 0 || this.built.chunks.size > 0) throw new Error("InstancedLod.copy: copy into an InstancedLod without levels or chunks");
+    const chunks = source.built.chunks.copies();
+    const inputs = source.inputs.map((input, i) => ({ ...input, maxPixels: at(source.levels, i).maxPixels }));
     super.copy(source, false);
-    this.store.copy(source.places);
-    this.range = source.range && { ...source.range };
-    this.draws = source.entries.length > 0 ? this.build(cloneLevels(source.entries)) : 0;
-    this.blocks = this.makeBlocks();
-    this.copySettings(source);
+    this.built.chunks.dispose();
+    this.built.lists.dispose();
+    this.built = this.init(inputs, source.built.maxInstanceCount);
+    this.built.loads.item.given = source.built.loads.item.given;
+    this.forceLevel = source.forceLevel;
+    this.autoUpdate = source.autoUpdate;
+    this.cullDistance = source.cullDistance && { ...source.cullDistance };
+    copyWind(source, this);
+    for (const chunk of chunks) this.addChunk(chunk);
     return this;
   }
 
   override clone(): this {
-    const clone = new InstancedLod().copy(this);
+    const clone = new InstancedLod([], this.gpu).copy(this);
     if (!sameClass(this, clone)) throw new Error("InstancedLod.clone: a subclass must override clone");
     return clone;
   }
 
-  protected release(): void {
-    this.meshes?.dispose();
-    this.selection?.dispose();
-    this.places.attach(null);
-    this.places.dispose();
-    for (const { object } of this.entries) if (object) disposeCopies(object);
+  /**
+   * Release its buffers and what it made of its levels, once nothing it prepares or compiles still uses them. Objects
+   * you give or load, chunk attributes among them, are yours to dispose; LodLoader's are freed when the last Lod
+   * holding them is disposed (see `LodLevel.hold`).
+   */
+  override dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    super.dispose();
+    this.built.chunks.dispose();
+    this.built.loads.dispose(() => {
+      this.built.meshes.dispose();
+      this.built.lists.dispose();
+      for (const { object } of this.levels) if (object) disposeCopies(object);
+    });
   }
+}
+
+/** What an InstancedLod is made of for its levels and lists: what its meshes draw with, its chunks and its loading. */
+interface Built extends Drawing {
+  readonly maxInstanceCount: number;
+  readonly chunks: ChunkSet;
+  readonly meshes: MeshesByLevel;
+  readonly loads: LodLevelLoadManager;
+  /** The levels as levelsToDraw reads them. */
+  readonly encoded: EncodedLevels;
 }

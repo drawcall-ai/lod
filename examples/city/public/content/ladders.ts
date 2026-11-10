@@ -1,4 +1,4 @@
-import type { LevelRequest } from "@drawcall/lod";
+import type { LodLevelRequest } from "@drawcall/lod";
 import { HERO_VARIANT, VARIANTS as CORN_VARIANTS } from "./corn/layout.ts";
 import { HOUSE_VARIANTS } from "./house/params.ts";
 
@@ -8,7 +8,7 @@ import { HOUSE_VARIANTS } from "./house/params.ts";
  */
 export interface Ladder {
   url: string;
-  levels: LevelRequest[];
+  levels: LodLevelRequest[];
 }
 
 export interface Species {
@@ -40,7 +40,7 @@ export const SPECIES: Species[] = [
 ];
 
 export function treeLadder({ id, maxPixels, resolution, frames, cull }: Species, variant: string): Ladder {
-  const levels: LevelRequest[] = [
+  const levels: LodLevelRequest[] = [
     { type: "impostor", layout: "hemi", maxPixels, resolution, frames },
     { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
   ];
@@ -131,10 +131,10 @@ export type GroundKind = { name: string; ground: Habitat; density: number; reach
  * Ground cover near the camera: grass blade by blade, wild flowers on the meadows, ferns
  * and nettles on the forest floor. A kilometre of meadow holds far too many blades to
  * list, and from a few dozen metres on the ground texture shows the same green (the
- * blades take their colour from it), so each kind lives in `Patches` of 6 m tiles filled
+ * blades take their colour from it), so each kind is planted on the GPU in 6 m tiles
  * only within the distance where it still stands taller than its cull size on screen;
  * there it dithers out into the empty level. The cull size is set so that happens `reach`
- * metres away on an 800 px tall view (a 50° field of view). Every kind switches directly
+ * metres away on an 800 px tall screen (a 50° field of view). Every kind switches directly
  * from its original geometry to an impostor, then disappears into the ground.
  */
 export const GROUND_COVER: GroundKind[] = [

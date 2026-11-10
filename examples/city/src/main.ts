@@ -4,11 +4,11 @@
 // levels and ?quality=<q> sets Lod.quality from the start; ?terrain=0 leaves the ground
 // mesh out (everything still stands where the ground would be; roads and the creek stay).
 // ?wind=0 builds vegetation without wind, for a static performance baseline.
-// Forests and ground cover stream on the GPU around the camera (world/stream.ts), from a compute pass of their own.
+// Forests and ground cover are planted on the GPU in the tiles near the camera (world/near-tiles.ts, world/planting.ts).
 // window.city exposes the tour and frame measurements to scripts/tour.ts.
 import { textures } from "./loading.ts";
 import * as THREE from "three/webgpu";
-import { InstancedLod, Lod, Wind, setViewportHeight } from "@drawcall/lod";
+import { InstancedLod, Lod, LodGpu, Wind } from "@drawcall/lod";
 import { Library } from "../public/content/materials.ts";
 import { number } from "../public/content/parameters.ts";
 import { terrainMaterial } from "./render/ground/material.ts";
@@ -25,8 +25,7 @@ import { Corn } from "./world/corn/index.ts";
 import { groundCover } from "./world/ground-cover.ts";
 import { water } from "./world/creek.ts";
 import { houses } from "./world/houses.ts";
-import { Patches } from "./world/patches.ts";
-import { Stream } from "./world/stream.ts";
+import { NearTiles } from "./world/near-tiles.ts";
 import { TOWN } from "./world/plan.ts";
 import { loadPlan } from "./world/plan/cache.ts";
 import { EXTENT } from "./world/terrain.ts";
@@ -63,6 +62,9 @@ await library.load();
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.5, 60000);
 const scene = new THREE.Scene();
 const pipeline = await Pipeline.create(scene, camera, Math.min(devicePixelRatio, 2));
+// What every Lod and InstancedLod of the city shares. Its pool has room for what the InstancedLods' lists hold at most
+// together (about 342k instances in 5.8k chunks), within one storage binding of 128 MiB of matrices.
+const gpu = new LodGpu(pipeline.renderer, { maxInstanceCount: 350_000, maxChunkCount: 6000 });
 loaded("renderer");
 // hidden until the world is built: an empty canvas would sit over the page meanwhile
 pipeline.canvas.style.visibility = "hidden";
@@ -90,7 +92,13 @@ scene.fogNode = haze(
 
 const zones = { fields: world.fields, forests: world.forests, parcels: { texture: world.land.texture(), extent: EXTENT }, town: TOWN };
 const wind = params.get("wind") === "0" ? undefined : new Wind({ direction: [1, 0.35], speed: 0.22 });
-const content = Promise.all([houses(world), trees(world, pipeline.renderer, wind), props(world), Corn.build(world), groundCover(library, world, zones, camera, pipeline.renderer, wind)]);
+const content = Promise.all([
+  houses(world, gpu),
+  trees(world, gpu, wind),
+  props(world, gpu),
+  Corn.build(world, gpu),
+  groundCover(library, world, zones, camera, gpu, wind),
+]);
 // Let cache discovery start before constructing the ground on this thread.
 await new Promise<void>((resolve) => setTimeout(resolve, 0));
 if (terrain) {
@@ -110,11 +118,9 @@ scene.updateMatrixWorld(true);
 scene.matrixWorldAutoUpdate = false;
 sun.castBy(scene);
 const lods: (Lod | InstancedLod)[] = [];
-const patches: Patches[] = [];
-const streams: Stream[] = [];
+const nearTiles: NearTiles[] = [];
 scene.traverse((object) => {
-  if (object instanceof Patches) patches.push(object);
-  if (object instanceof Stream) streams.push(object);
+  if (object instanceof NearTiles) nearTiles.push(object);
   if (!(object instanceof Lod || object instanceof InstancedLod)) return;
   lods.push(object);
   object.manager = lodManager;
@@ -122,6 +128,8 @@ scene.traverse((object) => {
     sun.castBy(object);
   });
 });
+/** The forests and ground cover; corn updates its own tiles. */
+const planted = nearTiles.filter((tiles) => tiles !== corn.plants);
 const kinds = [
   { name: "houses", roots: [buildings] },
   { name: "trees", roots: [forest] },
@@ -157,8 +165,6 @@ let viewportVersion = 0;
 function resize(): void {
   viewportVersion++;
   pipeline.setSize(innerWidth, innerHeight);
-  Patches.height = innerHeight;
-  setViewportHeight(camera, innerHeight);
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
 }
@@ -178,8 +184,8 @@ function clearance(): number {
 }
 
 /**
- * Every live frame advances and renders; a level still loading draws as a ready coarser one, else as the level it
- * already showed, else not at all.
+ * Every live frame advances and renders; a level still loading draws as a loaded coarser one, and nothing draws until
+ * the coarsest has loaded.
  */
 function frame(dt: number): void {
   if (wind) wind.time += dt;
@@ -189,9 +195,8 @@ function frame(dt: number): void {
   focus = fly.touched ? fly.update(dt) : tour.pose(playback.time, camera);
   fitCamera(focus);
   sun.update(camera, focus, clearance());
-  corn.update(camera);
-  const above = camera.position.y - world.terrain.height(camera.position.x, camera.position.z);
-  for (const stream of streams) stream.update(camera.position, Math.max(0, above));
+  corn.update(camera, innerHeight);
+  for (const tiles of planted) tiles.update(camera.position);
   pipeline.render();
 }
 
@@ -235,11 +240,12 @@ window.city = diagnostics({
   loadMs,
   loadStages,
   pipeline,
+  camera,
   wind,
   tour,
   sun,
   lods,
-  patches,
+  nearTiles,
   kinds,
   playback,
   frame: () => frame(0),

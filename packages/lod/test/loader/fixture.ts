@@ -1,7 +1,7 @@
-import { Loader, LoadingManager, Mesh, RGBAFormat, Scene, type Object3D } from "three/webgpu";
+import { Loader, LoadingManager, Mesh, RGBAFormat, Scene, type Object3D, type Renderer } from "three/webgpu";
 import { beforeEach, vi } from "vitest";
 import type { CacheEntryOptions, Dependencies, SaveOptions } from "vitecache";
-import { boundingBox } from "../../src/bounds.js";
+import { boundingBox } from "../../src/source/detail.js";
 import type { Impostor } from "../../src/impostor/impostor.js";
 
 export const cache = {
@@ -43,7 +43,7 @@ function absent(dependencies: Dependencies = {}) {
 }
 
 /**
- * Mirrors vitecache: load() records a key-dependency baseline that save() requires unchanged unless the key holds only values,
+ * Mirrors vitecache: load() notes a key-dependency baseline that save() requires unchanged unless the key holds only values,
  * and saved dependencies validate later loads.
  */
 export class CacheEntry {
@@ -89,7 +89,7 @@ export function impostorOf(source: Object3D): Impostor {
   };
 }
 
-export const bakeImpostor = vi.fn(async (source: Object3D) => impostorOf(source));
+export const bakeImpostor = vi.fn<(source: Object3D, renderer: Renderer) => Promise<Impostor>>(async (source) => impostorOf(source));
 
 beforeEach(() => {
   cache.loaded.length = cache.saved.length = cache.attempts = 0;

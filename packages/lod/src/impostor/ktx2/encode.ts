@@ -34,6 +34,7 @@ const cores = globalThis.navigator?.hardwareConcurrency ?? 4;
 const LIMIT = Math.max(1, Math.min(8, cores - 1));
 /** Largest job first, so that the smaller ones fill the other workers meanwhile. */
 const queue: Task[] = [];
+/** How many encoder workers run: a process-wide pool, as each holds its own WASM memory and LIMIT bounds them all. */
 let workers = 0;
 
 /**

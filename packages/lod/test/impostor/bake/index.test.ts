@@ -24,14 +24,15 @@ import {
   type Object3D,
 } from "three/webgpu";
 import { describe, expect, it, vi } from "vitest";
+import { LodGpu } from "../../../src/gpu.js";
 import { bakeImpostor } from "../../../src/impostor/bake/index.js";
 import { texelPixels, type Impostor } from "../../../src/impostor/impostor.js";
 import { frameDirection } from "../../../src/impostor/octahedral.js";
 import { ImpostorMesh } from "../../../src/impostor/mesh/index.js";
-import { GPU_TIMEOUT, renderer } from "../../gpu.js";
-import { oneChunk } from "../../crowd.js";
+import { GPU_TIMEOUT, bakeRenderer, renderer } from "../../renderer.js";
+import { oneChunk } from "../../instances.js";
 
-const bake = (object: Object3D, layout: Impostor["layout"] = "full") => bakeImpostor(object, { layout, resolution: 32 });
+const bake = (object: Object3D, layout: Impostor["layout"] = "full") => bakeImpostor(object, bakeRenderer, { layout, resolution: 32 });
 
 /** Mip level `m` of the base layer. */
 const base = (impostor: Impostor, m = 0) => {
@@ -131,7 +132,7 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
     }
   });
 
-  it("keeps leaves facing every which way from cancelling out", async () => {
+  it("bakes leaves facing every which way without their normals cancelling out", async () => {
     // Strips far narrower than a texel's samples, at irregular widths, each facing +z or -z
     // at random as real leaves do: three turns all of them toward the camera, while their
     // own normals cancel out wherever a texel's samples hit both.
@@ -153,15 +154,15 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
       .setAttribute("position", new Float32BufferAttribute(positions, 3))
       .setAttribute("normal", new Float32BufferAttribute(normals, 3));
     const strips = new Mesh(geometry, new MeshStandardMaterial({ side: DoubleSide }));
-    const seen = centres(await bakeImpostor(strips, { resolution: 32, supersample: 4 }), 0);
+    const seen = centres(await bakeImpostor(strips, bakeRenderer, { resolution: 32, supersample: 4 }), 0);
     const facing = seen.filter((c) => c.cover > 0 && Math.abs(c.direction[2]) > 0.5);
     expect(facing.length).toBeGreaterThan(4);
     // how much of the shading normal (+-z, toward the camera) is left, on average
-    const kept = facing.reduce((sum, c) => sum + ((c.front * 2 - 1) * dot(c.normal, c.direction)) / Math.abs(c.direction[2]), 0) / facing.length;
-    expect(kept).toBeGreaterThan(0.95);
+    const held = facing.reduce((sum, c) => sum + ((c.front * 2 - 1) * dot(c.normal, c.direction)) / Math.abs(c.direction[2]), 0) / facing.length;
+    expect(held).toBeGreaterThan(0.95);
   });
 
-  it("keeps how far the normals it averages agree as the normal's length", async () => {
+  it("stores how far the normals it averages agree as the normal's length", async () => {
     const facets = await bake(new Mesh(new IcosahedronGeometry(1, 1), new MeshStandardMaterial({ flatShading: true })));
     const length = (c: { normal: number[] }) => Math.hypot(...c.normal);
     // Up close a texel sees one facet; one texel per frame sees half the ball.
@@ -193,16 +194,16 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
     map.needsUpdate = true;
     const plane = new Mesh(new PlaneGeometry(2, 2), new MeshStandardMaterial({ map, side: DoubleSide }));
     const impostor = await bake(plane, "hemi");
-    // Filtered from level 0, every level would keep its brightness.
+    // Filtered from level 0, every level would hold its brightness.
     expect(red(impostor, 0) - red(impostor, 3)).toBeGreaterThan(40);
     // Drawn up to 8 times its sharp height, the top level reads the texture 3 levels finer.
     const sharp = texelPixels(impostor);
-    const close = await bakeImpostor(plane, { layout: "hemi", resolution: 32, maxPixels: 8 * sharp });
+    const close = await bakeImpostor(plane, bakeRenderer, { layout: "hemi", resolution: 32, maxPixels: 8 * sharp });
     expect(red(close, 0) - red(impostor, 0)).toBeGreaterThan(40);
     expect(red(close, 3)).toBeCloseTo(red(impostor, 3), 0);
   });
 
-  it("keeps the cut-out of alpha-to-coverage materials", async () => {
+  it("bakes the cut-out of alpha-to-coverage materials", async () => {
     // Left half opaque, right half transparent.
     const map = new DataTexture(new Uint8Array([255, 255, 255, 255, 255, 255, 255, 0]), 2, 1, RGBAFormat);
     map.magFilter = map.minFilter = NearestFilter;
@@ -214,7 +215,7 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
     expect(coverage(cut) / coverage(solid)).toBeLessThan(0.65);
   });
 
-  it("keeps an alpha-tested cut-out's coverage at every mip level, however thin its parts", async () => {
+  it("holds an alpha-tested cut-out's coverage at every mip level, however thin its parts", async () => {
     // Needles: every fourth texel column opaque. The smaller mips average them to a uniform quarter, below the cutoff.
     const mipmaps = Array.from({ length: 9 }, (_, m) => {
       const size = 256 >> m;
@@ -237,7 +238,7 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
     }
   });
 
-  it("bakes glass as a dark opaque pane, not a hole, and keeps a blended texture's cut-out", async () => {
+  it("bakes glass as a dark opaque pane, not a hole, and a blended texture's cut-out as cut out", async () => {
     const glass = await bake(
       new Mesh(new PlaneGeometry(2, 2), new MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.25, side: DoubleSide })),
     );
@@ -258,12 +259,17 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
 
   it("rejects bad options and objects without extent", async () => {
     const knot = new Mesh(new TorusKnotGeometry(), new MeshStandardMaterial());
-    await expect(bakeImpostor(knot, { frames: 1 })).rejects.toThrow(/frames/);
-    await expect(bakeImpostor(knot, { resolution: 0 })).rejects.toThrow(/resolution/);
-    await expect(bakeImpostor(knot, { supersample: 1.5 })).rejects.toThrow(/supersample/);
-    await expect(bakeImpostor(knot, { maxPixels: 0 })).rejects.toThrow(/maxPixels/);
+    await expect(bakeImpostor(knot, bakeRenderer, { frames: 1 })).rejects.toThrow(/frames/);
+    await expect(bakeImpostor(knot, bakeRenderer, { resolution: 0 })).rejects.toThrow(/resolution/);
+    await expect(bakeImpostor(knot, bakeRenderer, { supersample: 1.5 })).rejects.toThrow(/supersample/);
+    await expect(bakeImpostor(knot, bakeRenderer, { maxPixels: 0 })).rejects.toThrow(/maxPixels/);
     const point = new BufferGeometry().setAttribute("position", new Float32BufferAttribute([1, 1, 1, 1, 1, 1, 1, 1, 1], 3));
-    await expect(bakeImpostor(new Mesh(point, new MeshStandardMaterial()), {})).rejects.toThrow(/no extent/);
+    await expect(bakeImpostor(new Mesh(point, new MeshStandardMaterial()), bakeRenderer)).rejects.toThrow(/no extent/);
+  });
+
+  it("rejects a renderer that clears on its own", async () => {
+    // The page's renderer clears before every render (autoClear), which would clear all but the last frame of a sheet.
+    await expect(bakeImpostor(new Mesh(new TorusKnotGeometry(), new MeshStandardMaterial()), renderer)).rejects.toThrow(/autoClear.*createBakeRenderer/);
   });
 
   it("bakes an InstancedLod with every instance at full detail, as the same meshes placed by hand", async () => {
@@ -276,10 +282,13 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
       plain.add(box);
     }
     // Its level 1 would draw a sphere, at any height.
-    const field = oneChunk([{ object: new Mesh(new BoxGeometry(), material) }, { object: new Mesh(new SphereGeometry(), material) }], spots.length);
-    spots.forEach((spot, i) => field.setMatrixAt(i, spot));
+    // Drawn by the bake's renderer.
+    const on = new LodGpu(bakeRenderer);
+    const field = oneChunk([{ object: new Mesh(new BoxGeometry(), material) }, { object: new Mesh(new SphereGeometry(), material) }], spots, { on });
     field.forceLevel = 1;
     const [a, b] = [await bake(plain), await bake(new Group().add(field))];
+    field.dispose();
+    on.dispose();
     expect(b.box).toEqual(a.box);
     const [left, right] = [base(a), base(b)];
     let differing = 0;

@@ -1,9 +1,9 @@
-import type { Object3D } from "three/webgpu";
+import type { Camera, Object3D } from "three/webgpu";
 import type { InstancedLod, Lod, Wind } from "@drawcall/lod";
 import type { Tour } from "./flight/tour.ts";
 import type { Pipeline } from "./render/pipeline.ts";
 import type { Sun } from "./render/sun/index.ts";
-import type { Patches } from "./world/patches.ts";
+import type { NearTiles } from "./world/near-tiles.ts";
 import { countLevels } from "./stats.ts";
 
 /** The running city, as main.ts hands it over. */
@@ -11,11 +11,12 @@ interface App {
   loadMs: number;
   loadStages: Record<string, number>;
   pipeline: Pipeline;
+  camera: Camera;
   wind: Wind | undefined;
   tour: Tour;
   sun: Sun;
   lods: (Lod | InstancedLod)[];
-  patches: Patches[];
+  nearTiles: NearTiles[];
   kinds: { name: string; roots: Object3D[] }[];
   playback: { time: number };
   frame(): void;
@@ -23,9 +24,9 @@ interface App {
   seek(time: number): void;
 }
 
-/** The tour scripts can settle and measure a view without changing the live loop. */
-export function diagnostics(view: App) {
-  const { pipeline, wind, tour, sun, lods, patches, kinds, playback, frame, resume } = view;
+/** The tour scripts can settle and measure a camera pose without changing the live loop. */
+export function diagnostics(app: App) {
+  const { pipeline, camera, wind, tour, sun, lods, nearTiles, kinds, playback, frame, resume } = app;
   let arrivals = 0;
   for (const lod of lods) lod.addEventListener("levelschange", () => arrivals++);
 
@@ -53,22 +54,22 @@ export function diagnostics(view: App) {
       await draw(1);
       const failed = lods.find((lod) => lod.error !== undefined);
       if (failed) throw failed.error;
-      if (arrivals !== changed || lods.some((lod) => lod.pending) || patches.some((patch) => !patch.settled)) {
+      if (arrivals !== changed || lods.some((lod) => lod.pending) || nearTiles.some((tiles) => !tiles.settled)) {
         changed = arrivals;
         quiet = performance.now();
       }
       if (performance.now() - quiet > 300) return;
-      if (performance.now() > until) throw new Error("The requested view did not settle");
+      if (performance.now() > until) throw new Error("The requested camera pose did not settle");
     }
   }
 
   return {
-    loadMs: view.loadMs,
-    loadStages: view.loadStages,
+    loadMs: app.loadMs,
+    loadStages: app.loadStages,
     keys: tour.keys.map(({ name, time }) => ({ name, time })),
     async seek(time: number) {
       pipeline.renderer.setAnimationLoop(null);
-      view.seek(time);
+      app.seek(time);
       await settle();
       resume();
     },
@@ -100,7 +101,7 @@ export function diagnostics(view: App) {
         ms: median(perFrame),
         cpu: median(cpu),
         ...pipeline.drawn,
-        kinds: kinds.map(({ name, roots }) => ({ name, levels: countLevels(roots) })),
+        kinds: kinds.map(({ name, roots }) => ({ name, levels: countLevels(roots, camera) })),
         cascades: sun.cascades.map((cascade) => ({ ...cascade.drawn })),
       };
     },

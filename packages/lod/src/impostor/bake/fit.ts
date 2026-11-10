@@ -1,5 +1,5 @@
 import { type Object3D, type Vector3 } from "three/webgpu";
-import { forEachVertex } from "../../bounds.js";
+import { forEachVertex } from "../../source/detail.js";
 import { frameBasis, type Vec3 } from "../octahedral.js";
 
 /**

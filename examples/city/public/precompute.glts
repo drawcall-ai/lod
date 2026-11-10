@@ -1,13 +1,23 @@
 // Builds every level of every ladder the city requests into the cache `vite build` deploys, so that the deployed
 // city builds none in the browser.
 import { gltsLoader, loadingManager, scene } from "@drawcall/glts";
-import { LodLoader } from "@drawcall/lod";
+import { LodLoader, type LodLevel } from "@drawcall/lod";
 import { LADDERS } from "./content/ladders.ts";
 
 loadingManager.addHandler(/\.glts$/i, gltsLoader);
 const loader = new LodLoader(loadingManager);
+
+/** `level`'s object, built (or read from the cache) if it is deferred. */
+async function built({ object, load }: LodLevel) {
+  if (object) return object;
+  if (!load) throw new Error("precompute: a level has neither an object nor a load");
+  return load();
+}
+
 await Promise.all(
   LADDERS.map(async (ladder) => {
-    for (const level of await loader.loadAsync(ladder)) scene.add(level.object ?? (await level.load()));
+    for (const level of await loader.loadAsync(ladder)) scene.add(await built(level));
   }),
 );
+// Every bake is done: free the renderer the loader made for them.
+loader.dispose();

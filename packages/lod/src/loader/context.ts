@@ -1,0 +1,100 @@
+import type { Object3D } from "three/webgpu";
+import { disposeRejected, disposeTree, type DisposeOptions } from "../dispose.js";
+import type { AssetDependencies } from "./dependencies.js";
+
+/**
+ * What one ladder's loads share: the source loaded to measure or build the ladder with, handed to the first level load
+ * (the source level draws it, a build uses it, a cached level disposes it; onLevel has not changed it), the levels built
+ * with the ladder, each handed to its first load, and every level object loaded. Those are freed if describing the
+ * ladder fails, else when the last Lod holding the levels is disposed (see `hold`), which spends them.
+ */
+export class LodLoadContext {
+  /** Level bytes built while describing the ladder, by index: a cached level is read again when it loads. */
+  private readonly built = new Map<number, Uint8Array>();
+  private spare: Loaded | undefined;
+  /** Every level object loaded, and what freeing it frees: a simplified level draws with its source's materials. */
+  private readonly loaded = new Map<Object3D, DisposeOptions>();
+  /** How many Lods hold the levels, and whether the last has let go, which freed them. */
+  private holders = 0;
+  private spent = false;
+
+  constructor(
+    private readonly load: () => Promise<Loaded>,
+    private readonly onLevel: ((object: Object3D, index: number) => void | Promise<void>) | undefined,
+  ) {}
+
+  /** The spare source, loaded once. */
+  async source(): Promise<Loaded> {
+    this.spare ??= await this.load();
+    return this.spare;
+  }
+
+  /** The spare source, for the first level load to take. */
+  take(): Loaded | undefined {
+    const taken = this.spare;
+    this.spare = undefined;
+    return taken;
+  }
+
+  /** Hold the bytes of level `index`, built while describing the ladder, for its first load to take. */
+  setBuilt(index: number, bytes: Uint8Array): void {
+    this.built.set(index, bytes);
+  }
+
+  /** The bytes of level `index` built while describing the ladder, once: undefined if none were, or once taken. */
+  takeBuilt(index: number): Uint8Array | undefined {
+    const bytes = this.built.get(index);
+    this.built.delete(index);
+    return bytes;
+  }
+
+  /** Apply onLevel to a level's arriving object, freeing it as `options` say if that fails. */
+  async arrive(object: Object3D, index: number, options: DisposeOptions): Promise<Object3D> {
+    try {
+      this.loaded.set(object, options);
+      await this.onLevel?.(object, index);
+      return object;
+    } catch (error) {
+      this.loaded.delete(object);
+      disposeRejected(object, options);
+      throw error;
+    }
+  }
+
+  /** Describing the ladder failed: free what it loaded. */
+  fail(): void {
+    this.free(disposeRejected);
+  }
+
+  /**
+   * A Lod made from the levels holds them; the release it answers lets go, and the last frees what was loaded. Levels
+   * no Lod ever held are never freed. Freed levels are spent: a Lod made from them later throws.
+   */
+  readonly hold = (): (() => void) => {
+    if (this.spent) throw new Error("LodLoader: these levels were freed with the last Lod that held them; call loadAsync again");
+    this.holders++;
+    let held = true;
+    return () => {
+      if (!held) return;
+      held = false;
+      if (--this.holders > 0) return;
+      this.spent = true;
+      this.free(disposeTree);
+    };
+  };
+
+  /** Free the spare source and every level object loaded with `dispose`. */
+  private free(dispose: (object: Object3D, options: DisposeOptions) => void): void {
+    const taken = this.take();
+    if (taken) dispose(taken.source, { materials: true });
+    for (const [object, options] of this.loaded) dispose(object, options);
+    this.loaded.clear();
+    this.built.clear();
+  }
+}
+
+/** A loaded source and what loading it read. */
+export interface Loaded {
+  source: Object3D;
+  dependencies: AssetDependencies;
+}

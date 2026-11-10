@@ -21,6 +21,7 @@ interface Basis {
   initializeBasis(): void;
 }
 
+/** basisu's encoder module, instantiated once: a process-wide WASM module, as three's decoders are. */
 let basis: Promise<Basis> | undefined;
 
 /**

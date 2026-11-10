@@ -1,17 +1,17 @@
 import { Box3, Matrix4, type Material, type Object3D } from "three/webgpu";
 import { decodeBakedMeshAsync, encodeBakedMeshAsync } from "../baked/codec.js";
-import { boundingBox } from "../bounds.js";
+import { boundingBox } from "../source/detail.js";
 import { decodeImpostorAsync, encodeImpostorAsync } from "../impostor/codec.js";
 import { ImpostorMesh, type ImpostorMeshOptions } from "../impostor/mesh/index.js";
-import { measure, recordDeviation } from "../levels.js";
+import { measure, recordDeviation } from "../levels/index.js";
 import { isImpostorMesh, isMesh } from "../three.js";
-import { decodeMeshAsync, encodeMeshAsync } from "../mesh/codec.js";
-import type { LevelRequest } from "./ladder.js";
+import { decodeMeshAsync, encodeMeshAsync } from "../codec/mesh.js";
+import type { LodLevelRequest } from "./request.js";
 
 // A cached level: the source's shape, what places the level and measures its default threshold, then its payload.
 
 /** A level the loader builds from the source and caches. */
-export type Derived = Exclude<LevelRequest, { type: "empty" }>;
+export type Derived = Exclude<LodLevelRequest, { type: "empty" }>;
 type Kind = Derived["type"];
 
 /**
@@ -41,7 +41,7 @@ function parseShape(meta: Record<string, unknown>): Shape {
   return { box, matrix: new Matrix4().fromArray(numbers(meta.placement, 16)) };
 }
 
-/** The owner-space bounds every drawable level declares. */
+/** The bounds every drawable level declares, in the space of the Lod that holds it. */
 export const placedBox = ({ box, matrix }: Shape): Box3 => box.clone().applyMatrix4(matrix);
 
 interface Metadata {
@@ -74,7 +74,7 @@ export async function encodeLevel(object: Object3D, kind: Kind, shape: Shape, ma
       .expandByScalar(bounds.getSize(box.min.clone()).length() * 1e-4)
       .containsBox(box)
   )
-    throw new Error(`LodLoader: the ${kind} level extends beyond the source's bounds; keep derived shapes, such as a low shell, inside the source`);
+    throw new Error(`LodLoader: the ${kind} level extends beyond the source's bounds; derived shapes, such as a low shell, must stay inside the source`);
   const payload = await encodePayload(object, kind, materials);
   const header = new TextEncoder().encode(
     JSON.stringify({
@@ -88,9 +88,9 @@ export async function encodeLevel(object: Object3D, kind: Kind, shape: Shape, ma
     }),
   );
   const bytes = new Uint8Array(8 + header.length + payload.length);
-  const view = new DataView(bytes.buffer);
-  view.setUint32(0, MAGIC, true);
-  view.setUint32(4, header.length, true);
+  const data = new DataView(bytes.buffer);
+  data.setUint32(0, MAGIC, true);
+  data.setUint32(4, header.length, true);
   bytes.set(header, 8);
   bytes.set(payload, 8 + header.length);
   return bytes;
@@ -134,9 +134,9 @@ export async function decodeLevel(
 
 export function readLevel(bytes: Uint8Array): Entry {
   if (bytes.length < 8) fail("missing header");
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const length = view.getUint32(4, true);
-  if (view.getUint32(0, true) !== MAGIC || length > bytes.length - 8) fail("invalid header");
+  const data = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const length = data.getUint32(4, true);
+  if (data.getUint32(0, true) !== MAGIC || length > bytes.length - 8) fail("invalid header");
   const meta = object(JSON.parse(new TextDecoder().decode(bytes.subarray(8, 8 + length))));
   if (
     typeof meta.name !== "string" ||

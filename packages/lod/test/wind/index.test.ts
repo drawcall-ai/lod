@@ -21,16 +21,16 @@ import {
   type Object3D,
 } from "three/webgpu";
 import { describe, expect, it, vi } from "vitest";
-import { drawOf } from "../../src/fade.js";
+import { fadeSourceOf } from "../../src/levels/fade.js";
 import { bakeImpostor } from "../../src/impostor/bake/index.js";
 import type { Impostor } from "../../src/impostor/impostor.js";
 import { ImpostorMesh } from "../../src/impostor/mesh/index.js";
 import { Lod } from "../../src/lod.js";
-import { readBytes } from "../../src/renderer.js";
+import { readBytes } from "../../src/bake.js";
 import { isMesh } from "../../src/three.js";
 import { Wind } from "../../src/wind/index.js";
-import { GPU_TIMEOUT, render as draw, renderer } from "../gpu.js";
-import { oneChunk } from "../crowd.js";
+import { GPU_TIMEOUT, bakeRenderer, render as draw, renderer, gpu } from "../renderer.js";
+import { chunkOf, oneChunk } from "../instances.js";
 
 /** Asymmetric, with a child transform: every part must use the same root-space sway. */
 function plant(): Group {
@@ -45,9 +45,10 @@ function plant(): Group {
 const SHEAR = () => new Matrix4().makeShear(0, 0, 0.3, 0, 0, 0);
 
 let atlas: Promise<Impostor> | undefined;
-const baked = () => (atlas ??= bakeImpostor(plant(), { resolution: 128, layout: "full" }));
+const baked = () => (atlas ??= bakeImpostor(plant(), bakeRenderer, { resolution: 128, layout: "full" }));
 
-function view(): PerspectiveCamera {
+/** A camera aside and above the placed plant, looking at it. */
+function aside(): PerspectiveCamera {
   const camera = new PerspectiveCamera(22, 1, 0.1, 100);
   camera.position.set(8, 4, 16);
   camera.lookAt(2, 1.4, -1);
@@ -62,7 +63,7 @@ function placed<T extends Object3D>(object: T): T {
 }
 
 /** `object` alone from `camera`, 128 px, multisampled: RGBA bytes. */
-async function render(object: Object3D, camera: Camera = view(), lit = false): Promise<Uint8Array> {
+async function render(object: Object3D, camera: Camera = aside(), lit = false): Promise<Uint8Array> {
   const target = new RenderTarget(128, 128, { samples: 4 });
   const scene = new Scene().add(object);
   if (lit) {
@@ -77,6 +78,13 @@ async function render(object: Object3D, camera: Camera = view(), lit = false): P
   target.dispose();
   scene.remove(object);
   return pixels;
+}
+
+/** How many pixels `pixels` covers, by alpha. */
+function covered(pixels: Uint8Array): number {
+  let count = 0;
+  for (let i = 3; i < pixels.length; i += 4) if ((pixels[i] ?? 0) > 128) count++;
+  return count;
 }
 
 /** Shared coverage over either's coverage, by alpha; both must cover something. */
@@ -126,7 +134,7 @@ async function shadowOf(object: Object3D, light: DirectionalLight | PointLight):
 }
 
 describe("Wind", { timeout: GPU_TIMEOUT }, () => {
-  it("shares the wind shader while keeping separate breeze clocks", async () => {
+  it("shares the wind shader between Winds, each swaying by its own clock", async () => {
     const first = new ImpostorMesh(await baked());
     const second = first.clone();
     const a = new Wind();
@@ -160,8 +168,8 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
     const wind = new Wind({ direction: [1, 0], speed: 0.25 });
     wind.apply(root, { amplitude: 0.9, baseY: 0, height: 3 });
     wind.time = 1;
-    const actual = await render(root, view(), true);
-    const expected = await render(reference, view(), true);
+    const actual = await render(root, aside(), true);
+    const expected = await render(reference, aside(), true);
     expect(overlap(actual, expected)).toBeGreaterThan(0.99);
     let error = 0;
     let covered = 0;
@@ -182,13 +190,13 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
       maxPixels: Infinity,
       box: new Box3(new Vector3(-0.35, 0, -0.35), new Vector3(0.35, 3, 0.35)),
     };
-    const owner = kind === "Lod" ? new Lod([level]) : oneChunk([level], 1);
+    const lod = kind === "Lod" ? new Lod([level], gpu) : oneChunk([level], 1);
     const wind = new Wind({ direction: [1, 0], speed: 0.25 });
-    wind.apply(owner, { amplitude: 0.9, baseY: 0, height: 3 });
+    wind.apply(lod, { amplitude: 0.9, baseY: 0, height: 3 });
     wind.time = 1;
     const camera = new PerspectiveCamera(30, 1, 0.1, 100);
     camera.position.set(0, 1.5, 12);
-    const scene = new Scene().add(owner);
+    const scene = new Scene().add(lod);
     // Shaders built while a frame renders, rather than in the compiles between frames.
     let inFrame = 0;
     let rendering = false;
@@ -208,7 +216,7 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
     });
     try {
       await draw(scene, camera, 128);
-      for (let frame = 0; frame < 200 && owner.pending; frame++) {
+      for (let frame = 0; frame < 200 && lod.pending; frame++) {
         await new Promise((resolve) => requestAnimationFrame(resolve));
         await draw(scene, camera, 128);
       }
@@ -218,7 +226,7 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
       expect(overlap(swayed, await draw(sheared, camera, 128))).toBeGreaterThan(0.97);
     } finally {
       vi.restoreAllMocks();
-      owner.dispose();
+      lod.dispose();
     }
   });
 
@@ -228,19 +236,25 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
       maxPixels: Infinity,
       box: new Box3(new Vector3(-0.5, -0.5, -0.5), new Vector3(0.5, 0.5, 0.5)),
     };
-    const owner = kind === "Lod" ? new Lod([level]) : oneChunk([level], 1);
+    const lod = kind === "Lod" ? new Lod([level], gpu) : oneChunk([level], 1);
     const camera = new PerspectiveCamera(30, 1, 0.1, 100);
     camera.position.z = 5;
     try {
       // Its level is still loading: its shaders are built from here on.
-      await draw(new Scene().add(owner), camera);
-      expect(() => new Wind().apply(owner, { amplitude: 0.1 })).toThrow(`${kind}: apply wind before the first render`);
+      await draw(new Scene().add(lod), camera);
+      expect(() => new Wind().apply(lod, { amplitude: 0.1 })).toThrow(`${kind}: apply wind before the first render`);
     } finally {
-      owner.dispose();
+      lod.dispose();
     }
   });
 
-  it("keeps Lod selection and fades based on the resting source size", () => {
+  it("sways a mesh from one wind root only", () => {
+    const mesh = new Mesh(new BoxGeometry(), new MeshStandardMaterial());
+    new Wind().apply(mesh, { amplitude: 0.1 });
+    expect(() => new Wind().apply(new Group().add(mesh), { amplitude: 0.1 })).toThrow("Wind: a mesh already belongs to a wind root");
+  });
+
+  it("switches a swaying Lod's levels and fades at the heights of its resting source", () => {
     const cube = () => new Mesh(new BoxGeometry(2, 2, 2), new MeshStandardMaterial());
     const heights = [410, 399, 381, 359, 101, 99, 95, 89];
     const distance = (pixels: number) => (Math.sqrt(12) * 1080) / (2 * Math.tan(Math.PI / 6) * pixels);
@@ -249,10 +263,10 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
     const wind = new Wind();
     const fades = (lod: Lod) =>
       lod.levels.map(({ object }) => {
-        const draw = object && drawOf(object);
+        const draw = object && fadeSourceOf(object);
         return draw?.kind === "object" ? draw.fade : null;
       });
-    const still = new Lod([{ object: cube() }, { object: cube() }, { object: cube() }]);
+    const still = new Lod([{ object: cube() }, { object: cube() }, { object: cube() }], gpu);
     still.levels.forEach((level, i) => (level.maxPixels = [Infinity, 400, 100][i] ?? Infinity));
     const moving = still.clone();
     wind.apply(moving, { amplitude: 0.8 });
@@ -270,25 +284,27 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
     moving.dispose();
   });
 
-  it("keeps a fade whole when the instances sway", async () => {
+  it("covers inside a fade what either level covers alone while the instances sway", async () => {
     const mesh = () => new Mesh(new BoxGeometry(0.7, 3, 0.7).translate(0, 1.5, 0), new MeshStandardMaterial());
-    const lod = oneChunk([{ object: mesh() }, { object: mesh() }], 2);
+    const diameter = Math.hypot(0.7, 3, 0.7);
+    const distance = Math.sqrt(((diameter * 128) / (2 * Math.tan(Math.PI / 6) * 60 * (1 - Lod.fade / 2))) ** 2 - 1);
+    const lod = oneChunk(
+      [{ object: mesh() }, { object: mesh() }],
+      [new Matrix4().makeTranslation(-1, 0, distance / 2), new Matrix4().makeTranslation(1, 0, 0)],
+    );
     const coarse = lod.levels[1];
     if (!coarse) throw new Error("missing coarse level");
     coarse.maxPixels = 60;
     const wind = new Wind();
     wind.apply(lod, { amplitude: 0.5 });
     wind.time = 0.7;
-    const diameter = Math.hypot(0.7, 3, 0.7);
-    const distance = Math.sqrt(((diameter * 128) / (2 * Math.tan(Math.PI / 6) * 60 * (1 - Lod.fade / 2))) ** 2 - 1);
-    lod.setMatrixAt(0, new Matrix4().makeTranslation(-1, 0, distance / 2));
-    lod.setMatrixAt(1, new Matrix4().makeTranslation(1, 0, 0));
     const camera = new PerspectiveCamera(60, 1, 0.1, 100);
     camera.position.set(0, 1.5, distance);
     camera.lookAt(0, 1.5, 0);
-    await render(lod, camera); // Learn this view's viewport height.
+    await render(lod, camera); // Learn the camera's viewport height.
     const faded = await render(lod, camera);
-    expect([lod.levelOf(0), lod.levelOf(1)]).toEqual([0, 0]);
+    // Half way through its fade, the second instance draws as much of level 1 as of level 0.
+    expect([chunkOf(lod).getLevelAt(0, camera), chunkOf(lod).getLevelAt(1, camera)]).toEqual([0, 1]);
     lod.forceLevel = 0;
     const whole = await render(lod, camera);
     expect(overlap(faded, whole)).toBeGreaterThan(0.999);
@@ -297,7 +313,7 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
     lod.dispose();
   });
 
-  it("keeps standalone instance bounds padded after the matrices change", () => {
+  it("pads an InstancedMesh's bounds for sway after its matrices change, and refuses one without storage matrices", () => {
     const standalone = new InstancedMesh(new BoxGeometry(0.5, 3, 0.5).translate(0, 1.5, 0), new MeshStandardMaterial(), 1);
     standalone.instanceMatrix = new StorageInstancedBufferAttribute(new Float32Array(new Matrix4().elements), 16);
     standalone.computeBoundingSphere();
@@ -328,7 +344,7 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
     const reference = plant();
     reference.matrixAutoUpdate = false;
     reference.matrix.makeTranslation(0, 10, 0).multiply(SHEAR());
-    const camera = view();
+    const camera = aside();
     camera.position.y += 10;
     camera.lookAt(2, 11.4, -1);
     const actual = await render(lod, camera);
@@ -350,7 +366,7 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
     referenceImpostor.setMatrixAt(0, SHEAR());
     const wind = new Wind({ direction: [1, 0], speed: 0.25 });
     wind.time = 1;
-    // A light of its own for every shadow: a light keeps the map of the scene it last lit.
+    // A light of its own for every shadow: a light holds the map of the scene it last lit.
     const lights: Array<() => DirectionalLight | PointLight> = [
       () => {
         const sun = new DirectionalLight(0xffffff, 3);
@@ -381,11 +397,11 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
     referenceImpostor.dispose();
   });
 
-  it("keeps transformed sources, impostors and their clones together on the shared clock", async () => {
+  it("sways placed sources, impostors and their clones alike on one Wind's clock", async () => {
     const data = await baked();
     const wind = new Wind({ direction: [1, 0.4], speed: 0.6 });
     const objects = [
-      placed(new Lod([{ object: plant() }, { object: new ImpostorMesh(data) }])),
+      placed(new Lod([{ object: plant() }, { object: new ImpostorMesh(data) }], gpu)),
       placed(oneChunk([{ object: plant() }, { object: new ImpostorMesh(data) }], 1)),
       placed(new ImpostorMesh(data)),
     ];
@@ -404,7 +420,9 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
           else {
             const source = sourceFrames[frames.length];
             if (!source) throw new Error("missing source frame");
-            expect(overlap(pixels, source)).toBeGreaterThan(0.86);
+            // Which object, and which frame covers nothing, should it fail.
+            const why = `${object.constructor.name} at ${time}: ${covered(pixels)} px against the source's ${covered(source)}`;
+            expect(overlap(pixels, source), why).toBeGreaterThan(0.86);
           }
           frames.push(pixels);
           expect(overlap(pixels, await render(clone))).toBeGreaterThan(0.99);

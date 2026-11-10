@@ -3,7 +3,7 @@ import { Fn, code, computeKernel, localId, uint, uvec2, wgslFn } from "three/tsl
 
 // What the page passes share: workgroups of `PAGE` lanes, and ranking lanes within one.
 
-/** Instances per page, and lanes per workgroup of the passes over pages: the selection runs one workgroup per page. */
+/** Instances per page, and lanes per workgroup of the passes over pages: updateInstance runs one workgroup per page. */
 export const PAGE = 256;
 
 /**

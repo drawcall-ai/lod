@@ -30,7 +30,7 @@ import {
   vec3,
   vec4,
 } from "three/tsl";
-import { dither, keepsPixel } from "../../fade.js";
+import { dither, keepsPixel } from "../../levels/fade.js";
 import type { ImpostorLayout } from "../impostor.js";
 import { basisNode, decodeNode } from "../octahedral.js";
 import type { Card } from "./card.js";
@@ -133,7 +133,7 @@ export function buildSurface(inputs: SurfaceInputs, card: Card, pass: Pass): Sur
   // Frame-local uv where the view ray meets the baked surface, its normal-depth texel
   // there, and "run", the distance along the ray to it. "trust" falls toward 0 when the
   // depth walk did not settle: the frame's surface there is not on this ray (the frame
-  // sees something the view does not), and blending it in would ghost.
+  // sees something the camera does not), and blending it in would ghost.
   const resolved = card.frames.map((frame, i) => {
     const p = planes[i];
     if (!p) throw new Error("ImpostorMesh: no plane for a frame");
@@ -224,7 +224,7 @@ export function buildSurface(inputs: SurfaceInputs, card: Card, pass: Pass): Sur
       .div(length(card.ray))
       .toVar();
     const clip = cameraProjectionMatrix.mul(cameraViewMatrix).mul(vec4(card.worldPoint.add(card.worldRay.mul(s)), 1));
-    // Stop short toward the camera by a texel and depth step: light and view frames
+    // Stop short toward the camera by a texel and depth step: the light's and the camera's frames
     // resolve slightly different surfaces, otherwise the receiver shades itself.
     const short = s.sub(
       halfSize

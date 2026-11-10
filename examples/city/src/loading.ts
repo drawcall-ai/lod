@@ -12,10 +12,6 @@ export const scripts = new GLTSLoader(manager, {
     [new URL("/content/textures.ts", location.href).href]: { ...textureModule, sharedTextures: textures },
   },
 });
-import.meta.hot?.dispose(() => {
-  scripts.dispose();
-  textures.dispose();
-});
 manager.addHandler(/\.glts$/, scripts);
 /** Levels arrive with the shadow sides the sun's casters draw with. */
 class Loader extends LodLoader {
@@ -31,3 +27,8 @@ class Loader extends LodLoader {
   }
 }
 export const loader = new Loader(manager);
+import.meta.hot?.dispose(() => {
+  scripts.dispose();
+  textures.dispose();
+  loader.dispose();
+});

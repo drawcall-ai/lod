@@ -3,23 +3,22 @@ import {
   BoxGeometry,
   InstancedMesh,
   Matrix4,
-  Mesh,
   MeshBasicMaterial,
   OrthographicCamera,
   PerspectiveCamera,
   Raycaster,
   Scene,
+  Vector2,
   Vector3,
   type Camera,
 } from "three/webgpu";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { drawOf } from "../src/fade.js";
-import { HANDOVER_MS } from "../src/residency.js";
+import { fadeSourceOf } from "../src/levels/fade.js";
+import { ARRIVAL_MS } from "../src/levels/manager.js";
 import { Lod } from "../src/lod.js";
-import { TYPICAL_HEIGHT, viewportHeight } from "../src/view.js";
-import { GPU_TIMEOUT, render, renderer, nextLevel } from "./gpu.js";
+import { box } from "./box.js";
+import { GPU_TIMEOUT, render, renderer, nextLevel, gpu } from "./renderer.js";
 
-const box = (material = new MeshBasicMaterial()) => new Mesh(new BoxGeometry(2, 2, 2), material);
 /** Bounding diameter of `box()`: the box diagonal. */
 const DIAMETER = 2 * Math.sqrt(3);
 const camera = new PerspectiveCamera(60, 1, 0.1, 1000);
@@ -27,7 +26,7 @@ const tan = Math.tan(Math.PI / 6);
 
 /** A source and two levels used up to 400 and 100 px tall. */
 function lod(): Lod {
-  const result = new Lod([{ object: box() }, { object: box() }, { object: box() }]);
+  const result = new Lod([{ object: box() }, { object: box() }, { object: box() }], gpu);
   setMaxPixels(result, [400, 100]);
   return result;
 }
@@ -40,17 +39,20 @@ function setMaxPixels(target: Lod, values: number[]): void {
   });
 }
 
-/** Place `view` where the bounding sphere is `pixels` tall on a `height` px screen. */
-function place(pixels: number, height = 1080, view: Camera = camera): void {
-  view.position.set(0, 0, (DIAMETER * height) / (2 * tan * pixels));
-  view.updateMatrixWorld();
+/** The canvas's height, which a Lod measures on outside a render. */
+const CANVAS = renderer.getSize(new Vector2()).y;
+
+/** Place `camera` where the bounding sphere is `pixels` tall on a `height` px screen. */
+function place(pixels: number, height = CANVAS, from: Camera = camera): void {
+  from.position.set(0, 0, (DIAMETER * height) / (2 * tan * pixels));
+  from.updateMatrixWorld();
 }
 
-/** Update `target` seen where it is `pixels` tall on the screen `view` last drew to. */
-function viewAt(target: Lod, pixels: number, view: Camera = camera): Lod {
-  place(pixels, viewportHeight(view) ?? TYPICAL_HEIGHT, view);
+/** Update `target`, which has not drawn yet, seen where it is `pixels` tall on the canvas, which it measures on outside a render. */
+function seenAt(target: Lod, pixels: number, from: Camera = camera): Lod {
+  place(pixels, CANVAS, from);
   target.updateMatrixWorld();
-  target.update(view);
+  target.update(from);
   return target;
 }
 
@@ -58,7 +60,7 @@ const visible = (target: Lod) => target.levels.flatMap(({ object }, i) => (objec
 /** The signed fade level `i` of `target` draws with (see fade.ts). */
 const fadeOf = (target: Lod, i: number) => {
   const object = target.levels[i]?.object;
-  const draw = object && drawOf(object);
+  const draw = object && fadeSourceOf(object);
   if (draw?.kind !== "object") throw new Error(`level ${i} has no draw`);
   return draw.fade;
 };
@@ -73,54 +75,49 @@ afterEach(() => {
 describe("Lod", { timeout: GPU_TIMEOUT }, () => {
   it("switches at maxPixels, measured from subtense, fov and screen height, times quality", () => {
     const target = lod();
-    expect(visible(viewAt(target, 100.01))).toEqual([1]);
-    expect(visible(viewAt(target, 99.99))).toEqual([1, 2]);
+    expect(visible(seenAt(target, 100.01))).toEqual([1]);
+    expect(visible(seenAt(target, 99.99))).toEqual([1, 2]);
     camera.zoom = 2;
     camera.updateProjectionMatrix();
-    // Twice as tall on screen: 50.01 px of the unzoomed view is above level 2's 100.
-    expect(visible(viewAt(target, 50.01))).toEqual([1]);
+    // Twice as tall on screen: 50.01 px of the unzoomed camera is above level 2's 100.
+    expect(visible(seenAt(target, 50.01))).toEqual([1]);
     camera.zoom = 1;
     camera.updateProjectionMatrix();
-    expect(visible(viewAt(target, 140))).toEqual([1]);
+    expect(visible(seenAt(target, 140))).toEqual([1]);
     Lod.quality = 0.5;
-    expect(visible(viewAt(target, 140))).toEqual([2]);
+    expect(visible(seenAt(target, 140))).toEqual([2]);
   });
 
-  it("shows one level outside a fade and both neighbours inside it, splitting the pixels", () => {
+  it("shows the levels levelsToDraw names, the coarser fading by its fade and the finer by its negation", () => {
     const target = lod();
-    expect(visible(viewAt(target, 1000))).toEqual([0]);
-    expect(visible(viewAt(target, 250))).toEqual([1]);
-    expect(visible(viewAt(target, 50))).toEqual([2]);
-    // The top Lod.fade of level 1's range, just under its maxPixels: half way through.
-    expect(visible(viewAt(target, 400 * (1 - Lod.fade / 2)))).toEqual([0, 1]);
-    expect(fadeOf(target, 1)).toBeCloseTo(0.5, 9);
-    expect(fadeOf(target, 0)).toBeCloseTo(-0.5, 9);
-    expect(fadeOf(target, 2)).toBe(0);
-    expect(visible(viewAt(target, 100 * (1 - Lod.fade / 2)))).toEqual([1, 2]);
-    expect(visible(viewAt(target, 250))).toEqual([1]);
+    expect(visible(seenAt(target, 250))).toEqual([1]);
     expect(fadeOf(target, 1)).toBe(0);
-    target.forceLevel = 2;
-    expect(visible(viewAt(target, 400 * (1 - Lod.fade / 2)))).toEqual([2]);
+    expect(visible(seenAt(target, 400 * (1 - Lod.fade / 2)))).toEqual([0, 1]);
+    expect(fadeOf(target, 1)).toBeCloseTo(0.5, 6);
+    expect(fadeOf(target, 0)).toBe(-fadeOf(target, 1));
     expect(fadeOf(target, 2)).toBe(0);
   });
 
-  it("switches at once in an orthographic view", () => {
+  it("switches at once in an orthographic camera", () => {
     const ortho = new OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
-    expect(visible(viewAt(lod(), 1, ortho))).toEqual([0]);
-    // Inside level 1's fade, which an orthographic view skips.
-    ortho.zoom = (400 * (1 - Lod.fade / 2) * 2) / (DIAMETER * 1080);
+    // Taller than level 1's maxPixels.
+    ortho.zoom = 1080 / CANVAS;
     ortho.updateProjectionMatrix();
-    expect(visible(viewAt(lod(), 1, ortho))).toEqual([1]);
+    expect(visible(seenAt(lod(), 1, ortho))).toEqual([0]);
+    // Inside level 1's fade, which an orthographic camera skips.
+    ortho.zoom = (400 * (1 - Lod.fade / 2) * 2) / (DIAMETER * CANVAS);
+    ortho.updateProjectionMatrix();
+    expect(visible(seenAt(lod(), 1, ortho))).toEqual([1]);
   });
 
-  it("leaves a nested Lod's levels to it and hands over to it at once", () => {
-    const outer = new Lod([{ object: box() }, { object: new Lod([{ object: box() }, { object: box() }]) }]);
+  it("leaves a nested Lod's levels to it and switches to it at once", () => {
+    const outer = new Lod([{ object: box() }, { object: new Lod([{ object: box() }, { object: box() }], gpu) }], gpu);
     const inner = outer.levels[1]?.object;
     if (!(inner instanceof Lod)) throw new Error("Missing nested Lod");
     setMaxPixels(outer, [400]);
-    viewAt(outer, 1000);
+    seenAt(outer, 1000);
     expect([outer.levels[0]?.object?.visible, inner.visible]).toEqual([true, false]);
-    viewAt(outer, 400 * (1 - Lod.fade / 2));
+    seenAt(outer, 400 * (1 - Lod.fade / 2));
     expect([outer.levels[0]?.object?.visible, inner.visible]).toEqual([false, true]);
     expect(inner.levels.map(({ object }) => object?.visible)).toEqual([true, true]);
   });
@@ -129,7 +126,7 @@ describe("Lod", { timeout: GPU_TIMEOUT }, () => {
     const source = box();
     const level = box();
     level.position.x = 10;
-    const target = new Lod([{ object: source }, { object: level }]);
+    const target = new Lod([{ object: source }, { object: level }], gpu);
     target.updateMatrixWorld();
     const hits = new Raycaster(new Vector3(0.3, 0.2, 10), new Vector3(0, 0, -1)).intersectObject(target);
     expect(hits.map((hit) => hit.object)).toEqual([target.levels[0]?.object]);
@@ -144,7 +141,7 @@ describe("Lod", { timeout: GPU_TIMEOUT }, () => {
       mesh.setMatrixAt(1, new Matrix4().makeTranslation(1.5, 0, 0));
       return mesh;
     };
-    const target = new Lod([{ object: pair() }, { object: pair() }]);
+    const target = new Lod([{ object: pair() }, { object: pair() }], gpu);
     const diameter = Math.hypot(5, 2, 2);
     const scene = new Scene().add(target);
     setMaxPixels(target, [40]);
@@ -161,53 +158,53 @@ describe("Lod", { timeout: GPU_TIMEOUT }, () => {
     target.dispose();
   });
 
-  it("clones rendered, hidden levels with independent selection", () => {
+  it("clones rendered, hidden levels that switch on their own", () => {
     const target = lod();
-    viewAt(target, 50);
+    seenAt(target, 50);
     target.visible = false;
     const clone = target.clone();
     expect(clone.levels.map((level) => level.maxPixels)).toEqual([Infinity, 400, 100]);
-    expect(visible(viewAt(clone, 1000))).toEqual([0]);
+    expect(visible(seenAt(clone, 1000))).toEqual([0]);
     expect(visible(target)).toEqual([2]);
   });
 });
 
-it.each([false, true])("hands over an installed source without popping (height fade: %s)", { timeout: GPU_TIMEOUT }, async (heightFade) => {
+it.each([false, true])("fades in an installed source without popping (height fade: %s)", { timeout: GPU_TIMEOUT }, async (heightFade) => {
   const deferred = { load: async () => box(), maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) };
-  const lod = new Lod([deferred, { object: box() }]);
-  const fallback = lod.levels[1]?.object;
-  if (!fallback) throw new Error("Missing coarse object");
+  const lod = new Lod([deferred, { object: box() }], gpu);
+  const coarse = lod.levels[1]?.object;
+  if (!coarse) throw new Error("Missing coarse object");
   lod.forceLevel = heightFade ? null : 0;
-  const coarse = lod.levels[1];
-  if (!coarse) throw new Error("Missing coarse level");
-  coarse.maxPixels = 100;
+  const coarseLevel = lod.levels[1];
+  if (!coarseLevel) throw new Error("Missing coarse level");
+  coarseLevel.maxPixels = 100;
   lod.position.z = heightFade ? -((DIAMETER * 64) / (2 * tan)) / 95 : -5;
-  const view = new PerspectiveCamera(60, 1, 0.1, 100);
+  const eye = new PerspectiveCamera(60, 1, 0.1, 100);
   const scene = new Scene().add(lod);
   const clock = vi.spyOn(performance, "now").mockReturnValue(1000);
   try {
-    renderer.render(scene, view);
-    await nextLevel(lod, view);
+    renderer.render(scene, eye);
+    await nextLevel(lod, eye);
     const source = lod.levels[0]?.object;
     if (!source) throw new Error("Missing installed source");
-    lod.update(view);
-    expect(drawOf(fallback)).toMatchObject({ fade: 0 });
+    lod.update(eye);
+    expect(fadeSourceOf(coarse)).toMatchObject({ fade: 0 });
     expect(source.visible).toBe(false);
-    clock.mockReturnValue(1000 + HANDOVER_MS / 2);
-    lod.update(view);
-    expect(drawOf(source)).toMatchObject({ fade: 0.5 });
-    expect(drawOf(fallback)).toMatchObject({ fade: -0.5 });
-    expect(source.visible && fallback.visible).toBe(true);
-    clock.mockReturnValue(1000 + HANDOVER_MS);
-    lod.update(view);
+    clock.mockReturnValue(1000 + ARRIVAL_MS / 2);
+    lod.update(eye);
+    expect(fadeSourceOf(source)).toMatchObject({ fade: 0.5 });
+    expect(fadeSourceOf(coarse)).toMatchObject({ fade: -0.5 });
+    expect(source.visible && coarse.visible).toBe(true);
+    clock.mockReturnValue(1000 + ARRIVAL_MS);
+    lod.update(eye);
     if (heightFade) {
-      const sourceDraw = drawOf(source),
-        coarseDraw = drawOf(fallback);
+      const sourceDraw = fadeSourceOf(source),
+        coarseDraw = fadeSourceOf(coarse);
       expect(sourceDraw?.kind === "object" && sourceDraw.fade).toBeCloseTo(-0.5);
       expect(coarseDraw?.kind === "object" && coarseDraw.fade).toBeCloseTo(0.5);
     } else {
-      expect(drawOf(source)).toMatchObject({ fade: 0 });
-      expect(fallback.visible).toBe(false);
+      expect(fadeSourceOf(source)).toMatchObject({ fade: 0 });
+      expect(coarse.visible).toBe(false);
     }
   } finally {
     clock.mockRestore();
@@ -215,55 +212,28 @@ it.each([false, true])("hands over an installed source without popping (height f
   }
 });
 
-it("keeps drawing the level it showed while the one it walked away to loads, then hands over to it", { timeout: GPU_TIMEOUT }, async () => {
+it("draws nothing, not even a given source, until its coarsest level has loaded, and each level at once once it has", { timeout: GPU_TIMEOUT }, async () => {
   let release = () => {};
   const gate = new Promise<void>((resolve) => (release = resolve));
   const coarse = { load: async () => (await gate, box()), maxPixels: 5, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) };
-  const lod = new Lod([{ object: box() }, coarse]);
+  const lod = new Lod([{ object: box() }, coarse], gpu);
   const scene = new Scene().add(lod);
-  const shown = () => lod.levels.flatMap(({ object }, i) => (object?.visible ? [i] : []));
   lod.position.z = -5;
   try {
     await render(scene, camera);
-    expect(shown()).toEqual([0]);
+    expect(visible(lod)).toEqual([]);
+    expect(lod.getLevel(camera)).toBeNull();
     lod.position.z = -900;
-    await render(scene, camera);
-    expect(shown()).toEqual([0]);
     const arrived = nextLevel(lod, camera);
     release();
     await arrived;
     await render(scene, camera);
-    // The arrival hands over from the kept source rather than replacing it at once.
-    expect(shown()).toContain(0);
-    await new Promise((resolve) => setTimeout(resolve, HANDOVER_MS));
+    expect(visible(lod)).toEqual([1]);
+    expect(lod.getLevel(camera)).toBe(1);
+    lod.position.z = -5;
     await render(scene, camera);
-    expect(shown()).toEqual([1]);
-  } finally {
-    lod.dispose();
-  }
-});
-
-it("keeps a level per camera: another camera whose level is missing never draws the one a nearer camera shows", { timeout: GPU_TIMEOUT }, async () => {
-  const coarse = { load: () => new Promise<Mesh>(() => {}), maxPixels: 5, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) };
-  const lod = new Lod([{ object: box() }, coarse]);
-  const scene = new Scene().add(lod);
-  const shown = () => lod.levels.flatMap(({ object }, i) => (object?.visible ? [i] : []));
-  const near = new PerspectiveCamera(60, 1, 0.1, 1000);
-  near.position.z = 5;
-  const far = near.clone();
-  far.position.z = 900;
-  try {
-    await render(scene, near);
-    expect(shown()).toEqual([0]);
-    await render(scene, far);
-    expect(shown()).toEqual([]);
-    // Out of its view, a camera forgets what it showed.
-    await render(scene, near);
-    near.position.x = 100;
-    await render(scene, near);
-    near.position.set(0, 0, 900);
-    await render(scene, near);
-    expect(shown()).toEqual([]);
+    expect(visible(lod)).toEqual([0]);
+    expect(lod.getLevel(camera)).toBe(0);
   } finally {
     lod.dispose();
   }

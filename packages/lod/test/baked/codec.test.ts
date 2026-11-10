@@ -20,12 +20,13 @@ import {
 } from "three/webgpu";
 import { describe, expect, it } from "vitest";
 import { encodeBakedMeshAsync, decodeBakedMeshAsync } from "../../src/baked/codec.js";
-import { pack, unpack } from "../../src/container.js";
+import { pack, unpack } from "../../src/codec/container.js";
 import { bakeMesh } from "../../src/baked/index.js";
-import { InteriorMaterial } from "../../src/baked/interior/material.js";
-import { deviationOf, recordDeviation } from "../../src/levels.js";
+import { InteriorMappingMaterial } from "../../src/baked/interior/material.js";
+import { deviationOf, recordDeviation } from "../../src/levels/index.js";
 import { disposeTree } from "../../src/dispose.js";
-import { house, interior, low } from "../house.js";
+import { box } from "../box.js";
+import { house, interior } from "../house.js";
 
 function texture(channels = 4): DataTexture {
   const data = Uint8Array.from({ length: 4 * 4 * channels }, (_, i) => (i * 137) % 256);
@@ -53,9 +54,9 @@ function fixture(rooms: boolean): Mesh {
   map.mipmaps = [4, 2, 1].map((size) => ({ width: size, height: size, data: new Uint8Array(size * size * 4).fill(size * 50) }));
   const normalMap = texture(),
     orm = texture();
-  const material = rooms ? new InteriorMaterial() : new MeshStandardNodeMaterial();
+  const material = rooms ? new InteriorMappingMaterial() : new MeshStandardNodeMaterial();
   material.setValues({ map, normalMap, aoMap: orm, roughnessMap: orm, metalnessMap: orm, roughness: 1, metalness: 1, alphaTest: 0.5, side: DoubleSide });
-  if (material instanceof InteriorMaterial) {
+  if (material instanceof InteriorMappingMaterial) {
     const response = new DataArrayTexture(new Uint8Array(2 * 2 * 6 * 4).fill(127), 2, 2, 6);
     response.colorSpace = SRGBColorSpace;
     response.minFilter = LinearMipmapLinearFilter;
@@ -101,7 +102,7 @@ describe("baked mesh codec", () => {
       expect(decoded.material.aoMap).toBe(decoded.material.roughnessMap);
       expect(decoded.material.aoMap).toBe(decoded.material.metalnessMap);
       expect(decoded.material.map).not.toBe(source.material.map);
-      if (decoded.material instanceof InteriorMaterial && source.material instanceof InteriorMaterial) {
+      if (decoded.material instanceof InteriorMappingMaterial && source.material instanceof InteriorMappingMaterial) {
         expect(decoded.material.rooms?.response.image.data).not.toBe(source.material.rooms?.response.image.data);
         expect(decoded.material.rooms?.boxes).toEqual(source.material.rooms?.boxes);
       }
@@ -117,6 +118,9 @@ describe("baked mesh codec", () => {
     source.material.normalScale.setScalar(0.6);
     await expect(encodeBakedMeshAsync(source)).rejects.toThrow(/normalScale/);
     source.material.normalScale.setScalar(1);
+    // Keys starting with "_" are three's own state, as listeners are: skipped, whatever they hold.
+    source.material.addEventListener("dispose", () => {});
+    Reflect.set(source.material, "_cache", new Map([[1, 2]]));
     const bytes = await encodeBakedMeshAsync(source);
     const { header, files } = await contents(bytes);
     const names: string[] = Reflect.get(header, "files");
@@ -135,9 +139,9 @@ describe("baked mesh codec", () => {
   it.skipIf(typeof document === "undefined")(
     "renders decoded real interior and cutout bakes identically",
     async () => {
-      const { render } = await import("../gpu.js");
+      const { bakeRenderer, render } = await import("../renderer.js");
       const rooms = interior();
-      const building = await bakeMesh(house().add(rooms), { low: low(), textureSize: 32, interior: rooms });
+      const building = await bakeMesh(house().add(rooms), { low: box(), textureSize: 32, interior: rooms, renderer: bakeRenderer });
       const alpha = texture();
       const data: unknown = alpha.image.data;
       if (!(data instanceof Uint8Array)) throw new Error("expected pixels");

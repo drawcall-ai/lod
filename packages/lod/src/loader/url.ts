@@ -1,7 +1,8 @@
 import { LoaderUtils } from "three/webgpu";
 
 const absolute = /^[a-z][a-z\d+.-]*:/i;
-const fallbackBase = "https://lod.invalid";
+/** An origin no URL has, to parse paths with when there is no document to resolve them against. */
+const placeholderOrigin = "https://lod.invalid";
 
 /** Resolve a relative asset path without changing absolute URLs or root-relative paths. */
 export function loaderPathURL(url: string, base: string): string {
@@ -9,7 +10,7 @@ export function loaderPathURL(url: string, base: string): string {
 }
 
 export const urlPath = (url: string): string => url.replace(/[?#].*$/s, "");
-export const urlQuery = (url: string): string => new URL(url, fallbackBase).search;
+export const urlQuery = (url: string): string => new URL(url, placeholderOrigin).search;
 
 export function assetPath(url: string): { path: string; extension: string } {
   const path = urlPath(url);
@@ -19,7 +20,7 @@ export function assetPath(url: string): { path: string; extension: string } {
 }
 
 export function sourceRelativeURL(value: string, source: string): string {
-  const base = new URL(source, typeof document === "undefined" ? fallbackBase : document.baseURI);
+  const base = new URL(source, typeof document === "undefined" ? placeholderOrigin : document.baseURI);
   const url = new URL(value, base);
   return url.origin === base.origin && !absolute.test(source) ? url.pathname + url.search + url.hash : url.href;
 }
@@ -30,7 +31,7 @@ export function sourceRelativeURL(value: string, source: string): string {
  */
 export const isLocal = (url: string): boolean => (url.startsWith("/") && !url.startsWith("//")) || url.startsWith("file:");
 
-/** Keep same-origin dependencies portable between development and deployment. */
+/** Same-origin dependencies as paths, portable between development and deployment. */
 export function localURL(url: string): string {
   if (typeof location === "undefined" || !/^https?:/i.test(url)) return url;
   const parsed = new URL(url);

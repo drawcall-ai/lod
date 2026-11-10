@@ -1,15 +1,15 @@
 import { Box3, BufferAttribute, BufferGeometry, DoubleSide, FrontSide, Mesh, MeshStandardNodeMaterial, Sphere, Vector3 } from "three/webgpu";
-import { pack, unpack } from "../container.js";
-import { deviationOf, recordDeviation } from "../levels.js";
+import { pack, unpack } from "../codec/container.js";
+import { deviationOf, recordDeviation } from "../levels/index.js";
 import { boolean, fail, file, number, numbers, object, type Files } from "./fields.js";
-import { InteriorMaterial } from "./interior/material.js";
+import { InteriorMappingMaterial } from "./interior/material.js";
 import { readTexture, writeTexture } from "./textures.js";
 
 /**
  * Encode an unmodified `bakeMesh` result, before adding it to a Lod or changing its
  * materials. This is a baked-result format, not an Object3D/NodeMaterial serializer.
  * Geometry, map bytes (including cutout mips), rooms, placement and LOD deviation survive
- * exactly. Decoding owns fresh resources; the input mesh remains owned by its caller.
+ * exactly. Decoding makes fresh resources; the input mesh stays its caller's.
  */
 export async function encodeBakedMeshAsync(mesh: Mesh): Promise<Uint8Array> {
   const deviation = deviationOf(mesh);
@@ -29,17 +29,18 @@ export async function encodeBakedMeshAsync(mesh: Mesh): Promise<Uint8Array> {
     fail("modified baked geometry");
   if (
     !(material instanceof MeshStandardNodeMaterial) ||
-    (Object.getPrototypeOf(material) !== MeshStandardNodeMaterial.prototype && Object.getPrototypeOf(material) !== InteriorMaterial.prototype)
+    (Object.getPrototypeOf(material) !== MeshStandardNodeMaterial.prototype && Object.getPrototypeOf(material) !== InteriorMappingMaterial.prototype)
   )
     fail("unsupported material");
   const standard = new MeshStandardNodeMaterial();
   // Only the maps, side and alphaTest differ from a default baked material. Refuse
   // shader hooks and material changes rather than silently dropping them from a cache.
+  // Keys starting with "_" are three's own state behind accessors (alphaTest's) and
+  // listeners, which the accessors and the checks below cover.
   const allowed = new Set([
     "uuid",
     "id",
     "version",
-    "_listeners",
     "map",
     "normalMap",
     "aoMap",
@@ -47,15 +48,13 @@ export async function encodeBakedMeshAsync(mesh: Mesh): Promise<Uint8Array> {
     "metalnessMap",
     "roughness",
     "metalness",
-    "alphaTest",
-    "_alphaTest",
     "side",
     "rooms",
     "bounds",
     "isInteriorMaterial",
   ]);
   for (const [key, value] of Object.entries(material)) {
-    if (allowed.has(key)) continue;
+    if (key.startsWith("_") || allowed.has(key)) continue;
     const expected: unknown = Reflect.get(standard, key);
     if (typeof value === "function" ? value !== expected : JSON.stringify(value) !== JSON.stringify(expected)) fail(`modified material.${key}`);
   }
@@ -83,7 +82,7 @@ export async function encodeBakedMeshAsync(mesh: Mesh): Promise<Uint8Array> {
   const index = geometry.index;
   if (!index || !(index.array instanceof Uint32Array) || index.itemSize !== 1) fail("expected Uint32 indices");
   files.index = new Uint8Array(index.array.buffer, index.array.byteOffset, index.array.byteLength);
-  const rooms = material instanceof InteriorMaterial ? (material.rooms ?? fail("unfurnished interior")) : null;
+  const rooms = material instanceof InteriorMappingMaterial ? (material.rooms ?? fail("unfurnished interior")) : null;
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
   const { boundingBox: box, boundingSphere: sphere } = geometry;
@@ -128,10 +127,10 @@ export async function decodeBakedMeshAsync(bytes: Uint8Array): Promise<Mesh> {
   const deviation = number(meta.deviation);
   if (deviation < 0) fail("negative LOD deviation");
   // The container's CRC rejects corrupt bytes, so lengths are checked but values are not walked.
-  const position = view(file(files, "position"), Float32Array);
-  const normal = view(file(files, "normal"), Float32Array);
-  const uv = view(file(files, "uv"), Float32Array);
-  const index = view(file(files, "index"), Uint32Array);
+  const position = typedArray(file(files, "position"), Float32Array);
+  const normal = typedArray(file(files, "normal"), Float32Array);
+  const uv = typedArray(file(files, "uv"), Float32Array);
+  const index = typedArray(file(files, "index"), Uint32Array);
   if (!position.length || position.length % 3 || normal.length !== position.length || uv.length * 3 !== position.length * 2 || index.length % 3)
     fail("invalid geometry lengths");
   const bounds = numbers(meta.bounds, 10);
@@ -140,9 +139,9 @@ export async function decodeBakedMeshAsync(bytes: Uint8Array): Promise<Mesh> {
   const map = readTexture(files, "map", meta.map, false);
   const normalMap = readTexture(files, "normal", meta.normal, false);
   const orm = readTexture(files, "orm", meta.orm, false);
-  const material = meta.rooms === null ? new MeshStandardNodeMaterial() : new InteriorMaterial();
+  const material = meta.rooms === null ? new MeshStandardNodeMaterial() : new InteriorMappingMaterial();
   material.setValues({ map, normalMap, aoMap: orm, roughnessMap: orm, metalnessMap: orm, roughness: 1, metalness: 1, side, alphaTest });
-  if (material instanceof InteriorMaterial) {
+  if (material instanceof InteriorMappingMaterial) {
     const rooms = object(meta.rooms);
     if (!Array.isArray(rooms.boxes) || !rooms.boxes.length) fail("missing room boxes");
     const boxes = rooms.boxes.map((value) => {
@@ -178,7 +177,7 @@ export async function decodeBakedMeshAsync(bytes: Uint8Array): Promise<Mesh> {
 }
 
 /** `bytes` as 32-bit values, in place: the container aligns its files. */
-function view<T extends Float32Array | Uint32Array>(bytes: Uint8Array, Type: { new (buffer: ArrayBuffer, offset: number, length: number): T }): T {
+function typedArray<T extends Float32Array | Uint32Array>(bytes: Uint8Array, Type: { new (buffer: ArrayBuffer, offset: number, length: number): T }): T {
   if (bytes.byteLength % 4) fail("invalid geometry data length");
   const { buffer, byteOffset, byteLength } = bytes;
   if (!(buffer instanceof ArrayBuffer)) fail("shared geometry data");

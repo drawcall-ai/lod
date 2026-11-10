@@ -1,276 +1,204 @@
-import {
-  type BufferGeometry,
-  type Camera,
-  type ComputeNode,
-  InstancedBufferGeometry,
-  type Matrix4,
-  Mesh,
-  type NodeMaterial,
-  Object3D,
-  type Renderer,
-  type Sphere,
-  type StorageInstancedBufferAttribute,
-} from "three/webgpu";
-import { at } from "../at.js";
-import { placeInterior } from "../baked/interior/material.js";
-import { prepareBounds } from "../bounds.js";
-import { disposeCopies } from "../dispose.js";
-import { drawOf, setDraw, white } from "../fade.js";
+import { type Box3, BufferGeometry, type Camera, type Color, Matrix4, Mesh, type Object3D, type Sphere } from "three/webgpu";
+import { setFadeSource, type DrawnInstances, type InstanceSlots } from "../levels/fade.js";
+import { levelMaterial } from "../levels/material.js";
 import { impostorInstances, type ImpostorMesh } from "../impostor/mesh/index.js";
-import type { Level } from "../levels.js";
-import { gpuRenderer, inShadowPass, isImpostorMesh } from "../three.js";
-import { inView } from "../view.js";
-import { ARGS_BYTES } from "./args.js";
-import { groupMaterial, parts, placed, type Part } from "./parts.js";
-import type { Selection } from "./select.js";
+import { isImpostorMesh, isInstancedMesh, isLOD, isMesh, rejectSkinned } from "../three.js";
+import { DRAW_BYTES, type IndirectDraw } from "./rows.js";
 
-// The indirect draws of one Selection's levels, and the compute that selects for them.
+// The meshes that draw an InstancedLod's level: one plain three Mesh per mesh and material group of its object, or an
+// ImpostorMesh for an impostor, each drawing every instance in its level's list for a camera with one indirect draw.
 
-/**
- * Selections due before the next draw of any InstancedLod: the first level mesh to draw
- * runs them all in one compute call (each call has a cost of its own: an encoder, a
- * pass, a submit). Each renderer runs those its own buffers are not current with.
- */
-const due = new Set<Selection>();
-const batch: ComputeNode[] = [];
+const IDENTITY = new Matrix4();
 
-/** Run the passes batched so far on `renderer`. */
-function flush(renderer: Renderer): void {
-  if (batch.length === 0) return;
-  renderer.compute(batch);
-  batch.length = 0;
+/** A mesh of a level's object and one of its material groups, placed in the instance's space. */
+export interface Part {
+  template: Mesh;
+  placement: Matrix4;
+  group: number;
+  draw: IndirectDraw;
 }
 
-/** An indirect level draw. Its material applies instance storage without Three's per-build nodes. */
-export class Instances extends Mesh<BufferGeometry, NodeMaterial> {
-  readonly isLodInstances = true;
-  // Capacity is in the indirect draw; a stable count keeps Three's shader key shared.
-  readonly count = 1;
-  /** Every instance's matrix: a draw reads those of the instances in its view's slots. */
-  instanceMatrix: StorageInstancedBufferAttribute;
-  instanceColor: StorageInstancedBufferAttribute;
-  // The owner installs the aggregate bounds instead of scanning the instance slots.
-  boundingSphere: Sphere | null = null;
-
-  constructor(geometry: BufferGeometry, material: NodeMaterial, selection: Selection) {
-    super(geometry, material);
-    this.instanceMatrix = selection.drawn;
-    this.instanceColor = selection.colors ?? white;
-  }
-}
-
-/** A mesh drawing one level's slots: instanced, or an impostor's cards. */
-export type LevelMesh = Instances | ImpostorMesh;
-
-/** What the meshes ask of the InstancedLod they draw for. */
-export interface Owner {
-  /** False once it is disposed: its meshes stop selecting. */
-  live(): boolean;
-  /** A mesh finished drawing for `camera` outside a shadow pass. */
-  drawn(camera: Camera, mesh: LevelMesh): void;
-  /** Run a draw callback's `action`, reporting what it throws: nothing may throw while three renders. */
-  guard(action: () => void): void;
-}
-
-/** Every level's meshes for one Selection, each drawing from its indirect arguments. */
-export class Meshes {
-  /** Per level, the meshes drawing it. */
-  readonly byLevel: LevelMesh[][] = [];
-
+/** What every level mesh of one InstancedLod draws from. */
+export interface MeshInputs {
+  /** The instances, which a mesh made later draws too. */
+  readonly instances: DrawnInstances;
   /**
-   * `reaches` are the per-level spheres the meshes are culled by; `radius` is the source
-   * radius the level shaders cut shadow casters off at.
+   * Around every instance, in the InstancedLod's space: what its meshes are culled by, and their box, which three's
+   * Box3.setFromObject reads.
    */
-  constructor(
-    private readonly selection: Selection,
-    private readonly reaches: readonly Sphere[],
-    private radius: number,
-    private readonly owner: Owner,
-  ) {}
-
-  setRadius(radius: number): void {
-    this.radius = radius;
-    for (const mesh of this.byLevel.flat()) {
-      const draw = drawOf(mesh);
-      if (draw?.kind === "instances") draw.radius = radius;
-    }
-  }
-
-  /** Every level's meshes from its `templates` parts, drawn in order from the selection's first indirect arguments. */
-  fill(levels: readonly Level[], templates: readonly (readonly Part[])[]): LevelMesh[] {
-    let offset = 0;
-    templates.forEach((parts, i) => {
-      this.byLevel[i] = this.make(at(levels, i), parts, offset);
-      offset += parts.length * ARGS_BYTES;
-    });
-    return this.byLevel.flat();
-  }
-
+  readonly bounds: Sphere;
+  readonly box: Box3;
+  /** Per camera, the instances in each level's list and where its indirect draws lie. */
+  readonly slots: (camera: Camera) => InstanceSlots;
+  /** One instance's bounding radius in its own space, which shadow casters are cut off at. */
+  readonly radius: number;
   /**
-   * `level`'s meshes from a clone of `template`, staged and compiled by `compile`; they draw
-   * once its caller adds them. Null if the owner died meanwhile, which frees them.
+   * Where `camera`'s indirect draws lie as a mesh draws for it with `renderer`, its lists sorted: the camera's due sorts,
+   * every InstancedLod's, run now. Never throws: three is rendering.
    */
-  async load(
-    level: Level,
-    template: Object3D,
-    compile: (staged: Object3D) => Promise<void>,
-  ): Promise<{ object: Object3D; found: Part[]; made: LevelMesh[] } | null> {
-    const staged = new Object3D();
-    const object = template.clone();
-    if (level.box) prepareBounds(object, level.box);
-    const found = parts(object, level.index);
-    const made = this.make(level, found, this.selection.append(found.map((part) => part.draw)));
-    for (const mesh of made) staged.add(mesh);
-    const abandon = () => {
-      for (const mesh of made) this.free(mesh);
-      disposeCopies(object);
-    };
-    try {
-      await compile(staged);
-    } catch (error) {
-      abandon();
-      throw error;
-    }
-    if (!this.owner.live()) {
-      abandon();
-      return null;
-    }
-    this.byLevel[level.index] = made;
-    return { object, found, made };
-  }
+  readonly drawFor: (renderer: unknown, camera: Camera) => InstanceSlots["args"];
+}
 
-  /** `level`'s `parts`, drawn from consecutive indirect arguments starting at byte `offset`. */
-  private make(level: Level, parts: readonly Part[], offset: number): LevelMesh[] {
-    return parts.map((part, i) => this.mesh(level, part, offset + i * ARGS_BYTES));
-  }
+/** `object`'s meshes and material groups, placed once in the instance's space, for level `level`. */
+export function partsOf(object: Object3D, level: number): Part[] {
+  rejectSkinned(object, "InstancedLod");
+  object.updateWorldMatrix(true, true);
+  const outside = object.parent ? object.parent.matrixWorld.clone().invert() : new Matrix4();
+  const found: Part[] = [];
+  object.traverse((node) => {
+    if (isLOD(node)) throw new Error("InstancedLod: levels cannot contain a Lod or InstancedLod; nest them with Lod");
+    if (isInstancedMesh(node) && !isImpostorMesh(node)) throw new Error(`InstancedLod: levels cannot contain an InstancedMesh ("${node.name}")`);
+    if (!isMesh(node)) return;
+    const placement = outside.clone().multiply(node.matrixWorld);
+    ranges(node).forEach((range, group) => found.push({ template: node, placement, group, draw: { level, ...range } }));
+  });
+  return found;
+}
 
-  /** Release `mesh`, which may never have been added. */
-  private free(mesh: LevelMesh): void {
-    // ImpostorMesh.dispose also destroys instance buffers; the Selection owns ours.
-    if (isImpostorMesh(mesh)) mesh.material.release();
-    mesh.geometry.dispose();
-  }
+/** The index (or vertex) ranges `mesh` draws, clipped to its draw range, in group order, empty draws included. */
+function ranges(mesh: Mesh): Array<{ count: number; start: number; indexed: boolean }> {
+  const { geometry } = mesh;
+  const indexed = geometry.index !== null;
+  const total = geometry.index?.count ?? geometry.getAttribute("position").count;
+  const groups = Array.isArray(mesh.material) ? geometry.groups : [{ start: 0, count: total }];
+  return groups.map(({ start, count }) => {
+    const first = Math.min(total, Math.max(0, start, geometry.drawRange.start));
+    const end = Math.min(total, start + count, geometry.drawRange.start + geometry.drawRange.count);
+    return { count: Math.max(0, end - first), start: first, indexed };
+  });
+}
 
-  /** Every level's meshes draw the selection's current buffers, colours it has begun to carry included, with the shaders they have. */
-  rebind(): void {
-    for (const mesh of this.byLevel.flat()) {
-      mesh.instanceMatrix = this.selection.drawn;
-      mesh.instanceColor = this.selection.colors ?? white;
-      if (mesh.geometry instanceof InstancedBufferGeometry) mesh.geometry.instanceCount = this.selection.capacity;
-    }
-  }
+/** A level's meshes, which draw once their indirect draws lie among a camera's (see `drawFrom`). */
+export interface LevelMeshes {
+  readonly meshes: Mesh[];
+  /** The meshes' indirect draws, in order. */
+  readonly draws: IndirectDraw[];
+  /** Draw from the camera's draw `first` on, where `draws` were appended (see `InstanceSlots.args`). */
+  drawFrom(first: number): void;
+}
 
-  /** Show only levels whose conservative bounds contain a possible selected instance; whether any may draw for `camera`. */
-  show(camera: Camera, matrixWorld: Matrix4): boolean {
-    let shown = false;
-    for (let level = 0; level < this.byLevel.length; level++) {
-      const reach = at(this.reaches, level);
-      const visible = !reach.isEmpty();
-      const meshes = at(this.byLevel, level);
-      for (const mesh of meshes) mesh.visible = visible;
-      shown ||= visible && meshes.length > 0 && inView(camera, matrixWorld, reach);
-    }
-    return shown;
-  }
+/** The meshes drawing `parts`, tinted by `tint`. */
+export function levelMeshes(parts: readonly Part[], tint: Color, inputs: MeshInputs): LevelMeshes {
+  let first: number | null = null;
+  const offset = (i: number) => (first === null ? null : (first + i) * DRAW_BYTES);
+  return {
+    meshes: parts.map((part, i) => levelMesh(part, () => offset(i), tint, inputs)),
+    draws: parts.map((part) => part.draw),
+    drawFrom: (start) => void (first = start),
+  };
+}
 
-  /** Whether the selection runs before the next draw of any InstancedLod. */
-  schedule(selected: boolean): void {
-    if (selected) due.add(this.selection);
-    else due.delete(this.selection);
-  }
+/** Release `mesh`, which may never have been added. */
+export function freeMesh(mesh: Mesh): void {
+  // ImpostorMesh.dispose also destroys its instance buffers, which are the InstancedLod's.
+  if (isImpostorMesh(mesh)) mesh.material.release();
+  mesh.geometry.dispose();
+}
 
-  dispose(): void {
-    // An ImpostorMesh frees its own material and geometry; the other meshes' faded
-    // materials go with the levels' originals.
-    for (const mesh of this.byLevel.flat()) {
-      mesh.removeFromParent();
-      this.free(mesh);
-    }
-    due.delete(this.selection);
-    this.byLevel.length = 0;
-  }
-
-  /** Material group `part.group` of `part.template` drawn for every instance in `level`'s slots. */
-  private mesh(level: Level, { template, placement, group }: Part, offset: number): LevelMesh {
-    const { selection, owner } = this;
-    // An impostor card is placed in the shader; any other mesh draws its geometry moved
-    // into the instance's space, so the instance matrix is all it needs.
-    const mesh = isImpostorMesh(template)
-      ? card(template, placement, selection)
-      : new Instances(placed(template.geometry, placement), groupMaterial(template, group), selection);
-    mesh.geometry = instanced(mesh.geometry, selection);
-    setDraw(mesh, { kind: "instances", slots: (camera) => selection.view(camera), radius: this.radius, tint: level.tint });
-    if (!isImpostorMesh(template)) placeInterior(mesh, placement);
-    mesh.name = template.name;
-    mesh.castShadow = template.castShadow;
-    mesh.receiveShadow = template.receiveShadow;
-    mesh.boundingSphere = at(this.reaches, level.index);
-    const previous = mesh.onBeforeRender;
-    // Selected once per view, before the first level mesh draws in it: the GPU runs the
-    // selection before the pass, which is submitted when it ends.
-    mesh.onBeforeRender = (renderer, scene, camera, geometry, material, group) => {
-      if (!owner.live()) return;
-      previous.call(mesh, renderer, scene, camera, geometry, material, group);
-      owner.guard(() => {
-        runDue(renderer, camera, selection);
-        const { args } = selection.view(camera);
-        mesh.geometry.setIndirect(args.attribute, args.offset + offset);
-      });
-    };
-    const after = mesh.onAfterRender;
-    mesh.onAfterRender = (renderer, scene, camera, geometry, material, group) => {
-      after.call(mesh, renderer, scene, camera, geometry, material, group);
-      if (!inShadowPass(scene)) owner.drawn(camera, mesh);
-    };
-    return mesh;
-  }
+/** Point every mesh of `meshes` at `instances.matrices`, which changed: survivors scale, or no longer do. */
+export function drawMatrices(meshes: readonly Mesh[], instances: DrawnInstances): void {
+  for (const mesh of meshes) if (isImpostorMesh(mesh)) mesh.instanceMatrix = instances.matrices;
 }
 
 /**
- * Run the selections due, `selection`'s among them, that `renderer`'s buffers are not current with for `camera`,
- * before a draw of `selection`'s.
+ * Material group `group` of `template` drawn for every instance in level `level`'s list, from byte `offset()` of a
+ * camera's draws, once there is one.
  */
-function runDue(renderer: unknown, camera: Camera, selection: Selection): void {
-  const gpu = gpuRenderer(renderer);
-  due.add(selection);
-  // Each level's draws start at its slots (see select.ts).
-  if (!gpu.hasFeature("indirect-first-instance")) throw new Error("InstancedLod: needs the GPU feature indirect-first-instance, which this device lacks");
-  for (const each of due) each.prepare(gpu);
-  // In order, passes without a dispatch of their own in batches.
-  for (const each of due) {
-    for (const { node, dispatch } of each.take(camera)) {
-      if (!dispatch) {
-        batch.push(node);
-        continue;
-      }
-      flush(gpu);
-      gpu.compute(node, dispatch);
-    }
-  }
-  due.clear();
-  flush(gpu);
-}
-
-/** An impostor's cards for `selection`'s slots. */
-function card(template: ImpostorMesh, placement: Matrix4, selection: Selection): ImpostorMesh {
-  const mesh = impostorInstances(template, 0, placement);
-  // Indirect arguments supply the actual count. A card's public count is otherwise
-  // used by Three to specialize its shader for one object's storage bindings.
-  mesh.count = 1;
-  mesh.instanceMatrix = selection.drawn;
-  mesh.instanceColor = selection.colors ?? white;
+function levelMesh({ template, placement, group }: Part, offset: () => number | null, tint: Color, inputs: MeshInputs): Mesh {
+  const { instances, bounds, box, slots, radius, drawFor } = inputs;
+  // An impostor card is placed in the shader; any other mesh draws its geometry moved into the instance's space, so
+  // the instance matrix is all it needs.
+  const mesh = isImpostorMesh(template) ? card(template, placement, inputs) : plain(template, placement, group, instances);
+  setFadeSource(mesh, {
+    kind: "instances",
+    slots,
+    radius,
+    tint,
+    level: isImpostorMesh(template) ? undefined : { instances, space: placement.clone().invert() },
+  });
+  mesh.name = template.name;
+  mesh.castShadow = template.castShadow;
+  mesh.receiveShadow = template.receiveShadow;
+  if (!isImpostorMesh(mesh)) mesh.geometry.boundingSphere = bounds;
+  mesh.geometry.boundingBox = box;
+  const previous = mesh.onBeforeRender;
+  // Each camera draws the instances in its own lists. A level compiling to join draws nothing yet: its pipelines do not
+  // depend on the indirect draw.
+  mesh.onBeforeRender = (renderer, scene, camera, geometry, material, drawn) => {
+    previous.call(mesh, renderer, scene, camera, geometry, material, drawn);
+    const start = offset();
+    if (start === null) return;
+    const args = drawFor(renderer, camera);
+    mesh.geometry.setIndirect(args.attribute, args.offset + start);
+  };
   return mesh;
 }
 
-/** A geometry drawing `geometry`'s buffers for `selection`'s instances; each view's draw points it at its indirect arguments. */
-function instanced(geometry: BufferGeometry, selection: Selection): BufferGeometry {
-  const view = new InstancedBufferGeometry();
-  // Capacity belongs to the geometry's statistics, not the object's shader cache key.
-  view.instanceCount = selection.capacity;
-  view.index = geometry.index;
-  for (const [name, attribute] of Object.entries(geometry.attributes)) view.setAttribute(name, attribute);
-  view.morphAttributes = geometry.morphAttributes;
-  view.boundingBox = geometry.boundingBox;
-  view.boundingSphere = geometry.boundingSphere;
-  return view;
+/**
+ * A plain mesh drawing `template`'s geometry moved by `placement`, with a geometry of its own, which its draws point
+ * at their camera's indirect draws, over the moved one's buffers.
+ */
+function plain(template: Mesh, placement: Matrix4, group: number, instances: DrawnInstances): Mesh {
+  const moved = placed(template.geometry, placement);
+  const geometry = new BufferGeometry();
+  geometry.index = moved.index;
+  for (const [name, attribute] of Object.entries(moved.attributes)) geometry.setAttribute(name, attribute);
+  geometry.morphAttributes = moved.morphAttributes;
+  // three's NodeMaterial multiplies a draw's colour by the varying vInstanceColor wherever its object has an
+  // instanceColor; placeInstances (see fade.ts) writes it.
+  return Object.assign(new Mesh(geometry, groupMaterial(template, group)), { instanceColor: instances.colors });
+}
+
+/** An impostor's cards for the instances in a level's list. */
+function card(template: ImpostorMesh, placement: Matrix4, { instances, bounds }: MeshInputs): ImpostorMesh {
+  const mesh = impostorInstances(template, 0, placement);
+  // Indirect draws give the count. Three otherwise keys a card's shader by its count, one per object.
+  mesh.count = 1;
+  mesh.instanceMatrix = instances.matrices;
+  mesh.instanceColor = instances.colors;
+  mesh.boundingSphere = bounds;
+  return mesh;
+}
+
+/** The level material of `mesh`'s material group `group`. */
+function groupMaterial(mesh: Mesh, group: number) {
+  if (!Array.isArray(mesh.material)) return levelMaterial(mesh.material);
+  const index = mesh.geometry.groups[group]?.materialIndex ?? 0;
+  const material = mesh.material[index];
+  if (!material) throw new Error(`InstancedLod: "${mesh.name}" has no material ${index}`);
+  return levelMaterial(material);
+}
+
+/**
+ * Placed copies of geometries, shared by every InstancedLod drawing the same mesh the same way: a side table, as three's
+ * BufferGeometry has no room for a package's state.
+ */
+const copies = new WeakMap<BufferGeometry, Array<{ placement: Matrix4; geometry: BufferGeometry }>>();
+
+/** `geometry` moved by `placement`: itself for the identity, else a copy made once. */
+function placed(geometry: BufferGeometry, placement: Matrix4): BufferGeometry {
+  if (placement.equals(IDENTITY)) return geometry;
+  const known = copies.get(geometry) ?? [];
+  copies.set(geometry, known);
+  const hit = known.find((entry) => entry.placement.equals(placement));
+  if (hit) return hit.geometry;
+  const copy = geometry.clone();
+  const box = copy.boundingBox;
+  const sphere = copy.boundingSphere;
+  // applyMatrix4 otherwise recomputes both bounds by walking the transformed vertices.
+  copy.boundingBox = null;
+  copy.boundingSphere = null;
+  // Translations leave normals and tangents unchanged; scanning them stalls large source arrivals.
+  if (placement.clone().setPosition(0, 0, 0).equals(IDENTITY)) {
+    const position = copy.getAttribute("position");
+    if (position) {
+      position.applyMatrix4(placement);
+      position.needsUpdate = true;
+    }
+  } else copy.applyMatrix4(placement);
+  copy.boundingBox = box?.applyMatrix4(placement) ?? null;
+  copy.boundingSphere = sphere?.applyMatrix4(placement) ?? null;
+  geometry.addEventListener("dispose", () => copy.dispose());
+  known.push({ placement: placement.clone(), geometry: copy });
+  return copy;
 }

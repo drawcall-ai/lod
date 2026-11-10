@@ -1,9 +1,9 @@
 import { BufferAttribute, BufferGeometry, Vector3 } from "three/webgpu";
 import { MeshBVH } from "three-mesh-bvh";
-import { Shading } from "./shading.js";
+import { MaterialEvaluator } from "./evaluator.js";
 import type { Source } from "./source.js";
 import { triangleArea, type Surface } from "./surface.js";
-import { Tracer } from "./trace.js";
+import { SourceRaycaster } from "./raycaster.js";
 
 /** Points sampled per surface to measure the deviation. */
 const SAMPLES = 20000;
@@ -49,15 +49,15 @@ function visibility(source: Source): (point: Vector3, triangle: number) => boole
   geometry.computeBoundingSphere();
   const bounds = geometry.boundingSphere;
   if (!bounds) throw new Error("@drawcall/lod: the source has no bounds");
-  const shading = new Shading(source, 0);
-  const tracer = new Tracer(source, shading);
+  const evaluator = new MaterialEvaluator(source, 0);
+  const raycaster = new SourceRaycaster(source, evaluator);
   const normal = new Vector3();
   const corner = new Vector3();
   const origin = new Vector3();
   const epsilon = bounds.radius * 1e-4;
   const far = bounds.radius * 4;
   const escapes = (point: Vector3, direction: Vector3) =>
-    tracer.cast(origin.copy(point).addScaledVector(direction, epsilon), direction, far, null) !== "opaque";
+    raycaster.cast(origin.copy(point).addScaledVector(direction, epsilon), direction, far, null) !== "opaque";
   return (point, triangle) => {
     const { positions, index } = source;
     const a = (index[triangle * 3] ?? 0) * 3;
@@ -65,7 +65,7 @@ function visibility(source: Source): (point: Vector3, triangle: number) => boole
     corner.fromArray(positions, (index[triangle * 3 + 2] ?? 0) * 3).sub(origin.fromArray(positions, a));
     normal.cross(corner).normalize();
     if (escapes(point, normal)) return true;
-    return shading.material(triangle).doubleSided && escapes(point, normal.negate());
+    return evaluator.material(triangle).doubleSided && escapes(point, normal.negate());
   };
 }
 

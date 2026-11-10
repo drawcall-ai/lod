@@ -71,7 +71,7 @@ describe("frameBasis", () => {
     }
   });
 
-  it("keeps world up on screen up away from the poles", () => {
+  it("turns world up to screen up away from the poles", () => {
     for (const n of directions) {
       if (Math.abs(n[1]) > 0.999) continue;
       expect(frameBasis(n).bitangent[1]).toBeGreaterThanOrEqual(0);

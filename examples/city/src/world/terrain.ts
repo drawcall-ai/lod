@@ -55,13 +55,13 @@ export class Terrain {
       let h = 0;
       for (const t of terms) h += t.amplitude * Math.sin(t.kx * x + t.kz * z + t.phase);
       // flatten toward the edge, and wherever a flat site (the town) needs it
-      let keep = 1 - THREE.MathUtils.smoothstep(Math.max(Math.abs(x), Math.abs(z)), EXTENT * 0.8, EXTENT * 0.97);
-      for (const f of flats) keep *= 0.25 + 0.75 * THREE.MathUtils.smoothstep(Math.hypot(x - f.x, z - f.z), f.radius * 0.6, f.radius * 1.3);
+      let relief = 1 - THREE.MathUtils.smoothstep(Math.max(Math.abs(x), Math.abs(z)), EXTENT * 0.8, EXTENT * 0.97);
+      for (const f of flats) relief *= 0.25 + 0.75 * THREE.MathUtils.smoothstep(Math.hypot(x - f.x, z - f.z), f.radius * 0.6, f.radius * 1.3);
       // the creek's valley: a broad trough with the channel in its floor
       const d = distanceTo(creek.course, x, z);
       let cut = creek.depth * Math.exp(-((d / 35) ** 2)) + 0.8 * Math.exp(-((d / 4) ** 2));
       for (const c of creek.crossings) cut *= THREE.MathUtils.smoothstep(Math.hypot(x - c.x, z - c.y), 20, 40);
-      return h * keep - cut;
+      return h * relief - cut;
     };
     const base = raw(0, 0);
     for (let j = 0; j < n; j++)

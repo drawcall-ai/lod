@@ -1,8 +1,8 @@
 import { BufferAttribute, BufferGeometry, type Object3D, type Texture } from "three/webgpu";
 import { MeshBVH } from "three-mesh-bvh";
-import { readMaterial, type MaterialInputs } from "./shading.js";
+import { readMaterial, type MaterialInputs } from "./evaluator.js";
 import { merge, type Merged } from "./surface.js";
-import type { Texels } from "./texels.js";
+import type { CpuTextureSampler } from "./sampler.js";
 
 // The CPU model of a source object that simplify measures against and bakeMesh bakes from.
 
@@ -27,7 +27,7 @@ export interface Source extends Merged {
  */
 export function readSource(object: Object3D, who: string, purpose: "bake" | "measure"): Source {
   const merged = merge(object, who);
-  const cache = new Map<Texture, Texels>();
+  const cache = new Map<Texture, CpuTextureSampler>();
   const inputs = merged.materials.map((material) => readMaterial(material, cache, purpose));
   const { positions, index } = merged;
   const count = index.length / 3;

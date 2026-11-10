@@ -11,28 +11,19 @@ import {
 } from "three/webgpu";
 import type { Impostor, ImpostorLayer } from "../impostor.js";
 
-/** One set of GPU textures per impostor, shared by every mesh drawing it. */
-const shared = new WeakMap<Impostor, { textures: Texture[]; users: number }>();
-
-export function acquireTextures(impostor: Impostor): Texture[] {
-  let entry = shared.get(impostor);
-  if (!entry) {
-    const textures = impostor.layers.map((layer, i) => {
-      const texture = textureOf(layer, impostor.size);
-      const map = impostor.maps[i];
-      texture.colorSpace = map === "base" || map === "emissive" ? SRGBColorSpace : NoColorSpace;
-      // The baked levels; the chain ends at one texel per frame.
-      texture.generateMipmaps = false;
-      texture.minFilter = LinearMipmapLinearFilter;
-      texture.magFilter = LinearFilter;
-      texture.needsUpdate = true;
-      return texture;
-    });
-    entry = { textures, users: 0 };
-    shared.set(impostor, entry);
-  }
-  entry.users++;
-  return entry.textures;
+/** `impostor`'s atlases as textures, one per map: an ImpostorMaterial's, freed with it. */
+export function impostorTextures(impostor: Impostor): Texture[] {
+  return impostor.layers.map((layer, i) => {
+    const texture = textureOf(layer, impostor.size);
+    const map = impostor.maps[i];
+    texture.colorSpace = map === "base" || map === "emissive" ? SRGBColorSpace : NoColorSpace;
+    // The baked levels; the chain ends at one texel per frame.
+    texture.generateMipmaps = false;
+    texture.minFilter = LinearMipmapLinearFilter;
+    texture.magFilter = LinearFilter;
+    texture.needsUpdate = true;
+    return texture;
+  });
 }
 
 function textureOf({ format, mipmaps: levels }: ImpostorLayer, size: number): Texture {
@@ -43,11 +34,4 @@ function textureOf({ format, mipmaps: levels }: ImpostorLayer, size: number): Te
   const texture = new DataTexture(first.data, size, size, RGBAFormat, UnsignedByteType);
   texture.mipmaps = mipmaps;
   return texture;
-}
-
-export function releaseTextures(impostor: Impostor): void {
-  const entry = shared.get(impostor);
-  if (!entry || --entry.users > 0) return;
-  for (const texture of entry.textures) texture.dispose();
-  shared.delete(impostor);
 }

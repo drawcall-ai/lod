@@ -35,9 +35,9 @@ export function rasterize(uvs: Float32Array, index: Uint32Array, size: number): 
     if (area === 0) continue;
     // Corners in counter-clockwise order for the fill rule; weights stay the input's.
     const sign = area > 0 ? 1 : -1;
-    const ownA = owns(bx, by, cx, cy, sign);
-    const ownB = owns(cx, cy, ax, ay, sign);
-    const ownC = owns(ax, ay, bx, by, sign);
+    const claimA = claims(bx, by, cx, cy, sign);
+    const claimB = claims(cx, cy, ax, ay, sign);
+    const claimC = claims(ax, ay, bx, by, sign);
     const x0 = Math.max(0, Math.ceil(Math.min(ax, bx, cx) - 0.5));
     const x1 = Math.min(size - 1, Math.floor(Math.max(ax, bx, cx) - 0.5));
     const y0 = Math.max(0, Math.ceil(Math.min(ay, by, cy) - 0.5));
@@ -50,7 +50,7 @@ export function rasterize(uvs: Float32Array, index: Uint32Array, size: number): 
         const wb = edge(cx, cy, ax, ay, qx, qy) * sign;
         const wc = edge(ax, ay, bx, by, qx, qy) * sign;
         if (wa < 0 || wb < 0 || wc < 0) continue;
-        if ((wa === 0 && !ownA) || (wb === 0 && !ownB) || (wc === 0 && !ownC)) continue;
+        if ((wa === 0 && !claimA) || (wb === 0 && !claimB) || (wc === 0 && !claimC)) continue;
         const texel = y * size + x;
         if (triangles[texel] !== -1) {
           overlaps++;
@@ -75,8 +75,8 @@ function edge(px: number, py: number, qx: number, qy: number, rx: number, ry: nu
   return (qx - px) * (ry - py) - (qy - py) * (rx - px);
 }
 
-/** Whether the edge p → q (reversed for clockwise triangles) owns centres exactly on it. */
-function owns(px: number, py: number, qx: number, qy: number, sign: number): boolean {
+/** Whether the edge p → q (reversed for clockwise triangles) claims centres exactly on it. */
+function claims(px: number, py: number, qx: number, qy: number, sign: number): boolean {
   const dx = (qx - px) * sign;
   const dy = (qy - py) * sign;
   return dy > 0 || (dy === 0 && dx < 0);

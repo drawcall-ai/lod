@@ -29,7 +29,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "build": "rm -rf dist && tsc -p tsconfig.json && node --experimental-strip-types --no-warnings scripts/typegpu.ts",
     "typecheck": "tsc -p tsconfig.test.json",
     "test": "vitest run",
     "xatlas": "node --experimental-strip-types --no-warnings scripts/xatlas.ts",
@@ -48,10 +48,12 @@
     "typegpu": "^0.12.9"
   },
   "devDependencies": {
+    "@babel/core": "^7.29.13",
     "@drawcall/glts": "^4.1.0",
     "@drawcall/lod": "link:",
     "@typegpu/gl": "^0.12.9",
     "@typegpu/three": "^0.12.2",
+    "@types/babel__core": "^7.20.5",
     "@types/node": "^24.13.6",
     "@types/three": "^0.186.0",
     "@vitest/browser-playwright": "4.1.11",
