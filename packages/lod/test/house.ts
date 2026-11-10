@@ -34,5 +34,3 @@ export function interior(): Group {
   );
   return new Group().add(new Mesh(new BoxGeometry(1.8, 1.8, 1.8), walls));
 }
-
-export const low = () => new Mesh(new BoxGeometry(2, 2, 2));

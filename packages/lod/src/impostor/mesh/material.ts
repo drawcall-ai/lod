@@ -1,4 +1,5 @@
 import {
+  ConvertNode,
   DoubleSide,
   Matrix4,
   MeshStandardNodeMaterial,
@@ -9,15 +10,16 @@ import {
   type Node,
   type NodeBuilder,
   type Object3D,
+  type Texture,
 } from "three/webgpu";
 import { Fn, diffuseColor, float, materialColor, metalness, mix, specularColor, specularF90, uniform, varyingProperty, vec3, vec4 } from "three/tsl";
-import { castPosition, instanceColor, instanceMatrixOf, tint } from "../../fade.js";
+import { castPosition, instanceColor, instanceMatrixOf, tint } from "../../levels/fade.js";
 import { isImpostorMesh, isShadowPass } from "../../three.js";
 import { buildKey, isNodeOf } from "../../tsl.js";
 import { boundingRadius, boxCentre, boxExtent, type Impostor } from "../impostor.js";
 import { buildCard, card, type CardInputs } from "./card.js";
 import { buildSurface, cosine, type Lighting, type Surface, type SurfaceInputs } from "./surface.js";
-import { acquireTextures, releaseTextures } from "./textures.js";
+import { impostorTextures } from "./textures.js";
 
 const placement = uniform(new Matrix4()).onObjectUpdate(({ object }, self) =>
   object && isImpostorMesh(object) ? self.value.copy(object.placement) : self.value.identity(),
@@ -51,13 +53,27 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
   deformNode: Node<"mat4"> | null = null;
   /** Mip bias of every atlas read: see `ImpostorMeshOptions.mipBias`, which it starts at. */
   readonly mipBias: Node<"float"> & { value: number };
+  /**
+   * The view-space mean of the normals a texel averages, its length how far they agree. A lighting term of its own reads this with
+   * `cosine` rather than `normalView`, a single unit normal that would light every averaged leaf one way.
+   */
+  readonly spread: Node<"vec3"> = Fn((builder: NodeBuilder) => this.lit(builder).spread)();
+  /**
+   * Diffuse light of the app's own, which the bake cannot hold as it depends on the light (leaves passing it through):
+   * given the direction to a direct light, the share of the light's colour × the surface's colour to add. Null for none.
+   * Only its source text enters the material's cache key, not what it captures: what tells two materials' shaders
+   * apart here is the ids of the nodes each makes for itself, so a value it captures needs no key of its own.
+   */
+  directTerm: ((direction: Node<"vec3">) => Node<"vec3">) | null = null;
+  /** The impostor's atlases, one per map: the material's own, freed with it. */
+  readonly textures: readonly Texture[];
 
   private readonly inputs: CardInputs & SurfaceInputs;
   private readonly specular: Node<"vec4">;
   /**
    * Per build, one surface for every slot that reads it, made when the fragment stage
    * first reads it: TSL adds a node's variables to the stage being built when the node
-   * is made. Keyed by what the build keeps for `anchor`: each slot gets its own proxy of
+   * is made. Keyed by what the build holds for `anchor`: each slot gets its own proxy of
    * the builder.
    */
   private readonly surfaces = new WeakMap<object, Surface>();
@@ -72,7 +88,8 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
   ) {
     super({ roughness: 1, metalness: 1, alphaToCoverage: true, side: DoubleSide });
     this.name = "impostor";
-    const textures = acquireTextures(impostor);
+    const textures = impostorTextures(impostor);
+    this.textures = textures;
     this.mipBias = uniform(shading.mipBias);
     this.specular = uniform(new Vector4().fromArray(impostor.specular ?? [0.04, 0.04, 0.04, 1]));
     const layer = (map: Impostor["maps"][number]) => textures[impostor.maps.indexOf(map)] ?? null;
@@ -107,7 +124,6 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
     })();
     this.maskNode = Fn((builder) => this.surface(builder).drawn)();
     this.maskShadowNode = this.maskNode;
-    // Shadow passes only (see setupDepth): maps hold the resolved surface, not the card.
     this.depthNode = Fn((builder) => this.surface(builder).resolve().depth)();
     this.receivedShadowPositionNode = Fn((builder) => this.surface(builder).resolve().shadowPosition)();
     this.normalNode = Fn((builder) => this.lit(builder).normal)();
@@ -134,12 +150,12 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
     if (--this.users === 0) this.dispose();
   }
 
-  /** Explicit disposal, including by a caller: release its texture acquisition only once. */
+  /** Explicit disposal, including by a caller: frees its textures once. */
   override dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
     super.dispose();
-    releaseTextures(this.impostor);
+    for (const texture of this.textures) texture.dispose();
   }
 
   /** The card's vertex as `builder` draws it, in the vertex stage. */
@@ -153,7 +169,7 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
 
   /**
    * The surface `builder` draws, as its pass needs it. No parallax walk in shadow passes:
-   * shadow maps cover far more impostor pixels than the view, and shadows are too soft to
+   * shadow maps cover far more impostor pixels than the camera does, and shadows are too soft to
    * show it.
    */
   private surface(builder: NodeBuilder): Surface {
@@ -180,7 +196,7 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
   }
 
   override setupLightingModel(): PhysicalLightingModel {
-    return new SpreadLighting(Fn((builder) => this.lit(builder).spread)());
+    return new ImpostorLightingModel(this.spread, this.directTerm);
   }
 
   /** Baked F0 (RGB) and F90 (A) are uniforms so different asset averages share a shader. */
@@ -190,39 +206,36 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
     TSL.specularColorBlended.assign(mix(f0, diffuseColor.rgb, metalness));
     specularF90.assign(this.specular.a);
   }
-
-  /**
-   * The view keeps the card's depth, so early depth testing keeps rejecting hidden pixels
-   * (several times faster in crowds); shadow maps get the surface's (`depthNode`).
-   */
-  override setupDepth(builder: NodeBuilder): void {
-    const surface = this.depthNode;
-    this.depthNode = null;
-    super.setupDepth(builder);
-    this.depthNode = surface;
-  }
 }
 
 /**
  * Direct diffuse light by `cosine` instead of the clamped cosine of the mean normal. That
  * one leaves a canopy unlit wherever its mean normal is side-on to the sun, where the real
  * leaves, tilted every which way, catch a good part of it; renormalised, the mean lights
- * the canopy as one smooth surface. Specular keeps three's terms: its roughness widens
+ * the canopy as one smooth surface. Specular keeps three's terms, on the leaned normal (see surface.ts): its roughness widens
  * with the spread instead.
  */
-class SpreadLighting extends PhysicalLightingModel {
-  constructor(private readonly spread: Node<"vec3">) {
+class ImpostorLightingModel extends PhysicalLightingModel {
+  constructor(
+    private readonly spread: Node<"vec3">,
+    private readonly term: ImpostorMaterial["directTerm"],
+  ) {
     super();
   }
 
   override direct(input: Parameters<PhysicalLightingModel["direct"]>[0], builder: NodeBuilder): void {
-    const { lightDirection, lightColor, reflectedLight } = input;
+    const { lightDirection, reflectedLight } = input;
     const { directDiffuse } = reflectedLight;
-    if (!isNodeOf(lightDirection, "vec3", builder) || !isNodeOf(lightColor, "color", builder) || !isNodeOf(directDiffuse, "vec3", builder))
-      throw new Error("ImpostorMesh: three's direct light is not a direction, a colour and a sum");
+    if (!isNodeOf(lightDirection, "vec3", builder) || !isNodeOf(directDiffuse, "vec3", builder))
+      throw new Error("ImpostorMesh: three's direct light is not a direction and a sum");
+    // Converted rather than asked its type: asking makes three keep a type the shadow it multiplies in may not have (a
+    // cascaded shadow's is vec4), and the shader then multiplies a vec3 by a vec4.
+    const lightColor = new ConvertNode<"vec3">(input.lightColor, "vec3");
     // three's terms, its diffuse into a throwaway.
     super.direct({ ...input, reflectedLight: { ...reflectedLight, directDiffuse: vec3(0).toVar() } }, builder);
     // Lambert: the diffuse colour over π.
-    directDiffuse.addAssign(cosine(this.spread, lightDirection).mul(lightColor).mul(TSL.diffuseContribution).div(Math.PI));
+    const reflected = lightColor.mul(TSL.diffuseContribution);
+    directDiffuse.addAssign(cosine(this.spread, lightDirection).mul(reflected).div(Math.PI));
+    if (this.term) directDiffuse.addAssign(this.term(lightDirection).mul(reflected));
   }
 }

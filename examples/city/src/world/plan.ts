@@ -145,7 +145,6 @@ export function plan(seed: number): Plan {
   }
   banks(land, terrain, r, add);
   farmland(land, terrain, roads, { town: TOWN, houses: houses.map((h) => h.spot), forests: FORESTS }, r, add);
-  woods(FORESTS, terrain, land, r, add);
   groves(terrain, land, r, add);
   return {
     terrain,
@@ -209,29 +208,6 @@ export function footing(terrain: Terrain, x: number, z: number, reach: number): 
   let low = Infinity;
   for (let k = 0; k < 8; k++) low = Math.min(low, terrain.height(x + reach * Math.cos((k * Math.PI) / 4), z + reach * Math.sin((k * Math.PI) / 4)));
   return Math.min(low, terrain.height(x, z));
-}
-
-/** Trees on a jittered grid inside each forest, shrubs and saplings thickening its edge. */
-function woods(forests: Forest[], terrain: Terrain, land: Land, r: Random, add: (id: string, spot: Spot) => void) {
-  const step = 5.5;
-  for (const f of forests) {
-    const reach = f.radius * 1.6;
-    for (let z = f.z - reach; z < f.z + reach; z += step)
-      for (let x = f.x - reach; x < f.x + reach; x += step) {
-        const px = x + r.range(-0.45, 0.45) * step;
-        const pz = z + r.range(-0.45, 0.45) * step;
-        if (!inForest(f, px, pz) || land.at(px, pz) === Use.Paved) continue;
-        const edge = !inForest(f, px, pz, -14);
-        const pick = r.next();
-        const angle = r.range(0, Math.PI * 2);
-        if (edge && pick < 0.35) add("shrub_02", spot(terrain, px, pz, angle, r.range(0.9, 1.5)));
-        else if (edge && pick < 0.5) add("pine_sapling_small", spot(terrain, px, pz, angle, r.range(1.6, 2.6)));
-        else if (pick < 0.62) add("tree_small_02", spot(terrain, px, pz, angle, r.range(2.2, 3.2)));
-        else if (pick < 0.8) add("searsia_lucida", spot(terrain, px, pz, angle, r.range(1.8, 2.6)));
-        else if (pick < 0.9) add("shrub_02", spot(terrain, px, pz, angle, r.range(1.0, 1.6)));
-        else add("pine_sapling_small", spot(terrain, px, pz, angle, r.range(2.4, 3.4)));
-      }
-  }
 }
 
 /** Small groups of trees and shrubs scattered over open lawn. */

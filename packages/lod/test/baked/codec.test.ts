@@ -1,4 +1,3 @@
-import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import {
   AmbientLight,
   Box3,
@@ -20,12 +19,14 @@ import {
   Vector3,
 } from "three/webgpu";
 import { describe, expect, it } from "vitest";
-import { encodeBakedMesh, decodeBakedMeshAsync } from "../../src/baked/codec.js";
+import { encodeBakedMeshAsync, decodeBakedMeshAsync } from "../../src/baked/codec.js";
+import { pack, unpack } from "../../src/codec/container.js";
 import { bakeMesh } from "../../src/baked/index.js";
-import { InteriorMaterial } from "../../src/baked/interior/material.js";
-import { deviationOf, recordDeviation } from "../../src/levels.js";
+import { InteriorMappingMaterial } from "../../src/baked/interior/material.js";
+import { deviationOf, recordDeviation } from "../../src/levels/index.js";
 import { disposeTree } from "../../src/dispose.js";
-import { house, interior, low } from "../house.js";
+import { box } from "../box.js";
+import { house, interior } from "../house.js";
 
 function texture(channels = 4): DataTexture {
   const data = Uint8Array.from({ length: 4 * 4 * channels }, (_, i) => (i * 137) % 256);
@@ -53,9 +54,9 @@ function fixture(rooms: boolean): Mesh {
   map.mipmaps = [4, 2, 1].map((size) => ({ width: size, height: size, data: new Uint8Array(size * size * 4).fill(size * 50) }));
   const normalMap = texture(),
     orm = texture();
-  const material = rooms ? new InteriorMaterial() : new MeshStandardNodeMaterial();
+  const material = rooms ? new InteriorMappingMaterial() : new MeshStandardNodeMaterial();
   material.setValues({ map, normalMap, aoMap: orm, roughnessMap: orm, metalnessMap: orm, roughness: 1, metalness: 1, alphaTest: 0.5, side: DoubleSide });
-  if (material instanceof InteriorMaterial) {
+  if (material instanceof InteriorMappingMaterial) {
     const response = new DataArrayTexture(new Uint8Array(2 * 2 * 6 * 4).fill(127), 2, 2, 6);
     response.colorSpace = SRGBColorSpace;
     response.minFilter = LinearMipmapLinearFilter;
@@ -74,16 +75,25 @@ function fixture(rooms: boolean): Mesh {
   return mesh;
 }
 
+/** What a file holds, its header an object. */
+async function contents(bytes: Uint8Array): Promise<{ header: object; files: Uint8Array[] }> {
+  const { header, files } = await unpack(bytes, (why) => {
+    throw new Error(why);
+  });
+  if (typeof header !== "object" || header === null) throw new Error("expected a header object");
+  return { header, files };
+}
+
 describe("baked mesh codec", () => {
   it("round-trips geometry, cutout mips, room arrays, placement and deviation without sharing resources", async () => {
     for (const rooms of [false, true]) {
       const source = fixture(rooms);
-      const bytes = encodeBakedMesh(source);
+      const bytes = await encodeBakedMeshAsync(source);
       // A sliced file must not accidentally read beyond its view.
       const padded = new Uint8Array(bytes.length + 13);
       padded.set(bytes, 7);
       const decoded = await decodeBakedMeshAsync(padded.subarray(7, 7 + bytes.length));
-      expect(unzipSync(encodeBakedMesh(decoded))).toEqual(unzipSync(bytes));
+      expect(await contents(await encodeBakedMeshAsync(decoded))).toEqual(await contents(bytes));
       expect(deviationOf(decoded)).toBe(deviationOf(source));
       expect(decoded.geometry.boundingSphere).toEqual(source.geometry.boundingSphere);
       expect(decoded.geometry.attributes.position?.array).not.toBe(source.geometry.attributes.position?.array);
@@ -92,7 +102,7 @@ describe("baked mesh codec", () => {
       expect(decoded.material.aoMap).toBe(decoded.material.roughnessMap);
       expect(decoded.material.aoMap).toBe(decoded.material.metalnessMap);
       expect(decoded.material.map).not.toBe(source.material.map);
-      if (decoded.material instanceof InteriorMaterial && source.material instanceof InteriorMaterial) {
+      if (decoded.material instanceof InteriorMappingMaterial && source.material instanceof InteriorMappingMaterial) {
         expect(decoded.material.rooms?.response.image.data).not.toBe(source.material.rooms?.response.image.data);
         expect(decoded.material.rooms?.boxes).toEqual(source.material.rooms?.boxes);
       }
@@ -101,32 +111,37 @@ describe("baked mesh codec", () => {
     }
   });
 
-  it("rejects non-baked/modified input and corrupt geometry, texture data or metadata", async () => {
-    expect(() => encodeBakedMesh(new Mesh())).toThrow(/bakeMesh result/);
+  it("rejects non-baked/modified input and corrupt geometry, texture data, metadata or bytes", async () => {
+    await expect(encodeBakedMeshAsync(new Mesh())).rejects.toThrow(/bakeMesh result/);
     const source = fixture(false);
     if (!(source.material instanceof MeshStandardNodeMaterial)) throw new Error("expected standard material");
     source.material.normalScale.setScalar(0.6);
-    expect(() => encodeBakedMesh(source)).toThrow(/normalScale/);
+    await expect(encodeBakedMeshAsync(source)).rejects.toThrow(/normalScale/);
     source.material.normalScale.setScalar(1);
-    const bytes = encodeBakedMesh(source);
-    for (const corrupt of ["index", "map/0", "meta"]) {
-      const files = unzipSync(bytes);
-      if (corrupt === "meta") {
-        const meta = files.meta;
-        if (!meta) throw new Error("missing metadata");
-        files.meta = strToU8(strFromU8(meta).replace('"version":2', '"version":999'));
-      } else files[corrupt] = new Uint8Array(1);
-      await expect(decodeBakedMeshAsync(zipSync(files))).rejects.toThrow(/Invalid baked mesh/);
+    // Keys starting with "_" are three's own state, as listeners are: skipped, whatever they hold.
+    source.material.addEventListener("dispose", () => {});
+    Reflect.set(source.material, "_cache", new Map([[1, 2]]));
+    const bytes = await encodeBakedMeshAsync(source);
+    const { header, files } = await contents(bytes);
+    const names: string[] = Reflect.get(header, "files");
+    for (const name of ["index", "map/0"]) {
+      const changed = files.map((file, i) => (names[i] === name ? new Uint8Array(1) : file));
+      await expect(decodeBakedMeshAsync(await pack(header, changed))).rejects.toThrow(/Invalid baked mesh/);
     }
+    await expect(decodeBakedMeshAsync(await pack({ ...header, version: 999 }, files))).rejects.toThrow(/unsupported version/);
+    // The container's CRC catches a flipped bit that still inflates.
+    const flipped = bytes.slice();
+    flipped[bytes.length >> 1] = (flipped[bytes.length >> 1] ?? 0) ^ 0x10;
+    await expect(decodeBakedMeshAsync(flipped)).rejects.toThrow(/Invalid baked mesh: corrupt/);
     disposeTree(source);
   });
 
   it.skipIf(typeof document === "undefined")(
     "renders decoded real interior and cutout bakes identically",
     async () => {
-      const { render } = await import("../gpu.js");
+      const { bakeRenderer, render } = await import("../renderer.js");
       const rooms = interior();
-      const building = await bakeMesh(house().add(rooms), { low: low(), textureSize: 32, interior: rooms });
+      const building = await bakeMesh(house().add(rooms), { low: box(), textureSize: 32, interior: rooms, renderer: bakeRenderer });
       const alpha = texture();
       const data: unknown = alpha.image.data;
       if (!(data instanceof Uint8Array)) throw new Error("expected pixels");
@@ -138,7 +153,7 @@ describe("baked mesh codec", () => {
       camera.lookAt(0, 0, 0);
       const scene = new Scene().add(new AmbientLight(0xffffff, 2));
       for (const original of [building, cutout]) {
-        const restored = await decodeBakedMeshAsync(encodeBakedMesh(original));
+        const restored = await decodeBakedMeshAsync(await encodeBakedMeshAsync(original));
         scene.add(original);
         const before = await render(scene, camera);
         scene.remove(original).add(restored);

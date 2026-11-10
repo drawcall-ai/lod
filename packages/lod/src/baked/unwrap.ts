@@ -14,6 +14,7 @@ interface XAtlas {
   call: (name: string, ...args: number[]) => number;
 }
 
+/** xatlas's WASM module, instantiated once: process-wide, as three's decoders are. */
 let module: Promise<XAtlas> | undefined;
 
 /**
@@ -138,10 +139,10 @@ async function instantiate(): Promise<XAtlas> {
     wasi_snapshot_preview1: {
       // xatlas prints nothing unless asked; report everything as written.
       fd_write: (_fd: number, iovs: number, count: number, written: number) => {
-        const view = new DataView(heap().buffer);
+        const data = new DataView(heap().buffer);
         let bytes = 0;
-        for (let i = 0; i < count; i++) bytes += view.getUint32(iovs + i * 8 + 4, true);
-        view.setUint32(written, bytes, true);
+        for (let i = 0; i < count; i++) bytes += data.getUint32(iovs + i * 8 + 4, true);
+        data.setUint32(written, bytes, true);
         return 0;
       },
       proc_exit: (code: number) => {

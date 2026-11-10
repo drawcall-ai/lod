@@ -122,15 +122,15 @@ async function cornItem(library: Library, load: Load, variant: number): Promise<
 
 /**
  * Maize as the fields sow it (`layout`): `blocks` × `blocks` blocks of one design, the
- * plants that `keep` accepts, each variant at full detail.
+ * plants that `include` accepts, each variant at full detail.
  */
-async function cornRows(load: Load, blocks: number, keep: (p: Plant) => boolean = () => true): Promise<THREE.Group> {
+async function cornRows(load: Load, blocks: number, include: (p: Plant) => boolean = () => true): Promise<THREE.Group> {
   const plants = await Promise.all(Array.from({ length: VARIANTS }, (_, variant) => load(`corn/plant.glts?variant=${variant}`)));
   const field = new THREE.Group();
   const offset = ((blocks - 1) * BLOCK) / 2;
   for (let i = 0; i < blocks; i++)
     for (let j = 0; j < blocks; j++)
-      for (const p of layout(0).filter(keep)) {
+      for (const p of layout(0).filter(include)) {
         const plant = plants[p.variant]?.clone();
         if (!plant) throw new Error(`no corn variant ${p.variant}`);
         plant.position.set(p.x + i * BLOCK - offset, 0, p.z + j * BLOCK - offset);

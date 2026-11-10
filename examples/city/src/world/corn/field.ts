@@ -1,7 +1,8 @@
 import { HERO_VARIANT, BLOCK, plantTurn, type Plant } from "../../../public/content/corn/layout.ts";
 import * as THREE from "three/webgpu";
 import { Random } from "../../../public/content/random.ts";
-import type { Tiles } from "../patches.ts";
+import type { InstancedLod } from "@drawcall/lod";
+import type { NearTile, TileChunk } from "../near-tiles.ts";
 import { axes, type Field, type Plan } from "../plan.ts";
 import type { Terrain } from "../terrain.ts";
 
@@ -106,8 +107,8 @@ function worldTurn(tile: Tile, plant: Plant, target: THREE.Quaternion): THREE.Qu
   return plantTurn(plant, -tile.field.angle + (tile.flip ? Math.PI : 0), target);
 }
 
-/** The field tiles as patches of corn plants, one InstancedLod per variant; the hero plant is left out. */
-export class FieldTiles implements Tiles {
+/** The field tiles near the camera as chunks of corn plants, one InstancedLod per variant; the hero plant is left out. */
+export class FieldTiles {
   private readonly matrix = new THREE.Matrix4();
   private readonly position = new THREE.Vector3();
   private readonly turn = new THREE.Quaternion();
@@ -118,30 +119,38 @@ export class FieldTiles implements Tiles {
     private readonly designs: Plant[][],
     private readonly terrain: Terrain,
     private readonly hero: { tile: number; plant: number },
+    /** Per plant variant, the InstancedLod drawing it. */
+    private readonly lods: readonly InstancedLod[],
   ) {}
 
-  near(eye: THREE.Vector3, reach: number, visit: (tile: number, distance: number) => void): void {
-    for (let t = 0; t < this.tiles.length; t++) {
-      const tile = this.tiles[t];
-      if (!tile) throw new Error(`no corn tile ${t}`);
-      const dx = tile.centre.x - eye.x;
-      const dy = tile.centre.y - eye.y;
-      const dz = tile.centre.z - eye.z;
-      // Keep the arithmetic in this loop to avoid boxing helper return values.
-      const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      if (distance < reach) visit(t, distance);
-    }
+  /** The tiles whose centres lie within `reach` of `eye`, nearest first. */
+  near(eye: THREE.Vector3, reach: number): NearTile[] {
+    const near: NearTile[] = [];
+    this.tiles.forEach((tile, t) => {
+      const distance = tile.centre.distanceTo(eye);
+      if (distance < reach) near.push({ tile: t, distance });
+    });
+    return near.sort((a, b) => a.distance - b.distance);
   }
 
-  fill(t: number, emit: (lod: number, matrix: THREE.Matrix4) => void): void {
+  /** Tile `t`'s plants, a chunk per variant it has plants of. */
+  chunks(t: number): TileChunk[] {
     const tile = this.tiles[t];
     if (!tile) throw new Error(`no corn tile ${t}`);
-    this.designs[tile.design]?.forEach((plant, k) => {
-      if (t === this.hero.tile && k === this.hero.plant) return;
-      this.position.set(plant.x, 0, plant.z).applyMatrix4(tile.matrix);
-      this.position.y = this.terrain.height(this.position.x, this.position.z);
-      worldTurn(tile, plant, this.turn);
-      emit(plant.variant, this.matrix.compose(this.position, this.turn, this.one));
+    const design = this.designs[tile.design];
+    if (!design) throw new Error(`no corn design ${tile.design}`);
+    const plants = design.filter((_, k) => t !== this.hero.tile || k !== this.hero.plant);
+    return this.lods.flatMap((lod, variant) => {
+      const mine = plants.filter((plant) => plant.variant === variant);
+      if (mine.length === 0) return [];
+      const instanceMatrix = new THREE.InstancedBufferAttribute(new Float32Array(mine.length * 16), 16);
+      mine.forEach((plant, i) => {
+        this.position.set(plant.x, 0, plant.z).applyMatrix4(tile.matrix);
+        this.position.y = this.terrain.height(this.position.x, this.position.z);
+        worldTurn(tile, plant, this.turn);
+        this.matrix.compose(this.position, this.turn, this.one).toArray(instanceMatrix.array, i * 16);
+      });
+      return [{ lod, parameters: { instanceMatrix } }];
     });
   }
 }

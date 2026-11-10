@@ -1,5 +1,5 @@
 import { Matrix4, Sphere, Vector3, type Mesh } from "three/webgpu";
-import { drawOf } from "../fade.js";
+import { fadeSourceOf } from "../levels/fade.js";
 import { isImpostorMesh, isInstancedMesh } from "../three.js";
 
 /** Bound maximum sway on the mesh itself, leaving shared geometry in its rest pose. */
@@ -15,7 +15,7 @@ export function windBounds(mesh: Mesh, placement: Matrix4, amplitude: number, ba
   const reach = Math.max(Math.abs(root.min.y - baseY), Math.abs(root.max.y - baseY)) / height;
   rest.radius += amplitude * reach * horizontalScale(placement.clone().invert());
   // An ImpostorMesh of its own measures its shadow casters by this radius too.
-  const draw = drawOf(mesh);
+  const draw = fadeSourceOf(mesh);
   if (draw?.kind === "instances") draw.radius = rest.radius;
   const instances = isInstancedMesh(mesh) || isImpostorMesh(mesh) ? mesh : null;
   if (!instances) {

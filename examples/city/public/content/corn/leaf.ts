@@ -43,10 +43,6 @@ function bladeMaterial(library: Library, name: string, palette: Palette, shading
       normalScale: new THREE.Vector2(0.5, 0.5),
       vertexColors: true,
       roughness: 0.48,
-      // the fine hairs on a maize blade give it a soft, silvery sheen at grazing angles
-      sheen: 0.25,
-      sheenRoughness: 0.5,
-      sheenColor: new THREE.Color("#b9d98a"),
       side: THREE.DoubleSide,
     });
     return foliage(m, shading);

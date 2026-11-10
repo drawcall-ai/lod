@@ -2,6 +2,7 @@ import {
   AmbientLight,
   BackSide,
   BoxGeometry,
+  Color,
   DataTexture,
   DirectionalLight,
   Group,
@@ -16,14 +17,18 @@ import {
   Vector3,
   type Object3D,
 } from "three/webgpu";
+import { CSMShadowNode } from "three/addons/csm/CSMShadowNode.js";
 import { describe, expect, it } from "vitest";
 import { bakeMesh } from "../../../src/baked/index.js";
-import { InstancedLod } from "../../../src/instanced/index.js";
+import { disposeTree } from "../../../src/dispose.js";
 import { Lod } from "../../../src/lod.js";
-import { house, interior, low } from "../../house.js";
-import { InteriorMaterial } from "../../../src/baked/interior/material.js";
+import { box } from "../../box.js";
+import { house, interior } from "../../house.js";
+import { InteriorMappingMaterial } from "../../../src/baked/interior/material.js";
 import { isStandardNode } from "../../../src/three.js";
-import { GPU_TIMEOUT, render as draw } from "../../gpu.js";
+import { GPU_TIMEOUT, bakeRenderer, render as draw, renderer, gpu } from "../../renderer.js";
+import { must } from "../../must.js";
+import { oneChunk } from "../../instances.js";
 
 const SIZE = 96;
 
@@ -58,7 +63,7 @@ const distance = (a: number[], b: number[]) => Math.max(...a.map((v, i) => Math.
 /** The windows texture of a baked mesh: per texel, room + 1 and the glass's coverage. */
 function windows(mesh: Mesh): Uint8Array {
   const { material } = mesh;
-  if (!(material instanceof InteriorMaterial) || !material.rooms) throw new Error("expected a baked material with rooms");
+  if (!(material instanceof InteriorMappingMaterial) || !material.rooms) throw new Error("expected a baked material with rooms");
   const { data } = material.rooms.windows.image;
   if (!(data instanceof Uint8Array)) throw new Error("expected 8-bit windows");
   return data;
@@ -75,11 +80,11 @@ function colors(mesh: Mesh): Uint8Array {
 
 describe("interiors", { timeout: GPU_TIMEOUT }, () => {
   it("bakes the exterior alone and flags the glass texels as windows into the room behind", async () => {
-    const plain = await bakeMesh(house(), { low: low(), textureSize: 64 });
+    const plain = await bakeMesh(house(), { low: box(), textureSize: 64 });
     const source = house();
     const rooms = interior();
     source.add(rooms);
-    const baked = await bakeMesh(source, { low: low(), textureSize: 64, interior: rooms });
+    const baked = await bakeMesh(source, { low: box(), textureSize: 64, interior: rooms, renderer: bakeRenderer });
     expect(rooms.visible).toBe(true);
     expect(colors(baked)).toEqual(colors(plain));
     const data = windows(baked);
@@ -95,7 +100,7 @@ describe("interiors", { timeout: GPU_TIMEOUT }, () => {
   it("shows the room through the window, its far wall head-on and a side wall from aside", async () => {
     const rooms = interior();
     const source = house().add(rooms);
-    const baked = await bakeMesh(source, { low: low(), textureSize: 128, interior: rooms });
+    const baked = await bakeMesh(source, { low: box(), textureSize: 128, interior: rooms, renderer: bakeRenderer });
     const front = new Vector3(0, 0, 5);
     const aside = new Vector3(3.5, 0, 3.6);
     // Head-on, the far wall: lit by the light reaching the window, at any intensity.
@@ -114,13 +119,12 @@ describe("interiors", { timeout: GPU_TIMEOUT }, () => {
     const rooms = interior();
     const source = house().add(rooms);
     source.position.set(0.3, 0, 0);
-    const baked = await bakeMesh(source, { low: low(), textureSize: 128, interior: rooms });
+    const baked = await bakeMesh(source, { low: box(), textureSize: 128, interior: rooms, renderer: bakeRenderer });
     const turn = new Matrix4().makeRotationY(0.4);
-    const lod = new Lod([{ object: source.clone() }, { object: baked.clone() }]);
+    const lod = new Lod([{ object: source.clone() }, { object: baked.clone() }], gpu);
     lod.quaternion.setFromRotationMatrix(turn);
-    const instanced = new InstancedLod([{ object: source.clone() }, { object: baked.clone() }], 1);
+    const instanced = oneChunk([{ object: source.clone() }, { object: baked.clone() }], [turn]);
     instanced.forceLevel = 1;
-    instanced.setMatrixAt(0, turn);
     const window = new Vector3(0.3, 0, 1).applyMatrix4(turn);
     for (const offset of [new Vector3(0, 0, 4), new Vector3(2.5, 0.5, 3)]) {
       const eye = window.clone().add(offset);
@@ -131,6 +135,22 @@ describe("interiors", { timeout: GPU_TIMEOUT }, () => {
       expect(distance(real, fake)).toBeLessThan(12);
       expect(distance(fake, windowColor(await render(instanced, eye, window)))).toBeLessThan(2);
     }
+  });
+
+  it("takes the derivatives that pick a room's mip where every pixel of a quad takes them", async () => {
+    const rooms = interior();
+    const baked = await bakeMesh(house().add(rooms), { low: box(), textureSize: 128, interior: rooms, renderer: bakeRenderer });
+    const scene = new Scene().add(baked, new AmbientLight());
+    const camera = new PerspectiveCamera(30, 1, 0.1, 100);
+    camera.position.set(6, 1.5, 14);
+    // Outside uniform control flow a derivative reads neighbours that skipped the branch, whatever their registers
+    // held, so renders differ from process to process; three turns the check off, and the shader must pass it on.
+    const shader = must((await renderer.debug.getShaderAsync(scene, camera, baked)).fragmentShader);
+    const strict = shader.replace("diagnostic( off, derivative_uniformity );", "diagnostic( error, derivative_uniformity );");
+    expect(strict).not.toBe(shader);
+    const { device } = renderer.backend as unknown as { device: GPUDevice };
+    const { messages } = await device.createShaderModule({ code: strict }).getCompilationInfo();
+    expect(messages.filter((message) => message.type === "error").map((message) => message.message)).toEqual([]);
   });
 
   it("shows the next room through a doorway in the room behind the window", async () => {
@@ -152,17 +172,17 @@ describe("interiors", { timeout: GPU_TIMEOUT }, () => {
     const back = new Mesh(new BoxGeometry(1.8, 1.8, 0.9), new MeshBasicMaterial({ color: 0x2040d0, side: BackSide })).translateZ(-0.45);
     const rooms = new Group().add(front, back);
     const source = house().add(rooms);
-    const baked = await bakeMesh(source, { low: low(), textureSize: 128, interior: rooms });
+    const baked = await bakeMesh(source, { low: box(), textureSize: 128, interior: rooms, renderer: bakeRenderer });
     const eye = new Vector3(0, 0, 5);
     const [real, fake] = [windowColor(await render(source, eye)), windowColor(await render(baked, eye))];
     expect(fake[2]).toBeGreaterThan(fake[0] + 60);
     expect(distance(real, fake)).toBeLessThan(6);
   });
 
-  it("keeps the reflection of fully transmissive glass over the room", async () => {
+  it("draws the reflection of fully transmissive glass over the room", async () => {
     const rooms = interior();
     const source = house(new MeshPhysicalMaterial({ roughness: 0.3, transmission: 1 })).add(rooms);
-    const baked = await bakeMesh(source, { low: low(), textureSize: 64, interior: rooms });
+    const baked = await bakeMesh(source, { low: box(), textureSize: 64, interior: rooms, renderer: bakeRenderer });
     const eye = new Vector3(0, 0, 5);
     // A sun behind the eye: its highlight sits on the glass, the room is not lit by it.
     const dull = windowColor(await render(baked, eye, undefined, 0.6));
@@ -170,10 +190,63 @@ describe("interiors", { timeout: GPU_TIMEOUT }, () => {
     expect(Math.min(...sunny.map((v, i) => v - (dull[i] ?? 0)))).toBeGreaterThan(10);
   });
 
+  it.each([false, true])("draws the room under a shadow-casting sun (cascaded: %s)", async (cascaded) => {
+    const rooms = interior();
+    const baked = await bakeMesh(house().add(rooms), { low: box(), textureSize: 64, interior: rooms, renderer: bakeRenderer });
+    const eye = new Vector3(0, 0, 5);
+    const sun = new DirectionalLight(0xffffff, 3);
+    sun.position.set(2, 4, 5);
+    sun.castShadow = true;
+    if (cascaded) sun.shadow.shadowNode = new CSMShadowNode(sun, { cascades: 2, maxFar: 40 });
+    const camera = new PerspectiveCamera(30, 1, 0.1, 100);
+    camera.position.copy(eye);
+    camera.lookAt(0, 0, 1);
+    const scene = new Scene().add(baked, sun, new AmbientLight(0xffffff, 0.6));
+    renderer.shadowMap.enabled = true;
+    try {
+      const pixels = await draw(scene, camera, SIZE);
+      expect(pixels[((SIZE / 2) * SIZE + SIZE / 2) * 4 + 3]).toBeGreaterThan(200);
+    } finally {
+      renderer.shadowMap.enabled = false;
+      sun.dispose();
+    }
+  });
+
+  it("shares one program between the materials of buildings with as many rooms", async () => {
+    const bake = async (tint?: number) => {
+      const rooms = interior();
+      if (tint !== undefined)
+        rooms.traverse((object) => {
+          if (!(object instanceof Mesh)) return;
+          for (const material of [object.material].flat()) if ("color" in material && material.color instanceof Color) material.color.setHex(tint);
+        });
+      return bakeMesh(house().add(rooms), { low: box(), textureSize: 64, interior: rooms, renderer: bakeRenderer });
+    };
+    const [a, b] = [await bake(), await bake(0xd08020)];
+    const scene = new Scene().add(a, new AmbientLight());
+    const camera = new PerspectiveCamera(30, 1, 0.1, 100);
+    camera.position.set(0, 0, 12);
+    // Alpha on the middle row where b stands, right of a.
+    const there = (pixels: Uint8Array) => pixels[(32 * 64 + 52) * 4 + 3];
+    try {
+      expect(there(await draw(scene, camera))).toBe(0);
+      const programs = renderer.info.memory.programs;
+      scene.add(b.translateX(2));
+      expect(there(await draw(scene, camera))).toBe(255);
+      expect(renderer.info.memory.programs).toBe(programs);
+      // Each shows its own rooms through its window.
+      const [ownA, ownB] = [windowColor(await render(a, new Vector3(0, 0, 5))), windowColor(await render(b, new Vector3(2, 0, 5), new Vector3(2, 0, 1)))];
+      expect(distance(ownA, ownB)).toBeGreaterThan(10);
+    } finally {
+      disposeTree(a);
+      disposeTree(b);
+    }
+  });
+
   it("refuses lights in the interior, and fails when no glass looks into a room", async () => {
     const lit = interior().add(new PointLight());
-    await expect(bakeMesh(house().add(lit), { low: low(), textureSize: 32, interior: lit })).rejects.toThrow(/light/);
+    await expect(bakeMesh(house().add(lit), { low: box(), textureSize: 32, interior: lit, renderer: bakeRenderer })).rejects.toThrow(/light/);
     const rooms = new Group().add(new Mesh(new BoxGeometry(0.5, 0.5, 0.5), new MeshBasicMaterial()).translateX(5));
-    await expect(bakeMesh(house(), { low: low(), textureSize: 32, interior: rooms })).rejects.toThrow(/no glass/);
+    await expect(bakeMesh(house(), { low: box(), textureSize: 32, interior: rooms, renderer: bakeRenderer })).rejects.toThrow(/no glass/);
   });
 });

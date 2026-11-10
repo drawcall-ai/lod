@@ -1,4 +1,5 @@
 import * as THREE from "three/webgpu";
+import { ImpostorMesh, InstancedLod } from "@drawcall/lod";
 
 /**
  * The scene's shadow casters by size, so a cascade draws only those whose shadow is at
@@ -6,11 +7,9 @@ import * as THREE from "three/webgpu";
  * camera, props into the middle ones, houses and trees into all. A caster's size is its
  * own mesh's bounding diameter in the world: a house's gutter counts as small even where
  * its walls are large, and an InstancedLod's mesh measures one instance (at scale 1), not
- * the whole crowd its bounds cover.
+ * all the instances its bounds cover.
  *
- * Casters draw both sides of their faces into the maps. three's default, back faces
- * only, leaks light wherever a model is open: under eaves, through window reveals into
- * the rooms, as thin lit lines across the shadows of houses.
+ * Casters draw both sides of their faces into the maps (see castBothSides).
  */
 export class Casters {
   /** Meshes that cast, with their size in metres. */
@@ -23,20 +22,16 @@ export class Casters {
     this.add(root);
   }
 
-  /** Register only new draws beneath an arriving level or crowd. */
+  /** Register only new draws beneath an arriving level or InstancedLod. */
   add(root: THREE.Object3D): void {
     root.updateMatrixWorld(true);
     root.traverse((node) => {
       if (!(node instanceof THREE.Mesh) || this.seen.has(node)) return;
       this.seen.add(node);
       if (!node.castShadow) return;
-      for (const material of [node.material].flat()) material.shadowSide = THREE.DoubleSide;
-      const geometry: THREE.BufferGeometry = node.geometry;
+      castBothSides(node);
       const scale = node.matrixWorld.getMaxScaleOnAxis();
-      if (!geometry.boundingSphere) geometry.computeBoundingSphere();
-      const sphere = geometry.boundingSphere;
-      if (!sphere) throw new Error(`${node.name}: no bounding sphere`);
-      this.meshes.push({ mesh: node, size: 2 * sphere.radius * scale });
+      this.meshes.push({ mesh: node, size: 2 * ownSphere(node).radius * scale });
     });
   }
 
@@ -51,9 +46,39 @@ export class Casters {
   }
 }
 
+/**
+ * The bounding sphere of `mesh`'s geometry alone. An InstancedLod bounds its level meshes' geometry by all their
+ * instances (an impostor's cards keep their own), so those are measured from their vertices, which hold one instance.
+ */
+function ownSphere(mesh: THREE.Mesh): THREE.Sphere {
+  const geometry: THREE.BufferGeometry = mesh.geometry;
+  if (mesh.parent instanceof InstancedLod && !(mesh instanceof ImpostorMesh)) {
+    // (CPU only: never drawn, so it holds no GPU buffers to dispose)
+    const vertices = new THREE.BufferGeometry().setAttribute("position", geometry.getAttribute("position"));
+    vertices.computeBoundingSphere();
+    if (!vertices.boundingSphere) throw new Error(`${mesh.name}: no vertices to bound`);
+    return vertices.boundingSphere;
+  }
+  if (!geometry.boundingSphere) geometry.computeBoundingSphere();
+  if (!geometry.boundingSphere) throw new Error(`${mesh.name}: no bounding sphere`);
+  return geometry.boundingSphere;
+}
+
 /** Whether `mesh` draws at all now: it and its parents visible, and an instanced mesh with instances. */
 function shown(mesh: THREE.Mesh): boolean {
   if (mesh instanceof THREE.InstancedMesh && mesh.count === 0) return false;
   for (let node: THREE.Object3D | null = mesh; node; node = node.parent) if (!node.visible) return false;
   return true;
+}
+
+/**
+ * Draw both sides of `root`'s faces into the shadow maps. three's default, back faces
+ * only, leaks light wherever a model is open: under eaves, through window reveals into
+ * the rooms, as thin lit lines across the shadows of houses. A LOD level gets it as it
+ * arrives (see loading.ts), before its shadow draws compile: they depend on it.
+ */
+export function castBothSides(root: THREE.Object3D): void {
+  root.traverse((node) => {
+    if (node instanceof THREE.Mesh) for (const material of [node.material].flat()) material.shadowSide = THREE.DoubleSide;
+  });
 }

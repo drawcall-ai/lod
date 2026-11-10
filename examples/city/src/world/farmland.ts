@@ -30,14 +30,14 @@ export function farmland(
   land: Land,
   terrain: Terrain,
   roads: Road[],
-  keep: { town: { x: number; z: number; radius: number }; houses: Spot[]; forests: Forest[] },
+  avoid: { town: { x: number; z: number; radius: number }; houses: Spot[]; forests: Forest[] },
   r: Random,
   add: (id: string, spot: Spot) => void,
 ): void {
-  const { town } = keep;
+  const { town } = avoid;
   // grassland stays around every house (its garden or yard) and as a meadow along the forests
   const gardens = new Uint8Array(GRID * GRID);
-  for (const h of keep.houses)
+  for (const h of avoid.houses)
     for (let dz = -35; dz <= 35; dz += 5)
       for (let dx = -35; dx <= 35; dx += 5) {
         const g = gridCell(h.x + dx, h.z + dz);
@@ -56,7 +56,7 @@ export function farmland(
     if (land.useOf(k) !== Use.Lawn) continue;
     const { x, z } = land.centre(k);
     if (Math.hypot(x - town.x, z - town.z) < town.radius * 0.75 || gardens[gridCell(x, z) ?? 0] === 1) continue;
-    if (keep.forests.some((f) => inForest(f, x, z, 50))) continue;
+    if (avoid.forests.some((f) => inForest(f, x, z, 50))) continue;
     const gx = Math.floor(x / REGION) + span;
     const gz = Math.floor(z / REGION) + span;
     let region = null;

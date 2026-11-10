@@ -1,11 +1,14 @@
 import { GLTSLoader } from "@drawcall/glts";
-import { LoadingManager, Mesh, Texture } from "three/webgpu";
+import { Box3, BoxGeometry, LoadingManager, Mesh, MeshBasicMaterial, Scene, Texture } from "three/webgpu";
 import { expect, it, vi } from "vitest";
+import { disposeTree } from "../src/dispose.js";
 import { InstancedLod } from "../src/instanced/index.js";
-import { decodeMeshAsync, encodeMesh } from "../src/mesh/codec.js";
+import { decodeMeshAsync, encodeMeshAsync } from "../src/codec/mesh.js";
 import { Lod } from "../src/lod.js";
+import { isGLTSScene } from "../src/three.js";
+import { gpu } from "./renderer.js";
 
-it.each([Lod, InstancedLod])("lets the GLTS source release its resources while preserving shared host textures (%s)", async (Type) => {
+it("lets a GLTS source release its resources while preserving shared host textures", async () => {
   const texture = new Texture();
   const disposed = vi.spyOn(texture, "dispose");
   const cleanup = vi.fn();
@@ -23,17 +26,21 @@ it.each([Lod, InstancedLod])("lets the GLTS source release its resources while p
   const loader = new GLTSLoader(new LoadingManager(), { modules: { host: { texture, cleanup } } });
   try {
     const source = await loader.loadAsync("https://assets.test/owned.glts");
+    // A clone is a plain Scene: disposing it fires its draw state's release, not the script's.
+    expect(isGLTSScene(source)).toBe(true);
+    expect(isGLTSScene(source.clone())).toBe(false);
+    expect(isGLTSScene(Object.assign(new Scene(), { source: source.source }))).toBe(false);
     const mesh = source.children[0];
     if (!(mesh instanceof Mesh) || Array.isArray(mesh.material)) throw new Error("Missing source mesh");
     const geometryDisposed = vi.fn();
     const materialDisposed = vi.fn();
     mesh.geometry.addEventListener("dispose", geometryDisposed);
     mesh.material.addEventListener("dispose", materialDisposed);
-    const coarse = await decodeMeshAsync(encodeMesh(source, [mesh.material]), [mesh.material]);
-    const owner = new Type([{ object: source }, { object: coarse }], 2);
-    const clone = owner.clone();
-    owner.dispose();
-    clone.dispose();
+    // A coarse level decoded from it draws with its materials: only the source frees them.
+    const coarse = await decodeMeshAsync(await encodeMeshAsync(source, [mesh.material]), [mesh.material]);
+    disposeTree(coarse, { materials: false });
+    expect(materialDisposed).not.toHaveBeenCalled();
+    disposeTree(source);
     expect(cleanup).toHaveBeenCalledOnce();
     expect(geometryDisposed).toHaveBeenCalledOnce();
     expect(materialDisposed).toHaveBeenCalledOnce();
@@ -44,4 +51,59 @@ it.each([Lod, InstancedLod])("lets the GLTS source release its resources while p
     disposed.mockRestore();
     texture.dispose();
   }
+});
+
+it("frees a template's textures but leaves their ImageBitmap to the copies that still share it", async () => {
+  const image = await createImageBitmap(new ImageData(1, 1));
+  const map = new Texture(image);
+  const disposed = vi.spyOn(map, "dispose");
+  const source = new Mesh(new BoxGeometry(), new MeshBasicMaterial({ map }));
+  const lod = new Lod([{ object: source }], gpu);
+  disposeTree(source);
+  expect(disposed).toHaveBeenCalled();
+  // A closed bitmap has no size: the copy could no longer upload it.
+  expect(image.width).toBe(1);
+  lod.dispose();
+});
+
+it.each([Lod, InstancedLod].map((Type) => ({ name: Type.name, Type })))(
+  "leaves given objects to whoever made them, and holds each level once per $name, a copy included, until disposed",
+  ({ Type }) => {
+    const source = new Mesh(new BoxGeometry(), new MeshBasicMaterial());
+    const freed = vi.fn();
+    source.geometry.addEventListener("dispose", freed);
+    source.material.addEventListener("dispose", freed);
+    const released = vi.fn();
+    const hold = vi.fn(() => released);
+    const load = vi.fn(async () => new Mesh());
+    const lod = new Type(
+      [
+        { object: source, hold },
+        { load, maxPixels: 10, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]), hold },
+      ],
+      gpu,
+    );
+    const copy = lod.clone();
+    expect(hold).toHaveBeenCalledTimes(2);
+    lod.dispose();
+    expect(released).toHaveBeenCalledOnce();
+    copy.dispose();
+    expect(released).toHaveBeenCalledTimes(2);
+    expect(load).not.toHaveBeenCalled();
+    expect(freed).not.toHaveBeenCalled();
+  },
+);
+
+it("frees the draw state of every level mesh once, of the source and of each copy", () => {
+  const lod = new Lod([{ object: new Mesh(new BoxGeometry(), new MeshBasicMaterial()) }], gpu);
+  const copy = lod.clone();
+  const freed = new Map<object, number>();
+  for (const root of [lod, copy]) root.traverse((node) => node.addEventListener("dispose", () => freed.set(node, (freed.get(node) ?? 0) + 1)));
+  lod.dispose();
+  copy.dispose();
+  lod.dispose();
+  const meshes = [lod, copy].flatMap((root) => root.getObjectsByProperty("isMesh", true));
+  expect(meshes).toHaveLength(2);
+  expect([...freed.values()]).toEqual([1, 1, 1, 1]);
+  for (const mesh of meshes) expect(freed.get(mesh)).toBe(1);
 });

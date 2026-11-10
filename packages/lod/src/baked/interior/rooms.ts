@@ -1,5 +1,5 @@
 import { Box3, Ray, Vector3, type Matrix4, type Object3D } from "three/webgpu";
-import { forEachVertex } from "../../bounds.js";
+import { forEachVertex } from "../../source/detail.js";
 import { isLight } from "../../three.js";
 
 /** Most rooms an interior may have: six faces each in texture arrays of at most 256 layers. */

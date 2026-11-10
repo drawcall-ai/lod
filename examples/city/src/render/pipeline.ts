@@ -69,7 +69,7 @@ export class Pipeline {
     this.target.setSize(size.x, size.y);
   }
 
-  /** Prepare the resident first view with the same target and colour state as a live pass. */
+  /** Prepare the first view with the same target and colour state as a live pass. */
   async compile(): Promise<void> {
     const { renderer } = this;
     const previous = renderer.getRenderTarget();

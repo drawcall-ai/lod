@@ -7,14 +7,15 @@ import {
   MeshPhysicalNodeMaterial,
   MeshStandardNodeMaterial,
   MeshToonNodeMaterial,
-  type Backend,
   type BatchedMesh,
   type Box3,
   type BufferAttribute,
   type Color,
+  type CompressedTexture,
   type InstancedMesh,
   type Loader,
   type Material,
+  type Matrix4,
   type Mesh,
   type MeshPhysicalMaterial,
   type MeshStandardMaterial,
@@ -26,10 +27,8 @@ import {
   type SkinnedMesh,
   type StorageInstancedBufferAttribute,
   type Texture,
-  type WebGPUBackend,
 } from "three/webgpu";
 import type { GLTSLoader, GLTSScene } from "@drawcall/glts";
-import type { Instances } from "./instanced/meshes.js";
 import type { InstancedLod } from "./instanced/index.js";
 import type { ImpostorMesh } from "./impostor/mesh/index.js";
 
@@ -45,12 +44,14 @@ export const isInstancedMesh = (node: Object3D): node is InstancedMesh => flag(n
 export const isBatchedMesh = (node: Object3D): node is BatchedMesh => flag(node, "isBatchedMesh");
 export const isLight = (node: Object3D): boolean => flag(node, "isLight");
 export const isScene = (node: Object3D): node is Scene => flag(node, "isScene");
-export const isGLTSScene = (node: Object3D): node is GLTSScene => isScene(node) && "source" in node && "dispose" in node && typeof node.dispose === "function";
+export const isLine = (node: Object3D): boolean => flag(node, "isLine");
+export const isPoints = (node: Object3D): boolean => flag(node, "isPoints");
+/** A scene a GLTSLoader loaded: its loader gives it a dispose of its own, which a clone, a plain Scene, lacks. */
+export const isGLTSScene = (node: Object3D): node is GLTSScene => isScene(node) && "source" in node && Object.hasOwn(node, "dispose");
 /** A GLTSLoader, recognized by the bundled module provenance it publishes. */
 export const isGLTSLoader = (loader: Loader): loader is GLTSLoader =>
   "moduleSources" in loader && typeof loader.moduleSources === "object" && loader.moduleSources !== null;
 export const isImpostorMesh = (node: Object3D): node is ImpostorMesh => flag(node, "isImpostorMesh");
-export const isLodInstances = (node: Object3D): node is Instances => flag(node, "isLodInstances");
 export const isInstancedLod = (node: Object3D): node is InstancedLod => flag(node, "isInstancedLod");
 /** three's LOD and this package's Lod and InstancedLod. */
 export const isLOD = (
@@ -77,75 +78,36 @@ const NODE_MATERIALS: Record<string, new () => NodeMaterial> = {
 };
 
 /**
- * A node material that renders like `material`: a clone when it is one, else the node
- * material of its type with its values, as three converts it for WebGPU itself.
+ * A node material that renders like `material`: a clone when it is one, else the node material of its type with its
+ * values, as three converts it for WebGPU itself. NodeMaterial.copy skips accessors of Material itself, alphaTest among
+ * them.
  */
 export function toNodeMaterial(material: Material): NodeMaterial {
-  if (isNodeMaterial(material)) {
-    const copy = material.clone();
-    // three's NodeMaterial.copy skips accessors of Material itself, alphaTest among them.
-    copy.alphaTest = material.alphaTest;
-    return copy;
-  }
+  const copy = isNodeMaterial(material) ? material.clone() : new (nodeMaterialOf(material))().copy(material);
+  copy.alphaTest = material.alphaTest;
+  return copy;
+}
+
+function nodeMaterialOf(material: Material): new () => NodeMaterial {
   const Type = NODE_MATERIALS[material.type];
   if (!Type) throw new Error(`@drawcall/lod: ${material.type} has no node material to draw with WebGPU`);
-  // Every own value but the source's identity and its event listeners.
-  const values = Object.fromEntries(Object.entries(material).filter(([key]) => key !== "uuid" && key !== "_listeners"));
-  return Object.assign(new Type(), values);
+  return Type;
 }
 export const isTexture = (value: unknown): value is Texture => flag(value, "isTexture");
+export const isCompressedTexture = (value: unknown): value is CompressedTexture => flag(value, "isCompressedTexture");
 export const isColor = (value: unknown): value is Color => flag(value, "isColor");
 
-/**
- * `renderer` as the WebGPU renderer it is: three's typings give render callbacks a
- * WebGLRenderer, which this package does not draw with.
- */
-export function gpuRenderer(renderer: unknown): Renderer {
-  if (!isRenderer(renderer)) throw new Error("@drawcall/lod: draws with three's WebGPURenderer only");
-  return renderer;
-}
-const isRenderer = (value: unknown): value is Renderer => flag(value, "isRenderer");
+export const isRenderer = (value: unknown): value is Renderer => flag(value, "isRenderer");
 
-/** The queue of `renderer`'s WebGPU device; throws until the backend has one. */
-export function gpuQueue(renderer: Renderer): GPUQueueLike {
-  const { backend } = renderer;
-  // three's typings declare WebGPUBackend but not its device.
-  const device = isWebGPUBackend(backend) && "device" in backend ? backend.device : undefined;
-  if (!hasQueue(device)) throw new Error("@drawcall/lod: level preparation requires an initialized WebGPU device");
-  return device.queue;
-}
-interface GPUQueueLike {
-  onSubmittedWorkDone(): Promise<void>;
-}
-const hasQueue = (value: unknown): value is { queue: GPUQueueLike } =>
-  typeof value === "object" &&
-  value !== null &&
-  "queue" in value &&
-  typeof value.queue === "object" &&
-  value.queue !== null &&
-  "onSubmittedWorkDone" in value.queue &&
-  typeof value.queue.onSubmittedWorkDone === "function";
-const isWebGPUBackend = (backend: Backend): backend is WebGPUBackend => flag(backend, "isWebGPUBackend");
-
-/**
- * Whether the scene `node` is in is being drawn into a shadow map: three's shadow pass
- * draws it with its own override material, and calls `update` on every LOD with the
- * light's camera, which must not switch the levels the view chose.
- */
-export function inShadowPass(node: Object3D): boolean {
+/** The root of the tree `node` is in: its scene, once added to one. */
+export function rootOf(node: Object3D): Object3D {
   let root = node;
   while (root.parent) root = root.parent;
-  return "overrideMaterial" in root && isShadowPass(root.overrideMaterial);
+  return root;
 }
 
 /** Whether `material` is the one three draws shadow maps with (a node material building for a shadow pass has it). */
 export const isShadowPass = (material: unknown): boolean => flag(material, "isShadowPassMaterial");
-
-/** The storage matrices of a level draw, an ImpostorMesh, or a storage-backed InstancedMesh; else null. */
-export function storageMatrices(object: Object3D): StorageInstancedBufferAttribute | null {
-  if (isImpostorMesh(object) || isLodInstances(object)) return object.instanceMatrix;
-  return isInstancedMesh(object) && isStorageInstanced(object.instanceMatrix) ? object.instanceMatrix : null;
-}
 
 /** Whether `value` is of exactly `like`'s class: a guard for clone() overrides. */
 export const sameClass = <T extends object>(like: T, value: object): value is T => Object.getPrototypeOf(value) === Object.getPrototypeOf(like);
@@ -167,4 +129,15 @@ export function placeLike(level: Object3D, source: Object3D): void {
     level.castShadow ||= node.castShadow;
     level.receiveShadow ||= node.receiveShadow;
   });
+}
+
+/** Upper bound on the largest singular value, exact for orthogonal matrix axes. */
+export function stretch(matrix: Matrix4): number {
+  const e = matrix.elements;
+  const xy = Math.abs(e[0] * e[4] + e[1] * e[5] + e[2] * e[6]);
+  const xz = Math.abs(e[0] * e[8] + e[1] * e[9] + e[2] * e[10]);
+  const yz = Math.abs(e[4] * e[8] + e[5] * e[9] + e[6] * e[10]);
+  return Math.sqrt(
+    Math.max(e[0] ** 2 + e[1] ** 2 + e[2] ** 2 + xy + xz, e[4] ** 2 + e[5] ** 2 + e[6] ** 2 + xy + yz, e[8] ** 2 + e[9] ** 2 + e[10] ** 2 + xz + yz),
+  );
 }

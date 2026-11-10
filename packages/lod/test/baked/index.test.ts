@@ -23,11 +23,11 @@ import { describe, expect, it } from "vitest";
 import { bakeMesh } from "../../src/baked/index.js";
 import type { Impostor } from "../../src/impostor/impostor.js";
 import { ImpostorMesh } from "../../src/impostor/mesh/index.js";
-import { InstancedLod } from "../../src/instanced/index.js";
 import { Lod } from "../../src/lod.js";
 import { must } from "../must.js";
 import { isStandardNode } from "../../src/three.js";
-import { GPU_TIMEOUT, render as draw } from "../gpu.js";
+import { GPU_TIMEOUT, render as draw, gpu } from "../renderer.js";
+import { oneChunk } from "../instances.js";
 
 /** A pattern of 8×8 colour blocks. */
 function blocks(): DataTexture {
@@ -90,10 +90,10 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
       // A plain grey box is off by 7 to 23 here.
       expect(difference(real, await render(baked, eye))).toBeLessThan(5);
     }
-    expect(new Lod([{ object: source }, { object: baked }]).levels[1]?.maxPixels).not.toBe(512);
+    expect(new Lod([{ object: source }, { object: baked }], gpu).levels[1]?.maxPixels).not.toBe(512);
   });
 
-  it("keeps the textures of a source in which some meshes have no UVs", async () => {
+  it("bakes the textures of a source in which some meshes have no UVs", async () => {
     const plain = new BoxGeometry(0.3, 0.3, 0.3);
     plain.deleteAttribute("uv");
     const corner = new Mesh(plain, new MeshStandardMaterial({ color: 0x806040 }));
@@ -103,11 +103,11 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
     for (const eye of EYES) expect(difference(await render(source, eye), await render(baked, eye))).toBeLessThan(6);
   });
 
-  it("keeps a low mesh's own UVs when they are usable, and unwraps it again when they overlap", async () => {
+  it("uses a low mesh's own UVs when they are usable, and unwraps it again when they overlap", async () => {
     const source = textured(new PlaneGeometry(1, 1, 8, 8));
     const plane = new PlaneGeometry(1, 1);
-    const kept = await bakeMesh(source, { low: new Mesh(plane), textureSize: 64 });
-    expect(kept.geometry.getAttribute("uv").array).toEqual(plane.getAttribute("uv").array);
+    const own = await bakeMesh(source, { low: new Mesh(plane), textureSize: 64 });
+    expect(own.geometry.getAttribute("uv").array).toEqual(plane.getAttribute("uv").array);
 
     // Every face of a box spans all of 0..1.
     const box = new BoxGeometry(1, 1, 1);
@@ -123,13 +123,13 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
     for (const spot of spots) {
       const box = new Mesh(geometry, material);
       box.matrixAutoUpdate = false;
-      // Instances keep their matrices in 32-bit floats: so do these, for an exact match.
+      // Instances hold their matrices in 32-bit floats: so do these, for an exact match.
       box.matrix.fromArray(Float32Array.from(spot.elements));
       plain.add(box);
     }
-    const lod = new InstancedLod([{ object: new Mesh(geometry, material) }, { object: new Mesh(new SphereGeometry(), material) }], spots.length);
+    const lod = oneChunk([{ object: new Mesh(geometry, material) }, { object: new Mesh(new SphereGeometry(), material) }], spots);
     const instanced = new InstancedMesh(geometry, material, spots.length);
-    spots.forEach((spot, i) => (lod.setMatrixAt(i, spot), instanced.setMatrixAt(i, spot)));
+    spots.forEach((spot, i) => instanced.setMatrixAt(i, spot));
     const low = () => new Mesh(new BoxGeometry(3.2, 1.6, 3.2));
     const expected = colors(await bakeMesh(plain, { low: low(), textureSize: 64 }));
     expect(colors(await bakeMesh(new Group().add(lod), { low: low(), textureSize: 64 }))).toEqual(expected);
@@ -138,14 +138,14 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
 
   it("refuses ImpostorMeshes, which have no surface to read", async () => {
     const impostor: Impostor = {
-      version: 3,
+      version: 4,
       layout: "full",
       frames: 4,
       size: 16,
       box: [-1, 0, -1, 1, 2, 1],
       halfSize: 1.5,
       maps: ["base", "normalDepth", "orm"],
-      layers: [0, 1, 2].map(() => [16, 8, 4].map((size) => new Uint8Array(size * size * 4))),
+      layers: [0, 1, 2].map(() => ({ format: RGBAFormat, mipmaps: [16, 8, 4].map((size) => new Uint8Array(size * size * 4)) })),
     };
     await expect(bakeMesh(new Group().add(textured(new BoxGeometry()), new ImpostorMesh(impostor)))).rejects.toThrow(/ImpostorMesh/);
   });
@@ -153,17 +153,16 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
   it("bakes normals that turn with an instance: a rotated InstancedLod copy looks like a rotated Lod", async () => {
     const baked = await bakeMesh(textured(new BoxGeometry(1, 1, 1, 4, 4, 4)), { textureSize: 128 });
     const turn = new Matrix4().makeRotationY(Math.PI / 2);
-    const lod = new Lod([{ object: new Mesh(new BoxGeometry()) }, { object: baked.clone() }]);
+    const lod = new Lod([{ object: new Mesh(new BoxGeometry()) }, { object: baked.clone() }], gpu);
     lod.forceLevel = 1;
     lod.quaternion.setFromRotationMatrix(turn);
-    const instanced = new InstancedLod([{ object: new Mesh(new BoxGeometry()) }, { object: baked.clone() }], 1);
+    const instanced = oneChunk([{ object: new Mesh(new BoxGeometry()) }, { object: baked.clone() }], [turn]);
     instanced.forceLevel = 1;
-    instanced.setMatrixAt(0, turn);
     const eye: [number, number, number] = [2, 1.5, 2.5];
     expect(difference(await render(lod, eye), await render(instanced, eye))).toBeLessThan(1);
   });
 
-  it("keeps a cut-out's coverage in the distance", async () => {
+  it("preserves a cut-out's coverage in the distance", async () => {
     // Sparse opaque cells, about 30%, like leaves: plain mips average them below the alpha test.
     const data = new Uint8Array(32 * 32 * 4).fill(255);
     let seed = 1;
@@ -174,7 +173,7 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
     const source = new Mesh(plane, new MeshStandardMaterial({ map, alphaTest: 0.5 }));
     const baked = await bakeMesh(source, { low: new Mesh(plane), textureSize: 64 });
     const covered = (pixels: Uint8Array) => pixels.filter((_, i) => i % 4 === 3 && pixels[i] !== 0).length;
-    // About 8 px across. One nearest-filtered source view aliases badly: compare
+    // About 8 px across. One nearest-filtered render of the source aliases badly: compare
     // coverage over subpixel phases, while the baked map samples its 8×8 mip.
     const pixel = (2 * Math.tan((20 * Math.PI) / 180) * 11) / 64;
     let far = 0;
@@ -219,8 +218,8 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
     const shell = () => {
       const box = new BoxGeometry(2, 2, 2);
       const index = box.index?.array ?? [];
-      const kept = box.groups.filter((_, i) => i !== 3).flatMap((g) => Array.from(index.slice(g.start, g.start + g.count)));
-      box.setIndex(kept).clearGroups();
+      const faces = box.groups.filter((_, i) => i !== 3).flatMap((g) => Array.from(index.slice(g.start, g.start + g.count)));
+      box.setIndex(faces).clearGroups();
       return box;
     };
     const material = new MeshStandardMaterial({ color: 0x8090a0 });
@@ -231,7 +230,7 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
     const furnished = new Group().add(new Mesh(shell(), material), floor, partition);
     // The deviation, read through the default maxPixels it gives in a Lod: inversely proportional.
     const deviation = async (source: Object3D) =>
-      1 / must(new Lod([{ object: source }, { object: await bakeMesh(source, { low: new Mesh(shell()), textureSize: 64 }) }]).levels[1]).maxPixels;
+      1 / must(new Lod([{ object: source }, { object: await bakeMesh(source, { low: new Mesh(shell()), textureSize: 64 }) }], gpu).levels[1]).maxPixels;
     const [bare, inside] = [await deviation(plain), await deviation(furnished)];
     expect(Math.abs(inside - bare) / bare).toBeLessThan(0.1);
   });

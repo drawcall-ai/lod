@@ -1,23 +1,25 @@
 import { CacheEntry, type CacheEntryOptions, type Dependencies, type JsonValue } from "vitecache";
-import type { LevelRequest } from "../loader.js";
+import type { Derived } from "./level.js";
 import { urlQuery } from "./url.js";
 
 /** Persistent cache location. Generator packages are discovered from GLTS source provenance. */
 export type LodCacheOptions = Pick<CacheEntryOptions, "basePath" | "root">;
 
-const version = "lod-levels@18";
+/**
+ * What builds and lays out a cached level, and so what identifies it beside its inputs: bump it with any change to
+ * the bytes a level or shape entry holds. Not this package's files, which change with every rebuild, whether a level
+ * would or not.
+ */
+const version = "lod-level@23";
 
 /**
- * The index of a ladder: keyed by the requested URLs, levels and bundled modules, and saved with what loading the sources
- * revealed, so vitecache rechecks those without loading the sources.
+ * One derived level, or the source's shape: keyed by the URLs it is built from, its request and their bundled modules,
+ * and saved with what loading them revealed, so vitecache rechecks those without loading the sources. Each level has
+ * its own entry, so a level is built and saved only when it is first needed; the shape's describes the ladder before
+ * any level is.
  */
-export function indexEntry(
-  inputs: Dependencies,
-  levels: readonly LevelRequest[],
-  modules: Readonly<Record<string, string>>,
-  options?: LodCacheOptions,
-): CacheEntry {
-  // vitecache resolves URLs to file paths; keep generation parameters in the key.
+export function ladderEntry(inputs: Dependencies, of: Derived | "shape", modules: Readonly<Record<string, string>>, options?: LodCacheOptions): CacheEntry {
+  // vitecache resolves URLs to file paths; generation parameters go in the key.
   const queries: Record<string, string> = {};
   for (const [name, dependency] of Object.entries(inputs)) {
     const query = dependency.url === undefined ? "" : urlQuery(dependency.url);
@@ -29,26 +31,12 @@ export function indexEntry(
     version,
     dependencies: {
       ...inputs,
-      "lod:levels": { value: levels.map(parameters) },
+      "lod:level": { value: of === "shape" ? { type: of } : parameters(of) },
       "lod:modules": { value: modules },
       "lod:queries": { value: queries },
-      // Only packages the app installs resolve from its root; this package's own dependencies are covered by its version and `version` above.
-      "lod:package": { package: "@drawcall/lod" },
+      // Only packages the app installs resolve from its root; this package's own dependencies are covered by `version` above.
       "lod:three": { package: "three" },
     },
-  });
-}
-
-/**
- * A level payload saved apart from its index, addressed by the index's content: a valid index vouches for its payloads,
- * and rebuilds write new ones rather than replacing those a live ladder or another build still reads.
- */
-export function payloadEntry(index: string, level: number, options?: LodCacheOptions): CacheEntry {
-  return new CacheEntry({
-    basePath: options?.basePath,
-    root: options?.root,
-    version,
-    dependencies: { "lod:index": { value: index }, "lod:level": { value: level } },
   });
 }
 
@@ -57,13 +45,12 @@ export async function sha256(bytes: Uint8Array): Promise<string> {
   return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-/** What derives each level's content. Switch thresholds and impostor draw options apply at decode, so changing one reuses the cache. */
-function parameters(level: LevelRequest): JsonValue {
+/** What derives a level's content. Switch thresholds and impostor draw options apply at decode, so changing one reuses the cache. */
+function parameters(level: Derived): JsonValue {
   switch (level.type) {
-    case "empty":
-      return { type: level.type };
     case "simplify":
-      return { type: level.type, ratio: level.ratio ?? null };
+      // Alpha-tested cards are thinned whole since lod-level@23; keyed here so other kinds' levels stay cached.
+      return { type: level.type, ratio: level.ratio ?? null, cards: "thin" };
     case "baked":
       return {
         type: level.type,

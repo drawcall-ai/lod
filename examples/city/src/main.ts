@@ -4,10 +4,11 @@
 // levels and ?quality=<q> sets Lod.quality from the start; ?terrain=0 leaves the ground
 // mesh out (everything still stands where the ground would be; roads and the creek stay).
 // ?wind=0 builds vegetation without wind, for a static performance baseline.
+// Forests and ground cover are planted on the GPU in the tiles near the camera (world/near-tiles.ts, world/planting.ts).
 // window.city exposes the tour and frame measurements to scripts/tour.ts.
 import { textures } from "./loading.ts";
 import * as THREE from "three/webgpu";
-import { InstancedLod, Lod, Wind, setViewportHeight } from "@drawcall/lod";
+import { InstancedLod, Lod, LodGpu, Wind } from "@drawcall/lod";
 import { Library } from "../public/content/materials.ts";
 import { number } from "../public/content/parameters.ts";
 import { terrainMaterial } from "./render/ground/material.ts";
@@ -24,7 +25,7 @@ import { Corn } from "./world/corn/index.ts";
 import { groundCover } from "./world/ground-cover.ts";
 import { water } from "./world/creek.ts";
 import { houses } from "./world/houses.ts";
-import { Patches } from "./world/patches.ts";
+import { NearTiles } from "./world/near-tiles.ts";
 import { TOWN } from "./world/plan.ts";
 import { loadPlan } from "./world/plan/cache.ts";
 import { EXTENT } from "./world/terrain.ts";
@@ -46,13 +47,24 @@ const loaded = (name: string) => {
 };
 
 const ui = new Ui();
-THREE.DefaultLoadingManager.onProgress = (url, loaded, total) => ui.progress(`Loading ${url.split("/").pop()} (${loaded}/${total})`, (0.85 * loaded) / total);
+// Each Lod holds an item on `lodManager` while the levels its view needs arrive: `loading` tells when the first view
+// is complete.
+const lodManager = new THREE.LoadingManager();
+let loading = false;
+lodManager.onStart = () => (loading = true);
+lodManager.onLoad = () => (loading = false);
+THREE.DefaultLoadingManager.onProgress = (url, loaded, total) => {
+  ui.progress(`Loading ${url.split("/").pop()} (${loaded}/${total})`, (0.85 * loaded) / total);
+};
 
 const library = new Library(THREE.DefaultLoadingManager, new URL("/assets/", location.href).href, textures);
 await library.load();
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.5, 60000);
 const scene = new THREE.Scene();
 const pipeline = await Pipeline.create(scene, camera, Math.min(devicePixelRatio, 2));
+// What every Lod and InstancedLod of the city shares. Its pool has room for what the InstancedLods' lists hold at most
+// together (about 342k instances in 5.8k chunks), within one storage binding of 128 MiB of matrices.
+const gpu = new LodGpu(pipeline.renderer, { maxInstanceCount: 350_000, maxChunkCount: 6000 });
 loaded("renderer");
 // hidden until the world is built: an empty canvas would sit over the page meanwhile
 pipeline.canvas.style.visibility = "hidden";
@@ -80,7 +92,13 @@ scene.fogNode = haze(
 
 const zones = { fields: world.fields, forests: world.forests, parcels: { texture: world.land.texture(), extent: EXTENT }, town: TOWN };
 const wind = params.get("wind") === "0" ? undefined : new Wind({ direction: [1, 0.35], speed: 0.22 });
-const content = Promise.all([houses(world), trees(world, wind), props(world), Corn.build(world), groundCover(library, world, zones, wind)]);
+const content = Promise.all([
+  houses(world, gpu),
+  trees(world, gpu, wind),
+  props(world, gpu),
+  Corn.build(world, gpu),
+  groundCover(library, world, zones, camera, gpu, wind),
+]);
 // Let cache discovery start before constructing the ground on this thread.
 await new Promise<void>((resolve) => setTimeout(resolve, 0));
 if (terrain) {
@@ -100,15 +118,18 @@ scene.updateMatrixWorld(true);
 scene.matrixWorldAutoUpdate = false;
 sun.castBy(scene);
 const lods: (Lod | InstancedLod)[] = [];
-const patches: Patches[] = [];
+const nearTiles: NearTiles[] = [];
 scene.traverse((object) => {
-  if (object instanceof Patches) patches.push(object);
+  if (object instanceof NearTiles) nearTiles.push(object);
   if (!(object instanceof Lod || object instanceof InstancedLod)) return;
   lods.push(object);
+  object.manager = lodManager;
   object.addEventListener("levelschange", () => {
     sun.castBy(object);
   });
 });
+/** The forests and ground cover; corn updates its own tiles. */
+const planted = nearTiles.filter((tiles) => tiles !== corn.plants);
 const kinds = [
   { name: "houses", roots: [buildings] },
   { name: "trees", roots: [forest] },
@@ -144,8 +165,6 @@ let viewportVersion = 0;
 function resize(): void {
   viewportVersion++;
   pipeline.setSize(innerWidth, innerHeight);
-  Patches.height = innerHeight;
-  setViewportHeight(camera, innerHeight);
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
 }
@@ -164,7 +183,10 @@ function clearance(): number {
   return camera.position.y - world.terrain.height(camera.position.x, camera.position.z) - 80;
 }
 
-/** Every live frame advances and renders; resident coarse levels cover deferred detail. */
+/**
+ * Every live frame advances and renders; a level still loading draws as a loaded coarser one, and nothing draws until
+ * the coarsest has loaded.
+ */
 function frame(dt: number): void {
   if (wind) wind.time += dt;
   playback.time = playback.requested ?? (playback.playing ? Math.min(playback.time + dt, tour.duration) : playback.time);
@@ -173,9 +195,8 @@ function frame(dt: number): void {
   focus = fly.touched ? fly.update(dt) : tour.pose(playback.time, camera);
   fitCamera(focus);
   sun.update(camera, focus, clearance());
-  Patches.beginFrame();
-  corn.update(camera);
-  for (const patch of patches) if (patch !== corn.plants) patch.update(camera);
+  corn.update(camera, innerHeight);
+  for (const tiles of planted) tiles.update(camera.position);
   pipeline.render();
 }
 
@@ -184,20 +205,15 @@ sun.update(camera, focus, clearance());
 ui.progress("Preparing the first view…", 0.85);
 await library.ready(scene);
 loaded("textures");
-// Select resident levels before compiling the first view.
-for (const lod of lods) {
-  lod.autoUpdate = false;
-  lod.update(camera);
-}
 await pipeline.compile();
 loaded("compiled");
+// Render the first view until its levels and shadows have arrived, and while the viewport changes meanwhile.
 for (;;) {
   const version = viewportVersion;
   await pipeline.step(() => frame(0));
   await pipeline.wait();
-  if (version === viewportVersion) break;
+  if (version === viewportVersion && !loading) break;
 }
-for (const lod of lods) lod.autoUpdate = true;
 const loadMs = performance.now() - started;
 loaded("first frame");
 ui.ready();
@@ -224,11 +240,12 @@ window.city = diagnostics({
   loadMs,
   loadStages,
   pipeline,
+  camera,
   wind,
   tour,
   sun,
   lods,
-  patches,
+  nearTiles,
   kinds,
   playback,
   frame: () => frame(0),

@@ -1,6 +1,7 @@
-import { Loader, LoadingManager, Mesh, Scene, type Object3D } from "three/webgpu";
+import { Loader, LoadingManager, Mesh, RGBAFormat, Scene, type Object3D, type Renderer } from "three/webgpu";
 import { beforeEach, vi } from "vitest";
 import type { CacheEntryOptions, Dependencies, SaveOptions } from "vitecache";
+import { boundingBox } from "../../src/source/detail.js";
 import type { Impostor } from "../../src/impostor/impostor.js";
 
 export const cache = {
@@ -8,7 +9,8 @@ export const cache = {
   versions: new Map<string, string>(),
   /** Locators with no backing file, which vitecache refuses to save as dependencies. */
   missing: new Set<string>(),
-  loaded: new Array<{ role: unknown; hit: boolean }>(),
+  /** Whether each load() hit. */
+  loaded: new Array<boolean>(),
   /** Every save() call, including those that throw. */
   attempts: 0,
   saved: new Array<{ options: CacheEntryOptions; dependencies: Dependencies }>(),
@@ -41,7 +43,7 @@ function absent(dependencies: Dependencies = {}) {
 }
 
 /**
- * Mirrors vitecache: load() records a key-dependency baseline that save() requires unchanged unless the key holds only values,
+ * Mirrors vitecache: load() notes a key-dependency baseline that save() requires unchanged unless the key holds only values,
  * and saved dependencies validate later loads.
  */
 export class CacheEntry {
@@ -56,7 +58,7 @@ export class CacheEntry {
     const stored = cache.files.get(this.key);
     const valid = stored && !absent(this.options.dependencies) && stored.hashes === this.baseline + hashes(stored.dependencies);
     const bytes = valid ? stored.bytes : undefined;
-    cache.loaded.push({ role: this.options.dependencies?.["lod:level"]?.value ?? "index", hit: bytes !== undefined });
+    cache.loaded.push(bytes !== undefined);
     return bytes;
   }
   async save(bytes: Uint8Array, { dependencies = {} }: SaveOptions = {}) {
@@ -72,25 +74,29 @@ export class CacheEntry {
   }
 }
 
-export const baked: Impostor = {
-  version: 3,
-  layout: "full",
-  frames: 2,
-  size: 2,
-  box: [-1, -1, -1, 1, 1, 1],
-  halfSize: 2,
-  maps: ["base", "normalDepth", "orm"],
-  layers: Array.from({ length: 3 }, () => [new Uint8Array(16)]),
-};
+/** A minimal impostor with the box a real bake of `source` has. */
+export function impostorOf(source: Object3D): Impostor {
+  const box = boundingBox(source);
+  return {
+    version: 4,
+    layout: "full",
+    frames: 2,
+    size: 8,
+    box: [...box.min.toArray(), ...box.max.toArray()],
+    halfSize: 2,
+    maps: ["base", "normalDepth", "orm"],
+    layers: Array.from({ length: 3 }, () => ({ format: RGBAFormat, mipmaps: [8, 4, 2].map((size) => new Uint8Array(size * size * 4)) })),
+  };
+}
 
-export const bakeImpostor = vi.fn(async () => baked);
+export const bakeImpostor = vi.fn<(source: Object3D, renderer: Renderer) => Promise<Impostor>>(async (source) => impostorOf(source));
 
 beforeEach(() => {
   cache.loaded.length = cache.saved.length = cache.attempts = 0;
   cache.files.clear();
   cache.versions.clear();
   cache.missing.clear();
-  bakeImpostor.mockReset().mockResolvedValue(baked);
+  bakeImpostor.mockReset().mockImplementation(async (source) => impostorOf(source));
 });
 
 export function sourceFixture(make: (url: string) => unknown, extension = /\.(glts|gltf|glb)$/) {
@@ -104,7 +110,9 @@ export function sourceFixture(make: (url: string) => unknown, extension = /\.(gl
 
 /** A scene holding `objects`, as GLTSLoader loads it: with its `source` provenance and a `dispose` that frees what it holds. */
 export function gltsScene(source: unknown, ...objects: Object3D[]): Scene {
-  const scene = new Scene().add(...objects);
+  // Object3D.add with no object logs an error.
+  const scene = new Scene();
+  for (const object of objects) scene.add(object);
   const dispose = () =>
     scene.traverse((node) => {
       if (!(node instanceof Mesh)) return;

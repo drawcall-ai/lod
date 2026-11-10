@@ -1,5 +1,6 @@
 import * as THREE from "three/webgpu";
 import type { HouseParams } from "../../public/content/house/params.ts";
+import { SIGN_NAMES } from "../../public/content/ladders.ts";
 import type { Random } from "../../public/content/random.ts";
 import { footing, inRect, PAVEMENT, spot, type Rect, type Road, type Spot } from "./plan.ts";
 import { fence, frontHedge, garden } from "./gardens.ts";
@@ -10,7 +11,6 @@ export const STREET_WIDTH = 7;
 
 /** Within this distance of the centre streets have pavements and lots are narrow. */
 const CORE = 280;
-const SIGN_NAMES = ["Maple St", "Church Rd", "Mill Lane", "Oak Ave", "High St", "Elm St"];
 
 export interface Town {
   roads: Road[];

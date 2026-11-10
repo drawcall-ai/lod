@@ -16,8 +16,8 @@ const design = number(query, "design", 0, 0, DESIGNS - 1, true);
 /** No axis: the canopy over the whole block rather than one of its sides. */
 const CANOPY = "";
 const axis = choice(query, "axis", ["x", "z"], CANOPY);
-// Warm every design's and wall's cache on the server before the browser requests individual assets.
-if (import.meta.env.SSR) {
+// Warm every design's and wall's cache in a `vite build` warmup, so the deployed app finds each asset it requests.
+if (import.meta.env.PROD && import.meta.env.SSR) {
   for (let index = 0; index < DESIGNS; index++) dispose(await cover(scene.source, library, index, CANOPY));
   for (const axis of ["x", "z"] as const) dispose(await cover(scene.source, library, 0, axis));
 }

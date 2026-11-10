@@ -19,6 +19,7 @@ import {
   min,
   mix,
   normalize,
+  positionViewDirection,
   screenCoordinate,
   select,
   sin,
@@ -29,7 +30,7 @@ import {
   vec3,
   vec4,
 } from "three/tsl";
-import { dither, keepsPixel } from "../../fade.js";
+import { dither, keepsPixel } from "../../levels/fade.js";
 import type { ImpostorLayout } from "../impostor.js";
 import { basisNode, decodeNode } from "../octahedral.js";
 import type { Card } from "./card.js";
@@ -83,7 +84,7 @@ export interface Surface {
 export interface Lighting {
   /** unit view-space normal to shade with */
   normal: Node<"vec3">;
-  /** `normal` × how far the normals it averages agree: see `cosine` */
+  /** the normals' mean direction, on `normal`'s side but not leaned, × how far they agree: see `cosine` */
   spread: Node<"vec3">;
   roughness: Node<"float">;
   metalness: Node<"float">;
@@ -132,7 +133,7 @@ export function buildSurface(inputs: SurfaceInputs, card: Card, pass: Pass): Sur
   // Frame-local uv where the view ray meets the baked surface, its normal-depth texel
   // there, and "run", the distance along the ray to it. "trust" falls toward 0 when the
   // depth walk did not settle: the frame's surface there is not on this ray (the frame
-  // sees something the view does not), and blending it in would ghost.
+  // sees something the camera does not), and blending it in would ghost.
   const resolved = card.frames.map((frame, i) => {
     const p = planes[i];
     if (!p) throw new Error("ImpostorMesh: no plane for a frame");
@@ -223,7 +224,7 @@ export function buildSurface(inputs: SurfaceInputs, card: Card, pass: Pass): Sur
       .div(length(card.ray))
       .toVar();
     const clip = cameraProjectionMatrix.mul(cameraViewMatrix).mul(vec4(card.worldPoint.add(card.worldRay.mul(s)), 1));
-    // Stop short toward the camera by a texel and depth step: light and view frames
+    // Stop short toward the camera by a texel and depth step: the light's and the camera's frames
     // resolve slightly different surfaces, otherwise the receiver shades itself.
     const short = s.sub(
       halfSize
@@ -241,11 +242,11 @@ export function buildSurface(inputs: SurfaceInputs, card: Card, pass: Pass): Sur
     const normal = (texel: Node<"vec4">) => texel.rgb.mul(2).sub(1);
     const mean = normal(r0.sample()).mul(w.x).add(normal(r1.sample()).mul(w.y)).add(normal(r2.sample()).mul(w.z)).toVar();
     const orm = blend(read(maps.orm, r0.at), read(maps.orm, r1.at), read(maps.orm, r2.at)).toVar();
-    const agreement = length(mean);
+    // How far the normals agree, kept above 0 for what divides by it.
+    const agreed = clamp(length(mean), 1e-3, 1).toVar();
     // Toksvig: the spread of the averaged normal widens the specular lobe, so distant
     // foliage and bumpy rock stop sparkling.
-    const len = clamp(agreement, 1e-3, 1);
-    const roughness = sqrt(min(orm.g.mul(orm.g).add(len.oneMinus().div(len)), 1));
+    const roughness = sqrt(min(orm.g.mul(orm.g).add(agreed.oneMinus().div(agreed)), 1));
     // orm.a is the share shading with the normal rather than its opposite. Pick one
     // per texel of the strongest frame's mip, fixed on the object as leaves are.
     const strong = select(w.x.greaterThanEqual(max(w.y, w.z)), r0.at, select(w.y.greaterThanEqual(w.z), r1.at, r2.at));
@@ -253,9 +254,13 @@ export function buildSurface(inputs: SurfaceInputs, card: Card, pass: Pass): Sur
     const texel = floor(strong.mul(cell).mul(frames).div(level));
     const random = fract(sin(dot(texel, vec2(12.9898, 78.233))).mul(43758.5453));
     const side = select(random.lessThan(orm.a), float(1), float(-1));
-    const shading: Node<"vec3"> = card.toView(mean).mul(side).toVar();
+    const spread: Node<"vec3"> = card.toView(mean).mul(side).mul(agreed).toVar();
+    // Lean the shading normal toward the view by what unit normals agreeing this little have beside their mean. A heuristic,
+    // not their visible mean, whose lean grows with the view angle: what it fixes is the mean of grass pointing up, into
+    // glare from a low sun ahead.
+    const leaned = normalize(spread.add(positionViewDirection.mul(sqrt(agreed.mul(agreed).oneMinus()))));
     const emissive = maps.emissive ? blend(read(maps.emissive, r0.at), read(maps.emissive, r1.at), read(maps.emissive, r2.at)).rgb : null;
-    lighting = { normal: shading, spread: shading.mul(clamp(agreement, 0, 1)), roughness, metalness: orm.b, occlusion: orm.r, emissive };
+    lighting = { normal: leaned, spread, roughness, metalness: orm.b, occlusion: orm.r, emissive };
     return lighting;
   };
   return {

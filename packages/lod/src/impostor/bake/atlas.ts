@@ -16,11 +16,11 @@ const NEIGHBOURS = [
  * The bake stores the normals two ways (see its materials): the maps hold the surface's
  * own normals, `turned` the shading normals turned toward the camera, each with the share
  * of the surface that shades with the normal rather than its opposite (in orm.a). One way
- * is kept for the whole impostor, as texels filtered together must mean the same thing.
+ * serves the whole impostor, as texels filtered together must mean the same thing.
  * With `specular`, the bake also writes each surface's dielectric specular, of which only
- * the coverage-weighted sum is kept, for its mean.
+ * the coverage-weighted sum is stored, for its mean.
  */
-export class Atlas {
+export class ImpostorAtlasMip {
   readonly size: number;
   readonly layers: Uint8Array[];
   readonly coverage: Float32Array;
@@ -43,7 +43,7 @@ export class Atlas {
     this.turned = new Uint8Array(this.size * this.size * 4);
   }
 
-  /** Keep the turned normals: write them over the own normals and their shares. */
+  /** Use the turned normals: write them over the own normals and their shares. */
   useTurned(): void {
     const normalDepth = this.layer("normalDepth");
     const orm = this.layer("orm");
@@ -55,7 +55,7 @@ export class Atlas {
 
   private layer(map: ImpostorMap): Uint8Array {
     const layer = this.layers[this.maps.indexOf(map)];
-    if (!layer) throw new Error(`Atlas: no ${map} layer`);
+    if (!layer) throw new Error(`ImpostorAtlasMip: no ${map} layer`);
     return layer;
   }
 
@@ -70,7 +70,7 @@ export class Atlas {
     const { cell, size, maps, layers } = this;
     const [alpha] = pixels;
     if (!alpha || pixels.length !== maps.length + (this.specular ? 2 : 1))
-      throw new Error("Atlas.write: one pixel array per map, then the turned normals, then the specular if baked");
+      throw new Error("ImpostorAtlasMip.write: one pixel array per map, then the turned normals, then the specular if baked");
     const sources = [...maps, "turned" as const];
     const specular = this.specular ? pixels[maps.length + 1] : undefined;
     for (let y = 0; y < cell; y++)
@@ -104,7 +104,7 @@ export class Atlas {
         sources.forEach((map, m) => {
           const source = pixels[m];
           const layer = map === "turned" ? this.turned : layers[m];
-          if (!source || !layer) throw new Error(`Atlas.write: no pixels for ${map}`);
+          if (!source || !layer) throw new Error(`ImpostorAtlasMip.write: no pixels for ${map}`);
           const [r, g, b, a] = average(source);
           if (map === "normalDepth") this.agreement.own += cover * Math.hypot(r * 2 - 1, g * 2 - 1, b * 2 - 1);
           if (map === "turned") this.agreement.turned += cover * Math.hypot(r * 2 - 1, g * 2 - 1, b * 2 - 1);
@@ -116,7 +116,7 @@ export class Atlas {
   /** The coverage-weighted mean of the baked specular: F0 RGB, then F90. */
   meanSpecular(): [number, number, number, number] {
     const { value, coverage } = this.specularSum;
-    if (!this.specular || coverage === 0) throw new Error("Atlas.meanSpecular: no specular was baked");
+    if (!this.specular || coverage === 0) throw new Error("ImpostorAtlasMip.meanSpecular: no specular was baked");
     const [r = 0, g = 0, b = 0, f90 = 0] = value.map((v) => v / coverage);
     return [r, g, b, f90];
   }
@@ -160,7 +160,7 @@ export class Atlas {
         filled[ny * cell + nx] = 1;
         queue[tail++] = ny * cell + nx;
         const to = ((y0 + ny) * size + x0 + nx) * 4;
-        // Base keeps zero coverage; the other layers' alpha is data (depth) and spreads too.
+        // Base coverage stays zero; the other layers' alpha is data (depth) and spreads too.
         this.layers.forEach((layer, m) => {
           const n = this.maps[m] === "base" ? 3 : 4;
           for (let k = 0; k < n; k++) layer[to + k] = layer[from + k] ?? 0;
@@ -173,9 +173,9 @@ export class Atlas {
 
 /**
  * Pack one texel into `layer` at byte `out`: colour as sRGB if `srgb`, the rest linearly.
- * An averaged normal keeps its length, which says how far the normals it averages agree
- * and is lit by: renormalised, a texel of leaves facing every which way would light as one
- * smooth surface turned to the camera.
+ * An averaged normal is not renormalised: its length says how far the normals it averages
+ * agree, and is lit by. Renormalised, a texel of leaves facing every which way would light
+ * as one smooth surface turned to the camera.
  */
 function store(layer: Uint8Array, out: number, [r, g, b, a]: readonly [number, number, number, number], srgb: boolean): void {
   const encode = srgb ? toSrgb : (v: number) => Math.round(v * 255);

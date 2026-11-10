@@ -11,7 +11,7 @@ export const HERO_LEAF: [number, number] = [192, 24];
 
 export async function plant(source: GLTSSource, library: Library, variant: number, hero = false, tassel = true): Promise<Object3D> {
   const materials = await registerMaterials(source, library);
-  return cachedObject(assetEntry(source, "corn@3", { variant, hero, tassel }), library, materials, () =>
+  return cachedObject(assetEntry(source, "corn@5", { variant, hero, tassel }), library, materials, () =>
     // Seeds start at 1: the shapes the variants were tuned with, such as the hero leaf the ladybird sits on.
     cornPlant(library, variant + 1, { leafSegments: hero ? HERO_LEAF : [24, 4], detail: hero ? "fine" : "field", tassel }),
   );

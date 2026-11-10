@@ -1,6 +1,9 @@
-/** Setup-only culling and caster padding; selection and fades keep their rest bounds. */
-export const WIND_BOUNDS = Symbol("wind bounds");
+/**
+ * How a Lod or InstancedLod takes wind: it refuses it once it has rendered or prepares levels, whose shaders would then
+ * build in a frame; else it pads its setup-only culling and casters, while the levels it draws hold their rest bounds.
+ */
+export const WIND = Symbol("wind");
 
-export interface WindBounds {
-  [WIND_BOUNDS](padding: number, slope: number, baseY: number): void;
+export interface WindTarget {
+  [WIND](padding: number, slope: number, baseY: number): void;
 }

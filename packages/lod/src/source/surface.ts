@@ -1,5 +1,5 @@
 import { Matrix3, Vector3, type BufferGeometry, type Material, type Matrix4, type Mesh, type Object3D } from "three/webgpu";
-import { forEachMesh } from "../bounds.js";
+import { forEachMesh } from "./detail.js";
 import { isImpostorMesh, rejectSkinned } from "../three.js";
 
 /** Indexed triangles as flat arrays, in one space. */

@@ -1,7 +1,10 @@
-import type { Mip } from "../source/texels.js";
+import type { Mip } from "../source/sampler.js";
 
-/** Keep the base mip's cut-out coverage, with room for filtering around the alpha test. */
-export function keepCoverage(mips: Mip[]): Mip[] {
+/**
+ * Preserve the base mip's cut-out coverage down the chain: scale each smaller mip's alpha, in place, so that the same
+ * share of its texels passes the alpha test, with room for filtering around the test. Returns `mips`.
+ */
+export function preserveCoverage(mips: Mip[]): Mip[] {
   const [base] = mips;
   if (!base) return mips;
   const target = passing(base, 1);
@@ -23,7 +26,7 @@ export function keepCoverage(mips: Mip[]): Mip[] {
     }
     // The smallest scale puts a retained texel at alpha 128: bilinear filtering
     // then cuts almost all of its area away. Centre the gap without changing which
-    // texels pass. A uniform coarse mip has no gap; keep its original correction.
+    // texels pass. A uniform coarse mip has no gap; use its original correction.
     if (Number.isFinite(inside) && Number.isFinite(outside)) high = 255 / (inside + outside);
     for (let i = 3; i < mip.data.length; i += 4) mip.data[i] = (mip.data[i] ?? 0) * high;
   }

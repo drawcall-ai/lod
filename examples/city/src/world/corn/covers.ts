@@ -1,6 +1,6 @@
 import * as THREE from "three/webgpu";
 import { Fn, cameraPosition, distance, mix, modelWorldMatrix, positionLocal, smoothstep, uniform, vec3, vec4 } from "three/tsl";
-import { boundingBox, InstancedLod } from "@drawcall/lod";
+import { InstancedLod, type LodGpu } from "@drawcall/lod";
 import { type Tile, vigour } from "./field.ts";
 import { BLOCK } from "../../../public/content/corn/layout.ts";
 import { canopy, SINK, TOP } from "../../../public/content/corn/cover/shapes.ts";
@@ -31,15 +31,15 @@ export interface CoverBakes {
 type Axis = "x" | "z";
 
 /** Every block design's canopy, then the walls along x and z. */
-export function covers({ canopies, walls }: CoverBakes, tiles: Tile[], skirt: Skirt): Cover[] {
+export function covers({ canopies, walls }: CoverBakes, tiles: Tile[], skirt: Skirt, gpu: LodGpu): Cover[] {
   return [
-    ...canopies.map((bake, design) => canopyCover(bake, design, tiles, skirt)),
-    wallCover(walls.x, "x", tiles, skirt),
-    wallCover(walls.z, "z", tiles, skirt),
+    ...canopies.map((bake, design) => canopyCover(bake, design, tiles, skirt, gpu)),
+    wallCover(walls.x, "x", tiles, skirt, gpu),
+    wallCover(walls.z, "z", tiles, skirt, gpu),
   ];
 }
 
-function canopyCover(bake: THREE.Mesh, design: number, tiles: Tile[], skirt: Skirt): Cover {
+function canopyCover(bake: THREE.Mesh, design: number, tiles: Tile[], skirt: Skirt, gpu: LodGpu): Cover {
   const material = coverMaterial(bake);
   const ridged = new THREE.Mesh(bake.geometry, material);
   // Near the camera it rises in front of the plants' fade; far away the ridges are subpixel.
@@ -51,10 +51,14 @@ function canopyCover(bake: THREE.Mesh, design: number, tiles: Tile[], skirt: Ski
     level.receiveShadow = true;
   }
   const places = tiles.filter((tile) => tile.design === design).map((tile) => ({ matrix: tile.matrix, at: tile.centre }));
-  return { kind: "canopy", lod: coverLod(`corn block ${design}`, levels, places), diameter: boundingBox(ridged).getSize(new THREE.Vector3()).length() };
+  return {
+    kind: "canopy",
+    lod: coverLod(gpu, `corn block ${design}`, levels, places),
+    diameter: new THREE.Box3().setFromObject(ridged).getSize(new THREE.Vector3()).length(),
+  };
 }
 
-function wallCover(bake: THREE.Mesh, axis: Axis, tiles: Tile[], skirt: Skirt): Cover {
+function wallCover(bake: THREE.Mesh, axis: Axis, tiles: Tile[], skirt: Skirt, gpu: LodGpu): Cover {
   const wall = new THREE.Mesh(bake.geometry, rising(coverMaterial(bake), skirt));
   wall.castShadow = wall.receiveShadow = true;
   const turn = new THREE.Matrix4().makeRotationY(Math.PI);
@@ -63,7 +67,11 @@ function wallCover(bake: THREE.Mesh, axis: Axis, tiles: Tile[], skirt: Skirt): C
       .filter((side) => side.axis === axis)
       .map((side) => ({ matrix: side.turned ? tile.matrix.clone().multiply(turn) : tile.matrix, at: tile.centre })),
   );
-  return { kind: "wall", lod: coverLod(`corn wall ${axis}`, [wall], places), diameter: boundingBox(wall).getSize(new THREE.Vector3()).length() };
+  return {
+    kind: "wall",
+    lod: coverLod(gpu, `corn wall ${axis}`, [wall], places),
+    diameter: new THREE.Box3().setFromObject(wall).getSize(new THREE.Vector3()).length(),
+  };
 }
 
 function coverMaterial(bake: THREE.Mesh): THREE.MeshStandardNodeMaterial {
@@ -95,15 +103,16 @@ function rising(material: THREE.MeshStandardNodeMaterial, skirt: Skirt): THREE.M
 }
 
 /** `levels` of a baked cover over `places`, after an empty level 0 (the plants show there); thresholds are set by `Corn.update`. */
-function coverLod(name: string, levels: THREE.Mesh[], places: { matrix: THREE.Matrix4; at: THREE.Vector3 }[]): InstancedLod {
+function coverLod(gpu: LodGpu, name: string, levels: THREE.Mesh[], places: { matrix: THREE.Matrix4; at: THREE.Vector3 }[]): InstancedLod {
   const lod = new InstancedLod(
     [new THREE.Object3D(), ...levels].map((object) => ({ object })),
-    places.length,
+    gpu,
+    { maxInstanceCount: places.length },
   );
   lod.name = name;
-  places.forEach(({ matrix, at }, i) => {
-    lod.setMatrixAt(i, matrix);
-    lod.setColorAt(i, tint(at));
+  lod.addChunk({
+    instanceMatrix: new THREE.InstancedBufferAttribute(new Float32Array(places.flatMap(({ matrix }) => matrix.elements)), 16),
+    instanceColor: new THREE.InstancedBufferAttribute(new Float32Array(places.flatMap(({ at }) => tint(at).toArray())), 3),
   });
   // drawn before the plants, which then skip the pixels it hides
   lod.traverse((node) => (node.renderOrder = -1));

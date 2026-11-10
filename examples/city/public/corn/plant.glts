@@ -9,8 +9,8 @@ onDispose(() => library.dispose());
 const query = new URL(import.meta.url).searchParams;
 const variant = number(query, "variant", 0, 0, VARIANTS - 1, true);
 const hero = choice(query, "hero", ["0", "1"], "0") === "1";
-// Warm every variant cache on the server before the browser requests individual assets.
-if (import.meta.env.SSR)
+// Warm every variant cache in a `vite build` warmup, so the deployed app finds each asset it requests.
+if (import.meta.env.PROD && import.meta.env.SSR)
   for (let warm = 0; warm < VARIANTS; warm++) {
     library.release(await plant(scene.source, library, warm));
     if (warm === HERO_VARIANT) library.release(await plant(scene.source, library, warm, true));

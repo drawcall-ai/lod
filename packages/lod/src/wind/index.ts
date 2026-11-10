@@ -1,10 +1,11 @@
 import { Box3, Matrix4, ObjectSpaceNormalMap, Vector2, type Mesh, type Object3D } from "three/webgpu";
-import { boundingBox, levelBox } from "../bounds.js";
-import { levelMaterial } from "../material.js";
+import { levelBox } from "../levels/bounds.js";
+import { boundingBox } from "../source/detail.js";
+import { levelMaterial } from "../levels/material.js";
 import { isBatchedMesh, isImpostorMesh, isInstancedLod, isInstancedMesh, isLOD, isMesh, isSkinnedMesh, isStorageInstanced } from "../three.js";
-import { WIND_BOUNDS, type WindBounds } from "./hooks.js";
+import { WIND, type WindTarget } from "./hooks.js";
 import { windBounds } from "./bounds.js";
-import { setSway, swayMatrix, type Breeze } from "./sway.js";
+import { setSway, swayMatrix, swaying, type Breeze } from "./sway.js";
 
 export interface WindOptions {
   /** Horizontal world-space X/Z direction; normalized on assignment. Default [1, 0]. */
@@ -22,10 +23,10 @@ export interface SwayOptions {
   height?: number;
 }
 
+/** The Wind each root was applied to, and how: a side table, as the roots are the app's. */
 const bindings = new WeakMap<Object3D, { wind: Wind; options: SwayOptions; refresh: (added: Object3D) => void }>();
-const attached = new WeakSet<Mesh>();
 const identity = new Matrix4();
-// Every wind's values are read per object. Sharing this node keeps attachments from
+// Every wind's values are read per object. Sharing this node stops attachments from
 // invalidating the same material when another region starts drawing its impostor.
 const impostorSway = swayMatrix();
 
@@ -75,7 +76,7 @@ export class Wind {
     this.breeze.speed = value;
   }
 
-  /** Global amplitude multiplier in [0, 1]. Zero keeps the wind shader but draws the rest pose. */
+  /** Global amplitude multiplier in [0, 1]. Zero draws the rest pose, with the wind shader. */
   get strength(): number {
     return this.breeze.strength;
   }
@@ -96,7 +97,7 @@ export class Wind {
     this.breeze.direction.set(x, z).normalize();
   }
 
-  /** Attach once, after constructing all levels. Objects without this call keep their original shaders. */
+  /** Attach once, after constructing all levels and before a Lod or InstancedLod first renders. Objects without this call draw with their original shaders. */
   apply(root: Object3D, { amplitude, baseY, height }: SwayOptions): void {
     if (bindings.has(root)) throw new Error("Wind: already applied to this object");
     this.attach(root, { amplitude, baseY, height }, false);
@@ -109,8 +110,8 @@ export class Wind {
     added.traverse((node) => {
       if (node !== root && isLOD(node)) throw new Error("Wind: apply to nested LODs individually");
       if (!isMesh(node)) return;
-      if (refreshing && attached.has(node)) return;
-      if (attached.has(node)) throw new Error("Wind: a mesh already belongs to a wind root");
+      if (refreshing && swaying(node)) return;
+      if (swaying(node)) throw new Error("Wind: a mesh already belongs to a wind root");
       if (isSkinnedMesh(node) || isBatchedMesh(node)) throw new Error("Wind: skinned and batched meshes are not supported");
       if (node !== root && !isInstancedLod(root) && (isInstancedMesh(node) || (isImpostorMesh(node) && node.count > 1)))
         throw new Error("Wind: apply to nested instance batches individually");
@@ -147,7 +148,7 @@ export class Wind {
     if (size <= 0) throw new Error("Wind: height must be positive");
     const shape = new Vector2(amplitude / size, base);
     const padding = (amplitude * Math.max(Math.abs(box.min.y - base), Math.abs(box.max.y - base))) / size;
-    if (hasBounds(root) && !refreshing) root[WIND_BOUNDS](padding, amplitude / size, base);
+    if (isWindTarget(root) && !refreshing) root[WIND](padding, amplitude / size, base);
     for (const { mesh, placement } of placed) {
       if (!isInstancedLod(root)) windBounds(mesh, placement, amplitude, base, size);
       setSway(mesh, { breeze: this.breeze, shape, placement, fromRoot: placement.clone().invert() });
@@ -157,15 +158,14 @@ export class Wind {
           mesh.material.needsUpdate = true;
         }
       } else mesh.material = Array.isArray(mesh.material) ? mesh.material.map((m) => levelMaterial(m, true)) : levelMaterial(mesh.material, true);
-      attached.add(mesh);
     }
     const options = { amplitude, baseY: base, height: size };
     bindings.set(root, { wind: this, options, refresh: (next) => this.attach(root, options, true, next, box) });
   }
 }
 
-function hasBounds(root: Object3D): root is Object3D & WindBounds {
-  return WIND_BOUNDS in root;
+function isWindTarget(root: Object3D): root is Object3D & WindTarget {
+  return WIND in root;
 }
 
 function sourceBox(root: Object3D): Box3 {

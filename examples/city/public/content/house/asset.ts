@@ -42,7 +42,7 @@ async function building(
   if (part === "low") return library.own(shape.low(params));
   const materials = registerMaterials(library, params);
   await library.ready();
-  return cachedObject(assetEntry(source, "house@2", { ...key, part }), library, materials, () => {
+  return cachedObject(assetEntry(source, "house@4", { ...key, part }), library, materials, () => {
     const rooms = library.own(houseInterior(library, params));
     if (part === "interior") return rooms;
     const exterior = library.own(shape.detail(library, params));

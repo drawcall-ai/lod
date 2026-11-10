@@ -1,21 +1,26 @@
 import * as THREE from "three/webgpu";
-import { InstancedLod, Lod, type Wind } from "@drawcall/lod";
+import { InstancedLod, Lod, type LodGpu, type Wind } from "@drawcall/lod";
 import { loader, scripts } from "../../loading.ts";
 import { heroPlant } from "./hero.ts";
 import { sourceBox } from "../bounds.ts";
-import { Patches } from "../patches.ts";
+import { NearTiles } from "../near-tiles.ts";
+import { screenScale } from "../screen.ts";
 import type { Plan } from "../plan.ts";
 import { covers, type Cover, type Skirt, skirt as skirtUniform } from "./covers.ts";
 import { cut, FieldTiles, heroSpot } from "./field.ts";
 import { cutoff, plantRequest, setCutoff } from "./levels.ts";
+import { cornLadder } from "../../../public/content/ladders.ts";
 import { BLOCK, DESIGNS, layout, VARIANTS } from "../../../public/content/corn/layout.ts";
 import { TOP } from "../../../public/content/corn/cover/shapes.ts";
 
-const CHUNKS = 128;
+/** Field blocks whose plants are drawn at once. */
+const ROOM = 128;
 const RAMP = 2;
 const LEAD = 0.5;
 const FLAT_PIXELS = 60;
 const BLOCK_RADIUS = Math.hypot(BLOCK / 2, TOP - 1.2, BLOCK / 2);
+
+const eye = new THREE.Vector3();
 
 /** Every field system exists at startup; the package independently requests each plant level. */
 export class Corn extends THREE.Object3D {
@@ -25,7 +30,7 @@ export class Corn extends THREE.Object3D {
   private constructor(
     readonly covers: Cover[],
     private readonly skirt: Skirt,
-    readonly plants: Patches,
+    readonly plants: NearTiles,
     readonly hero: Lod,
     readonly ladybird: Lod,
     readonly anchors: { hero: THREE.Vector3; ladybird: THREE.Vector3 },
@@ -36,7 +41,7 @@ export class Corn extends THREE.Object3D {
     this.add(plants, ...covers.map((cover) => cover.lod), hero, ladybird);
   }
 
-  static async build(plan: Plan): Promise<Corn> {
+  static async build(plan: Plan, gpu: LodGpu): Promise<Corn> {
     const designs = Array.from({ length: DESIGNS }, (_, d) => layout(d));
     const tiles = cut(plan, DESIGNS, TOP);
     const spot = heroSpot(tiles, designs);
@@ -47,36 +52,35 @@ export class Corn extends THREE.Object3D {
       coverBake("axis=z"),
     ]);
     const skirt = skirtUniform();
-    const perTile = Array.from({ length: VARIANTS }, (_, variant) =>
-      Math.max(...designs.map((design) => design.filter((plant) => plant.variant === variant).length)),
-    );
     const plants = await Promise.all(
       Array.from({ length: VARIANTS }, async (_, variant) => {
-        const count = perTile[variant];
-        if (count === undefined) throw new Error("Missing corn variant tile capacity");
-        const levels = await loader.loadAsync(plantRequest(`/corn/plant.glts?variant=${variant}`));
-        const lod = new InstancedLod(levels, CHUNKS * count);
+        const levels = await loader.loadAsync(plantRequest(cornLadder(variant)));
+        // Room for a chunk per tile held, each with as many of this variant's plants as a block design has most.
+        const perTile = Math.max(...designs.map((plants) => plants.filter((plant) => plant.variant === variant).length));
+        const lod = new InstancedLod(levels, gpu, { maxInstanceCount: ROOM * perTile });
         lod.name = `corn plant ${variant}`;
         const box = sourceBox(lod.levels);
         return { lod, size: box.getSize(new THREE.Vector3()).length() };
       }),
     );
-    const details = await heroPlant(spot, plan.terrain);
+    const details = await heroPlant(spot, plan.terrain, gpu);
+    const lods = plants.map(({ lod }) => lod);
+    const field = new FieldTiles(tiles, designs, plan.terrain, spot, lods);
     let corn: Corn | undefined;
-    const patches = new Patches(
-      plants.map(({ lod }) => lod),
-      perTile,
-      CHUNKS,
-      new FieldTiles(tiles, designs, plan.terrain, spot),
-      () => {
+    // One block filled a frame: the CPU builds its plants.
+    const near = new NearTiles(lods, {
+      near: (position) => {
         if (!corn) throw new Error("Corn tiles requested before initialization");
-        return corn.fadeFrom / (1 - Lod.fade) + BLOCK_RADIUS;
+        return field.near(position, corn.fadeFrom / (1 - Lod.fade) + BLOCK_RADIUS);
       },
-    );
+      chunks: (tile) => field.chunks(tile),
+      perFrame: 1,
+      room: ROOM,
+    });
     corn = new Corn(
-      covers({ canopies, walls: { x, z } }, tiles, skirt),
+      covers({ canopies, walls: { x, z } }, tiles, skirt, gpu),
       skirt,
-      patches,
+      near,
       details.hero,
       details.ladybird,
       details.anchors,
@@ -93,17 +97,17 @@ export class Corn extends THREE.Object3D {
   }
 
   /**
-   * Before rendering, plants dither out at one height on screen; covers rise out of the soil in
+   * Before rendering, on a screen `height` CSS pixels tall: plants dither out at one height on screen; covers rise out of the soil in
    * front of that, are drawn wherever a part of them may have risen, and swap to their
    * ridged level once no part of them is rising. When more blocks are in reach than there
    * are plant slots, the plants dither out nearer, and back out as slots free up.
    */
-  update(camera: THREE.Camera): void {
-    const scale = (camera.projectionMatrix.elements[5] * Patches.height * Lod.quality) / 2;
+  update(camera: THREE.Camera, height: number): void {
+    const scale = screenScale(camera, height, Lod.quality);
     const gone = cutoff(this.squeeze);
     this.fadeFrom = (this.plantSize * scale) / gone;
-    this.plants.update(camera);
-    const over = this.plants.wanted / CHUNKS;
+    this.plants.update(eye.setFromMatrixPosition(camera.matrixWorld));
+    const over = this.plants.wanted / ROOM;
     this.squeeze = over > 1 ? Math.min(this.squeeze * Math.max(1.02, Math.sqrt(over)), 4) : Math.max(1, this.squeeze / 1.02);
     for (const lod of this.active) setCutoff(lod.levels, gone);
     const risen = Math.max(this.fadeFrom - LEAD, RAMP);

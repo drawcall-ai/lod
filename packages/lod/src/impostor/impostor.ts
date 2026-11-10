@@ -1,8 +1,10 @@
+import { RGBAFormat, type CompressedPixelFormat } from "three/webgpu";
+
 /** Which part of the view sphere the atlas covers. */
 export type ImpostorLayout = "hemi" | "full";
 
 /**
- * The atlas maps, in the order they are stored. Each is one RGBA8 layer:
+ * The atlas maps, in the order they are stored. Each is one RGBA layer:
  *
  * - `base`: base colour (sRGB) in RGB, coverage in A.
  * - `normalDepth`: an object-space normal n in RGB (`n * 0.5 + 0.5`), depth in A. The
@@ -16,6 +18,19 @@ export const MAPS = ["base", "normalDepth", "orm", "emissive"] as const;
 export type ImpostorMap = (typeof MAPS)[number];
 
 /**
+ * One map's mip chain, `size >> level` square, from `size` down to one texel per frame (`frames` square). The levels
+ * are baked, not filtered from level 0.
+ */
+export interface ImpostorLayer {
+  /**
+   * RGBAFormat: 4 bytes a texel, as baked. A decoded impostor holds the block-compressed format its decoder transcoded
+   * to for the GPU, or RGBAFormat where the GPU takes none.
+   */
+  format: typeof RGBAFormat | CompressedPixelFormat;
+  mipmaps: Uint8Array[];
+}
+
+/**
  * A baked octahedral impostor: plain data, no GPU resources.
  *
  * The atlas is `frames x frames` cells of `size / frames` pixels each. Cell (col, row)
@@ -27,7 +42,7 @@ export type ImpostorMap = (typeof MAPS)[number];
  * toward the camera that baked the frame and 0 is away from it.
  */
 export interface Impostor {
-  version: 3;
+  version: 4;
   layout: ImpostorLayout;
   /** frames per atlas side */
   frames: number;
@@ -47,12 +62,10 @@ export interface Impostor {
    */
   specular?: [number, number, number, number];
   /**
-   * One per entry in `maps`: its mip chain of RGBA8 arrays, `size >> level` square, from
-   * `size` down to one texel per frame (`frames` square). The levels are baked, not
-   * filtered from level 0. An ImpostorMesh's textures share these arrays, so they stay in
-   * memory while the impostor is referenced, ready for `encodeImpostor`.
+   * One per entry in `maps`. An ImpostorMesh's textures share these arrays, so they stay in memory while the impostor is
+   * referenced, ready for `encodeImpostorAsync` when they are RGBAFormat.
    */
-  layers: Uint8Array[][];
+  layers: ImpostorLayer[];
 }
 
 export function boxCentre(b: Impostor["box"]): [number, number, number] {
@@ -70,9 +83,24 @@ export function boundingRadius(b: Impostor["box"]): number {
 }
 
 /**
+ * Empty border around the object in every frame, as a fraction of the frame's half
+ * size. It keeps mip levels from blending a frame's silhouette into its neighbour.
+ */
+export const PAD = 0.06;
+
+/**
+ * `texelPixels` of any impostor baked at `resolution`, at least: a frame fitted to the source's bounding sphere, the
+ * widest it can be. The default `maxPixels` of an impostor level a loader describes before building it.
+ */
+export const framePixels = (resolution = 128): number => 2 ** Math.floor(Math.log2(resolution)) / (2 * (1 + PAD));
+
+/**
  * On-screen height of the object at which two atlas texels span one pixel: the default
  * `LodLevel.maxPixels` of an impostor. An impostor blends filtered reads of several
  * views, so it keeps the source's colour detail only down to about two texels per pixel.
+ * A LodLoader describes its levels before baking them, so its impostor levels default to
+ * `framePixels` instead: this height for a frame fitted to the bounding sphere, up to about
+ * 1.5 times lower than for the frame the bake fits.
  */
 export function texelPixels(impostor: Pick<Impostor, "size" | "frames" | "box" | "halfSize">): number {
   const cell = impostor.size / impostor.frames;
@@ -91,7 +119,7 @@ export function validateImpostor(value: unknown): asserts value is Impostor {
   if (typeof value !== "object" || value === null) fail("not an object");
   const fields: Partial<Record<keyof Impostor, unknown>> = value;
   const { version, layout, frames, size, box, halfSize, maps, specular, layers } = fields;
-  if (version !== 3) fail(`unsupported version ${String(version)}; bake it again`);
+  if (version !== 4) fail(`unsupported version ${String(version)}; bake it again`);
   if (layout !== "hemi" && layout !== "full") fail(`unknown layout "${String(layout)}"`);
   if (!isNumber(frames) || !Number.isInteger(frames) || frames < 2) fail("frames must be an integer >= 2");
   if (!isNumber(size) || !Number.isInteger(size) || size <= 0 || size % frames !== 0)
@@ -108,10 +136,13 @@ export function validateImpostor(value: unknown): asserts value is Impostor {
   if (!Number.isInteger(Math.log2(cell))) fail(`frame size ${cell} is not a power of two`);
   const levels = Math.log2(cell) + 1;
   for (const layer of layers) {
-    if (!Array.isArray(layer) || layer.length !== levels) fail(`every layer must be a mip chain of ${levels} levels`);
-    layer.forEach((level: unknown, m) => {
+    if (typeof layer !== "object" || layer === null || !Array.isArray(layer.mipmaps) || layer.mipmaps.length !== levels)
+      fail(`every layer must be a mip chain of ${levels} levels`);
+    const rgba = layer.format === RGBAFormat;
+    layer.mipmaps.forEach((level: unknown, m: number) => {
       const bytes = (size >> m) ** 2 * 4;
-      if (!(level instanceof Uint8Array) || level.length !== bytes) fail(`mip level ${m} must be a Uint8Array of ${bytes} bytes`);
+      if (!(level instanceof Uint8Array) || (rgba ? level.length !== bytes : !level.length))
+        fail(`mip level ${m} must be a Uint8Array${rgba ? ` of ${bytes} bytes` : ""}`);
     });
   }
 }

@@ -1,13 +1,29 @@
-import { DoubleSide, MeshStandardNodeMaterial, NoBlending, type Material, type Node, type NodeBuilder, type NodeMaterial, type Object3D } from "three/webgpu";
+import {
+  DoubleSide,
+  MeshStandardNodeMaterial,
+  NoBlending,
+  type ContextNode,
+  type Material,
+  type Node,
+  type NodeBuilder,
+  type NodeMaterial,
+  type Object3D,
+  type TextureNode,
+} from "three/webgpu";
 import {
   ambientOcclusion,
   cameraViewMatrix,
   Fn,
   clamp,
+  context,
+  dFdx,
+  dFdy,
   diffuseColor,
   emissive,
   faceDirection,
   float,
+  length,
+  log2,
   materialMetalness,
   materialOpacity,
   materialRoughness,
@@ -20,27 +36,31 @@ import {
   specularColor,
   specularF90,
   step,
+  uniform,
+  uv,
+  vec2,
+  vec3,
   vec4,
 } from "three/tsl";
 import { isMesh, isNodeMaterial, isPhysical, isStandard, isStandardNode, toNodeMaterial } from "../../three.js";
-import { affine, biasedTextures, isNodeOf } from "../../tsl.js";
-import { placeInstances } from "../../fade.js";
-import { originalOf } from "../../material.js";
+import { affine, isNodeOf } from "../../tsl.js";
+import { placeInstances } from "../../levels/fade.js";
+import { originalOf } from "../../levels/material.js";
 
 /** What every bake material reads, shared by all of them and set per bake. */
 export interface BakeSettings {
   /** the cameras' distance from the bounding box centre, and the bounding radius: the depth encoding */
   distance: number;
   radius: number;
-  /** mip bias of every texture read, per mip level: textures are read at the size of a texel (see `bakeImpostor`) */
+  /** mip bias of every texture read but an alpha-tested material's, per mip level: textures are read at the size of a texel (see `bakeImpostor`) */
   textureBias: Node<"float"> & { value: number };
 }
 
 /**
  * The outputs a bake material writes, by name: one per atlas map, then the second way to
- * store the normals (see Atlas) and the specular. A render target takes the ones it has
+ * store the normals (see ImpostorAtlasMip) and the specular. A render target takes the ones it has
  * textures of that name for, so every material writes them all and the bake decides,
- * once it knows every material, which it keeps.
+ * once it knows every material, which it uses.
  */
 export const OUTPUTS = ["base", "normalDepth", "orm", "emissive", "turned", "specular"] as const;
 export type Output = (typeof OUTPUTS)[number];
@@ -105,7 +125,7 @@ const STANDARD_KEYS = [
   "wireframe",
 ] as const;
 
-/** Built-in materials whose look the standard keys carry over; others only keep their color/map. */
+/** Built-in materials whose look the standard keys carry over; others carry only their color/map. */
 const MAPPED = new Set(["MeshBasicMaterial", "MeshLambertMaterial", "MeshPhongMaterial", "MeshToonMaterial", "MeshMatcapMaterial"]);
 
 /** A node material that renders like `source`: a copy of a node or standard one, else the standard keys carried over. */
@@ -139,20 +159,23 @@ function bakeMaterial(source: Material, settings: BakeSettings): { material: Nod
   // Coverage is the material's alpha where it cuts the surface out: alpha-to-coverage (no
   // multisampling here, so it would cover the card), or a blended material's texture
   // alpha. A blended material's uniform opacity (glass) is no hole: it folds into the
-  // colour, as if the pane were dark and opaque, which keeps its reflection.
+  // colour, as if the pane were dark and opaque, which leaves its reflection.
   const blended = material.transparent;
   const coverage = blended ? diffuseColor.a.div(max(materialOpacity, 1e-4)) : material.alphaToCoverage ? diffuseColor.a : float(1);
   const opacity = blended ? materialOpacity : float(1);
   // Blending would mix the outputs with the cleared background; coverage carries alpha
-  // instead. Without normal blending three also keeps the alpha (not opaque).
+  // instead. Without normal blending three also writes the alpha (not opaque).
   material.transparent = false;
   material.blending = NoBlending;
   material.depthWrite = true;
-  material.contextNode = biasedTextures(settings.textureBias);
+  // A cut-out covers where its alpha passes the test at full detail, and the supersamples average that. Tested at
+  // a smaller mip, whose alpha averages the holes in, thin cut-outs such as needles fall below the cutoff and vanish.
+  const cutOut = material.alphaTest > 0 || material.alphaTestNode !== null;
+  material.contextNode = cutOut ? sharpTextures() : biasedTextures(settings.textureBias);
 
   // Two ways to store the normals three shades with, each a normal and the share of the
-  // surface that shades with it rather than its opposite; the bake keeps the one whose
-  // normals agree more once averaged (see Atlas):
+  // surface that shades with it rather than its opposite; the bake uses the one whose
+  // normals agree more once averaged (see ImpostorAtlasMip):
   // - the surface's own normal and the share whose front faced the camera (on two-sided
   //   surfaces three turns the normal toward the camera; this undoes it). Painted canopy
   //   normals of cut-out foliage agree this way, which three turns inward on every leaf
@@ -194,4 +217,40 @@ function changesSpecular(material: Material): boolean {
   if (!isPhysical(material)) return false;
   const { ior, specularIntensity, specularColor: c, specularIntensityMap, specularColorMap } = material;
   return ior !== 1.5 || specularIntensity !== 1 || c.r !== 1 || c.g !== 1 || c.b !== 1 || specularIntensityMap !== null || specularColorMap !== null;
+}
+
+/** The size in texels of a texture's image, or null when it has none to read. */
+function texelsOf(image: unknown): [number, number] | null {
+  if (typeof image !== "object" || image === null || !("width" in image) || !("height" in image)) return null;
+  const { width, height } = image;
+  return typeof width === "number" && typeof height === "number" ? [width, height] : null;
+}
+
+/**
+ * A context in which every texture read is `bias` mip levels above the level the
+ * hardware would pick: the level from the read's own texel footprint, plus `bias`. Reads
+ * with uv of their own making, or with an explicit level or gradients, are left as they are.
+ */
+function biasedTextures(bias: Node<"float">): ContextNode<unknown> {
+  return context({
+    getTextureLevel: (node: TextureNode) => {
+      const texture = node.value;
+      const size = texelsOf(texture.image);
+      if (node.uvNode || !size) return null;
+      // The texture's offset, repeat and rotation, as three applies them.
+      const at = uniform(texture.matrix).mul(vec3(uv(texture.channel), 1)).xy;
+      const texels = at.mul(vec2(size[0], size[1]));
+      return log2(max(max(length(dFdx(texels)), length(dFdy(texels))), 1e-6)).add(bias);
+    },
+  });
+}
+
+/**
+ * A context in which every texture read is at level 0, the full detail. Reads with uv of their own making, or with an
+ * explicit level or gradients, are left as they are.
+ */
+function sharpTextures(): ContextNode<unknown> {
+  return context({
+    getTextureLevel: (node: TextureNode) => (node.uvNode || !texelsOf(node.value.image) ? null : float(0)),
+  });
 }

@@ -9,6 +9,7 @@ import {
   type Node,
   type NodeBuilder,
   type Object3D,
+  type StorageBufferNode,
   type Texture,
   type Vector3,
 } from "three/webgpu";
@@ -39,6 +40,7 @@ import {
   select,
   sign,
   step,
+  storage,
   texture,
   textureLoad,
   uniform,
@@ -48,9 +50,9 @@ import {
   vec3,
   vec4,
 } from "three/tsl";
-import { instanceMatrixOf } from "../../fade.js";
-import { isScene } from "../../three.js";
-import { affine, column, contextNode, isNodeOf, isOrthographic, roomBounds } from "../../tsl.js";
+import { instanceMatrixOf, spaceOf } from "../../levels/fade.js";
+import { isScene, rootOf } from "../../three.js";
+import { affine, column, contextNode, isNodeOf, isOrthographic } from "../../tsl.js";
 import { FACES, type Faces } from "./faces.js";
 
 // Interior mapping (Andrew Willmott's interior cubemaps): a window texel looks into the
@@ -68,19 +70,9 @@ export interface Rooms extends Faces {
   windows: DataTexture;
 }
 
-/** Per mesh: where its geometry's space sits in the source's, when an InstancedLod moved the geometry (see `placeInterior`). */
-const spaces = new WeakMap<Object3D, Matrix4>();
 const identity = new Matrix4();
-const space = uniform(new Matrix4()).onObjectUpdate(({ object }) => (object && spaces.get(object)) ?? identity);
-
-/**
- * Tell `mesh`, if it shows rooms, that its geometry was moved by `placement` out of the
- * source's space: InstancedLod draws copies of its templates' geometry placed in the
- * instance's space.
- */
-export function placeInterior(mesh: Object3D, placement: Matrix4): void {
-  spaces.set(mesh, placement.clone().invert());
-}
+/** Where the drawn mesh's geometry space sits in the source's: moved where an InstancedLod draws it (see `spaceOf`). */
+const space = uniform(new Matrix4()).onObjectUpdate(({ object }) => spaceOf(object) ?? identity);
 
 function flat<T>(node: Node<T>): Node<T> {
   return varying(node).setInterpolation(InterpolationSamplingType.FLAT);
@@ -95,31 +87,34 @@ function pick(vectors: readonly Vector3[], index: Node<"int">): Node<"vec3"> {
  * A baked level's material that shows `rooms` through its windows. The rooms' textures
  * go with it.
  */
-export class InteriorMaterial extends MeshStandardNodeMaterial {
+export class InteriorMappingMaterial extends MeshStandardNodeMaterial {
   readonly isInteriorMaterial = true;
   rooms: Rooms | null = null;
-  /** Each room's box: its min, then its max. */
-  private bounds: StorageBufferAttribute | null = null;
+  /**
+   * Each room's box, its min then its max, as the shader reads them: one node per set of rooms, named so that the
+   * shaders of every building with as many rooms share one program.
+   */
+  private bounds: StorageBufferNode<"vec4"> | null = null;
 
   /** Show `rooms` through the windows. */
   furnish(rooms: Rooms): this {
-    const bounds = new StorageBufferAttribute(Float32Array.from(rooms.boxes.flatMap((box) => [...box.min.toArray(), 0, ...box.max.toArray(), 0])), 4);
+    const boxes = new StorageBufferAttribute(Float32Array.from(rooms.boxes.flatMap((box) => [...box.min.toArray(), 0, ...box.max.toArray(), 0])), 4);
     this.rooms = rooms;
-    this.bounds = bounds;
+    this.bounds = storage(boxes, "vec4", 0).setName("lodRoomBounds");
     this.addEventListener("dispose", () => {
       rooms.response.dispose();
       rooms.glow?.dispose();
       rooms.windows.dispose();
-      bounds.dispose();
+      boxes.dispose();
     });
     return this;
   }
 
   override setupLightingModel(): PhysicalLightingModel {
-    return this.rooms && this.bounds ? new InteriorLighting(this.rooms, this.bounds) : super.setupLightingModel();
+    return this.rooms && this.bounds ? new InteriorLightingModel(this.rooms, this.bounds) : super.setupLightingModel();
   }
 
-  override copy(source: InteriorMaterial): this {
+  override copy(source: InteriorMappingMaterial): this {
     super.copy(source);
     this.rooms = source.rooms;
     this.bounds = source.bounds;
@@ -134,11 +129,11 @@ export class InteriorMaterial extends MeshStandardNodeMaterial {
  * view ray meets. Its glow adds on top. Glass shows the room by its share, under its own
  * reflection: three's specular term carries the Fresnel.
  */
-class InteriorLighting extends PhysicalLightingModel {
+class InteriorLightingModel extends PhysicalLightingModel {
   constructor(
     private readonly rooms: Rooms,
-    /** see `InteriorMaterial.bounds` */
-    private readonly bounds: StorageBufferAttribute,
+    /** see `InteriorMappingMaterial.bounds` */
+    private readonly boxes: StorageBufferNode<"vec4">,
   ) {
     super();
   }
@@ -153,7 +148,7 @@ class InteriorLighting extends PhysicalLightingModel {
     if (!isNodeOf(irradiance, "vec3", builder) || !isNodeOf(directDiffuse, "vec3", builder) || !isNodeOf(indirectDiffuse, "vec3", builder))
       throw new Error("bakeMesh: three's lighting is not made of vec3s");
     const count = rooms.boxes.length;
-    const boxes = roomBounds(this.bounds);
+    const { boxes } = this;
     const faceSize = rooms.response.image.width;
     const [width, height] = [rooms.windows.image.width, rooms.windows.image.height];
 
@@ -184,10 +179,10 @@ class InteriorLighting extends PhysicalLightingModel {
       )
       .toVar();
     const far = low.sub(point).div(direction).max(high.sub(point).div(direction)).toVar();
-    // The box is intersected for every texel, so the derivatives that pick the cube's mip
-    // level are defined across window edges.
+    // The box is intersected for every texel, and the derivatives that pick the cube's mip level are taken here, before
+    // the branch: inside it, at a window's edge, they would read neighbours that skipped it, which differ run to run.
     const exit = point.add(direction.mul(max(min(far.x, min(far.y, far.z)), 0))).toVar();
-    const footprint = max(length(dFdx(exit)), length(dFdy(exit)));
+    const footprint = max(length(dFdx(exit)), length(dFdy(exit))).toVar();
 
     If(room.greaterThan(0).and(share.greaterThan(0)), () => {
       const wall = exit.sub(low.add(high).mul(0.5));
@@ -223,17 +218,17 @@ class InteriorLighting extends PhysicalLightingModel {
       const light = irradiance.add(ibl);
       let shown = texture(rooms.response, at).depth(layer).level(level).rgb.mul(light).div(Math.PI);
       if (rooms.glow) shown = shown.add(texture(rooms.glow, at).depth(layer).level(level).rgb);
-      const keep = share.oneMinus();
-      directDiffuse.assign(directDiffuse.mul(keep));
-      indirectDiffuse.assign(indirectDiffuse.mul(keep).add(shown.mul(share)));
+      // What the glass shows of its own, where the room does not show.
+      const rest = share.oneMinus();
+      directDiffuse.assign(directDiffuse.mul(rest));
+      indirectDiffuse.assign(indirectDiffuse.mul(rest).add(shown.mul(share)));
     });
   }
 }
 
 /** The environment of the scene `object` is in, if any. */
 function environmentOf(object: Object3D): Texture | null {
-  let root = object;
-  while (root.parent) root = root.parent;
+  const root = rootOf(object);
   return isScene(root) ? root.environment : null;
 }
 
