@@ -56,15 +56,16 @@ it.each(["Lod", "InstancedLod"].flatMap((kind) => ["load", "compile"].map((waiti
       });
     }
     try {
-      // The camera asks for the fine level, but its first drawable should not await that load.
-      for (let frame = 0; frame < 30 && !lod.levels[1]?.object; frame++) {
+      // The camera asks for the fine level, but its first drawable should not await that load. A frame count would
+      // flake on a software GPU, where the coarse level's compile spans many frames: wait for it, drawing meanwhile.
+      await eventually(async () => {
         renderer.render(scene, camera);
         await new Promise((resolve) => requestAnimationFrame(resolve));
-      }
+        expect(lod.levels[1]?.object).toBeDefined();
+      });
       expect(fine).toHaveBeenCalledOnce();
       expect(coarse).toHaveBeenCalledOnce();
       expect(lod.levels[0]?.object).toBeUndefined();
-      expect(lod.levels[1]?.object).toBeDefined();
       expect((await render(scene, camera)).some((byte) => byte > 0)).toBe(true);
       release();
       await nextLevel(lod, camera);

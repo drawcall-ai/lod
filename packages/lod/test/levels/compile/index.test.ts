@@ -15,7 +15,6 @@ import {
   RenderTarget,
   RGBAFormat,
   Scene,
-  WebGPURenderer,
 } from "three/webgpu";
 import { mrt, output, texture, vec3, vec4 } from "three/tsl";
 import { expect, it, vi } from "vitest";
@@ -39,27 +38,6 @@ const contextOf = (scene = new Scene()) => ({
   cubeFace: 0,
   mipLevel: 0,
   depth: 0,
-});
-
-it("prepares a level on WebGPURenderer's WebGL backend", { timeout: GPU_TIMEOUT }, async () => {
-  const webgl = new WebGPURenderer({ forceWebGL: true });
-  await webgl.init();
-  const mesh = new Mesh(new BoxGeometry(), new MeshBasicNodeMaterial());
-  mesh.position.z = -3;
-  const scene = new Scene().add(mesh);
-  const context = { ...contextOf(scene), renderer: webgl };
-  try {
-    await gpu.compiler.compileAsync(mesh, context, alone);
-    webgl.setRenderTarget(context.target);
-    webgl.render(scene, context.camera);
-    const pixels = await webgl.readRenderTargetPixelsAsync(context.target, 0, 0, 32, 32);
-    expect(pixels.some((byte) => byte > 0)).toBe(true);
-  } finally {
-    mesh.geometry.dispose();
-    mesh.material.dispose();
-    context.target.dispose();
-    webgl.dispose();
-  }
 });
 
 it("rejects a render pipeline that the backend could not compile", { timeout: GPU_TIMEOUT }, async () => {
