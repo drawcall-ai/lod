@@ -48,12 +48,11 @@ export function town(centre: { x: number; z: number; angle: number; radius: numb
   const exists = (i: number, j: number) => reach(node(i, j)) < centre.radius * (0.85 + 0.3 * Math.sin(i * 1.7 + j * 2.3));
 
   const segments: { a: THREE.Vector2; b: THREE.Vector2; core: boolean }[] = [];
-  /** How many streets meet at each node, by its `i,j`. */
-  const degree = new Map<string, { i: number; j: number; streets: number }>();
+  const junctions = new Map<string, { i: number; j: number; streets: number }>();
   const meet = (i: number, j: number, streets: number) => {
-    const node = degree.get(`${i},${j}`) ?? { i, j, streets: 0 };
-    node.streets += streets;
-    degree.set(`${i},${j}`, node);
+    const junction = junctions.get(`${i},${j}`) ?? { i, j, streets: 0 };
+    junction.streets += streets;
+    junctions.set(`${i},${j}`, junction);
   };
   const link = (i: number, j: number, di: number, dj: number) => {
     if (!exists(i, j) || !exists(i + di, j + dj)) return;
@@ -96,11 +95,7 @@ export function town(centre: { x: number; z: number; angle: number; radius: numb
   const add = (id: string, at: Spot) => town.models.set(id, [...(town.models.get(id) ?? []), at]);
 
   // every street, the main road through town included, gets lots on both sides
-  const sides = [...segments];
-  mainRoad.reduce((a, b) => {
-    sides.push({ a, b, core: reach(b) < CORE });
-    return b;
-  });
+  const sides = [...segments, ...[...pairs(mainRoad)].map(([a, b]) => ({ a, b, core: reach(b) < CORE }))];
   const taken: { x: number; z: number; radius: number }[] = [{ x: churchAt.x, z: churchAt.y, radius: 15 }];
   const free = (x: number, z: number, radius: number) =>
     !inRect(plaza, x, z, radius + 4) &&
@@ -150,7 +145,7 @@ export function town(centre: { x: number; z: number; angle: number; radius: numb
   }
   // a street sign at the corner of each crossing, the street names taking turns
   const names = cycle(STREET_NAMES);
-  for (const { i, j, streets } of degree.values()) {
+  for (const { i, j, streets } of junctions.values()) {
     if (streets < 3) continue;
     const p = node(i, j)
       .addScaledVector(u, STREET_WIDTH / 2 + 1)
@@ -194,6 +189,15 @@ function distanceToSegment(x: number, z: number, a: THREE.Vector2, b: THREE.Vect
   const dz = b.y - a.y;
   const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (z - a.y) * dz) / (dx * dx + dz * dz)));
   return Math.hypot(x - a.x - t * dx, z - a.y - t * dz);
+}
+
+/** Each item of `items` with the one after it. */
+function* pairs<T>(items: readonly T[]): Generator<[T, T]> {
+  let previous: T | undefined;
+  for (const item of items) {
+    if (previous !== undefined) yield [previous, item];
+    previous = item;
+  }
 }
 
 /** `items` over and over. */
