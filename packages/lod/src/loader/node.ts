@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { readFile } from "node:fs/promises";
-import { join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createCanvas, type Canvas } from "@drawcall/webgpu";
 import type { GLTSLoader } from "@drawcall/glts";
@@ -11,12 +11,13 @@ import { setUpBakeRenderer } from "../bake.js";
 import type { LodLevel } from "../levels/index.js";
 import { CachedLodLoader as BrowserCachedLodLoader, type CachedLodLoaderOptions } from "./index.js";
 import type { LodRequest } from "./request.js";
-
-/** The origin loads in Node fetch the app's public directory at, as a page of the app fetches it from its own. */
-const origin = "https://lod.invalid";
+import { placeholderOrigin } from "./url.js";
 
 interface Session {
+  /** The project root, which recorded inputs are relative to. */
   root: string;
+  /** The directory served paths load from. */
+  publicDir: string;
   /** The public files the session's loads read, relative to `root`. */
   read: Set<string>;
 }
@@ -26,37 +27,74 @@ const sessions = new AsyncLocalStorage<Session>();
 
 /**
  * CachedLodLoader in Node, as the vitecache plugin runs it: `loadAsync` builds and saves every level of the ladder, each
- * with the public files the ladder's loads read and the installed version of three. Without a manager of yours,
- * served paths such as `/trees/oak.glts` load from the `public` directory below `root`, and `.glts` sources through a
- * GLTSLoader of its own; bakes draw on a WebGPU device of @drawcall/webgpu. Each load frees what it made to load and
- * bake with, so the levels it returns load nothing more once `loadAsync` has resolved.
+ * with the public files the ladder's loads read and the installed version of three. Served paths such as
+ * `/trees/oak.glts` load from the public directory, and `.glts` sources through a GLTSLoader of the load's own; bakes
+ * draw on a WebGPU device of @drawcall/webgpu. The project root and public directory are vitecache's: those of the
+ * Vite project while the vitecache plugin runs, else `options.root` (or the working directory) and its `public`.
+ *
+ * Each `loadAsync` loads and bakes with what it makes for itself, which it frees before resolving, so loads may run
+ * concurrently; the levels it returns hold everything they draw, and loading their source again afterwards fails.
  */
 export class CachedLodLoader extends BrowserCachedLodLoader {
-  protected override readonly buildsAll = true;
-  private readonly root: string;
-  private readonly scripts: ScriptLoader | undefined = undefined;
+  private readonly site: { root: string; publicDir: string };
 
-  constructor(manager?: LoadingManager, options: CachedLodLoaderOptions = {}) {
-    super(manager ?? servingManager(), options);
-    this.root = resolve(options.root ?? process.cwd());
-    if (manager) return;
-    this.scripts = new ScriptLoader(this.manager, pathToFileURL(`${this.root}/`).href);
-    this.manager.addHandler(/\.glts$/i, this.scripts);
+  constructor(
+    manager?: LoadingManager,
+    private readonly settings: CachedLodLoaderOptions = {},
+  ) {
+    if (manager)
+      throw new Error(
+        "CachedLodLoader: in Node, construct it without a manager: it serves the app's public files and loads .glts sources itself, which is how it records what each level was built from",
+      );
+    super(undefined, settings);
+    this.site = site(settings.root);
   }
 
   override loadAsync(request: LodRequest): Promise<LodLevel[]> {
-    return session({ root: this.root, read: new Set() }, async () => {
+    const { root, publicDir } = this.site;
+    return session({ root, publicDir, read: new Set() }, async () => {
+      const loader = new SessionLoader(root, this.settings);
+      loader.setPath(this.path).setResourcePath(this.resourcePath).setCrossOrigin(this.crossOrigin);
       try {
-        return await super.loadAsync(request);
+        return await loader.loadAsync(request);
       } finally {
-        await this.dispose();
+        await loader.dispose();
       }
     });
   }
 
+  /** Nothing to free: each load frees what it made. */
+  override async dispose(): Promise<void> {}
+}
+
+/** The vitecache plugin's project root and public directory while it runs in this process, else `root`'s. */
+function site(root: string | undefined): { root: string; publicDir: string } {
+  // vitecache's plugin publishes its project on globalThis.vitecache (see vitecache's shared.d.ts).
+  const shared: unknown = Reflect.get(globalThis, "vitecache");
+  const field = (name: string) => {
+    const value: unknown = typeof shared === "object" && shared !== null ? Reflect.get(shared, name) : undefined;
+    return typeof value === "string" ? value : undefined;
+  };
+  // As vitecache resolves an entry's root and cache directory: an explicit root is not the plugin's.
+  const plugin = root === undefined ? field("directory") : undefined;
+  const resolved = resolve(root ?? field("root") ?? process.cwd());
+  return { root: resolved, publicDir: plugin ? dirname(plugin) : join(resolved, "public") };
+}
+
+/** One `loadAsync` of the Node loader: builds every level, with a GLTSLoader and bake renderer of its own. */
+class SessionLoader extends BrowserCachedLodLoader {
+  protected override readonly buildsAll = true;
+  private readonly scripts: ScriptLoader;
+
+  constructor(root: string, options: CachedLodLoaderOptions) {
+    super(servingManager(), options);
+    this.scripts = new ScriptLoader(this.manager, pathToFileURL(`${root}/`).href);
+    this.manager.addHandler(/\.glts$/i, this.scripts);
+  }
+
   override async dispose(): Promise<void> {
     await super.dispose();
-    this.scripts?.dispose();
+    await this.scripts.dispose();
   }
 
   protected override newBakeRenderer(): Promise<WebGPURenderer> {
@@ -73,9 +111,15 @@ export class CachedLodLoader extends BrowserCachedLodLoader {
   }
 }
 
+/** A manager that serves root-relative paths from the public directory while a load runs. */
 function servingManager(): LoadingManager {
   const manager = new LoadingManager();
-  manager.setURLModifier((url) => (url.startsWith("/") && !url.startsWith("//") ? origin + url : url));
+  manager.setURLModifier((url) => {
+    if (!url.startsWith("/") || url.startsWith("//")) return url;
+    if (!sessions.getStore())
+      throw new Error(`CachedLodLoader: cannot load "${url}" after loadAsync resolved: in Node, a ladder loads its assets only while loadAsync runs`);
+    return placeholderOrigin + url;
+  });
   return manager;
 }
 
@@ -97,11 +141,13 @@ class ScriptLoader extends Loader<Object3D> {
     return (await this.loader).loadAsync(url);
   }
 
-  /** Free the GLTSLoader and the scenes it loaded; the next load makes another. */
-  dispose(): void {
+  /** Free the GLTSLoader and the scenes it loaded, resolving once freed; the next load makes another. */
+  async dispose(): Promise<void> {
     const loader = this.loader;
     this.loader = undefined;
-    void loader?.then((made) => made.dispose());
+    // A GLTSLoader that failed to load failed the load that made it.
+    const made = await loader?.catch(() => undefined);
+    made?.dispose();
   }
 }
 
@@ -150,8 +196,8 @@ async function install(): Promise<{ canvas: Canvas; restore: () => Promise<void>
 async function serve(fetch: typeof globalThis.fetch, input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const url = new URL(input instanceof Request ? input.url : input);
   const state = sessions.getStore();
-  if (url.origin !== origin || !state) return fetch(input, init);
-  const file = join(state.root, "public", decodeURIComponent(url.pathname));
+  if (url.origin !== placeholderOrigin || !state) return fetch(input, init);
+  const file = join(state.publicDir, decodeURIComponent(url.pathname));
   try {
     const bytes = await readFile(file);
     state.read.add(relative(state.root, file));

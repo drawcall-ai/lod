@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, expect, it } from "vitest";
 import { CachedLodLoader } from "../../src/loader/node.js";
 import type { LodRequest } from "../../src/loader/request.js";
+import { LoadingManager } from "three/webgpu";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 const directory = join(root, "public/_vitecache");
@@ -39,4 +40,15 @@ it("builds and saves every level with the public files the ladder read, which a 
   }
   await new CachedLodLoader(undefined, { root }).loadAsync(request);
   expect(await saved()).toEqual(entries);
+});
+
+it("runs loads on one loader concurrently, each with its own GLTSLoader", { timeout: 120_000 }, async () => {
+  const loader = new CachedLodLoader(undefined, { root });
+  const request = (size: number): LodRequest => ({ url: `/box.glts?size=${size}`, levels: [{ type: "simplify", ratio: 0.5, maxPixels: 100 }] });
+  const ladders = await Promise.all([loader.loadAsync(request(3)), loader.loadAsync(request(4))]);
+  expect(ladders.map((levels) => levels.length)).toEqual([2, 2]);
+});
+
+it("refuses a manager, which would load what it cannot record", () => {
+  expect(() => new CachedLodLoader(new LoadingManager())).toThrow(/without a manager/);
 });

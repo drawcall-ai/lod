@@ -1,8 +1,11 @@
 import { LoaderUtils } from "three/webgpu";
 
 const absolute = /^[a-z][a-z\d+.-]*:/i;
-/** An origin no URL has, to parse paths with when there is no document to resolve them against. */
-const placeholderOrigin = "https://lod.invalid";
+/**
+ * An origin no URL has: paths parse against it where there is no document to resolve them against, and Node loads
+ * fetch the app's public files at it, as a page of the app fetches them from its own.
+ */
+export const placeholderOrigin = "https://lod.invalid";
 
 /** Resolve a relative asset path without changing absolute URLs or root-relative paths. */
 export function loaderPathURL(url: string, base: string): string {
