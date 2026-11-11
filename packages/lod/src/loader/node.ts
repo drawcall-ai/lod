@@ -37,7 +37,8 @@ const sessions = new AsyncLocalStorage<Session>();
  * Vite project while the vitecache plugin runs, else `options.root` (or the working directory) and its `public`.
  *
  * Each `loadAsync` loads and bakes with what it makes for itself, which it frees before resolving, so loads may run
- * concurrently; the levels it returns hold everything they draw, and loading their source again afterwards fails.
+ * concurrently. The levels it returns load their stored bytes as in browsers, but none holds the source: loading the
+ * source level, or a simplified level, which draws with the source's materials, fails once `loadAsync` has resolved.
  */
 export class CachedLodLoader extends BrowserCachedLodLoader {
   private readonly site: { root: string; publicDir: string };

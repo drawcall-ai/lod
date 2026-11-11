@@ -99,6 +99,12 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
       const shape = readShape(await this.cached(ladder, "shape", async () => encodeShape(shapeOf(await context.source()))));
       const box = placedBox(shape);
       if (box.isEmpty()) throw new Error("CachedLodLoader: the source has no visible geometry to measure");
+      // Building every level, the loader frees what it loaded with as loadAsync resolves (see the Node loader): no
+      // level keeps the spare source, and the source loads again only when a level asks for it.
+      if (this.buildsAll) {
+        const spare = context.take();
+        if (spare) disposeRecursive(spare);
+      }
       const thresholds = resolveThresholds(
         [
           {},
@@ -136,7 +142,7 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
           return { load, maxPixels, box: box.clone(), hold };
         }),
       ];
-      const levels = await preload(deferred);
+      const levels = await preload(deferred, !this.buildsAll);
       return levels;
     } catch (error) {
       context.fail();
@@ -256,12 +262,15 @@ function materialsOf(object: Object3D): Material[] {
 /** A level that loads on demand, as every level of a ladder starts. */
 type DeferredLevel = LodLevel & { load: () => Promise<Object3D>; box: Box3; maxPixels: number };
 
-/** Loads what every camera draws before it picks a level: the empty levels, and the source if it is the only drawable. */
-async function preload(levels: DeferredLevel[]): Promise<LodLevel[]> {
+/**
+ * Loads what every camera draws before it picks a level: the empty levels, and, given `alone`, the source if it is the
+ * only drawable.
+ */
+async function preload(levels: DeferredLevel[], alone: boolean): Promise<LodLevel[]> {
   const drawable = levels.filter((level) => !level.box.isEmpty());
   return Promise.all(
     levels.map(async (level) =>
-      level.box.isEmpty() || drawable.length === 1 ? { object: await level.load(), maxPixels: level.maxPixels, hold: level.hold } : level,
+      level.box.isEmpty() || (alone && drawable.length === 1) ? { object: await level.load(), maxPixels: level.maxPixels, hold: level.hold } : level,
     ),
   );
 }

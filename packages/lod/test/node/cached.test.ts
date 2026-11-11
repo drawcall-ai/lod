@@ -43,15 +43,16 @@ it("builds and saves every level with the public files and packages the ladder r
   expect(await saved()).toEqual(entries);
 });
 
-it("runs loads on one loader concurrently, each with its own GLTSLoader", { timeout: 120_000 }, async () => {
+it("runs loads on one loader concurrently, each with its own GLTSLoader and bake renderer", { timeout: 120_000 }, async () => {
   const loader = new CachedLodLoader(undefined, { root });
-  const request = (size: number): LodRequest => ({ url: `/box.glts?size=${size}`, levels: [{ type: "simplify", ratio: 0.5, maxPixels: 100 }] });
-  const ladders = await Promise.all([loader.loadAsync(request(3)), loader.loadAsync(request(4))]);
+  const ladders = await Promise.all([
+    loader.loadAsync({ url: "/box.glts?size=3", levels: [{ type: "simplify", ratio: 0.5, maxPixels: 100 }] }),
+    loader.loadAsync({ url: "/box.glts?size=4", levels: [{ type: "impostor", resolution: 32 }] }),
+  ]);
   expect(ladders.map((levels) => levels.length)).toEqual([2, 2]);
-});
-
-it("refuses a manager, which would load what it cannot record", () => {
-  expect(() => new CachedLodLoader(new LoadingManager())).toThrow(/without a manager/);
+  // Nothing holds the source once loadAsync has resolved.
+  const source = ladders[0]?.[0]?.load;
+  await expect(source?.()).rejects.toThrow(/after loadAsync resolved/);
 });
 
 it("fails a load that fetches what it cannot record", { timeout: 120_000 }, async () => {
@@ -59,4 +60,8 @@ it("fails a load that fetches what it cannot record", { timeout: 120_000 }, asyn
   await expect(new CachedLodLoader(undefined, { root }).loadAsync("/fetch.glts")).rejects.toMatchObject({
     cause: { message: expect.stringMatching(/cannot precompute/) },
   });
+});
+
+it("refuses a manager, which would load what it cannot record", () => {
+  expect(() => new CachedLodLoader(new LoadingManager())).toThrow(/without a manager/);
 });
