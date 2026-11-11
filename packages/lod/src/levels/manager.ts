@@ -11,7 +11,7 @@ import { LoadingItem } from "./item.js";
 import { CameraRequests } from "./requests.js";
 import { ChunkWait } from "./wait.js";
 import { ContextCompiles } from "./compiles.js";
-import { renderingNow } from "./renderer.js";
+import { busyRenderer } from "./renderer.js";
 
 /** How long an arriving level fades in for, over what drew in its place. */
 export const ARRIVAL_MS = 200;
@@ -63,8 +63,6 @@ export class LodLevelLoadManager {
   error: Error | undefined;
   /** Whether a render has updated the Lod: its shaders are being or have been built. */
   started = false;
-  /** The cameras rendering the Lod, and what they asked for. */
-  readonly requests: CameraRequests;
   /** Its item on a LoadingManager. */
   readonly item: LoadingItem;
 
@@ -92,8 +90,8 @@ export class LodLevelLoadManager {
   private readonly releases: (() => void)[];
   /** An InstancedLod's chunks, while they wait to be shown taken in (see `chunksChanged`); null for a Lod. */
   private readonly wait: ChunkWait | null;
-  /** What draws the Lod, once a render has updated it (see `renderer`). */
-  private drawnWith: Renderer | null = null;
+  /** The renderer drawing the Lod and what the cameras rendering it there asked for, once one updated it (see `updating`). */
+  private drawing: { readonly renderer: Renderer; readonly requests: CameraRequests } | null = null;
 
   constructor(
     private readonly lod: Object3D<LodEventMap>,
@@ -114,13 +112,11 @@ export class LodLevelLoadManager {
     this.coarsest = coarsest;
     this.order = levels.length === 0 ? [] : [coarsest, ...[...levels.keys()].reverse().filter((level) => level !== coarsest)];
     this.releases = [...new Set(levels.flatMap(({ hold }) => (hold ? [hold] : [])))].map((hold) => hold());
-    const renderer = () => this.renderer();
-    this.requests = new CameraRequests(renderer, this.seen);
     this.compiles = new ContextCompiles(
       (context, bits) => this.compileLevels(context, bits),
       (error) => this.report(error),
     );
-    this.item = new LoadingItem(lod, name, renderer);
+    this.item = new LoadingItem(lod, name);
     this.wait =
       readChunks &&
       new ChunkWait(
@@ -136,29 +132,41 @@ export class LodLevelLoadManager {
     return Math.min((performance.now() - this.arrival) / ARRIVAL_MS, 1);
   }
 
+  /** The renderer drawing the Lod: the first of `Lod.renderers` whose render updated it; null before. */
+  get renderer(): Renderer | null {
+    return this.drawing?.renderer ?? null;
+  }
+
   /**
-   * The renderer that draws the Lod: the first of `Lod.renderers` whose render or compile updated it, bound then.
-   * Another renderer drawing it throws, as does asking before one has.
+   * The renderer updating the Lod now: the one of `Lod.renderers` rendering, else the one drawing it, as when an app
+   * updates it itself; null while neither is known. The first binds the Lod to it; another drawing it throws.
    */
-  renderer(): Renderer {
-    const now = renderingNow();
-    if (!this.drawnWith) {
-      if (!now) throw new Error(`${this.name}: render it first, with a renderer added to Lod.renderers`);
-      this.drawnWith = now;
+  updating(): Renderer | null {
+    const busy = busyRenderer();
+    if (!this.drawing) {
+      if (!busy) return null;
+      this.drawing = { renderer: busy, requests: new CameraRequests(busy, this.seen) };
     }
-    if (now && now !== this.drawnWith) throw new Error(`${this.name}: another renderer than the first that rendered it drew it`);
-    return this.drawnWith;
+    if (busy && busy !== this.drawing.renderer) throw new Error(`${this.name}: another renderer than the first that rendered it drew it`);
+    return this.drawing.renderer;
+  }
+
+  /** Whether `camera` still renders the Lod (see `CameraRequests.rendering`). */
+  rendering(camera: Camera): boolean {
+    return this.drawing?.requests.rendering(camera) ?? false;
   }
 
   get pending(): boolean {
-    if (this.disposed || this.error) return false;
-    if (this.arriving.size > 0 || this.ready.size > 0 || (this.requests.needed() & ~this.loaded) !== 0) return true;
-    return this.compiles.running(this.requests);
+    if (this.disposed || this.error || !this.drawing) return false;
+    const { requests } = this.drawing;
+    if (this.arriving.size > 0 || this.ready.size > 0 || (requests.needed() & ~this.loaded) !== 0) return true;
+    return this.compiles.running(requests);
   }
 
   /**
-   * `camera`, a shadow map's when `shadow`, wants the levels of the bits `wanted` (see levelsToLoad): load what is
-   * missing, and answer the bits of the levels loaded now. Outside a Scene a missing level is an error, as no render of it would load it.
+   * `camera`, a shadow map's when `shadow`, wants the levels of the bits `wanted` (see levelsToLoad) in an update that
+   * `updating` answered a renderer for: load what is missing, and answer the bits of the levels loaded now. Outside a
+   * Scene a missing level is an error, as no render of it would load it.
    */
   request(camera: Camera, wanted: number, shadow: boolean): number {
     this.started = true;
@@ -169,8 +177,9 @@ export class LodLevelLoadManager {
       return this.loaded;
     }
     this.item.touch();
-    const frame = this.requests.set(scene, camera, wanted, shadow);
-    this.load(camera, shadow, frame);
+    const { requests } = this.drawn();
+    const frame = requests.set(scene, camera, wanted, shadow);
+    this.load(requests, camera, shadow, frame);
     this.wait?.render();
     this.sync();
     return this.loaded;
@@ -188,11 +197,17 @@ export class LodLevelLoadManager {
   }
 
   /**
-   * The height `camera`, a shadow map's when `shadow`, draws at (see CameraRenders.heightOf), which levels are chosen
-   * at.
+   * The height `camera`, a shadow map's when `shadow`, draws at with `renderer` (see CameraRenders.heightOf), which
+   * levels are chosen at.
    */
-  heightOf(camera: Camera, shadow: boolean): number {
-    return this.seen.heightOf(camera, this.renderer(), shadow);
+  heightOf(camera: Camera, renderer: Renderer, shadow: boolean): number {
+    return this.seen.heightOf(camera, renderer, shadow);
+  }
+
+  /** The renderer drawing the Lod and its cameras' requests: known once a render updated it, before anything loads. */
+  private drawn(): { readonly renderer: Renderer; readonly requests: CameraRequests } {
+    if (!this.drawing) throw new Error(`${this.name}: no renderer has updated it`);
+    return this.drawing;
   }
 
   /** What compiles for `cameras` are for: the shadow maps they drew, and the targets disposed. */
@@ -205,8 +220,8 @@ export class LodLevelLoadManager {
    * level that draws something, none of them wants and is not yet compiled for it, and prepare the levels that have
    * loaded. `shadow` is whether a shadow map renders it, in the renderer's `frame`.
    */
-  private load(camera: Camera, shadow: boolean, frame: number | null): void {
-    const needed = this.requests.needed();
+  private load(requests: CameraRequests, camera: Camera, shadow: boolean, frame: number | null): void {
+    const needed = requests.needed();
     const coarsestLoaded = !this.levelAt(this.coarsest).load || this.loads.get(this.coarsest)?.object !== undefined;
     for (const level of this.order) {
       const { load } = this.levelAt(level);
@@ -216,7 +231,7 @@ export class LodLevelLoadManager {
     // What draws never changes halfway through a frame: once a camera updated the Lod in it, as for an InstancedLod
     // its indirect draws, a shadow map rendered later joins nothing. The camera's next update does; a Lod only shadow
     // maps update joins in theirs.
-    if (!shadow || this.requests.cameraFrame !== frame) this.join();
+    if (!shadow || requests.cameraFrame !== frame) this.join();
     const context = this.seen.contextOf(camera);
     if (!context) return;
     this.compiles.compile(context, this.compiles.claim(context, this.loaded & ~this.empty & ~needed));
@@ -257,8 +272,9 @@ export class LodLevelLoadManager {
     // A context whose target was disposed meanwhile is dropped: compiling would revive the target.
     if (this.disposed || !this.seen.holds(context)) return;
     const objects = this.order.filter((level) => has(bits, level)).flatMap((level) => this.drawnBy(level));
-    const compileFor = this.compileFor(this.requests.cameras());
-    await Promise.all(objects.map((object) => compilerOf(this.renderer()).compileAsync(object, context, compileFor)));
+    const { renderer, requests } = this.drawn();
+    const compileFor = this.compileFor(requests.cameras());
+    await Promise.all(objects.map((object) => compilerOf(renderer).compileAsync(object, context, compileFor)));
   }
 
   /**
@@ -271,8 +287,9 @@ export class LodLevelLoadManager {
     const done = nextTask()
       .then(async () => {
         const object = this.loads.get(level)?.object;
-        if (this.disposed || !object || !has(this.requests.needed(), level)) return;
-        const cameras = this.requests.cameras();
+        const { renderer, requests } = this.drawn();
+        if (this.disposed || !object || !has(requests.needed(), level)) return;
+        const cameras = requests.cameras();
         // Contexts whose targets were disposed meanwhile are dropped. A camera that starts rendering the Lod while it
         // arrives draws it with pipelines built in that frame.
         const seen = [context, ...cameras.flatMap((camera) => this.seen.contextOf(camera) ?? [])];
@@ -281,7 +298,7 @@ export class LodLevelLoadManager {
         const prepared = this.prepare(level, object);
         try {
           const compileFor = this.compileFor(cameras);
-          await Promise.all([...contexts].map((other) => compilerOf(this.renderer()).compileAsync(prepared.object, other, compileFor)));
+          await Promise.all([...contexts].map((other) => compilerOf(renderer).compileAsync(prepared.object, other, compileFor)));
         } catch (error) {
           prepared.discard();
           throw error;
@@ -315,12 +332,10 @@ export class LodLevelLoadManager {
   /**
    * Hold the item while levels a camera wants are missing, compiling or arriving, or chunks wait to be shown taken in,
    * and end it once they are done, so a host waiting for its LoadingManager renders its cameras complete. Called at
-   * the end of each request. Before a render has updated the Lod it holds none: a host loading the Lod renders it
-   * only once its LoadingManager is done.
+   * the end of each request.
    */
   private sync(): void {
-    if (!this.drawnWith) return;
-    this.item.sync(!this.disposed && !this.error && (this.pending || (this.wait !== null && this.wait.waiting) || this.progress < 1));
+    this.item.sync(this.renderer, !this.disposed && !this.error && (this.pending || (this.wait !== null && this.wait.waiting) || this.progress < 1));
   }
 
   /**
@@ -352,7 +367,7 @@ export class LodLevelLoadManager {
    */
   dispose(release: () => void): void {
     this.disposed = true;
-    this.item.sync(false);
+    this.item.sync(this.renderer, false);
     this.seen.dispose();
     for (const prepared of this.ready.values()) prepared.discard();
     this.ready.clear();

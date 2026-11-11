@@ -34,7 +34,7 @@ export const renderers = new Set<Renderer>();
  * The renderer of `renderers` rendering now, else the one compiling: three's renderer calls a LOD's `update` with its
  * camera only. Several at once throw, as which one updates the LOD is unknown.
  */
-export function renderingNow(): Renderer | undefined {
+export function busyRenderer(): Renderer | undefined {
   const busied = [...renderers].filter(busy);
   const rendering = busied.filter((renderer) => callDepth(renderer) >= 0);
   const found = rendering.length > 0 ? rendering : busied;

@@ -138,12 +138,11 @@ it("glares in a low sun ahead only where a texel's normals agree", { timeout: GP
 it.each([false, true])("occludes at its reconstructed surface (reversed depth: %s)", { timeout: GPU_TIMEOUT }, async (reversedDepthBuffer) => {
   const drawing = new WebGPURenderer({ reversedDepthBuffer });
   await drawing.init();
-  Lod.renderers.add(drawing);
   const target = new RenderTarget(64, 64);
   const source = new Mesh(new BoxGeometry(2, 2, 2), new MeshStandardMaterial({ color: 0xe04020 }));
   const impostor = new ImpostorMesh(await bakeImpostor(source, bakeRenderer, { frames: 4, resolution: 32 }));
-  const on = new LodPool();
-  const instanced = oneChunk([{ object: impostor }], 1, { on });
+  const pool = new LodPool();
+  const instanced = oneChunk([{ object: impostor }], 1, { pool });
   const wall = new Mesh(new PlaneGeometry(4, 4), new MeshStandardMaterial({ color: 0x2040e0 }));
   const camera = new PerspectiveCamera(40, 1, 0.1, 20);
   camera.position.z = 6;
@@ -161,6 +160,7 @@ it.each([false, true])("occludes at its reconstructed surface (reversed depth: %
     if (red === undefined || blue === undefined) throw new Error("Missing centre pixel");
     return red > blue;
   };
+  Lod.renderers.add(drawing);
   try {
     for (const z of [0.5, 1.5]) {
       wall.position.z = z;
@@ -173,7 +173,7 @@ it.each([false, true])("occludes at its reconstructed surface (reversed depth: %
     }
   } finally {
     instanced.dispose();
-    on.dispose();
+    pool.dispose();
     impostor.dispose();
     source.geometry.dispose();
     source.material.dispose();

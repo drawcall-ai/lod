@@ -33,10 +33,10 @@ export interface MeshInputs {
   /** One instance's bounding radius in its own space, which shadow casters are cut off at. */
   readonly radius: number;
   /**
-   * Where `camera`'s indirect draws lie as a mesh draws for it, its lists sorted: the camera's due sorts,
+   * Where `camera`'s indirect draws lie as `renderer` draws a mesh for it, its lists sorted: the camera's due sorts,
    * every InstancedLod's, run now. Never throws: three is rendering.
    */
-  readonly drawFor: (camera: Camera) => InstanceSlots["args"];
+  readonly drawFor: (renderer: unknown, camera: Camera) => InstanceSlots["args"];
 }
 
 /** `object`'s meshes and material groups, placed once in the instance's space, for level `level`. */
@@ -95,9 +95,12 @@ export function freeMesh(mesh: Mesh): void {
   mesh.geometry.dispose();
 }
 
-/** Point every mesh of `meshes` at `instances.matrices`, which changed: survivors scale, or no longer do. */
-export function drawMatrices(meshes: readonly Mesh[], instances: DrawnInstances): void {
-  for (const mesh of meshes) if (isImpostorMesh(mesh)) mesh.instanceMatrix = instances.matrices;
+/** Point every mesh of `meshes` at `instances`, which changed: survivors scale, or no longer do, or pages arrived. */
+export function drawInstances(meshes: readonly Mesh[], instances: DrawnInstances): void {
+  for (const mesh of meshes) {
+    if (isImpostorMesh(mesh)) mesh.instanceMatrix = instances.matrices;
+    Object.assign(mesh, { instanceColor: instances.colors });
+  }
 }
 
 /**
@@ -128,7 +131,7 @@ function levelMesh({ template, placement, group }: Part, offset: () => number | 
     previous.call(mesh, renderer, scene, camera, geometry, material, drawn);
     const start = offset();
     if (start === null) return;
-    const args = drawFor(camera);
+    const args = drawFor(renderer, camera);
     mesh.geometry.setIndirect(args.attribute, args.offset + start);
   };
   return mesh;

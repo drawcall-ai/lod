@@ -17,8 +17,8 @@ describe("LodPool", () => {
   it("reports a pool outgrowing its first renderer's storage binding limit when that renderer draws it", { timeout: GPU_TIMEOUT }, async () => {
     const limit = vi.spyOn(GPUSupportedLimits.prototype, "maxStorageBufferBindingSize", "get").mockReturnValue(2 ** 20);
     vi.spyOn(console, "error").mockImplementation(() => {});
-    const on = new LodPool();
-    const lod = oneChunk(levels(), 1, { on });
+    const pool = new LodPool();
+    const lod = oneChunk(levels(), 1, { pool });
     const camera = new PerspectiveCamera(60, 1, 0.1, 100);
     camera.position.z = 5;
     try {
@@ -29,7 +29,7 @@ describe("LodPool", () => {
       limit.mockRestore();
       vi.mocked(console.error).mockRestore();
       lod.dispose();
-      on.dispose();
+      pool.dispose();
     }
   });
 });

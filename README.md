@@ -8,7 +8,7 @@ Requires Three.js `WebGPURenderer` (`three/webgpu`).
 npm install @drawcall/lod three typegpu
 ```
 
-Load a model into an existing Three.js scene. Each level loads once the camera needs it, finer ones as the camera approaches. Add the renderer to `Lod.renderers` once; loading code needs no renderer, as each Lod draws with the first of them that renders it.
+Load a model into an existing Three.js scene. Each level loads once the camera needs it, finer ones as the camera approaches. Add the renderer to `Lod.renderers` once, as three tells a Lod nothing of the renderer drawing it; loading code needs no renderer.
 
 ```ts
 import { Lod, LodLoader } from "@drawcall/lod";

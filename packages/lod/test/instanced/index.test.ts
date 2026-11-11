@@ -599,6 +599,7 @@ describe("an InstancedLod's shaders", { timeout: GPU_TIMEOUT }, () => {
     const scene = new Scene().add(first);
     const camera = new PerspectiveCamera(60, 1, 0.1, 100);
     camera.position.z = 5;
+    await render(scene, camera);
     const draw = must(drawnMeshes(first)[0]);
     const before = await renderer.debug.getShaderAsync(scene, camera, draw);
     // Unrelated asynchronous asset arrivals allocate nodes between equivalent InstancedLods.
@@ -606,6 +607,7 @@ describe("an InstancedLod's shaders", { timeout: GPU_TIMEOUT }, () => {
     const second = oneChunk([{ object: box() }], 17);
     scene.add(second);
     try {
+      await render(scene, camera);
       const after = await renderer.debug.getShaderAsync(scene, camera, must(drawnMeshes(second)[0]));
       expect(before.vertexShader).toContain("lodInstanceMatrices");
       expect(after.vertexShader).toBe(before.vertexShader);
@@ -637,13 +639,34 @@ describe("an InstancedLod's shaders", { timeout: GPU_TIMEOUT }, () => {
   });
 });
 
-it(
-  "reports another renderer than the first that drew an InstancedLod as its error, and goes on drawing with the first",
-  { timeout: GPU_TIMEOUT },
-  async () => {
+describe("renderers", () => {
+  /** A renderer the app never added to Lod.renderers, as a loader's own would be. */
+  const unknownRenderer = async () => {
     const other = new WebGPURenderer({ antialias: false });
     await other.init();
-    Lod.renderers.add(other);
+    return other;
+  };
+
+  it("draws nothing for a renderer it does not know, then draws with the first of Lod.renderers that renders it", { timeout: GPU_TIMEOUT }, async () => {
+    const other = await unknownRenderer();
+    const lod = oneChunk([{ object: box() }], 1);
+    const scene = new Scene().add(lod);
+    const camera = new PerspectiveCamera(60, 1, 0.1, 100);
+    camera.position.z = 5;
+    try {
+      expect(() => chunkOf(lod).getLevelAt(0, camera)).toThrow(/render the InstancedLod first/);
+      other.render(scene, camera);
+      expect(lod.error).toBeUndefined();
+      await eventually(async () => expect((await render(scene, camera)).some((value) => value > 0)).toBe(true));
+      expect(chunkOf(lod).getLevelAt(0, camera)).toBe(0);
+    } finally {
+      lod.dispose();
+      other.dispose();
+    }
+  });
+
+  it("reports another renderer than the first that drew it as its error, and goes on drawing with the first", { timeout: GPU_TIMEOUT }, async () => {
+    const other = await unknownRenderer();
     const lod = oneChunk([{ object: box() }], 1);
     const scene = new Scene().add(lod);
     const camera = new PerspectiveCamera(60, 1, 0.1, 100);
@@ -662,8 +685,7 @@ it(
     } finally {
       logged.mockRestore();
       lod.dispose();
-      Lod.renderers.delete(other);
       other.dispose();
     }
-  },
-);
+  });
+});

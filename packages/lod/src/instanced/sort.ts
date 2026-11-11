@@ -3,7 +3,7 @@ import type { d } from "typegpu";
 import type { DrawLevels } from "../levels/draw.js";
 import type { InstanceSlots } from "../levels/fade.js";
 import type { Cull } from "./cull.js";
-import { releaseArrays, type InstancePagePool } from "./pages/index.js";
+import { releaseArrays, type InstancePages } from "./pages/index.js";
 import {
   FLOATS_AT,
   FLOAT_ROW,
@@ -59,7 +59,7 @@ export class Sorter {
   private passes: SortPasses | null = null;
   private disposed = false;
 
-  constructor(private readonly pool: InstancePagePool) {}
+  constructor(private readonly pages: InstancePages) {}
 
   /** A row for an InstancedLod whose levels of `listed`, a mask, list up to `listSize` instances each. */
   register(listed: number, listSize: number): number {
@@ -80,7 +80,7 @@ export class Sorter {
 
   /** Survivors' scaled matrices, every pool index's: one buffer, as pool indices are unique to their InstancedLod. */
   get scaledMatrices(): StorageInstancedBufferAttribute {
-    return (this.scaled ??= new StorageInstancedBufferAttribute(new Float32Array(this.pool.capacity * 16), 16));
+    return (this.scaled ??= new StorageInstancedBufferAttribute(new Float32Array(this.pages.capacity * 16), 16));
   }
 
   /** An InstancedLod draws for `camera`: its buffers are made with the first. */
@@ -143,7 +143,7 @@ export class Sorter {
     if (!buffers || buffers.due.size === 0) return;
     const sort = this.sortBuffers(buffers);
     const { scaled } = this;
-    const passes = (this.passes ??= sortPasses(sort, this.pool.pages));
+    const passes = (this.passes ??= sortPasses(sort, this.pages.pages));
     passes.point(sort, this.layout.length);
     renderer.compute([passes.update, passes.indirect]);
     buffers.whole = false;
@@ -186,10 +186,10 @@ export class Sorter {
       indices,
       fades,
       args,
-      matrices: this.pool.matrices,
+      matrices: this.pages.matrices,
       scaled: this.scaled ?? this.unscaled,
       counts: this.layout.counts,
-      occupied: this.pool.occupied,
+      occupied: this.pages.occupied,
       draws: this.layout.draws,
     };
   }

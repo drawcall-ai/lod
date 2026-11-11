@@ -24,8 +24,8 @@ export class CameraRequests {
   private readonly inRound = new Set<Camera>();
 
   constructor(
-    /** The renderer drawing the Lod (see `LodLevelLoadManager.renderer`). */
-    private readonly renderer: () => Renderer,
+    /** The renderer drawing the Lod. */
+    private readonly renderer: Renderer,
     /** What renders told of the cameras that drew the Lod. */
     private readonly seen: CameraRenders,
   ) {}
@@ -40,7 +40,7 @@ export class CameraRequests {
     let request = this.requests.get(camera);
     if (!request) this.requests.set(camera, (request = { levels: 0, round: this.round, frame: null }));
     request.round = this.round;
-    const frame = this.renderer().info.frame;
+    const frame = this.renderer.info.frame;
     request.frame = shadow ? frame : null;
     if (!shadow) this.cameraFrame = frame;
     request.levels = wanted;
@@ -49,7 +49,7 @@ export class CameraRequests {
 
   /** Note what a render of `scene` with `camera` tells: nothing outside the renderer's renders. */
   private see(scene: Scene, camera: Camera): void {
-    const renderer = this.renderer();
+    const { renderer } = this;
     if (!busy(renderer)) return;
     this.seen.note(renderer, scene, camera);
     if (inShadowMap(scene)) return;
@@ -94,6 +94,6 @@ export class CameraRequests {
   private fresh(camera: Camera, request: Request): boolean {
     if (request.round >= this.round - 1) return true;
     if (request.frame === null) return false;
-    return request.frame === this.renderer().info.frame || this.seen.drawsShadowMap(camera);
+    return request.frame === this.renderer.info.frame || this.seen.drawsShadowMap(camera);
   }
 }

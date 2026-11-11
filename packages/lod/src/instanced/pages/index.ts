@@ -41,8 +41,23 @@ interface Run {
   count: number;
 }
 
-/** The page pool of a LodPool, and the passes that fill and free it. */
-export class InstancePagePool {
+/** The pages a pool of `maxInstanceCount` instances in `maxChunkCount` chunks holds; throws for sizes it cannot hold. */
+export function pageCount(maxInstanceCount: number, maxChunkCount: number): number {
+  for (const [name, value] of [
+    ["maxInstanceCount", maxInstanceCount],
+    ["maxChunkCount", maxChunkCount],
+  ] as const) {
+    if (!Number.isInteger(value) || value < 1) throw new RangeError(`LodPool: ${name} must be a positive integer, got ${value}`);
+  }
+  // A part-filled page per chunk besides the pages that fill.
+  const pages = maxChunkCount + Math.ceil(maxInstanceCount / PAGE);
+  if (pages >= 2 ** PAGE_BITS)
+    throw new RangeError(`LodPool: ${pages} pages of ${PAGE} instances outgrow the ${2 ** PAGE_BITS} a pool lists: lower maxInstanceCount or maxChunkCount`);
+  return pages;
+}
+
+/** The pages of a LodPool on one renderer, and the passes that fill and free them. */
+export class InstancePages {
   /** Room for instances, in pages of `PAGE`. */
   readonly capacity: number;
   readonly pages: number;
@@ -50,7 +65,7 @@ export class InstancePagePool {
   readonly occupied: StorageBufferAttribute;
   /** Bumped whenever the passes ran: what the pages hold changed. */
   version = 0;
-  private readonly pool: PoolBuffers;
+  private readonly buffers: PoolBuffers;
   private passes: PoolPasses | null = null;
   /** Per slot, its chunk and windows, and the generation of the chunk it last took: a slot reused in one frame still frees its pages. */
   private readonly held: (Held | null)[];
@@ -72,17 +87,15 @@ export class InstancePagePool {
     maxInstanceCount: number,
     /** The most chunks held at once. */
     maxChunkCount: number,
+    /** The largest storage binding the device takes: its maxStorageBufferBindingSize, which the matrices are one of. */
+    maxBinding: number,
   ) {
-    for (const [name, value] of [
-      ["maxInstanceCount", maxInstanceCount],
-      ["maxChunkCount", maxChunkCount],
-    ] as const) {
-      if (!Number.isInteger(value) || value < 1) throw new RangeError(`LodPool: ${name} must be a positive integer, got ${value}`);
-    }
-    // A part-filled page per chunk besides the pages that fill.
-    const pages = maxChunkCount + Math.ceil(maxInstanceCount / PAGE);
-    if (pages >= 2 ** PAGE_BITS)
-      throw new RangeError(`LodPool: ${pages} pages of ${PAGE} instances outgrow the ${2 ** PAGE_BITS} a pool lists: lower maxInstanceCount or maxChunkCount`);
+    const pages = pageCount(maxInstanceCount, maxChunkCount);
+    const bytes = pages * PAGE * 64;
+    if (bytes > maxBinding)
+      throw new RangeError(
+        `LodPool: the matrices of ${pages} pages of ${PAGE} instances, ${bytes} bytes, outgrow the device's storage binding of ${maxBinding} bytes: lower maxInstanceCount or maxChunkCount, or raise maxStorageBufferBindingSize in the renderer's requiredLimits`,
+      );
     const windows = WINDOWS_PER_PAGE * pages;
     this.pages = pages;
     this.capacity = pages * PAGE;
@@ -91,7 +104,7 @@ export class InstancePagePool {
     stack[0] = pages;
     for (let i = 0; i < pages; i++) stack[i + 1] = pages - 1 - i;
     const words = (length: number, itemSize = 1) => new StorageBufferAttribute(new Uint32Array(length * itemSize), itemSize);
-    this.pool = {
+    this.buffers = {
       pages,
       slots: maxChunkCount,
       stack: new StorageBufferAttribute(stack, 1),
@@ -103,7 +116,7 @@ export class InstancePagePool {
       matrices: new StorageInstancedBufferAttribute(new Float32Array(this.capacity * 16), 16),
       colors: new StorageInstancedBufferAttribute(new Float32Array(this.capacity * 4), 4),
     };
-    this.occupied = this.pool.occupied;
+    this.occupied = this.buffers.occupied;
     this.windows = [{ first: 0, count: windows }];
     this.held = Array.from({ length: maxChunkCount }, () => null);
     this.generations = new Uint32Array(maxChunkCount);
@@ -112,21 +125,12 @@ export class InstancePagePool {
 
   /** Every pool index's instance matrix, as the level meshes draw them. */
   get matrices(): StorageInstancedBufferAttribute {
-    return this.pool.matrices;
+    return this.buffers.matrices;
   }
 
   /** Every pool index's colour, RGB and a pad. */
   get colors(): StorageInstancedBufferAttribute {
-    return this.pool.colors;
-  }
-
-  /** Throw unless the matrices, one storage binding, fit in `limit` bytes: the device's maxStorageBufferBindingSize. */
-  checkBinding(limit: number): void {
-    const bytes = this.capacity * 64;
-    if (bytes <= limit) return;
-    throw new RangeError(
-      `LodPool: the matrices of ${this.pages} pages of ${PAGE} instances, ${bytes} bytes, outgrow the device's storage binding of ${limit} bytes: lower maxInstanceCount or maxChunkCount, or raise maxStorageBufferBindingSize in the renderer's requiredLimits`,
-    );
+    return this.buffers.colors;
   }
 
   /** Whether the next run takes chunks in or frees them. */
@@ -137,12 +141,12 @@ export class InstancePagePool {
   /** Take `chunk` into a free slot at the next run; its slot. */
   add(chunk: PoolChunk): number {
     const slot = this.free.pop();
-    if (slot === undefined) throw new Error(`InstancedLod: all ${this.pool.slots} chunk slots are taken: raise LodPool's maxChunkCount`);
+    if (slot === undefined) throw new Error(`InstancedLod: all ${this.buffers.slots} chunk slots are taken: raise LodPool's maxChunkCount`);
     const windows = Math.ceil(chunk.count / PAGE);
     const base = this.take(windows);
     if (base === null) {
       this.free.push(slot);
-      throw new Error(`InstancedLod: chunks span more than the pool's ${this.pool.table.count} windows of ${PAGE} spots: raise LodPool's maxInstanceCount`);
+      throw new Error(`InstancedLod: chunks span more than the pool's ${this.buffers.table.count} windows of ${PAGE} spots: raise LodPool's maxInstanceCount`);
     }
     this.held[slot] = { chunk, base, windows };
     this.change(slot);
@@ -176,7 +180,7 @@ export class InstancePagePool {
   }
 
   private write(slot: number, values: readonly number[]): void {
-    const { sources } = this.pool;
+    const { sources } = this.buffers;
     sources.array.set(values, slot * 4);
     sources.addUpdateRange(slot * 4, 4);
     sources.needsUpdate = true;
@@ -210,7 +214,7 @@ export class InstancePagePool {
   /** Take the chunks' changes in on `renderer`, if they changed since the last run. */
   prepare(renderer: Renderer): void {
     if (!this.pending) return;
-    const passes = (this.passes ??= new PoolPasses(this.pool));
+    const passes = (this.passes ??= new PoolPasses(this.buffers));
     // The free pass reads the windows of chunks removed since the last run: they serve chunks taken in after it.
     const freed = this.releasing;
     this.releasing = [];
@@ -223,7 +227,7 @@ export class InstancePagePool {
     this.removed = false;
     this.version++;
     this.giveBack(freed);
-    if (!this.released) releaseArrays([this.pool.matrices, this.pool.colors]);
+    if (!this.released) releaseArrays([this.buffers.matrices, this.buffers.colors]);
     this.released = true;
   }
 
@@ -260,7 +264,7 @@ export class InstancePagePool {
     }
     if (short > 0) {
       throw new Error(
-        `InstancedLod: ${short} chunk${short === 1 ? "" : "s"} lack pages, holding ${got} of the ${needed} pages they need: raise LodPool's maxInstanceCount (its pool has ${this.pool.pages} pages of ${PAGE})`,
+        `InstancedLod: ${short} chunk${short === 1 ? "" : "s"} lack pages, holding ${got} of the ${needed} pages they need: raise LodPool's maxInstanceCount (its pool has ${this.buffers.pages} pages of ${PAGE})`,
       );
     }
     return instances;
@@ -269,15 +273,25 @@ export class InstancePagePool {
   /** The chunks' states as the GPU holds them after run `version`: one read back for every InstancedLod asking. */
   private statesAt(renderer: Renderer, version: number): Promise<Uint32Array> {
     if (this.read?.version !== version) {
-      const promise = renderer.getArrayBufferAsync(this.pool.states).then((buffer) => new Uint32Array(buffer));
+      const promise = renderer.getArrayBufferAsync(this.buffers.states).then((buffer) => new Uint32Array(buffer));
       this.read = { version, promise };
     }
     return this.read.promise;
   }
 
   dispose(): void {
-    const { pool } = this;
-    for (const attribute of [pool.stack, pool.table, pool.windows, pool.sources, pool.states, pool.occupied, pool.matrices, pool.colors]) attribute.dispose();
+    const { buffers } = this;
+    for (const attribute of [
+      buffers.stack,
+      buffers.table,
+      buffers.windows,
+      buffers.sources,
+      buffers.states,
+      buffers.occupied,
+      buffers.matrices,
+      buffers.colors,
+    ])
+      attribute.dispose();
     this.passes?.dispose();
     this.passes = null;
   }

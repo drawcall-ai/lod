@@ -65,7 +65,7 @@ export interface InstanceSlots {
 /** What an InstancedLod's level meshes draw their instances from: every pool index's matrix, and its colour (RGB and a pad). */
 export interface DrawnInstances {
   matrices: StorageInstancedBufferAttribute;
-  readonly colors: StorageInstancedBufferAttribute;
+  colors: StorageInstancedBufferAttribute;
 }
 
 /** How a mesh of a level is drawn, which says where its fade and shadow size come from. */

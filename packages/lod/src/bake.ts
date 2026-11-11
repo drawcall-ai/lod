@@ -1,4 +1,5 @@
 import { Color, DataUtils, WebGPURenderer, type RenderTarget, type Renderer } from "three/webgpu";
+import { renderers } from "./levels/renderer.js";
 
 // What the GPU bakes (impostor frames, interior rooms) share: the renderer they draw with, one bake at a time on it,
 // and reading back what they drew.
@@ -40,9 +41,20 @@ const BLACK = new Color(0x000000);
  */
 const queues = new WeakMap<Renderer, Promise<unknown>>();
 
-/** Run `bake` on `renderer` once every bake queued on it before has settled. */
+/**
+ * Run `bake` on `renderer` once every bake queued on it before has settled, `renderer` among `Lod.renderers` meanwhile:
+ * the Lods and InstancedLods a bake draws draw with it.
+ */
 export function inTurn<T>(renderer: Renderer, bake: () => Promise<T>): Promise<T> {
-  const next = (queues.get(renderer) ?? Promise.resolve()).then(bake);
+  const next = (queues.get(renderer) ?? Promise.resolve()).then(async () => {
+    const added = !renderers.has(renderer);
+    renderers.add(renderer);
+    try {
+      return await bake();
+    } finally {
+      if (added) renderers.delete(renderer);
+    }
+  });
   // The queue goes on past a failed bake; its caller has the failure.
   queues.set(
     renderer,

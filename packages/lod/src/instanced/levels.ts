@@ -8,25 +8,26 @@ import type { DrawnInstances } from "../levels/fade.js";
 import type { PreparedLevel } from "../levels/manager.js";
 import { refreshWind } from "../wind/index.js";
 import type { InstanceLists } from "./lists.js";
-import { freeMesh, levelMeshes, partsOf, type LevelMeshes, type Part } from "./meshes.js";
+import { drawInstances, freeMesh, levelMeshes, partsOf, type LevelMeshes, type Part } from "./meshes.js";
 import type { InstanceShape } from "./shape.js";
 
-/** What an InstancedLod's level meshes draw with: its shape, lists and the instances they draw. */
+/** What an InstancedLod's level meshes draw with: its shape and the instances they draw. */
 export interface Drawing {
   readonly shape: InstanceShape;
-  readonly lists: InstanceLists;
-  /** What the level meshes draw: the pool's instances, or while survivors scale, their scaled matrices. */
+  /** What the level meshes draw: the pages' instances, or while survivors scale, their scaled matrices. */
   readonly drawn: DrawnInstances;
 }
 
 /**
  * An InstancedLod's level meshes: per level, the meshes drawing it with its debug tint, made from the level's object
- * once there is one and added to the InstancedLod, and the source level's parts, which a raycast hits.
+ * once there is one and added to the InstancedLod, and the source level's parts, which a raycast hits. They draw once
+ * attached to the lists of the renderer drawing the InstancedLod.
  */
 export class MeshesByLevel {
   private readonly tints: Color[];
-  private readonly byLevel: Mesh[][] = [];
+  private readonly byLevel: LevelMeshes[] = [];
   private sourceParts: readonly Part[] = [];
+  private lists: InstanceLists | null = null;
 
   constructor(
     /** The InstancedLod, which holds the meshes. */
@@ -36,18 +37,24 @@ export class MeshesByLevel {
     private readonly drawing: Drawing,
     /** Around every instance, survivors grown: what every level mesh is culled and boxed by. */
     private readonly bounds: { readonly sphere: Sphere; readonly box: Box3 },
-    /** Sorts `camera`'s lists as a mesh draws for it. */
-    private readonly drawFor: (camera: Camera) => void,
+    /** Sorts `camera`'s lists as `renderer` draws a mesh for it. */
+    private readonly drawFor: (renderer: unknown, camera: Camera) => void,
   ) {
     this.tints = levels.map(() => new Color(1, 1, 1));
     levels.forEach(({ object }, i) => {
       const parts = object ? partsOf(object, i) : [];
       if (i === 0) this.sourceParts = parts;
       const made = this.meshesOf(parts, i);
-      drawInto(drawing.lists, made);
-      this.byLevel.push(made.meshes);
+      this.byLevel.push(made);
       for (const mesh of made.meshes) parent.add(mesh);
     });
+  }
+
+  /** Draw for the cameras of `lists`, whose pages `drawing.drawn` now holds. */
+  attach(lists: InstanceLists): void {
+    this.lists = lists;
+    for (const made of this.byLevel) drawInto(lists, made);
+    drawInstances(this.all(), this.drawing.drawn);
   }
 
   /** The source level's parts, which a raycast hits. */
@@ -57,12 +64,12 @@ export class MeshesByLevel {
 
   /** The meshes drawing level `level`. */
   of(level: number): readonly Mesh[] {
-    return at(this.byLevel, level);
+    return at(this.byLevel, level).meshes;
   }
 
   /** Every level's meshes. */
   all(): Mesh[] {
-    return this.byLevel.flat();
+    return this.byLevel.flatMap(({ meshes }) => meshes);
   }
 
   /** Tint each level as Lod.debug, `debug`, has it. */
@@ -72,25 +79,31 @@ export class MeshesByLevel {
 
   /** Show the meshes of the levels of the bits `levels`, and hide the others. */
   show(levels: number): void {
-    this.byLevel.forEach((meshes, level) => {
+    this.byLevel.forEach(({ meshes }, level) => {
       for (const mesh of meshes) mesh.visible = has(levels, level);
     });
   }
 
   /** The meshes drawing `parts` of level `level` for the cameras of the lists. */
   private meshesOf(parts: readonly Part[], level: number): LevelMeshes {
-    const { lists, drawn, shape } = this.drawing;
+    const { drawn, shape } = this.drawing;
     return levelMeshes(parts, at(this.tints, level), {
       instances: drawn,
       bounds: this.bounds.sphere,
       box: this.bounds.box,
-      slots: (camera) => lists.slots(camera),
+      slots: (camera) => this.attached().slots(camera),
       radius: shape.fadeRadius,
-      drawFor: (camera) => {
-        this.drawFor(camera);
-        return lists.slots(camera).args;
+      drawFor: (renderer, camera) => {
+        this.drawFor(renderer, camera);
+        return this.attached().slots(camera).args;
       },
     });
+  }
+
+  /** The lists the meshes draw for, which only an attached InstancedLod's draws read. */
+  private attached(): InstanceLists {
+    if (!this.lists) throw new Error("InstancedLod: its meshes draw before a renderer drew it");
+    return this.lists;
   }
 
   /** Level meshes of `loaded`, level `index`'s object, staged for wind and compiling. */
@@ -107,8 +120,8 @@ export class MeshesByLevel {
       object: staged,
       join: () => {
         level.object = object;
-        drawInto(this.drawing.lists, made);
-        this.byLevel[index] = made.meshes;
+        drawInto(this.attached(), made);
+        this.byLevel[index] = made;
         if (index === 0) this.sourceParts = parts;
         for (const mesh of made.meshes) this.parent.add(mesh);
       },
@@ -121,7 +134,7 @@ export class MeshesByLevel {
 
   /** Take every mesh out of the InstancedLod and free it. */
   dispose(): void {
-    for (const mesh of this.byLevel.flat()) {
+    for (const mesh of this.all()) {
       mesh.removeFromParent();
       freeMesh(mesh);
     }

@@ -22,8 +22,6 @@ export class LoadingItem {
     private readonly lod: Object3D,
     /** The item's name: the kind of Lod and its uuid. */
     private readonly name: string,
-    /** The renderer drawing the Lod (see `LodLevelLoadManager.renderer`): bound before the item is first held. */
-    private readonly renderer: () => Renderer,
   ) {}
 
   /** Where the item goes. */
@@ -38,13 +36,17 @@ export class LoadingItem {
     this.updated = true;
   }
 
-  /** Hold the item if `held`, else end it; while it is held, look at the renderer's renders (see `look`). */
-  sync(held: boolean): void {
-    this.hold(held);
-    if (!this.holding || this.looking) return;
+  /**
+   * Hold the item if `held` and `renderer`, the one drawing the Lod, is known, else end it; while it is held, look at
+   * the renderer's renders (see `look`). Before a render has updated the Lod it holds none: a host loading the Lod
+   * renders it only once its LoadingManager is done.
+   */
+  sync(renderer: Renderer | null, held: boolean): void {
+    this.hold(held && renderer !== null);
+    if (!renderer || !this.holding || this.looking) return;
     // The first look only counts the renders: those still to come in this render are not without an update.
     this.updated = true;
-    this.look();
+    this.look(renderer);
   }
 
   /** Report a failure on the LoadingManager the item is held on, and end the item. */
@@ -74,8 +76,7 @@ export class LoadingItem {
    * starts it again. Renders of other scenes in a separate task can end it early, and the next update reopens it; a
    * renderer that only compiles holds a hidden Lod's item.
    */
-  private look(): void {
-    const renderer = this.renderer();
+  private look(renderer: Renderer): void {
     this.looking = true;
     const timer: unknown = setTimeout(() => {
       this.looking = false;
@@ -84,7 +85,7 @@ export class LoadingItem {
       if (renders !== this.renders && !this.updated) return this.hold(false);
       this.renders = renders;
       this.updated = false;
-      this.look();
+      this.look(renderer);
     }, LOOK_MS);
     // A held item must not hold Node.js open.
     if (typeof timer === "object" && timer !== null && "unref" in timer && typeof timer.unref === "function") timer.unref();

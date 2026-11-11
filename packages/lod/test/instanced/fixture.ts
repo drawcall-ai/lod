@@ -57,7 +57,7 @@ export function instancesOf(mesh: Object3D) {
  * order. The camera's due sorts run first, as its next draw would run them.
  */
 export async function sortedLists(lod: InstancedLod, camera: Camera) {
-  pool.sorter.run(renderer, camera);
+  pool.on(renderer).sorter.run(renderer, camera);
   return Promise.all(
     drawnMeshes(lod).map(async (mesh, index) => {
       const { indices, fades, args } = drawnSlots(mesh, camera);

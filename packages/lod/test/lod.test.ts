@@ -220,6 +220,7 @@ it("draws nothing, not even a given source, until its coarsest level has loaded,
   const scene = new Scene().add(lod);
   lod.position.z = -5;
   try {
+    expect(() => lod.getLevel(camera)).toThrow(/render the Lod first/);
     await render(scene, camera);
     expect(visible(lod)).toEqual([]);
     expect(lod.getLevel(camera)).toBeNull();

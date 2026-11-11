@@ -53,8 +53,9 @@ export class Lod extends Object3D<LodEventMap> {
   /** Share of a level's range its fade spans: from `maxPixels × (1 - fade)` up to its `maxPixels`, the finer level draws too. */
   static readonly fade = FADE;
   /**
-   * The renderers Lods and InstancedLods draw with: add the app's before it renders them. Each draws with the first of
-   * them that renders it; updated before that outside their renders, it reports an error.
+   * The renderers Lods and InstancedLods draw with, as three tells a LOD's `update` no renderer: add the app's before
+   * it renders them; a bake adds its own while it runs. Each Lod or InstancedLod draws with the first of them that
+   * renders it, and another of them drawing it is its error. Until one has, an update draws and loads nothing.
    */
   static readonly renderers: Set<Renderer> = renderers;
 
@@ -195,9 +196,11 @@ export class Lod extends Object3D<LodEventMap> {
   /** Show the levels for `camera`, a shadow map's when `shadow`. */
   private show(camera: Camera, shadow: boolean): void {
     if (this.disposed || this.levels.length === 0) return;
+    const renderer = this.loads.updating();
+    if (!renderer) return;
     // A shadow map draws the levels its scene's camera chose.
     if (shadow) return void this.loads.request(camera, 0, true);
-    const { height, levels } = this.measure(camera, false);
+    const { height, levels } = this.measure(camera, renderer, false);
     const loaded = this.loads.request(camera, levelsToLoad([[height, height]], this.encoded.heights(levels)), false);
     let { level, finer, fade } = levelsToDraw(height, levels, loaded, this.loads.before, this.loads.progress);
     // A nested Lod fades its own levels: the switch to or from one is immediate.
@@ -212,20 +215,23 @@ export class Lod extends Object3D<LodEventMap> {
     });
   }
 
-  /** The source's height on `camera`'s screen, and the levels as levelsToDraw reads them there. */
-  private measure(camera: Camera, shadow: boolean) {
-    const screen = screenOf(camera, this.loads.heightOf(camera, shadow));
+  /** The source's height on `camera`'s screen, drawn by `renderer`, and the levels as levelsToDraw reads them there. */
+  private measure(camera: Camera, renderer: Renderer, shadow: boolean) {
+    const screen = screenOf(camera, this.loads.heightOf(camera, renderer, shadow));
     const height = screenHeight(this.sphere, this.matrixWorld, screen) * Lod.quality;
     return { height, levels: this.encoded.get(this.forceLevel, !screen.ortho) };
   }
 
   /**
    * The index of the level that draws most of the Lod's pixels for `camera` from where it is, with the levels loaded
-   * now and no arrival under way (see `drawnLevel`); null while no level it could draw is loaded.
+   * now and no arrival under way (see `drawnLevel`); null while no level it could draw is loaded. It measures with the
+   * renderer drawing the Lod, so it throws before one has rendered it.
    */
   getLevel(camera: Camera): number | null {
     if (this.levels.length === 0) return null;
-    const { height, levels } = this.measure(camera, inShadowMap(this));
+    const { renderer } = this.loads;
+    if (!renderer) throw new Error("Lod.getLevel: render the Lod first: it measures with the renderer drawing it");
+    const { height, levels } = this.measure(camera, renderer, inShadowMap(this));
     return drawnLevel(levelsToDraw(height, levels, this.loads.loaded, this.loads.loaded, 1));
   }
 
