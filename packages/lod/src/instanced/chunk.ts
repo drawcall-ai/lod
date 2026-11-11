@@ -69,7 +69,8 @@ const origin = new Vector3();
 /**
  * Instances added to an InstancedLod in one call and removed whole (see `InstancedLod.addChunk`). An instance's index
  * is its index in the chunk's range, stable while other chunks come and go. The methods reading or writing instances
- * work for a chunk from the CPU only (see `isCpuChunk`): a GPU chunk's instances live on the GPU, and its methods throw.
+ * work for a chunk from the CPU only, one with an `instanceMatrix`: a GPU chunk's instances live on the GPU, and its
+ * methods throw.
  */
 export abstract class InstancedLodChunk {
   /** A CPU chunk's attributes; null for a GPU chunk. */
