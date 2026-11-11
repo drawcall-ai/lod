@@ -60,13 +60,8 @@ export interface ChunkState {
   minScale: number;
   maxScale: number;
   readonly boundingBox: Box3;
-  levelAt: ((chunk: InstancedLodCpuChunk, index: number, camera: Camera) => number | null) | null;
+  levelAt: ((chunk: CpuChunk, index: number, camera: Camera) => number | null) | null;
 }
-
-/** A chunk whose instances the CPU holds: what `InstancedLod.addChunk` returns for instances from the CPU. */
-export type InstancedLodCpuChunk = InstancedLodChunk & { readonly instanceMatrix: InstancedBufferAttribute; readonly instance: null };
-
-export const isCpuChunk = (chunk: InstancedLodChunk): chunk is InstancedLodCpuChunk => chunk.instanceMatrix !== null;
 
 const matrix = new Matrix4();
 const origin = new Vector3();
@@ -74,63 +69,20 @@ const origin = new Vector3();
 /**
  * Instances added to an InstancedLod in one call and removed whole (see `InstancedLod.addChunk`). An instance's index
  * is its index in the chunk's range, stable while other chunks come and go. The methods reading or writing instances
- * work for a chunk from the CPU only: a GPU chunk's instances live on the GPU, and its methods throw.
+ * work for a chunk from the CPU only (see `isCpuChunk`): a GPU chunk's instances live on the GPU, and its methods throw.
  */
-export class InstancedLodChunk {
+export abstract class InstancedLodChunk {
   /** A CPU chunk's attributes; null for a GPU chunk. */
-  readonly instanceMatrix: InstancedBufferAttribute | null;
-  readonly instanceColor: InstancedBufferAttribute | null;
+  abstract readonly instanceMatrix: InstancedBufferAttribute | null;
+  abstract readonly instanceColor: InstancedBufferAttribute | null;
   /** How a GPU chunk reads its instances; null for a CPU chunk. */
-  readonly instance: InstancedLodInstance | null;
-  readonly start: number;
-  readonly count: number;
+  abstract readonly instance: InstancedLodInstance | null;
 
-  /** Made by `InstancedLod.addChunk`. */
-  constructor(
-    parameters: InstancedLodChunkParameters,
+  protected constructor(
+    readonly start: number,
+    readonly count: number,
     private readonly state: ChunkState,
-  ) {
-    const { start = 0 } = parameters;
-    if (parameters.instance) {
-      const { instance, count, originBox, minScale, maxScale } = parameters;
-      checkRange(start, count);
-      if (!(minScale > 0 && minScale <= maxScale && Number.isFinite(maxScale)))
-        throw new RangeError(`InstancedLod: a chunk's scales must be 0 < minScale <= maxScale, got ${minScale}, ${maxScale}`);
-      if (originBox.isEmpty() || ![...originBox.min.toArray(), ...originBox.max.toArray()].every(Number.isFinite))
-        throw new RangeError("InstancedLod: a chunk's originBox must be finite and not empty");
-      state.originBox.copy(originBox);
-      state.minScale = minScale;
-      state.maxScale = maxScale;
-      this.instanceMatrix = this.instanceColor = null;
-      this.instance = instance;
-      this.start = start;
-      this.count = count;
-      return;
-    }
-    if ("originBox" in parameters || "minScale" in parameters || "maxScale" in parameters)
-      throw new TypeError("InstancedLod: a CPU chunk's originBox, minScale and maxScale are measured from its instances, not given");
-    const { instanceMatrix, instanceColor = null, count = instanceMatrix.count - start } = parameters;
-    if (instanceMatrix.itemSize !== 16)
-      throw new TypeError(`InstancedLod: a chunk's instanceMatrix holds 16 floats per instance, not ${instanceMatrix.itemSize}`);
-    if (!(instanceMatrix.array instanceof Float32Array) || instanceMatrix.normalized)
-      throw new TypeError("InstancedLod: a chunk's instanceMatrix holds floats, not normalized");
-    checkRange(start, count);
-    if (start + count > instanceMatrix.count)
-      throw new RangeError(`InstancedLod: a chunk's range of ${count} from ${start} passes the ${instanceMatrix.count} instances of its instanceMatrix`);
-    if (instanceColor) {
-      if (instanceColor.itemSize !== 3)
-        throw new TypeError(`InstancedLod: a chunk's instanceColor holds RGB per instance, not ${instanceColor.itemSize} floats`);
-      if (!(instanceColor.array instanceof Float32Array) || instanceColor.normalized)
-        throw new TypeError("InstancedLod: a chunk's instanceColor holds floats, not normalized");
-      if (instanceColor.count < start + count) throw new RangeError("InstancedLod: a chunk's instanceColor holds fewer instances than its range");
-    }
-    this.instanceMatrix = instanceMatrix;
-    this.instanceColor = instanceColor;
-    this.instance = null;
-    this.start = start;
-    this.count = count;
-    measureChunk(this.cpu(), state);
-  }
+  ) {}
 
   /** Holds every instance's origin, in the InstancedLod's space: given for a GPU chunk, measured for a CPU one. */
   get originBox(): Box3 {
@@ -189,14 +141,71 @@ export class InstancedLodChunk {
     return levelAt(this.cpu(index), index, camera);
   }
 
-  /** This chunk, whose instances the CPU holds, after checking `index`, if given, is one of them. */
-  private cpu(index?: number): InstancedLodCpuChunk {
+  /** This chunk, whose instances the CPU holds, after checking `index` is one of them. */
+  private cpu(index: number): CpuChunk {
     if (!isCpuChunk(this)) throw new Error("InstancedLod: a GPU chunk's instances live on the GPU: the CPU cannot read or write them");
-    if (index !== undefined && !(Number.isInteger(index) && index >= 0 && index < this.count))
+    if (!(Number.isInteger(index) && index >= 0 && index < this.count))
       throw new RangeError(`InstancedLod: ${index} is not an instance of the chunk's ${this.count}`);
     return this;
   }
 }
+
+/** A chunk whose instances the CPU holds, in its attributes: what `InstancedLod.addChunk` makes of CPU parameters. */
+export class CpuChunk extends InstancedLodChunk {
+  readonly instanceMatrix: InstancedBufferAttribute;
+  readonly instanceColor: InstancedBufferAttribute | null;
+  readonly instance = null;
+
+  constructor(parameters: InstancedLodCpuChunkParameters, state: ChunkState) {
+    if ("originBox" in parameters || "minScale" in parameters || "maxScale" in parameters)
+      throw new TypeError("InstancedLod: a CPU chunk's originBox, minScale and maxScale are measured from its instances, not given");
+    const { instanceMatrix, instanceColor = null, start = 0, count = instanceMatrix.count - start } = parameters;
+    if (instanceMatrix.itemSize !== 16)
+      throw new TypeError(`InstancedLod: a chunk's instanceMatrix holds 16 floats per instance, not ${instanceMatrix.itemSize}`);
+    if (!(instanceMatrix.array instanceof Float32Array) || instanceMatrix.normalized)
+      throw new TypeError("InstancedLod: a chunk's instanceMatrix holds floats, not normalized");
+    checkRange(start, count);
+    if (start + count > instanceMatrix.count)
+      throw new RangeError(`InstancedLod: a chunk's range of ${count} from ${start} passes the ${instanceMatrix.count} instances of its instanceMatrix`);
+    if (instanceColor) {
+      if (instanceColor.itemSize !== 3)
+        throw new TypeError(`InstancedLod: a chunk's instanceColor holds RGB per instance, not ${instanceColor.itemSize} floats`);
+      if (!(instanceColor.array instanceof Float32Array) || instanceColor.normalized)
+        throw new TypeError("InstancedLod: a chunk's instanceColor holds floats, not normalized");
+      if (instanceColor.count < start + count) throw new RangeError("InstancedLod: a chunk's instanceColor holds fewer instances than its range");
+    }
+    super(start, count, state);
+    this.instanceMatrix = instanceMatrix;
+    this.instanceColor = instanceColor;
+    measureChunk(this, state);
+  }
+}
+
+/** A chunk whose instances the app's records on the GPU hold: what `InstancedLod.addChunk` makes of GPU parameters. */
+export class GpuChunk extends InstancedLodChunk {
+  readonly instanceMatrix = null;
+  readonly instanceColor = null;
+  readonly instance: InstancedLodInstance;
+
+  constructor(parameters: InstancedLodGpuChunkParameters, state: ChunkState) {
+    if ("instanceMatrix" in parameters || "instanceColor" in parameters)
+      throw new TypeError("InstancedLod: a GPU chunk reads its instances by its instance function: give it no instanceMatrix or instanceColor");
+    const { instance, start = 0, count, originBox, minScale, maxScale } = parameters;
+    checkRange(start, count);
+    if (!(minScale > 0 && minScale <= maxScale && Number.isFinite(maxScale)))
+      throw new RangeError(`InstancedLod: a chunk's scales must be 0 < minScale <= maxScale, got ${minScale}, ${maxScale}`);
+    if (originBox.isEmpty() || ![...originBox.min.toArray(), ...originBox.max.toArray()].every(Number.isFinite))
+      throw new RangeError("InstancedLod: a chunk's originBox must be finite and not empty");
+    super(start, count, state);
+    state.originBox.copy(originBox);
+    state.minScale = minScale;
+    state.maxScale = maxScale;
+    this.instance = instance;
+  }
+}
+
+/** Whether `chunk`'s instances are the CPU's, in its attributes, which its CPU methods read and write. */
+export const isCpuChunk = (chunk: InstancedLodChunk): chunk is CpuChunk => chunk instanceof CpuChunk;
 
 function checkRange(start: number, count: number): void {
   if (!Number.isInteger(start) || !Number.isInteger(count) || start < 0 || count < 0)
@@ -204,7 +213,7 @@ function checkRange(start: number, count: number): void {
 }
 
 /** Measure into `state` the origins and scales of `chunk`'s instances at a scale above 0, from its CPU attributes. */
-export function measureChunk(chunk: InstancedLodCpuChunk, state: ChunkState): void {
+export function measureChunk(chunk: CpuChunk, state: ChunkState): void {
   const { array } = chunk.instanceMatrix;
   state.originBox.makeEmpty();
   state.minScale = Infinity;

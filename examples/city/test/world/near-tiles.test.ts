@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { InstancedLodCpuChunkParameters } from "@drawcall/lod";
+import type { InstancedLodChunkParameters } from "@drawcall/lod";
 import { InstancedBufferAttribute, Matrix4, Object3D, Vector3 } from "three/webgpu";
 import { NearTiles, tileAt, tileKey, tilesAround } from "../../src/world/near-tiles.ts";
 
@@ -17,7 +17,10 @@ interface Recorded {
 class Recorder extends Object3D {
   readonly chunks = new Set<Recorded>();
 
-  addChunk({ instanceMatrix, start = 0, count = instanceMatrix.count - start }: InstancedLodCpuChunkParameters): Recorded {
+  addChunk(parameters: InstancedLodChunkParameters): Recorded {
+    const { instanceMatrix, start = 0 } = parameters;
+    if (!instanceMatrix) throw new Error("the recorder takes CPU chunks: it reads their instanceMatrix");
+    const { count = instanceMatrix.count - start } = parameters;
     const chunk = { start, count, x: instanceMatrix.array[start * 16 + 12] ?? NaN };
     this.chunks.add(chunk);
     return chunk;

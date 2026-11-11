@@ -2,6 +2,7 @@ import { Box3, BoxGeometry, Color, InstancedBufferAttribute, Matrix4, Mesh, Mesh
 import { mat4 } from "three/tsl";
 import { describe, expect, it } from "vitest";
 import { InstancedLod } from "../../src/instanced/index.js";
+import { isCpuChunk } from "../../src/instanced/chunk.js";
 import { instanceColor, instanceMatrix } from "../instances.js";
 import { gpu } from "../renderer.js";
 import { box } from "../box.js";
@@ -23,6 +24,8 @@ describe("InstancedLodChunk", () => {
     expect(() => target.addChunk({ instanceMatrix: matrices, ...bounds })).toThrow(/measured from its instances/);
     expect(() => target.addChunk({ ...gpuChunk, minScale: 3 })).toThrow(/0 < minScale <= maxScale/);
     expect(() => target.addChunk({ ...gpuChunk, count: -1 })).toThrow(/integers of at least 0/);
+    // As a caller without types would: a GPU chunk reads no attributes.
+    expect(() => Reflect.apply(target.addChunk, target, [{ ...gpuChunk, instanceMatrix: matrices }])).toThrow(/give it no instanceMatrix/);
     expect(() => new InstancedLod([], gpu).addChunk({ instanceMatrix: matrices })).toThrow(/levels before chunks/);
     expect([...target.chunks]).toEqual([]);
     target.dispose();
@@ -30,15 +33,17 @@ describe("InstancedLodChunk", () => {
 
   it("reads and writes a CPU chunk's instances in its range of its attributes", () => {
     const target = lod();
+    const matrices = instanceMatrix([1, 2, 3].map((x) => new Matrix4().makeTranslation(x, 0, 0)));
     const chunk = target.addChunk({
-      instanceMatrix: instanceMatrix([1, 2, 3].map((x) => new Matrix4().makeTranslation(x, 0, 0))),
+      instanceMatrix: matrices,
       instanceColor: instanceColor([new Color(1, 0, 0), new Color(0, 1, 0), new Color(0, 0, 1)]),
       start: 1,
       count: 2,
     });
+    expect(isCpuChunk(chunk)).toBe(true);
     expect(chunk.getMatrixAt(0, new Matrix4()).elements[12]).toBe(2);
     chunk.setMatrixAt(1, new Matrix4().makeTranslation(9, 0, 0));
-    expect(chunk.instanceMatrix.array[2 * 16 + 12]).toBe(9);
+    expect(matrices.array[2 * 16 + 12]).toBe(9);
     expect(chunk.getColorAt(1, new Color()).getHex()).toBe(0x0000ff);
     chunk.setColorAt(0, new Color(1, 1, 0));
     expect(chunk.getColorAt(0, new Color()).getHex()).toBe(0xffff00);
@@ -70,6 +75,7 @@ describe("InstancedLodChunk", () => {
   it("refuses the CPU methods of a GPU chunk, whose instances live on the GPU", () => {
     const target = lod();
     const chunk = target.addChunk(gpuChunk);
+    expect(isCpuChunk(chunk)).toBe(false);
     expect(chunk.originBox).toEqual(bounds.originBox);
     const gpu = /a GPU chunk's instances live on the GPU/;
     expect(() => chunk.getMatrixAt(0, new Matrix4())).toThrow(gpu);

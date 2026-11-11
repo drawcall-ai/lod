@@ -1,6 +1,6 @@
 import { Matrix4, Ray, Sphere, type Intersection, type Mesh, type Object3D, type Raycaster } from "three/webgpu";
 import { stretch } from "../three.js";
-import type { InstancedLodCpuChunk, InstancedLodChunk } from "./chunk.js";
+import type { CpuChunk, InstancedLodChunk } from "./chunk.js";
 import type { Part } from "./meshes.js";
 
 /** A hit on an InstancedLod: `object` is the InstancedLod, `instanceId` the instance's index in `chunk`. */
@@ -23,13 +23,7 @@ const world = new Matrix4();
 const hits: Intersection[] = [];
 
 /** Hits on the instances of `chunks`, CPU chunks `lod` holds, of `source`'s meshes, each raycast where an instance stands. */
-export function raycastInstances(
-  lod: Object3D,
-  source: RaycastSource,
-  chunks: Iterable<InstancedLodCpuChunk>,
-  raycaster: Raycaster,
-  intersects: Intersection[],
-): void {
+export function raycastInstances(lod: Object3D, source: RaycastSource, chunks: Iterable<CpuChunk>, raycaster: Raycaster, intersects: Intersection[]): void {
   ray.copy(raycaster.ray).applyMatrix4(inverse.copy(lod.matrixWorld).invert());
   // A mesh of several material groups is a part per group: it is hit once. A mesh's parts share its placement.
   const meshes = new Map<Mesh, Matrix4>();

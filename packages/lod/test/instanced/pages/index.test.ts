@@ -115,13 +115,14 @@ describe("a LodGpu's page pool", { timeout: GPU_TIMEOUT }, () => {
 
   it("packs only the instances at a scale above 0 into pages, as few as they fill", async () => {
     // Three chunks of 512 spots, a third at scale 0 each: a page each, where every spot would need two of the five.
+    // Each chunk's records start a page past the last's, over what the last left there.
     const pool = small();
     const lod = instancedLod(pool);
     const report = vi.spyOn(console, "error");
     try {
       for (let i = 0; i < 3; i++) {
-        produce(i * 2 * PAGE, 2 * PAGE, 0, { write: 1 });
-        lod.addChunk(gpuChunk(2 * PAGE, "in place"));
+        produce(i * 2 * PAGE, 2 * PAGE, 0, { write: 1, start: i * PAGE });
+        lod.addChunk(gpuChunk(2 * PAGE, "in place", i * PAGE));
         await frames(lod, above);
       }
       const spots = Array.from({ length: 6 * PAGE }, (_, k) => k).filter(picked);

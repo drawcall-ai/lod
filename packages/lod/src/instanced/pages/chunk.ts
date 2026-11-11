@@ -61,26 +61,26 @@ export function mirrorReader(first: Mirrors) {
 }
 
 /**
- * This lane's instance of `chunk`, read by `instance`: the lane's index in the chunk's range, its matrix (scale 0 past
- * the chunk's range) and colour, and whether it is an instance, at a scale above 0.
+ * This lane's instance of `chunk`, read by `instance`: its matrix (scale 0 past the chunk's range), its colour if
+ * `withColor` (white otherwise, its nodes left out of the pass), and whether it is an instance, at a scale above 0.
  */
-function read(chunk: ChunkUniforms, instance: InstancedLodInstance) {
+function read(chunk: ChunkUniforms, instance: InstancedLodInstance, withColor: boolean) {
   const index = workgroupId.x.mul(PAGE).add(localId.x).toVar();
   const matrix = mat4(nothing).toVar();
   const color = vec3(1).toVar();
   If(index.lessThan(chunk.count), () => {
     const read = instance(chunk.start.add(index));
     matrix.assign(read.matrix);
-    if (read.color) color.assign(read.color);
+    if (withColor && read.color) color.assign(read.color);
   });
-  return { index, matrix, color, live: maxScale(matrix).greaterThan(0) };
+  return { matrix, color, live: maxScale(matrix).greaterThan(0) };
 }
 
 /** Counts each window's instances of `chunk`, read by `instance`: one workgroup per window. */
 export function countPass(pool: PoolBuffers, chunk: ChunkUniforms, instance: InstancedLodInstance): ComputeNode {
   const { windows } = nodes(pool);
   return workgroups(() => {
-    const { live } = read(chunk, instance);
+    const { live } = read(chunk, instance, false);
     const { total } = rank(live);
     If(localId.x.equal(0), () => void windows.element(chunk.base.add(workgroupId.x)).assign(total));
   });
@@ -103,7 +103,7 @@ export function writePass(pool: PoolBuffers, chunk: ChunkUniforms, instance: Ins
         .add(packed.mod(PAGE))
         .toVar();
     const state = states.element(chunk.slot.mul(2)).toVar();
-    const { matrix, color, live } = read(chunk, instance);
+    const { matrix, color, live } = read(chunk, instance, true);
     const { before } = rank(live);
     const packed = windows.element(chunk.base.add(workgroupId.x)).add(before).toVar();
     // Instances past the pages the chunk got are left out.

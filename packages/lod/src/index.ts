@@ -9,8 +9,8 @@ export { InstancedLod, type InstancedLodOptions } from "./instanced/index.js";
 export { type CullDistance } from "./instanced/cull.js";
 export {
   InstancedLodChunk,
+  isCpuChunk,
   type InstancedLodChunkParameters,
-  type InstancedLodCpuChunk,
   type InstancedLodCpuChunkParameters,
   type InstancedLodGpuChunkParameters,
   type InstancedLodInstance,

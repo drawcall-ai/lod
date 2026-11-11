@@ -7,7 +7,7 @@ description: Use @drawcall/lod for cached, progressively loaded levels of detail
 
 ## Start with the loader
 
-Give the host's `LodLoader` an asset URL and the representations to derive from it. Use `.glb` or `.gltf` for stored models and `.glts` for procedural assets. Put generation parameters in the asset URL's query: each distinct query is a distinct cache identity. Build a `Lod` from the returned levels for an independently placed object, or an `InstancedLod` for repeated objects, whose instances arrive and leave in chunks of matrices and colours, from the CPU or from a compute pass of yours.
+Give the host's `LodLoader` an asset URL and the representations to derive from it. Use `.glb` or `.gltf` for stored models and `.glts` for procedural assets. Put generation parameters in the asset URL's query: each distinct query is a distinct cache identity. Build a `Lod` from the returned levels for an independently placed object, or an `InstancedLod` for repeated objects, whose instances arrive and leave in chunks: matrices and colours from the CPU, or records in your own layout that a compute pass of yours wrote on the GPU.
 
 Make a `LodGpu` once the renderer is initialised and give it to every `Lod` and `InstancedLod` drawing with that renderer. Every InstancedLod of one LodGpu sorts for a camera in one compute call. A camera that draws only a few InstancedLods, such as a minimap's, can give those a LodGpu of their own, which bounds the per-camera list memory. `LodLoader` needs no renderer.
 
@@ -86,7 +86,7 @@ Levels are chosen by on-screen size in CSS pixels on the actual render target, s
 
 A fixed set of copies is one chunk. For copies that exist only near the camera, such as plants on patches of ground, add a chunk when a patch comes into reach and remove it when the camera moves on; a few chunks a frame cost about what they hold. Prefer whole chunks over parking unused instances at scale 0.
 
-When the copies live on the GPU, in records of your own layout, give `addChunk` a TSL function that reads record `index` into a matrix (scale 0 for no copy) and an optional colour, plus the bounds the CPU cannot measure. The records are read once, in the next render that updates the InstancedLod, without a staging copy. Share one function between chunks of the same records, each with its own `start`: lod builds its copy pass once per function. Here `spots` is a `vec4` storage node your compute pass wrote, per spot a position and in `w` a scale between 0.5 and 1.5, or 0 for no plant; `capacity` is the spots per patch, `slot` the patch's place in `spots`, and `patchBox` the box of its positions.
+When the copies live on the GPU, in records of your own layout, give `addChunk` a TSL function that reads record `index` into a matrix (scale 0 for no copy) and an optional colour, plus the bounds the CPU cannot measure. Past a count your pass wrote, return a scale-0 matrix. The records are read once, in the next render that updates the InstancedLod. Each distinct function compiles a pass of its own: share one and tell chunks apart by `start`. Here `spots` is a `vec4` storage node your compute pass wrote, per spot a position and in `w` a scale between 0.5 and 1.5, or 0 for no plant; `capacity` is the spots per patch, `slot` the patch's place in `spots`, and `patchBox` the box of its positions.
 
 ```ts
 import { mat4 } from "three/tsl";

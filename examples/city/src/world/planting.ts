@@ -123,8 +123,8 @@ export function planter(plan: Plan, gpu: LodGpu) {
 
     /** The output of `planting`'s InstancedLod, and the pass that plants a tile into a slot of it. */
     const output = ({ from, to, scale: [low, high], tinted = false }: Planting) => {
-      const matrices = storage(new THREE.StorageInstancedBufferAttribute(SLOTS * capacity, 16), "mat4", SLOTS * capacity);
-      const colors = storage(new THREE.StorageInstancedBufferAttribute(SLOTS * capacity, 3), "vec3", SLOTS * capacity);
+      const matrices = storage(new THREE.StorageBufferAttribute(SLOTS * capacity, 16), "mat4", SLOTS * capacity);
+      const colors = storage(new THREE.StorageBufferAttribute(SLOTS * capacity, 3), "vec3", SLOTS * capacity);
       const matrixAt = t3.fromTSL(matrices, d.arrayOf(d.mat4x4f));
       const colorAt = t3.fromTSL(colors, d.arrayOf(d.vec3f));
       const instance: InstancedLodInstance = (index) => ({ matrix: matrices.element(index), color: colors.element(index) });

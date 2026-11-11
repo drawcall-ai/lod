@@ -21,10 +21,14 @@ const counts = storage(countBuffer, "uint", 4).toAtomic();
 const written = storage(countBuffer, "uint", 4).toReadOnly();
 const none = mat4(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 const first = uniform(0, "uint");
+const at = uniform(0, "uint");
 const total = uniform(0, "uint");
 const counter = uniform(0, "uint");
 const shift = uniform(0);
-/** How the compute pass writes: 0 the picked spots, counted; 1 every spot in its own place, those not picked at scale 0; 2 every spot. */
+/**
+ * How the compute pass writes: 0 the picked spots, counted; 1 every spot in its own place from record `at`, those not
+ * picked at scale 0; 2 every spot in its own place from record `at`, at its scale.
+ */
 const mode = uniform(0, "uint");
 
 /** Spot k's scale, colour and position: on a grid ahead of a camera at the origin looking down -z, moved by `by` along x. */
@@ -53,8 +57,8 @@ const pass = Fn(() => {
         colors.element(slot).assign(color);
       });
     }).Else(() => {
-      matrices.element(i).assign(chosen.or(mode.equal(2)).select(matrix, none));
-      colors.element(i).assign(color);
+      matrices.element(at.add(i)).assign(chosen.or(mode.equal(2)).select(matrix, none));
+      colors.element(at.add(i)).assign(color);
     });
   });
 })().compute(CAPACITY);
@@ -62,9 +66,13 @@ const clear = Fn(() => {
   atomicStore(counts.element(instanceIndex), uint(0));
 })().compute(4);
 
-/** Write spots `from` to `from + n` on the GPU, as `mode` says, the picked ones counted into counter `index`. */
-export function produce(from: number, n: number, index: number, { by = 0, write = 0 } = {}): void {
+/**
+ * Write spots `from` to `from + n` on the GPU, as `mode` says, the picked ones counted into counter `index`; in place,
+ * from record `start` on.
+ */
+export function produce(from: number, n: number, index: number, { by = 0, write = 0, start = 0 } = {}): void {
   first.value = from;
+  at.value = start;
   total.value = n;
   counter.value = index;
   shift.value = by;
@@ -82,12 +90,16 @@ const counted = [0, 1].map((counter): InstancedLodInstance => (index) => ({
   color: colors.element(index),
 }));
 
-/** The GPU chunk `produce` wrote: `n` spots, the picked ones counted into counter `counter`, or each in its place. */
-export function gpuChunk(n: number, counter: 0 | 1 | "in place"): InstancedLodChunkParameters {
+/**
+ * The GPU chunk `produce` wrote: `n` spots from record `start`, the picked ones counted into counter `counter`, or
+ * each in its place.
+ */
+export function gpuChunk(n: number, counter: 0 | 1 | "in place", start = 0): InstancedLodChunkParameters {
   const instance = counter === "in place" ? inPlace : counted[counter];
   if (!instance) throw new Error(`no counter ${counter}`);
   return {
     instance,
+    start,
     count: n,
     originBox: new Box3(new Vector3(-11, 0, -600), new Vector3(11, 1, -4)),
     minScale: 1,

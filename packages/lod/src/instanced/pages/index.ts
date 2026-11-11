@@ -1,6 +1,7 @@
 import { type Renderer, StorageBufferAttribute, StorageInstancedBufferAttribute } from "three/webgpu";
 import { at } from "../../at.js";
 import { PAGE_BITS, type PoolBuffers } from "./buffers.js";
+import type { InstancedLodInstance } from "../chunk.js";
 import type { ChunkRange, ChunkSource } from "./chunk.js";
 import { PoolPasses } from "./passes.js";
 import { PAGE } from "./workgroup.js";
@@ -158,13 +159,11 @@ export class InstancePagePool {
 
   /**
    * Free slot `slot`; its chunk's pages go back to the pool at the next run, its windows after it, and the passes
-   * reading by its instance function once no chunk reads by it.
+   * reading by its instance function then, if no chunk reads by it any more.
    */
   remove(slot: number): void {
-    const { base, windows, chunk } = this.heldAt(slot);
+    const { base, windows } = this.heldAt(slot);
     this.held[slot] = null;
-    const { source } = chunk;
-    if (typeof source === "function" && !this.held.some((held) => held?.chunk.source === source)) this.passes?.forget(source);
     this.releasing.push({ first: base, count: windows });
     this.write(slot, [0, 0, at(this.generations, slot), 0]);
     this.due.delete(slot);
@@ -214,6 +213,13 @@ export class InstancePagePool {
   prepare(renderer: Renderer): void {
     if (!this.pending) return;
     const passes = (this.passes ??= new PoolPasses(this.pool));
+    const used = new Set<InstancedLodInstance>();
+    for (const held of this.held) {
+      const source = held?.chunk.source;
+      if (typeof source === "function") used.add(source);
+    }
+    // The passes of a function no chunk reads by any more go; a chunk removed and added again since keeps them.
+    passes.retain(used);
     // The free pass reads the windows of chunks removed since the last run: they serve chunks taken in after it.
     const freed = this.releasing;
     this.releasing = [];
