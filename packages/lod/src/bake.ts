@@ -1,5 +1,9 @@
-import { Color, DataUtils, WebGPURenderer, type RenderTarget, type Renderer } from "three/webgpu";
+import { Color, DataUtils, WebGPURenderer, type Object3D, type RenderTarget, type Renderer } from "three/webgpu";
+import { disposeCopies } from "./dispose.js";
+import { InstancedLod } from "./instanced/index.js";
 import { renderers } from "./levels/renderer.js";
+import { LodPool } from "./pool.js";
+import { isInstancedLod } from "./three.js";
 
 // What the GPU bakes (impostor frames, interior rooms) share: the renderer they draw with, one bake at a time on it,
 // and reading back what they drew.
@@ -33,6 +37,49 @@ export function checkBakeRenderer(renderer: Renderer, who: string): void {
 }
 
 const BLACK = new Color(0x000000);
+
+/** A copy of what a bake draws, and what frees it once drawn. */
+export interface BakeCopy {
+  readonly root: Object3D;
+  /** Free every Lod and InstancedLod of the copy, and the LodPools made for it. */
+  dispose(): void;
+}
+
+/**
+ * `copy`, a fresh copy of what a bake draws, with each InstancedLod in it made again over a LodPool of its own, sized to
+ * its chunks: a LodPool draws with one renderer, which for the original is the app's.
+ */
+export function bakeCopy(copy: Object3D): BakeCopy {
+  const found: InstancedLod[] = [];
+  copy.traverse((node) => {
+    if (isInstancedLod(node)) found.push(node);
+  });
+  const pools: LodPool[] = [];
+  let root = copy;
+  for (const lod of found) {
+    const chunks = [...lod.chunks];
+    const pool = new LodPool({
+      maxInstanceCount: Math.max(
+        1,
+        chunks.reduce((sum, { count }) => sum + count, 0),
+      ),
+      maxChunkCount: Math.max(1, chunks.length),
+    });
+    pools.push(pool);
+    const own = new InstancedLod([], pool).copy(lod);
+    if (lod === root) root = own;
+    else lod.parent?.add(own);
+    lod.removeFromParent();
+    lod.dispose();
+  }
+  return {
+    root,
+    dispose: () => {
+      disposeCopies(root);
+      for (const pool of pools) pool.dispose();
+    },
+  };
+}
 
 /**
  * The bake under way on each renderer and those queued after it. Bakes run one at a time on a renderer: each holds one

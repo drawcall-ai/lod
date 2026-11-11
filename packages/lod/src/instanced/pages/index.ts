@@ -41,22 +41,7 @@ interface Run {
   count: number;
 }
 
-/** The pages a pool of `maxInstanceCount` instances in `maxChunkCount` chunks holds; throws for sizes it cannot hold. */
-export function pageCount(maxInstanceCount: number, maxChunkCount: number): number {
-  for (const [name, value] of [
-    ["maxInstanceCount", maxInstanceCount],
-    ["maxChunkCount", maxChunkCount],
-  ] as const) {
-    if (!Number.isInteger(value) || value < 1) throw new RangeError(`LodPool: ${name} must be a positive integer, got ${value}`);
-  }
-  // A part-filled page per chunk besides the pages that fill.
-  const pages = maxChunkCount + Math.ceil(maxInstanceCount / PAGE);
-  if (pages >= 2 ** PAGE_BITS)
-    throw new RangeError(`LodPool: ${pages} pages of ${PAGE} instances outgrow the ${2 ** PAGE_BITS} a pool lists: lower maxInstanceCount or maxChunkCount`);
-  return pages;
-}
-
-/** The pages of a LodPool on one renderer, and the passes that fill and free them. */
+/** The pages of a LodPool, and the passes that fill and free them. */
 export class InstancePages {
   /** Room for instances, in pages of `PAGE`. */
   readonly capacity: number;
@@ -87,15 +72,17 @@ export class InstancePages {
     maxInstanceCount: number,
     /** The most chunks held at once. */
     maxChunkCount: number,
-    /** The largest storage binding the device takes: its maxStorageBufferBindingSize, which the matrices are one of. */
-    maxBinding: number,
   ) {
-    const pages = pageCount(maxInstanceCount, maxChunkCount);
-    const bytes = pages * PAGE * 64;
-    if (bytes > maxBinding)
-      throw new RangeError(
-        `LodPool: the matrices of ${pages} pages of ${PAGE} instances, ${bytes} bytes, outgrow the device's storage binding of ${maxBinding} bytes: lower maxInstanceCount or maxChunkCount, or raise maxStorageBufferBindingSize in the renderer's requiredLimits`,
-      );
+    for (const [name, value] of [
+      ["maxInstanceCount", maxInstanceCount],
+      ["maxChunkCount", maxChunkCount],
+    ] as const) {
+      if (!Number.isInteger(value) || value < 1) throw new RangeError(`LodPool: ${name} must be a positive integer, got ${value}`);
+    }
+    // A part-filled page per chunk besides the pages that fill.
+    const pages = maxChunkCount + Math.ceil(maxInstanceCount / PAGE);
+    if (pages >= 2 ** PAGE_BITS)
+      throw new RangeError(`LodPool: ${pages} pages of ${PAGE} instances outgrow the ${2 ** PAGE_BITS} a pool lists: lower maxInstanceCount or maxChunkCount`);
     const windows = WINDOWS_PER_PAGE * pages;
     this.pages = pages;
     this.capacity = pages * PAGE;
@@ -131,6 +118,15 @@ export class InstancePages {
   /** Every pool index's colour, RGB and a pad. */
   get colors(): StorageInstancedBufferAttribute {
     return this.buffers.colors;
+  }
+
+  /** Throw unless the matrices, one storage binding, fit in `limit` bytes: the device's maxStorageBufferBindingSize. */
+  checkBinding(limit: number): void {
+    const bytes = this.capacity * 64;
+    if (bytes <= limit) return;
+    throw new RangeError(
+      `LodPool: the matrices of ${this.pages} pages of ${PAGE} instances, ${bytes} bytes, outgrow the device's storage binding of ${limit} bytes: lower maxInstanceCount or maxChunkCount, or raise maxStorageBufferBindingSize in the renderer's requiredLimits`,
+    );
   }
 
   /** Whether the next run takes chunks in or frees them. */

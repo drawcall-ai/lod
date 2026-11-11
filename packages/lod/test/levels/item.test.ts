@@ -190,9 +190,10 @@ it("holds a nested Lod's items on its lod's manager until its deferred levels ar
 
 it("reports a failed level the camera needs as an item error", { timeout: GPU_TIMEOUT }, async () => {
   const manager = new LoadingManager();
-  const lod = new Lod([{ load: () => Promise.reject(new Error("load failed")), maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) }], {
-    manager,
-  });
+  const lod = new Lod(
+    [{ load: () => Promise.reject(new Error("load failed")), maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) }],
+    { manager },
+  );
   lod.position.z = -5;
   const camera = new PerspectiveCamera(60, 1, 0.1, 100);
   const scene = new Scene().add(lod);

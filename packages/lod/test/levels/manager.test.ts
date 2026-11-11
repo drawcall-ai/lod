@@ -135,10 +135,12 @@ it("lets a level arrive for a second camera rendering to its own target only onc
     return mesh;
   };
   const bounds = new Box3().setFromArray([-1, -1, -1, 1, 1, 1]);
-  const lod = new Lod([
-    { load: fine, maxPixels: Infinity, box: bounds },
-    { object: box(), maxPixels: 8 },
-  ]);
+  const lod = new Lod(
+    [
+      { load: fine, maxPixels: Infinity, box: bounds },
+      { object: box(), maxPixels: 8 },
+    ],
+  );
   lod.position.z = -5;
   const main = new PerspectiveCamera(60, 1, 0.1, 100);
   const second = new PerspectiveCamera(60, 1, 0.1, 100);

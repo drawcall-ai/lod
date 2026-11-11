@@ -42,7 +42,7 @@ import {
   vec3,
   vec4,
 } from "three/tsl";
-import { isMesh, isNodeMaterial, isPhysical, isStandard, isStandardNode, toNodeMaterial } from "../../three.js";
+import { isInstancedLod, isMesh, isNodeMaterial, isPhysical, isStandard, isStandardNode, toNodeMaterial } from "../../three.js";
 import { affine, isNodeOf } from "../../tsl.js";
 import { placeInstances } from "../../levels/fade.js";
 import { originalOf } from "../../levels/material.js";
@@ -73,7 +73,7 @@ export type Output = (typeof OUTPUTS)[number];
 export function swapMaterials(root: Object3D, settings: BakeSettings): { materials: Material[]; emits: boolean; specular: boolean } {
   const baked = new Map<Material, { material: NodeMaterial; emits: boolean; specular: boolean }>();
   const plain = new Set<string>();
-  root.traverseVisible((node) => {
+  traverseDrawn(root, (node) => {
     // Lines, points and sprites would write their colour into the data targets. Layers
     // rather than `visible`, which would also hide any mesh children.
     if ("isLine" in node || "isPoints" in node || "isSprite" in node) return node.layers.disableAll();
@@ -95,6 +95,13 @@ export function swapMaterials(root: Object3D, settings: BakeSettings): { materia
   if (plain.size > 0) console.warn(`bakeImpostor: ${[...plain].join(", ")} bake as a plain rough MeshStandardMaterial with their color/map only`);
   const entries = [...baked.values()];
   return { materials: entries.map((e) => e.material), emits: entries.some((e) => e.emits), specular: entries.some((e) => e.specular) };
+}
+
+/** Call `visit` with every node under `root` that may draw: visible, or a level mesh an InstancedLod's sorts show. */
+function traverseDrawn(node: Object3D, visit: (node: Object3D) => void, shown = node.visible): void {
+  if (!shown) return;
+  visit(node);
+  for (const child of node.children) traverseDrawn(child, visit, child.visible || isInstancedLod(node));
 }
 
 const STANDARD_KEYS = [

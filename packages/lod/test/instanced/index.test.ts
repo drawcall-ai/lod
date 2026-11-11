@@ -665,6 +665,27 @@ describe("renderers", () => {
     }
   });
 
+  it("reports another renderer drawing an InstancedLod of a LodPool that the first draws as its error", { timeout: GPU_TIMEOUT }, async () => {
+    const other = await unknownRenderer();
+    const first = oneChunk([{ object: box() }], 1);
+    const second = oneChunk([{ object: box() }], 1);
+    const camera = new PerspectiveCamera(60, 1, 0.1, 100);
+    camera.position.z = 5;
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await render(new Scene().add(first), camera);
+      Lod.renderers.add(other);
+      other.render(new Scene().add(second), camera);
+      expect(second.error?.message).toMatch(/another renderer than the first that drew its LodPool/);
+    } finally {
+      Lod.renderers.delete(other);
+      logged.mockRestore();
+      first.dispose();
+      second.dispose();
+      other.dispose();
+    }
+  });
+
   it("reports another renderer than the first that drew it as its error, and goes on drawing with the first", { timeout: GPU_TIMEOUT }, async () => {
     const other = await unknownRenderer();
     const lod = oneChunk([{ object: box() }], 1);

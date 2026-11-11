@@ -181,7 +181,7 @@ export class InstancedLodChunk {
    * The level that draws most of instance `index`'s pixels for `camera` from where it is now, with the levels loaded
    * now and no arrival under way, as Lod.getLevel tells; null at scale 0, thinned out by `cullDistance`, or while no
    * level it could draw is loaded. From the attributes as they are, edits not yet drawn included. It throws for every
-   * instance while `cullDistance` or the thresholds are invalid, and before a renderer has rendered its InstancedLod.
+   * instance while `cullDistance` or the thresholds are invalid, and before a render has updated its InstancedLod.
    */
   getLevelAt(index: number, camera: Camera): number | null {
     const { levelAt } = this.state;

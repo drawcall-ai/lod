@@ -196,7 +196,7 @@ export class Lod extends Object3D<LodEventMap> {
   /** Show the levels for `camera`, a shadow map's when `shadow`. */
   private show(camera: Camera, shadow: boolean): void {
     if (this.disposed || this.levels.length === 0) return;
-    const renderer = this.loads.updating();
+    const renderer = this.loads.bind();
     if (!renderer) return;
     // A shadow map draws the levels its scene's camera chose.
     if (shadow) return void this.loads.request(camera, 0, true);

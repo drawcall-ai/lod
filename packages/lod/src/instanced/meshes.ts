@@ -95,12 +95,9 @@ export function freeMesh(mesh: Mesh): void {
   mesh.geometry.dispose();
 }
 
-/** Point every mesh of `meshes` at `instances`, which changed: survivors scale, or no longer do, or pages arrived. */
-export function drawInstances(meshes: readonly Mesh[], instances: DrawnInstances): void {
-  for (const mesh of meshes) {
-    if (isImpostorMesh(mesh)) mesh.instanceMatrix = instances.matrices;
-    Object.assign(mesh, { instanceColor: instances.colors });
-  }
+/** Point every mesh of `meshes` at `instances.matrices`, which changed: survivors scale, or no longer do. */
+export function drawMatrices(meshes: readonly Mesh[], instances: DrawnInstances): void {
+  for (const mesh of meshes) if (isImpostorMesh(mesh)) mesh.instanceMatrix = instances.matrices;
 }
 
 /**

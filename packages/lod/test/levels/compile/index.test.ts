@@ -153,9 +153,7 @@ it(
     try {
       const done = new Set<number>();
       const levels = [...alike, ...alike, other].map((material, index) =>
-        compilerOf(renderer)
-          .compileAsync(new Mesh(geometry, material), context, alone)
-          .then(() => done.add(index)),
+        compilerOf(renderer).compileAsync(new Mesh(geometry, material), context, alone).then(() => done.add(index)),
       );
       // The other shader's pipeline is requested while the first is still being created.
       await eventually(() => expect(pipelines).toHaveBeenCalledTimes(2));
@@ -210,9 +208,7 @@ it(
       renderer.setRenderTarget(null);
       renderer.setMRT(null);
       await Promise.all(
-        object.children.map((draw) =>
-          compilerOf(renderer).compileAsync(draw, { camera, scene, target, mrt: outputs, cubeFace: 0, mipLevel: 0, depth: 0 }, alone),
-        ),
+        object.children.map((draw) => compilerOf(renderer).compileAsync(draw, { camera, scene, target, mrt: outputs, cubeFace: 0, mipLevel: 0, depth: 0 }, alone)),
       );
       expect(renderer.getRenderTarget()).toBeNull();
       expect(renderer.getMRT()).toBeNull();
@@ -308,10 +304,12 @@ it(
       return arriving;
     };
     const bounds = new Box3().setFromArray([-0.5, -0.5, -0.5, 0.5, 0.5, 0.5]);
-    const lod = new Lod([
-      { load, maxPixels: Infinity, box: bounds },
-      { object: loaded, maxPixels: 2 },
-    ]);
+    const lod = new Lod(
+      [
+        { load, maxPixels: Infinity, box: bounds },
+        { object: loaded, maxPixels: 2 },
+      ],
+    );
     const scene = new Scene().add(light, ground, lod);
     const camera = new PerspectiveCamera(60, 1, 0.1, 100);
     camera.position.set(0, 2, 5);

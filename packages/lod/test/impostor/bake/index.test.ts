@@ -24,6 +24,8 @@ import {
   type Object3D,
 } from "three/webgpu";
 import { describe, expect, it, vi } from "vitest";
+import { Lod } from "../../../src/lod.js";
+import { LodPool } from "../../../src/pool.js";
 import { bakeImpostor } from "../../../src/impostor/bake/index.js";
 import { texelPixels, type Impostor } from "../../../src/impostor/impostor.js";
 import { frameDirection } from "../../../src/impostor/octahedral.js";
@@ -287,8 +289,8 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
     const scene = new Scene().add(group);
     const camera = new PerspectiveCamera(50, 1, 0.1, 100);
     camera.position.z = 8;
-    // The app's renderer draws it, then the bake's renderer, which the app never added to Lod.renderers, draws a copy
-    // sharing its LodPool; the app's draws on after.
+    // The app's renderer draws it, then the bake's renderer, which the app never added to Lod.renderers, draws a copy;
+    // the app's draws on after.
     await render(scene, camera);
     const [a, b] = [await bake(plain), await bake(group)];
     await render(scene, camera);
@@ -299,6 +301,28 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
     let differing = 0;
     for (let i = 0; i < left.length; i++) if (Math.abs((left[i] ?? 0) - (right[i] ?? 0)) > 8) differing++;
     expect(differing / left.length).toBeLessThan(0.01);
+  });
+
+  it("frees its copies of the Lods and InstancedLods it baked, and their LodPools", async () => {
+    let held = 0;
+    const hold = () => {
+      held++;
+      return () => void held--;
+    };
+    const material = new MeshStandardMaterial();
+    const lod = new Lod([{ object: new Mesh(new BoxGeometry(), material), hold }]);
+    const field = oneChunk([{ object: new Mesh(new BoxGeometry(), material) }], [new Matrix4().makeTranslation(2, 0, 0)]);
+    const pools = vi.spyOn(LodPool.prototype, "dispose");
+    try {
+      await bake(new Group().add(lod, field));
+      expect(held).toBe(1);
+      expect(pools).toHaveBeenCalledTimes(1);
+    } finally {
+      pools.mockRestore();
+      lod.dispose();
+      field.dispose();
+    }
+    expect(held).toBe(0);
   });
 
   it("refuses ImpostorMeshes, which have no surface to bake", async () => {
