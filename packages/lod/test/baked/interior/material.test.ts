@@ -20,7 +20,7 @@ import {
 import { CSMShadowNode } from "three/addons/csm/CSMShadowNode.js";
 import { describe, expect, it } from "vitest";
 import { bakeMesh } from "../../../src/baked/index.js";
-import { disposeTree } from "../../../src/dispose.js";
+import { disposeRecursive } from "../../../src/dispose.js";
 import { Lod } from "../../../src/lod.js";
 import { box } from "../../box.js";
 import { house, interior } from "../../house.js";
@@ -238,8 +238,8 @@ describe("interiors", { timeout: GPU_TIMEOUT }, () => {
       const [ownA, ownB] = [windowColor(await render(a, new Vector3(0, 0, 5))), windowColor(await render(b, new Vector3(2, 0, 5), new Vector3(2, 0, 1)))];
       expect(distance(ownA, ownB)).toBeGreaterThan(10);
     } finally {
-      disposeTree(a);
-      disposeTree(b);
+      disposeRecursive(a);
+      disposeRecursive(b);
     }
   });
 

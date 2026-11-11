@@ -3,7 +3,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import type { CacheEntryOptions, Input } from "vitecache";
 import { at } from "../at.js";
 import { createBakeRenderer } from "../bake.js";
-import { disposeTree } from "../dispose.js";
+import { disposeRecursive } from "../dispose.js";
 import { framePixels } from "../impostor/impostor.js";
 import { resolveThresholds, type LodLevel } from "../levels/index.js";
 import { meshoptDecoder } from "../meshopt.js";
@@ -171,10 +171,10 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
       try {
         return await this.build(ladder, index, source);
       } finally {
-        disposeTree(source);
+        disposeRecursive(source);
       }
     });
-    if (spare && !used) disposeTree(spare);
+    if (spare && !used) disposeRecursive(spare);
     return bytes;
   }
 
@@ -194,9 +194,9 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
       built = await buildLevel(source, request, { low, interior }, () => this.bakeRenderer());
       return await encodeLevel(built, request.type, shapeOf(source), materialsOf(source));
     } finally {
-      for (const object of [interior, low]) if (object) disposeTree(object);
+      for (const object of [interior, low]) if (object) disposeRecursive(object);
       // A simplified level draws with the source's materials, which are freed with the source.
-      if (built) disposeTree(built, { materials: request.type !== "simplify" });
+      if (built) disposeRecursive(built, { materials: request.type !== "simplify" });
     }
   }
 

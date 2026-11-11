@@ -1,5 +1,5 @@
 import type { Object3D } from "three/webgpu";
-import { disposeRejected, disposeTree, type DisposeOptions } from "../dispose.js";
+import { disposeRejected, disposeRecursive, type DisposeOptions } from "../dispose.js";
 
 /**
  * What one ladder's loads share: the source loaded to measure or build the ladder with, handed to the first level load
@@ -78,7 +78,7 @@ export class LodLoadContext {
       held = false;
       if (--this.holders > 0) return;
       this.spent = true;
-      this.free(disposeTree);
+      this.free(disposeRecursive);
     };
   };
 

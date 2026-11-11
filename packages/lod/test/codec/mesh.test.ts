@@ -10,7 +10,7 @@ import {
   MeshStandardNodeMaterial,
 } from "three/webgpu";
 import { expect, it } from "vitest";
-import { disposeTree } from "../../src/dispose.js";
+import { disposeRecursive } from "../../src/dispose.js";
 import { decodeMeshAsync, encodeMeshAsync } from "../../src/codec/mesh.js";
 
 it("preserves a Scene root and placement when decoding a mesh cache subarray", async () => {
@@ -30,8 +30,8 @@ it("preserves a Scene root and placement when decoding a mesh cache subarray", a
   if (!(mesh instanceof Mesh)) throw new Error("Expected a decoded mesh");
   expect(mesh.geometry.boundingBox?.min.toArray()).toEqual([-1, -1.5, -2]);
   expect(mesh.geometry.boundingBox?.max.toArray()).toEqual([1, 1.5, 2]);
-  disposeTree(restored, { materials: false });
-  disposeTree(source);
+  disposeRecursive(restored, { materials: false });
+  disposeRecursive(source);
 });
 
 it("shares original materials and transparent texture colours while restoring shader attributes", async () => {

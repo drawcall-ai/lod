@@ -1,7 +1,7 @@
 import { GLTSLoader } from "@drawcall/glts";
 import { Box3, BoxGeometry, LoadingManager, Mesh, MeshBasicMaterial, Scene, Texture } from "three/webgpu";
 import { expect, it, vi } from "vitest";
-import { disposeTree } from "../src/dispose.js";
+import { disposeRecursive } from "../src/dispose.js";
 import { InstancedLod } from "../src/instanced/index.js";
 import { decodeMeshAsync, encodeMeshAsync } from "../src/codec/mesh.js";
 import { Lod } from "../src/lod.js";
@@ -38,9 +38,9 @@ it("lets a GLTS source release its resources while preserving shared host textur
     mesh.material.addEventListener("dispose", materialDisposed);
     // A coarse level decoded from it draws with its materials: only the source frees them.
     const coarse = await decodeMeshAsync(await encodeMeshAsync(source, [mesh.material]), [mesh.material]);
-    disposeTree(coarse, { materials: false });
+    disposeRecursive(coarse, { materials: false });
     expect(materialDisposed).not.toHaveBeenCalled();
-    disposeTree(source);
+    disposeRecursive(source);
     expect(cleanup).toHaveBeenCalledOnce();
     expect(geometryDisposed).toHaveBeenCalledOnce();
     expect(materialDisposed).toHaveBeenCalledOnce();
@@ -59,7 +59,7 @@ it("frees a template's textures but leaves their ImageBitmap to the copies that 
   const disposed = vi.spyOn(map, "dispose");
   const source = new Mesh(new BoxGeometry(), new MeshBasicMaterial({ map }));
   const lod = new Lod([{ object: source }], gpu);
-  disposeTree(source);
+  disposeRecursive(source);
   expect(disposed).toHaveBeenCalled();
   // A closed bitmap has no size: the copy could no longer upload it.
   expect(image.width).toBe(1);
