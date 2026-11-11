@@ -5,7 +5,7 @@ import { EncodedLevels, emptyLevels, levelsFrom, type LodLevel, type Thresholded
 import { fadeSourceOf } from "../levels/fade.js";
 import { levelsToLoad } from "../levels/load.js";
 import { LodLevelLoadManager, type LodEventMap } from "../levels/manager.js";
-import type { LodGpu } from "../gpu.js";
+import type { LodPool } from "../pool.js";
 import { Lod, type LodOptions } from "../lod.js";
 import { inShadowMap } from "../levels/renderer.js";
 import { sameClass } from "../three.js";
@@ -27,10 +27,10 @@ export interface InstancedLodOptions extends LodOptions {
   /**
    * The most instances it draws for a camera, over all its chunks, CPU and GPU chunks alike: 16384 by default. Its
    * lists take 8 bytes per level that draws something per instance (about 400 KB with the defaults and three levels),
-   * and every camera that draws any InstancedLod of its LodGpu, each shadow map's included, holds the lists of every
-   * InstancedLod of that LodGpu. A camera that draws only a few InstancedLods, such as a minimap's or a reflection's,
-   * is bounded by giving those a LodGpu of their own. Chunks that together outgrow it are reported (see `error`),
-   * naming it as the limit to raise. Its LodGpu's pool holds the instances themselves (see `LodGpuOptions`).
+   * and every camera that draws any InstancedLod of its LodPool, each shadow map's included, holds the lists of every
+   * InstancedLod of that LodPool. A camera that draws only a few InstancedLods, such as a minimap's or a reflection's,
+   * is bounded by giving those a LodPool of their own. Chunks that together outgrow it are reported (see `error`),
+   * naming it as the limit to raise. Its LodPool holds the instances themselves (see `LodPoolOptions`).
    */
   maxInstanceCount?: number;
 }
@@ -55,7 +55,7 @@ const DEFAULT_INSTANCES = 16384;
  * `new Box3().setFromObject(lod)` bounds them once a level has loaded; with `precise` it walks a level's vertices once,
  * at no instance, as it cannot see them. Measure one instance by a level's `object`, scaled by its matrix.
  *
- * Instances live in its LodGpu's pool, and every InstancedLod of a LodGpu sorts for a camera in one compute call.
+ * Instances live in its LodPool, and every InstancedLod of a LodPool sorts for a camera in one compute call.
  * Requires WebGPU `indirect-first-instance`. Sequential cameras are supported; a nested render with a camera that the
  * outer render also draws with replaces that camera's instance lists, so exclude this InstancedLod from it with camera
  * layers.
@@ -83,18 +83,15 @@ export class InstancedLod extends Object3D<LodEventMap> {
   private readonly cull = emptyCull();
 
   /**
-   * `levels[0]` is the source. Empty only as the target of `copy`. It holds no instances until chunks are added. `gpu`
-   * is what it shares with every Lod drawing with its renderer.
+   * `levels[0]` is the source. Empty only as the target of `copy`. It holds no instances until chunks are added. `pool`
+   * holds its instances, and those of the InstancedLods it sorts with.
    */
   constructor(
     levels: readonly LodLevel[],
-    private readonly gpu: LodGpu,
+    private readonly pool: LodPool,
     options: InstancedLodOptions = {},
   ) {
     super();
-    // Each level's draws start at its list (see update.ts).
-    if (!gpu.renderer.hasFeature("indirect-first-instance"))
-      throw new Error("InstancedLod: needs the GPU feature indirect-first-instance, which this device lacks");
     const maxInstanceCount = options.maxInstanceCount ?? DEFAULT_INSTANCES;
     if (!Number.isInteger(maxInstanceCount) || maxInstanceCount < 1)
       throw new RangeError(`InstancedLod: maxInstanceCount must be a positive integer, got ${maxInstanceCount}`);
@@ -126,36 +123,31 @@ export class InstancedLod extends Object3D<LodEventMap> {
   /** What this InstancedLod is made of for `inputs` and `maxInstanceCount`: its levels, their meshes and their loading. */
   private init(inputs: readonly LodLevel[], maxInstanceCount: number): Built {
     const shape = new InstanceShape(inputs);
-    const { pool, renderer } = this.gpu;
-    const lists = new InstanceLists(this.gpu.sorter, listedOf(inputs), maxInstanceCount);
+    const { pages, sorter } = this.pool;
+    const lists = new InstanceLists(sorter, listedOf(inputs), maxInstanceCount);
     const chunks = new ChunkSet(
-      pool,
+      pages,
       lists.row,
       this.bounds,
       () => shape.originReach,
       (chunk, index, camera) => this.levelAt(chunk, index, camera),
     );
-    const drawn = { matrices: pool.matrices, colors: pool.colors };
+    const drawn = { matrices: pages.matrices, colors: pages.colors };
     const drawing = { shape, lists, drawn };
     this.inputs = inputs;
     if (inputs.length > 0) this.levels.push(...levelsFrom(inputs, 2 * shape.ownRadius, "InstancedLod"));
     const encoded = new EncodedLevels(this.levels, emptyLevels(inputs), "InstancedLod");
-    const drawFor = (renderer: unknown, camera: Camera) =>
-      this.built.loads.guard(() => {
-        if (renderer !== this.gpu.renderer) throw new Error("InstancedLod: another renderer than its LodGpu's drew it");
-        lists.drawFor(camera);
-      });
+    const drawFor = (camera: Camera) => this.built.loads.guard(() => lists.drawFor(this.built.loads.renderer(), camera));
     const meshes = new MeshesByLevel(this, this.levels, drawing, this.bounds, drawFor);
     const loads = new LodLevelLoadManager(
       this,
-      this.gpu,
       `InstancedLod ${this.uuid}`,
       inputs,
       encoded.get(null, true),
       (level, loaded) => meshes.prepare(level, loaded),
       (level) => meshes.of(level),
       async () => {
-        const instances = await pool.status(renderer, chunks.slots());
+        const instances = await pages.status(this.built.loads.renderer(), chunks.slots());
         if (instances !== null && instances > maxInstanceCount)
           throw new Error(`InstancedLod: its chunks hold ${instances} instances, more than its lists hold: raise its maxInstanceCount (${maxInstanceCount})`);
         return instances !== null;
@@ -216,10 +208,12 @@ export class InstancedLod extends Object3D<LodEventMap> {
     const { levels, eye, scale, ortho } = this.localCamera(camera, shadow);
     if (chunks.refresh()) this.measureBounds();
     // The pages change before any sorts with them.
-    const { pool } = this.gpu;
-    pool.prepare(this.gpu.renderer);
+    const renderer = loads.renderer();
+    this.pool.bind(renderer);
+    const { pages } = this.pool;
+    pages.prepare(renderer);
     const survivors = this.cullDistance?.scaleSurvivors ?? false;
-    if (survivors !== (drawn.matrices !== pool.matrices)) this.scaleSurvivors(survivors);
+    if (survivors !== (drawn.matrices !== pages.matrices)) this.scaleSurvivors(survivors);
     const cull = cullIn(this.cullDistance, this.matrixWorld, this.cull);
     const local = { levels, eye, scale, ortho, cull };
     const found = lists.of(camera);
@@ -257,8 +251,8 @@ export class InstancedLod extends Object3D<LodEventMap> {
 
   /** Draw survivors' scaled matrices, or the pool's again. */
   private scaleSurvivors(survivors: boolean): void {
-    const { pool, sorter } = this.gpu;
-    this.built.drawn.matrices = survivors ? sorter.scaledMatrices : pool.matrices;
+    const { pages, sorter } = this.pool;
+    this.built.drawn.matrices = survivors ? sorter.scaledMatrices : pages.matrices;
     drawMatrices(this.built.meshes.all(), this.built.drawn);
     this.measureBounds();
   }
@@ -303,7 +297,7 @@ export class InstancedLod extends Object3D<LodEventMap> {
   }
 
   override clone(): this {
-    const clone = new InstancedLod([], this.gpu).copy(this);
+    const clone = new InstancedLod([], this.pool).copy(this);
     if (!sameClass(this, clone)) throw new Error("InstancedLod.clone: a subclass must override clone");
     return clone;
   }

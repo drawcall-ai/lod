@@ -36,8 +36,8 @@ export class MeshesByLevel {
     private readonly drawing: Drawing,
     /** Around every instance, survivors grown: what every level mesh is culled and boxed by. */
     private readonly bounds: { readonly sphere: Sphere; readonly box: Box3 },
-    /** Sorts `camera`'s lists as a mesh draws for it with `renderer`. */
-    private readonly drawFor: (renderer: unknown, camera: Camera) => void,
+    /** Sorts `camera`'s lists as a mesh draws for it. */
+    private readonly drawFor: (camera: Camera) => void,
   ) {
     this.tints = levels.map(() => new Color(1, 1, 1));
     levels.forEach(({ object }, i) => {
@@ -86,8 +86,8 @@ export class MeshesByLevel {
       box: this.bounds.box,
       slots: (camera) => lists.slots(camera),
       radius: shape.fadeRadius,
-      drawFor: (renderer, camera) => {
-        this.drawFor(renderer, camera);
+      drawFor: (camera) => {
+        this.drawFor(camera);
         return lists.slots(camera).args;
       },
     });

@@ -1,6 +1,6 @@
 import * as THREE from "three/webgpu";
 import { cameraPosition, distance, float, positionWorld, vec4 } from "three/tsl";
-import { ImpostorMesh, Lod, type LodGpu, type LodLevel, type Wind } from "@drawcall/lod";
+import { ImpostorMesh, Lod, type LodPool, type LodLevel, type Wind } from "@drawcall/lod";
 import { sourceBox } from "./bounds.ts";
 import { planter } from "./planting.ts";
 import { GROUND_COVER, grassLadder, groundPlantLadder, type GroundKind, type Habitat } from "../../public/content/ladders.ts";
@@ -17,13 +17,13 @@ import { type Plan, TOWN } from "./plan.ts";
 const TILE = 6;
 
 /** Ground cover, planted on the GPU in the tiles near `camera`: `update` them before each frame. */
-export async function groundCover(library: Library, plan: Plan, zones: Zones, camera: THREE.Camera, gpu: LodGpu, wind?: Wind): Promise<THREE.Group> {
+export async function groundCover(library: Library, plan: Plan, zones: Zones, camera: THREE.Camera, pool: LodPool, renderer: THREE.Renderer, wind?: Wind): Promise<THREE.Group> {
   // Grass samples ground in the vertex stage, where pixel derivatives are unavailable.
   const ground = groundShading(library, zones, float(0));
   const root = new THREE.Group();
   root.name = "ground cover";
   const reference = new THREE.PerspectiveCamera(50);
-  const plant = planter(plan, gpu);
+  const plant = planter(plan, pool, renderer);
   const loaded = await Promise.all(
     GROUND_COVER.map(async (kind) => {
       const models = await ("grass" in kind ? grassModels(kind, ground) : plantModels(kind));

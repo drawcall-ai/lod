@@ -14,7 +14,7 @@ import { expect, it, vi } from "vitest";
 import { ARRIVAL_MS } from "../../src/levels/manager.js";
 import { Lod } from "../../src/lod.js";
 import { InstancedLod } from "../../src/instanced/index.js";
-import { GPU_TIMEOUT, render, renderer, eventually, gpu } from "../renderer.js";
+import { GPU_TIMEOUT, render, renderer, eventually } from "../renderer.js";
 import { box } from "../box.js";
 import { chunkOf, oneChunk } from "../instances.js";
 import { gatedBox, visibleLevels, waitUntilIdle } from "./fixture.js";
@@ -39,13 +39,13 @@ it.each(["Lod", "InstancedLod"].flatMap((kind) => placements.map((placement) => 
     // The box is about 40 px tall: the camera needs the deferred source.
     const levels = [level, { object: box(), maxPixels: 1 }];
     const manager = new LoadingManager();
-    const lod = kind === "Lod" ? new Lod(levels, gpu, { manager }) : oneChunk(levels, 1, { manager });
+    const lod = kind === "Lod" ? new Lod(levels, { manager }) : oneChunk(levels, 1, { manager });
     lod.position.z = shadow ? 5 : -5;
     const camera = new PerspectiveCamera(60, 1, 0.1, 100);
     // What a camera requests follows its position, not its frustum.
     if (placement === "facing away") camera.rotation.y = Math.PI;
     const scene = new Scene().add(lod);
-    const seen = new Lod([{ object: box() }], gpu, { manager });
+    const seen = new Lod([{ object: box() }], { manager });
     if (shadow) {
       const lamp = placement === "point shadow" ? new PointLight(0xffffff, 100) : new DirectionalLight();
       lamp.castShadow = true;
@@ -81,7 +81,7 @@ it("holds a Lod's item while a camera of the current or last round misses a leve
   const { level } = gatedBox();
   const manager = new LoadingManager();
   // The installed coarse box draws from afar; only near does the deferred source draw.
-  const lod = new Lod([level, { object: box(), maxPixels: 10 }], gpu, { manager });
+  const lod = new Lod([level, { object: box(), maxPixels: 10 }], { manager });
   lod.position.z = -50;
   const [main, thumbnail] = [new PerspectiveCamera(60, 1, 0.1, 100), new PerspectiveCamera(60, 1, 0.1, 100)];
   thumbnail.position.z = -45;
@@ -126,7 +126,7 @@ it.each(cases)(
   async ({ leave, back }) => {
     const { level } = gatedBox();
     const manager = new LoadingManager();
-    const lod = new Lod([level, { object: box(), maxPixels: 1 }], gpu, { manager });
+    const lod = new Lod([level, { object: box(), maxPixels: 1 }], { manager });
     lod.position.z = -5;
     const group = new Group().add(lod);
     const camera = new PerspectiveCamera(60, 1, 0.1, 100);
@@ -160,13 +160,12 @@ it.each(cases)(
 it("holds a nested Lod's items on its lod's manager until its deferred levels arrive", { timeout: GPU_TIMEOUT }, async () => {
   const { level, release } = gatedBox();
   const manager = new LoadingManager();
-  const inner = new Lod([level, { object: box(), maxPixels: 1 }], gpu);
+  const inner = new Lod([level, { object: box(), maxPixels: 1 }]);
   const outer = new Lod(
     [
       { load: async () => inner, maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) },
       { object: box(), maxPixels: 1 },
     ],
-    gpu,
     { manager },
   );
   outer.position.z = -5;
@@ -193,10 +192,7 @@ it("reports a failed level the camera needs as an item error", { timeout: GPU_TI
   const manager = new LoadingManager();
   const lod = new Lod(
     [{ load: () => Promise.reject(new Error("load failed")), maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) }],
-    gpu,
-    {
-      manager,
-    },
+    { manager },
   );
   lod.position.z = -5;
   const camera = new PerspectiveCamera(60, 1, 0.1, 100);
@@ -216,7 +212,7 @@ it.each(["Lod", "InstancedLod"])(
   async (kind) => {
     const make = (manager: LoadingManager) => {
       const levels = [gatedBox().level, { object: box(), maxPixels: 1 }];
-      const lod = kind === "Lod" ? new Lod(levels, gpu, { manager }) : oneChunk(levels, 1, { manager });
+      const lod = kind === "Lod" ? new Lod(levels, { manager }) : oneChunk(levels, 1, { manager });
       lod.position.z = -5;
       return lod;
     };
@@ -227,7 +223,7 @@ it.each(["Lod", "InstancedLod"])(
     const manager = new LoadingManager();
     const { level, release } = gatedBox();
     const levels = [level, { object: box(), maxPixels: 1 }];
-    const nested = kind === "Lod" ? new Lod(levels, gpu, { manager }) : oneChunk(levels, 1, { manager });
+    const nested = kind === "Lod" ? new Lod(levels, { manager }) : oneChunk(levels, 1, { manager });
     nested.position.z = -5;
     const inner = new Scene().add(nested);
     new Scene().add(inner);

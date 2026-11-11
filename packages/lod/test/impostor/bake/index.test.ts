@@ -24,7 +24,8 @@ import {
   type Object3D,
 } from "three/webgpu";
 import { describe, expect, it, vi } from "vitest";
-import { LodGpu } from "../../../src/gpu.js";
+import { Lod } from "../../../src/lod.js";
+import { LodPool } from "../../../src/pool.js";
 import { bakeImpostor } from "../../../src/impostor/bake/index.js";
 import { texelPixels, type Impostor } from "../../../src/impostor/impostor.js";
 import { frameDirection } from "../../../src/impostor/octahedral.js";
@@ -283,12 +284,14 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
     }
     // Its level 1 would draw a sphere, at any height.
     // Drawn by the bake's renderer.
-    const on = new LodGpu(bakeRenderer);
+    Lod.renderers.add(bakeRenderer);
+    const on = new LodPool();
     const field = oneChunk([{ object: new Mesh(new BoxGeometry(), material) }, { object: new Mesh(new SphereGeometry(), material) }], spots, { on });
     field.forceLevel = 1;
     const [a, b] = [await bake(plain), await bake(new Group().add(field))];
     field.dispose();
     on.dispose();
+    Lod.renderers.delete(bakeRenderer);
     expect(b.box).toEqual(a.box);
     const [left, right] = [base(a), base(b)];
     let differing = 0;

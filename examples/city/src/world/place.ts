@@ -1,5 +1,5 @@
 import * as THREE from "three/webgpu";
-import { InstancedLod, type LodGpu, type LodLevel } from "@drawcall/lod";
+import { InstancedLod, type LodPool, type LodLevel } from "@drawcall/lod";
 
 /** A spot on the ground, with the turn and scale of what stands there. */
 export interface Spot {
@@ -14,8 +14,8 @@ export interface Spot {
 export type Tint = (at: Spot, index: number, color: THREE.Color) => THREE.Color;
 
 /** `levels` standing at `spots` as one chunk: on the ground, turned and scaled, coloured by `tint` when given. */
-export function instancedAt(gpu: LodGpu, name: string, levels: readonly LodLevel[], spots: readonly Spot[], tint?: Tint): InstancedLod {
-  const lod = new InstancedLod(levels, gpu, { maxInstanceCount: spots.length });
+export function instancedAt(pool: LodPool, name: string, levels: readonly LodLevel[], spots: readonly Spot[], tint?: Tint): InstancedLod {
+  const lod = new InstancedLod(levels, pool, { maxInstanceCount: spots.length });
   lod.name = name;
   const instanceMatrix = new THREE.InstancedBufferAttribute(new Float32Array(spots.length * 16), 16);
   const instanceColor = tint ? new THREE.InstancedBufferAttribute(new Float32Array(spots.length * 3), 3) : undefined;
@@ -42,7 +42,7 @@ const REGION = 1000;
  * gives each copy a colour, white for none.
  */
 export function spread(
-  gpu: LodGpu,
+  pool: LodPool,
   name: string,
   variants: readonly (readonly LodLevel[])[],
   spots: Spot[],
@@ -63,7 +63,7 @@ export function spread(
     const levels = variants[variant];
     if (!levels) throw new Error(`${name}: missing levels ${variant}`);
     for (const [key, group] of groups)
-      lods.push(instancedAt(gpu, `${name} ${variant} ${key}`, levels, group, tint && ((at, _, color) => tint(Math.round(at.x * 7 + at.z * 13), color))));
+      lods.push(instancedAt(pool, `${name} ${variant} ${key}`, levels, group, tint && ((at, _, color) => tint(Math.round(at.x * 7 + at.z * 13), color))));
   }
   return lods;
 }

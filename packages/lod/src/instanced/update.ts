@@ -30,7 +30,7 @@ import { PAGE } from "./pages/workgroup.js";
 import { COUNTS_PER_ROW, DRAW_BYTES, FLOATS_AT, FLOAT_ROW, INTS_AT, INT_ROW, UNLISTED } from "./rows.js";
 
 // Sorting every InstancedLod's instances into its levels' instance lists for one camera, on the GPU, in two passes a
-// LodGpu builds once (see sort.ts).
+// LodPool builds once (see sort.ts).
 //
 // One workgroup per page of the pool (see pages/index.ts), one lane per pool index of the pages in use: updateInstance
 // reads the row of the page's InstancedLod, which holds all it sorts by for the camera, and skips the page unless the
@@ -69,7 +69,7 @@ export interface SortBuffers {
 /** The sort passes over `buffers`, their nodes pointed at other buffers by `point`, for a pool of `pages` pages. */
 export function sortPasses(buffers: SortBuffers, pages: number) {
   if (pages > MAX_WORKGROUPS)
-    throw new RangeError(`LodGpu: a pool of ${pages} pages outgrows one dispatch of ${MAX_WORKGROUPS} workgroups: lower maxInstanceCount or maxChunkCount`);
+    throw new RangeError(`LodPool: a pool of ${pages} pages outgrows one dispatch of ${MAX_WORKGROUPS} workgroups: lower maxInstanceCount or maxChunkCount`);
   const nodes = nodesOf(buffers);
   const rowCount = uniform(0, "uint");
   const update = computeKernel(

@@ -22,7 +22,8 @@ export class LoadingItem {
     private readonly lod: Object3D,
     /** The item's name: the kind of Lod and its uuid. */
     private readonly name: string,
-    private readonly renderer: Renderer,
+    /** The renderer drawing the Lod (see `LodLevelLoadManager.renderer`): bound before the item is first held. */
+    private readonly renderer: () => Renderer,
   ) {}
 
   /** Where the item goes. */
@@ -74,7 +75,7 @@ export class LoadingItem {
    * renderer that only compiles holds a hidden Lod's item.
    */
   private look(): void {
-    const { renderer } = this;
+    const renderer = this.renderer();
     this.looking = true;
     const timer: unknown = setTimeout(() => {
       this.looking = false;

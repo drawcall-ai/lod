@@ -1,4 +1,4 @@
-import type { InstancedLod, LodGpu, LodLevel, Wind } from "@drawcall/lod";
+import type { InstancedLod, LodPool, LodLevel, Wind } from "@drawcall/lod";
 import * as THREE from "three/webgpu";
 import { Random } from "../../public/content/random.ts";
 import { loader } from "../loading.ts";
@@ -34,7 +34,7 @@ const BORDER: Mix = [
 ];
 
 /** The forests, planted on the GPU in the tiles near the camera (`update` them before each frame), and the trees the plan placed elsewhere. */
-export async function trees(plan: Plan, gpu: LodGpu, wind?: Wind): Promise<THREE.Group> {
+export async function trees(plan: Plan, pool: LodPool, renderer: THREE.Renderer, wind?: Wind): Promise<THREE.Group> {
   const root = new THREE.Group();
   root.name = "trees";
   const sway = (lod: InstancedLod) => {
@@ -53,10 +53,10 @@ export async function trees(plan: Plan, gpu: LodGpu, wind?: Wind): Promise<THREE
 
   for (const [id, models] of loaded) {
     const spots = plan.models.get(id);
-    if (spots?.length) root.add(...spread(gpu, id, models, spots, foliageTint).map(sway));
+    if (spots?.length) root.add(...spread(pool, id, models, spots, foliageTint).map(sway));
   }
 
-  const plant = planter(plan, gpu);
+  const plant = planter(plan, pool, renderer);
   const forest = (x: number, z: number) => plan.land.at(x, z) === Use.Forest;
   const inside = (x: number, z: number) => plan.forests.some((f) => inForest(f, x, z, -EDGE));
   const mixes: [string, Mix, (x: number, z: number) => boolean][] = [

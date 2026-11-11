@@ -1,4 +1,4 @@
-import { Frustum, Matrix4, type Box3, type Camera, type Sphere } from "three/webgpu";
+import { Frustum, Matrix4, type Box3, type Camera, type Renderer, type Sphere } from "three/webgpu";
 import { has } from "../levels/draw.js";
 import type { InstanceSlots } from "../levels/fade.js";
 import { emptyLevels, type LodLevel } from "../levels/index.js";
@@ -64,7 +64,7 @@ const MODE = {
   orthoInside: 3,
 } as const;
 
-/** The lists of every camera drawing one InstancedLod: its row of a LodGpu's sorts (see sort.ts). */
+/** The lists of every camera drawing one InstancedLod: its row of a LodPool's sorts (see sort.ts). */
 export class InstanceLists {
   private readonly cameras = new Map<Camera, CameraLists>();
   readonly row: number;
@@ -134,9 +134,9 @@ export class InstanceLists {
     lists.written = true;
   }
 
-  /** Sort every InstancedLod due for `camera`: before a level mesh draws for it. */
-  drawFor(camera: Camera): void {
-    this.sorter.run(camera);
+  /** Sort every InstancedLod due for `camera` on `renderer`: before a level mesh draws for it. */
+  drawFor(renderer: Renderer, camera: Camera): void {
+    this.sorter.run(renderer, camera);
   }
 
   /** Give back the lists of every camera other than `camera` that `rendering` says stopped drawing, as a clone made for one frame does. */

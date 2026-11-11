@@ -1,6 +1,5 @@
-import { Object3D, Sphere, type Camera, type Intersection, type LoadingManager, type Raycaster } from "three/webgpu";
+import { Object3D, Sphere, type Camera, type Intersection, type LoadingManager, type Raycaster, type Renderer } from "three/webgpu";
 import { at } from "./at.js";
-import type { LodGpu } from "./gpu.js";
 import { measureLevels, prepareBounds } from "./levels/bounds.js";
 import { disposeCopies } from "./dispose.js";
 import { EncodedLevels, emptyLevels, levelsFrom, tintOf, type LodLevel, type ThresholdedLevel } from "./levels/index.js";
@@ -10,7 +9,7 @@ import { levelsToLoad } from "./levels/load.js";
 import { LodLevelLoadManager, type LodEventMap, type PreparedLevel } from "./levels/manager.js";
 import { levelMaterial } from "./levels/material.js";
 import { screenHeight, screenOf } from "./levels/screen.js";
-import { inShadowMap } from "./levels/renderer.js";
+import { inShadowMap, renderers } from "./levels/renderer.js";
 import { isImpostorMesh, isLOD, isLine, isMesh, isPoints, rejectSkinned, sameClass } from "./three.js";
 import { WIND } from "./wind/hooks.js";
 import { copyWind, refreshWind } from "./wind/index.js";
@@ -40,7 +39,7 @@ type ObjectFade = Extract<FadeSource, { kind: "object" }>;
  *
  * Arriving levels' texture uploads are paced to about one uncompressed 2048² RGBA texture's bytes per frame. Levels
  * are cloned into the Lod. A nested Lod switches and fades its own levels. Lines, points and sprites draw without
- * fading. Raycasts hit the source only. A Lod draws with its LodGpu's renderer only.
+ * fading. Raycasts hit the source only. A Lod draws with one renderer: the first of `Lod.renderers` that renders it.
  *
  * Build a new Lod after adding or moving meshes within a level: geometry is measured and hooked at construction or
  * arrival. Skinned meshes and ShaderMaterials are refused; use static meshes with node materials or supported built-in
@@ -53,6 +52,11 @@ export class Lod extends Object3D<LodEventMap> {
   static debug = false;
   /** Share of a level's range its fade spans: from `maxPixels × (1 - fade)` up to its `maxPixels`, the finer level draws too. */
   static readonly fade = FADE;
+  /**
+   * The renderers Lods and InstancedLods draw with: add the app's before it renders them. Each draws with the first of
+   * them that renders it; updated before that outside their renders, it reports an error.
+   */
+  static readonly renderers: Set<Renderer> = renderers;
 
   readonly isLOD = true;
   /** Let the renderer call `update` with its camera every frame. */
@@ -83,14 +87,9 @@ export class Lod extends Object3D<LodEventMap> {
 
   /**
    * `levels[0]` is the source. Empty only as the target of `copy`. A source that draws nothing (an empty Object3D, for
-   * detail another system draws) is measured by the first level that draws something. `gpu` is what it shares with
-   * every Lod drawing with its renderer.
+   * detail another system draws) is measured by the first level that draws something.
    */
-  constructor(
-    levels: readonly LodLevel[],
-    private readonly gpu: LodGpu,
-    options: LodOptions = {},
-  ) {
+  constructor(levels: readonly LodLevel[], options: LodOptions = {}) {
     super();
     const { loads, encoded } = this.build(levels);
     this.loads = loads;
@@ -119,7 +118,6 @@ export class Lod extends Object3D<LodEventMap> {
     });
     const loads = new LodLevelLoadManager(
       this,
-      this.gpu,
       `Lod ${this.uuid}`,
       inputs,
       encoded.get(null, true),
@@ -262,7 +260,7 @@ export class Lod extends Object3D<LodEventMap> {
   }
 
   override clone(): this {
-    const clone = new Lod([], this.gpu).copy(this);
+    const clone = new Lod([]).copy(this);
     if (!sameClass(this, clone)) throw new Error("Lod.clone: a subclass must override clone");
     return clone;
   }

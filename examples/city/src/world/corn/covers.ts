@@ -1,6 +1,6 @@
 import * as THREE from "three/webgpu";
 import { Fn, cameraPosition, distance, mix, modelWorldMatrix, positionLocal, smoothstep, uniform, vec3, vec4 } from "three/tsl";
-import { InstancedLod, type LodGpu } from "@drawcall/lod";
+import { InstancedLod, type LodPool } from "@drawcall/lod";
 import { type Tile, vigour } from "./field.ts";
 import { BLOCK } from "../../../public/content/corn/layout.ts";
 import { canopy, SINK, TOP } from "../../../public/content/corn/cover/shapes.ts";
@@ -31,15 +31,15 @@ export interface CoverBakes {
 type Axis = "x" | "z";
 
 /** Every block design's canopy, then the walls along x and z. */
-export function covers({ canopies, walls }: CoverBakes, tiles: Tile[], skirt: Skirt, gpu: LodGpu): Cover[] {
+export function covers({ canopies, walls }: CoverBakes, tiles: Tile[], skirt: Skirt, pool: LodPool): Cover[] {
   return [
-    ...canopies.map((bake, design) => canopyCover(bake, design, tiles, skirt, gpu)),
-    wallCover(walls.x, "x", tiles, skirt, gpu),
-    wallCover(walls.z, "z", tiles, skirt, gpu),
+    ...canopies.map((bake, design) => canopyCover(bake, design, tiles, skirt, pool)),
+    wallCover(walls.x, "x", tiles, skirt, pool),
+    wallCover(walls.z, "z", tiles, skirt, pool),
   ];
 }
 
-function canopyCover(bake: THREE.Mesh, design: number, tiles: Tile[], skirt: Skirt, gpu: LodGpu): Cover {
+function canopyCover(bake: THREE.Mesh, design: number, tiles: Tile[], skirt: Skirt, pool: LodPool): Cover {
   const material = coverMaterial(bake);
   const ridged = new THREE.Mesh(bake.geometry, material);
   // Near the camera it rises in front of the plants' fade; far away the ridges are subpixel.
@@ -53,12 +53,12 @@ function canopyCover(bake: THREE.Mesh, design: number, tiles: Tile[], skirt: Ski
   const places = tiles.filter((tile) => tile.design === design).map((tile) => ({ matrix: tile.matrix, at: tile.centre }));
   return {
     kind: "canopy",
-    lod: coverLod(gpu, `corn block ${design}`, levels, places),
+    lod: coverLod(pool, `corn block ${design}`, levels, places),
     diameter: new THREE.Box3().setFromObject(ridged).getSize(new THREE.Vector3()).length(),
   };
 }
 
-function wallCover(bake: THREE.Mesh, axis: Axis, tiles: Tile[], skirt: Skirt, gpu: LodGpu): Cover {
+function wallCover(bake: THREE.Mesh, axis: Axis, tiles: Tile[], skirt: Skirt, pool: LodPool): Cover {
   const wall = new THREE.Mesh(bake.geometry, rising(coverMaterial(bake), skirt));
   wall.castShadow = wall.receiveShadow = true;
   const turn = new THREE.Matrix4().makeRotationY(Math.PI);
@@ -69,7 +69,7 @@ function wallCover(bake: THREE.Mesh, axis: Axis, tiles: Tile[], skirt: Skirt, gp
   );
   return {
     kind: "wall",
-    lod: coverLod(gpu, `corn wall ${axis}`, [wall], places),
+    lod: coverLod(pool, `corn wall ${axis}`, [wall], places),
     diameter: new THREE.Box3().setFromObject(wall).getSize(new THREE.Vector3()).length(),
   };
 }
@@ -103,10 +103,10 @@ function rising(material: THREE.MeshStandardNodeMaterial, skirt: Skirt): THREE.M
 }
 
 /** `levels` of a baked cover over `places`, after an empty level 0 (the plants show there); thresholds are set by `Corn.update`. */
-function coverLod(gpu: LodGpu, name: string, levels: THREE.Mesh[], places: { matrix: THREE.Matrix4; at: THREE.Vector3 }[]): InstancedLod {
+function coverLod(pool: LodPool, name: string, levels: THREE.Mesh[], places: { matrix: THREE.Matrix4; at: THREE.Vector3 }[]): InstancedLod {
   const lod = new InstancedLod(
     [new THREE.Object3D(), ...levels].map((object) => ({ object })),
-    gpu,
+    pool,
     { maxInstanceCount: places.length },
   );
   lod.name = name;

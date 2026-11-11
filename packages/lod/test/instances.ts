@@ -3,8 +3,8 @@ import { InstancedLod, type InstancedLodOptions } from "../src/instanced/index.j
 import type { InstancedLodChunk } from "../src/instanced/chunk.js";
 import { fadeSourceOf, type InstanceSlots } from "../src/levels/fade.js";
 import type { LodLevel } from "../src/levels/index.js";
-import { gpu } from "./renderer.js";
-import type { LodGpu } from "../src/gpu.js";
+import { pool } from "./renderer.js";
+import type { LodPool } from "../src/pool.js";
 
 /** `matrices` as a chunk's CPU instanceMatrix. */
 export function instanceMatrix(matrices: readonly Matrix4[]): InstancedBufferAttribute {
@@ -22,12 +22,12 @@ export function instanceColor(colors: readonly Color[]): InstancedBufferAttribut
 
 /**
  * An InstancedLod of `levels` holding one CPU chunk: of `instances` identity matrices, or of the matrices given,
- * coloured by `colors` if given, drawn with `on` (the tests' LodGpu by default).
+ * coloured by `colors` if given, drawn with `on` (the tests' LodPool by default).
  */
 export function oneChunk(
   levels: readonly LodLevel[],
   instances: number | readonly Matrix4[],
-  { colors, on = gpu, ...options }: InstancedLodOptions & { colors?: readonly Color[]; on?: LodGpu } = {},
+  { colors, on = pool, ...options }: InstancedLodOptions & { colors?: readonly Color[]; on?: LodPool } = {},
 ): InstancedLod {
   const lod = new InstancedLod(levels, on, options);
   const matrices = typeof instances === "number" ? Array.from({ length: instances }, () => new Matrix4()) : instances;

@@ -8,7 +8,7 @@
 // window.city exposes the tour and frame measurements to scripts/tour.ts.
 import { textures } from "./loading.ts";
 import * as THREE from "three/webgpu";
-import { InstancedLod, Lod, LodGpu, Wind } from "@drawcall/lod";
+import { InstancedLod, Lod, LodPool, Wind } from "@drawcall/lod";
 import { Library } from "../public/content/materials.ts";
 import { number } from "../public/content/parameters.ts";
 import { terrainMaterial } from "./render/ground/material.ts";
@@ -62,9 +62,10 @@ await library.load();
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.5, 60000);
 const scene = new THREE.Scene();
 const pipeline = await Pipeline.create(scene, camera, Math.min(devicePixelRatio, 2));
-// What every Lod and InstancedLod of the city shares. Its pool has room for what the InstancedLods' lists hold at most
-// together (about 342k instances in 5.8k chunks), within one storage binding of 128 MiB of matrices.
-const gpu = new LodGpu(pipeline.renderer, { maxInstanceCount: 350_000, maxChunkCount: 6000 });
+Lod.renderers.add(pipeline.renderer);
+// What every InstancedLod of the city shares. It has room for what the InstancedLods' lists hold at most together
+// (about 342k instances in 5.8k chunks), within one storage binding of 128 MiB of matrices, a device's default limit.
+const pool = new LodPool({ maxInstanceCount: 350_000, maxChunkCount: 6000 });
 loaded("renderer");
 // hidden until the world is built: an empty canvas would sit over the page meanwhile
 pipeline.canvas.style.visibility = "hidden";
@@ -93,11 +94,11 @@ scene.fogNode = haze(
 const zones = { fields: world.fields, forests: world.forests, parcels: { texture: world.land.texture(), extent: EXTENT }, town: TOWN };
 const wind = params.get("wind") === "0" ? undefined : new Wind({ direction: [1, 0.35], speed: 0.22 });
 const content = Promise.all([
-  houses(world, gpu),
-  trees(world, gpu, wind),
-  props(world, gpu),
-  Corn.build(world, gpu),
-  groundCover(library, world, zones, camera, gpu, wind),
+  houses(world, pool),
+  trees(world, pool, pipeline.renderer, wind),
+  props(world, pool),
+  Corn.build(world, pool),
+  groundCover(library, world, zones, camera, pool, pipeline.renderer, wind),
 ]);
 // Let cache discovery start before constructing the ground on this thread.
 await new Promise<void>((resolve) => setTimeout(resolve, 0));

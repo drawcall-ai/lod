@@ -21,7 +21,7 @@ import {
 } from "./rows.js";
 import { sortPasses, type SortBuffers, type SortPasses } from "./update.js";
 
-// Every InstancedLod of a LodGpu sorts with the same two passes (see update.ts), each its own row of a camera's rows:
+// Every InstancedLod of a LodPool sorts with the same two passes (see update.ts), each its own row of a camera's rows:
 // one renderer.compute call per camera sorts every InstancedLod whose row is due, at the camera's first level mesh
 // draw. A camera's buffers, its rows, lists and indirect draws, are its own, so a camera's sort reads only what its
 // InstancedLods wrote for it; the counts, which the indirect pass clears, and the draws are shared.
@@ -48,7 +48,7 @@ export interface RowValues {
   frustum: Frustum;
 }
 
-/** The rows of every InstancedLod of a LodGpu, every camera's buffers, and the passes sorting into them. */
+/** The rows of every InstancedLod of a LodPool, every camera's buffers, and the passes sorting into them. */
 export class Sorter {
   private readonly layout = new RowLayout();
   private readonly cameras = new Map<Camera, CameraBuffers>();
@@ -57,12 +57,9 @@ export class Sorter {
   /** Where survivors' scaled matrices go while none scale: never written, as no survivor scales. */
   private readonly unscaled = new StorageInstancedBufferAttribute(new Float32Array(16), 16);
   private passes: SortPasses | null = null;
-  private isDisposed = false;
+  private disposed = false;
 
-  constructor(
-    private readonly renderer: Renderer,
-    private readonly pool: InstancePagePool,
-  ) {}
+  constructor(private readonly pool: InstancePagePool) {}
 
   /** A row for an InstancedLod whose levels of `listed`, a mask, list up to `listSize` instances each. */
   register(listed: number, listSize: number): number {
@@ -139,8 +136,8 @@ export class Sorter {
     buffers.due.add(row);
   }
 
-  /** Sort every row due for `camera`, in one compute call: before a level mesh draws for it. */
-  run(camera: Camera): void {
+  /** Sort every row due for `camera` on `renderer`, in one compute call: before a level mesh draws for it. */
+  run(renderer: Renderer, camera: Camera): void {
     this.layOut();
     const buffers = this.cameras.get(camera);
     if (!buffers || buffers.due.size === 0) return;
@@ -148,7 +145,7 @@ export class Sorter {
     const { scaled } = this;
     const passes = (this.passes ??= sortPasses(sort, this.pool.pages));
     passes.point(sort, this.layout.length);
-    this.renderer.compute([passes.update, passes.indirect]);
+    renderer.compute([passes.update, passes.indirect]);
     buffers.whole = false;
     // Sorted: the rows wait as they are until written again, their sorting bits cleared with the next upload.
     for (const row of buffers.due) setSorting(buffers, row, 0);
@@ -157,13 +154,8 @@ export class Sorter {
     if (scaled && scaled.array.length > 0) releaseArrays([scaled]);
   }
 
-  /** Whether it was disposed: then it takes no InstancedLod and no camera. */
-  get disposed(): boolean {
-    return this.isDisposed;
-  }
-
   dispose(): void {
-    this.isDisposed = true;
+    this.disposed = true;
     for (const buffers of this.cameras.values()) disposeBuffers(buffers);
     this.cameras.clear();
     this.layout.dispose();
@@ -174,7 +166,7 @@ export class Sorter {
   }
 
   private check(): void {
-    if (this.isDisposed) throw new Error("LodGpu: disposed");
+    if (this.disposed) throw new Error("LodPool: disposed");
   }
 
   private layOut(): void {
@@ -183,7 +175,7 @@ export class Sorter {
 
   private buffersOf(camera: Camera): CameraBuffers {
     const buffers = this.cameras.get(camera);
-    if (!buffers) throw new Error("LodGpu: no buffers for the camera");
+    if (!buffers) throw new Error("LodPool: no buffers for the camera");
     return buffers;
   }
 

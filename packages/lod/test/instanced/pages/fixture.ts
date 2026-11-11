@@ -4,7 +4,7 @@ import { InstancedLod } from "../../../src/instanced/index.js";
 import type { InstancedLodChunkParameters } from "../../../src/instanced/chunk.js";
 import { PAGE } from "../../../src/instanced/pages/workgroup.js";
 import { box } from "../../box.js";
-import { renderer, gpu } from "../../renderer.js";
+import { renderer, pool } from "../../renderer.js";
 import { instanceColor, instanceMatrix } from "../../instances.js";
 
 // The app's side, as a test: a compute pass that writes finished instances, matrices and colours, of the spots it
@@ -96,7 +96,7 @@ export function cpuChunk(from: number, n: number, by = 0): InstancedLodChunkPara
 }
 
 /** An InstancedLod of two boxes, the second drawn below 6 px, drawn with `on`. */
-export function instancedLod(on = gpu): InstancedLod {
+export function instancedLod(on = pool): InstancedLod {
   const lod = new InstancedLod([{ object: box() }, { object: box() }], on);
   lod.levels.forEach((level, i) => (level.maxPixels = [Infinity, 6][i] ?? level.maxPixels));
   return lod;

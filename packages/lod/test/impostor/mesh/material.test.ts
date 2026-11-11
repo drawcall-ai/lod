@@ -23,7 +23,7 @@ import type { InstancedLod } from "../../../src/instanced/index.js";
 import { bakeImpostor } from "../../../src/impostor/bake/index.js";
 import { ImpostorMesh, impostorInstances } from "../../../src/impostor/mesh/index.js";
 import { Lod } from "../../../src/lod.js";
-import { GPU_TIMEOUT, bakeRenderer, render, renderer, eventually, gpu } from "../../renderer.js";
+import { GPU_TIMEOUT, bakeRenderer, render, renderer, eventually } from "../../renderer.js";
 import { chunkOf, oneChunk } from "../../instances.js";
 import { must } from "../../must.js";
 
@@ -90,7 +90,7 @@ it.each([false, true])(
       [0, 1, 2].map((index) => at(2, 2 - index * 2)),
       { colors: colored ? undefined : [0, 1, 2].map(() => new Color("blue")) },
     );
-    const lod = new Lod([{ object: template }], gpu);
+    const lod = new Lod([{ object: template }]);
     const single = lod.levels[0]?.object;
     if (!(single instanceof ImpostorMesh)) throw new Error("Missing single card");
     const scene = new Scene().add(left, right, lod, new AmbientLight(0xffffff, 3));
@@ -165,7 +165,7 @@ it("shares shadow shader builds while each InstancedLod and single card holds it
     [{ object: template }],
     [0, 1, 2].map((index) => at(3, 0, 2 - index * 2)),
   );
-  const lod = new Lod([{ object: template.clone() }], gpu);
+  const lod = new Lod([{ object: template.clone() }]);
   for (const root of [left, right, lod])
     root.traverse((object) => {
       if (object instanceof Mesh) object.layers.set(1);

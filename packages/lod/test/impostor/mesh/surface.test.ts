@@ -24,7 +24,8 @@ import { cosine } from "../../../src/impostor/mesh/surface.js";
 import { readBytes } from "../../../src/bake.js";
 import { GPU_TIMEOUT, bakeRenderer, render, renderer } from "../../renderer.js";
 import { oneChunk } from "../../instances.js";
-import { LodGpu } from "../../../src/gpu.js";
+import { Lod } from "../../../src/lod.js";
+import { LodPool } from "../../../src/pool.js";
 
 function atlas(normalDepth = [128, 128, 255, 128]): Impostor {
   return {
@@ -137,10 +138,11 @@ it("glares in a low sun ahead only where a texel's normals agree", { timeout: GP
 it.each([false, true])("occludes at its reconstructed surface (reversed depth: %s)", { timeout: GPU_TIMEOUT }, async (reversedDepthBuffer) => {
   const drawing = new WebGPURenderer({ reversedDepthBuffer });
   await drawing.init();
+  Lod.renderers.add(drawing);
   const target = new RenderTarget(64, 64);
   const source = new Mesh(new BoxGeometry(2, 2, 2), new MeshStandardMaterial({ color: 0xe04020 }));
   const impostor = new ImpostorMesh(await bakeImpostor(source, bakeRenderer, { frames: 4, resolution: 32 }));
-  const on = new LodGpu(drawing);
+  const on = new LodPool();
   const instanced = oneChunk([{ object: impostor }], 1, { on });
   const wall = new Mesh(new PlaneGeometry(4, 4), new MeshStandardMaterial({ color: 0x2040e0 }));
   const camera = new PerspectiveCamera(40, 1, 0.1, 20);
@@ -178,6 +180,7 @@ it.each([false, true])("occludes at its reconstructed surface (reversed depth: %
     wall.geometry.dispose();
     wall.material.dispose();
     target.dispose();
+    Lod.renderers.delete(drawing);
     drawing.dispose();
   }
 });

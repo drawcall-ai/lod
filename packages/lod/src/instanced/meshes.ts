@@ -33,10 +33,10 @@ export interface MeshInputs {
   /** One instance's bounding radius in its own space, which shadow casters are cut off at. */
   readonly radius: number;
   /**
-   * Where `camera`'s indirect draws lie as a mesh draws for it with `renderer`, its lists sorted: the camera's due sorts,
+   * Where `camera`'s indirect draws lie as a mesh draws for it, its lists sorted: the camera's due sorts,
    * every InstancedLod's, run now. Never throws: three is rendering.
    */
-  readonly drawFor: (renderer: unknown, camera: Camera) => InstanceSlots["args"];
+  readonly drawFor: (camera: Camera) => InstanceSlots["args"];
 }
 
 /** `object`'s meshes and material groups, placed once in the instance's space, for level `level`. */
@@ -128,7 +128,7 @@ function levelMesh({ template, placement, group }: Part, offset: () => number | 
     previous.call(mesh, renderer, scene, camera, geometry, material, drawn);
     const start = offset();
     if (start === null) return;
-    const args = drawFor(renderer, camera);
+    const args = drawFor(camera);
     mesh.geometry.setIndirect(args.attribute, args.offset + start);
   };
   return mesh;

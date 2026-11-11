@@ -14,10 +14,10 @@ import {
 import { describe, expect, it } from "vitest";
 import { InstancedLod } from "../../src/instanced/index.js";
 import { instanceColor, instanceMatrix } from "../instances.js";
-import { gpu } from "../renderer.js";
+import { pool } from "../renderer.js";
 import { box } from "../box.js";
 
-const lod = () => new InstancedLod([{ object: box() }], gpu);
+const lod = () => new InstancedLod([{ object: box() }], pool);
 const gpuMatrices = () => new StorageInstancedBufferAttribute(new Float32Array(4 * 16), 16);
 const bounds = { originBox: new Box3(new Vector3(-1, 0, -1), new Vector3(1, 0, 1)), minScale: 1, maxScale: 2 };
 
@@ -40,7 +40,7 @@ describe("InstancedLodChunk", () => {
     expect(() => target.addChunk({ instanceMatrix: gpuMatrices() })).toThrow(/needs its originBox, minScale and maxScale/);
     expect(() => target.addChunk({ instanceMatrix: gpuMatrices(), ...bounds, minScale: 3 })).toThrow(/0 < minScale <= maxScale/);
     expect(() => target.addChunk({ instanceMatrix: gpuMatrices(), ...bounds, instanceCount: counts, instanceCountIndex: 1 })).toThrow(/passes the end/);
-    expect(() => new InstancedLod([], gpu).addChunk({ instanceMatrix: matrices })).toThrow(/levels before chunks/);
+    expect(() => new InstancedLod([], pool).addChunk({ instanceMatrix: matrices })).toThrow(/levels before chunks/);
     expect([...target.chunks]).toEqual([]);
     target.dispose();
   });
@@ -69,7 +69,7 @@ describe("InstancedLodChunk", () => {
   it("measures a CPU chunk's origins and scales, instances at scale 0 left out", () => {
     const coarse = new Mesh(new BoxGeometry(2, 10, 2), new MeshBasicMaterial());
     coarse.position.y = 5;
-    const target = new InstancedLod([{ object: box() }, { object: coarse }], gpu);
+    const target = new InstancedLod([{ object: box() }, { object: coarse }], pool);
     const chunk = target.addChunk({
       instanceMatrix: instanceMatrix([
         new Matrix4().makeTranslation(-5, 0, 0),

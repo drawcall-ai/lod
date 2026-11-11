@@ -25,7 +25,7 @@ import { simplify } from "../../src/simplify/index.js";
 import { isImpostorMesh, isInstancedMesh, isLOD, isMesh } from "../../src/three.js";
 import { area } from "../../src/source/surface.js";
 import { must } from "../must.js";
-import { gpu } from "../renderer.js";
+import { pool } from "../renderer.js";
 
 const triangles = (geometry: BufferGeometry) => (geometry.index?.count ?? 0) / 3;
 const meshes = (root: Object3D) => root.children.filter(isMesh);
@@ -33,7 +33,7 @@ const sphere = (material = new MeshStandardMaterial()) => new Mesh(new SphereGeo
 
 /** How far `copy` is from `source`, in `source`'s units, read back from the default maxPixels it gets in a Lod. */
 const deviation = (source: Object3D, copy: Object3D) =>
-  boundingBox(source).getSize(new Vector3()).length() / must(new Lod([{ object: source.clone() }, { object: copy }], gpu).levels[1]).maxPixels;
+  boundingBox(source).getSize(new Vector3()).length() / must(new Lod([{ object: source.clone() }, { object: copy }]).levels[1]).maxPixels;
 
 describe("simplify", () => {
   it("reduces triangles, shares the materials and geometry the source shares, and measures its deviation in the source's units", async () => {
@@ -57,7 +57,7 @@ describe("simplify", () => {
   it("simplifies a nested Lod's source whatever it shows, and leaves its other levels", async () => {
     const material = new MeshStandardMaterial();
     const far = new Mesh(new SphereGeometry(1, 8, 4), material);
-    const inner = new Lod([{ object: sphere(material) }, { object: far }], gpu);
+    const inner = new Lod([{ object: sphere(material) }, { object: far }]);
     inner.levels.forEach((level, i) => (must(level.object).visible = i === 1));
     const [nested] = (await simplify(new Group().add(inner), { ratio: 0.1 })).children;
     if (!nested || !isLOD(nested)) throw new Error("expected the nested Lod");
@@ -87,7 +87,7 @@ describe("simplify", () => {
     expect(triangles(many.geometry)).toBeLessThan(triangles(instanced.geometry) * 0.15);
     expect(many.count).toBe(2);
     expect(same.impostor).toBe(impostor);
-    const lod = new InstancedLod([{ object: sphere() }], gpu);
+    const lod = new InstancedLod([{ object: sphere() }], pool);
     const clone = vi.spyOn(lod, "clone");
     const source = new Group().add(sphere(), lod);
     try {

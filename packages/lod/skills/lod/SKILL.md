@@ -9,7 +9,7 @@ description: Use @drawcall/lod for cached, progressively loaded levels of detail
 
 Give the host's `LodLoader` an asset URL and the representations to derive from it. Use `.glb` or `.gltf` for stored models and `.glts` for procedural assets. Put generation parameters in the asset URL's query: each distinct query is a distinct cache identity. Build a `Lod` from the returned levels for an independently placed object, or an `InstancedLod` for repeated objects, whose instances arrive and leave in chunks of matrices and colours, from the CPU or from a compute pass of yours.
 
-Make a `LodGpu` once the renderer is initialised and give it to every `Lod` and `InstancedLod` drawing with that renderer. Every InstancedLod of one LodGpu sorts for a camera in one compute call. A camera that draws only a few InstancedLods, such as a minimap's, can give those a LodGpu of their own, which bounds the per-camera list memory. `LodLoader` needs no renderer.
+Add the application's renderer to `Lod.renderers` once, before it renders. `LodLoader`, `Lod` and `InstancedLod` need no renderer, so a `.glts` script or other loading code can make them: each draws with the first of `Lod.renderers` that renders it, and answers `getLevel` or `getLevelAt` once one has. Give every InstancedLod a `LodPool`, which holds the instances and sorts every InstancedLod of the pool for a camera in one compute call; share one per renderer. A camera that draws only a few InstancedLods, such as a minimap's, can give those a LodPool of their own, which bounds the per-camera list memory. A pool's matrices are one storage binding: the default device limit of 128 MiB holds about two million instances, and a pool sized beyond the device's `maxStorageBufferBindingSize` is the InstancedLods' error when they first draw. Request the adapter's larger limit in the renderer's `requiredLimits` to pool more.
 
 `loadAsync` resolves with the ladder before its levels load; each level loads when a camera first needs it. On a cold cache a derived level is built when it first loads, so a cold far camera builds only the coarse levels it needs. Give simplified and baked levels an explicit `maxPixels`: without one, a level is built with the ladder to measure its default. A simplified level also loads the source for its original materials; a source-only ladder loads its source eagerly. Prefer baked or impostor middle levels for an expensive `.glts`: a simplified level brings the script run forward to that viewing range.
 
@@ -22,10 +22,9 @@ This example draws many copies of one procedural asset. `positions` contains the
 ```ts
 import { InstancedBufferAttribute, LoadingManager, Matrix4 } from "three/webgpu";
 import { GLTSLoader } from "@drawcall/glts";
-import { InstancedLod, LodGpu, LodLoader } from "@drawcall/lod";
+import { InstancedLod, Lod, LodLoader, LodPool } from "@drawcall/lod";
 
-await renderer.init();
-const gpu = new LodGpu(renderer);
+Lod.renderers.add(renderer);
 
 const manager = new LoadingManager();
 manager.addHandler(/\.glts$/, new GLTSLoader(manager));
@@ -37,7 +36,7 @@ const levels = await loader.loadAsync({
     { type: "empty", maxPixels: 4 },
   ],
 });
-const trees = new InstancedLod(levels, gpu);
+const trees = new InstancedLod(levels, new LodPool());
 
 const matrix = new Matrix4();
 const matrices = new Float32Array(positions.flatMap((position) => matrix.makeTranslation(position).toArray()));
@@ -103,12 +102,12 @@ Pass levels in finest-to-coarsest order. An empty object can be a deliberate cul
 
 Describe a deferred representation with a load function, bounds and a transition height. The function returns the object already placed in the Lod's space; the bounds cover it in that same space, including its children. For a cached impostor, decode the atlas and return an `ImpostorMesh` with the intended draw settings.
 
-Here, `loadDetailedMesh` loads the detailed object, `sourceBox` describes its bounds in the Lod's space, `coarseMesh` is already available, and `gpu` is the renderer's LodGpu.
+Here, `loadDetailedMesh` loads the detailed object, `sourceBox` describes its bounds in the Lod's space and `coarseMesh` is already available.
 
 ```ts
 import { Lod } from "@drawcall/lod";
 
-const object = new Lod([{ load: loadDetailedMesh, maxPixels: Infinity, box: sourceBox }, { object: coarseMesh }], gpu);
+const object = new Lod([{ load: loadDetailedMesh, maxPixels: Infinity, box: sourceBox }, { object: coarseMesh }]);
 scene.add(object);
 ```
 
@@ -134,15 +133,15 @@ For dense cover, combine near individuals with a baked distant patch. Jitter pos
 
 Levels load as the camera comes to need them, so a frame drawn soon after loading can lack them. Give the Lods and InstancedLods a `manager` of their own, so that it tracks only them: each holds an item there while the levels its cameras need load, compile or fade in, and ends it once they are complete. Render the `Scene` that holds them each frame, since a Lod loads nothing before such a render.
 
-To capture one frame, even with nothing cached, place the camera and render, then wait a frame; while the manager is loading, compile with `renderer.compileAsync(scene, camera)`, render again and wait a frame; capture after a quiet frame, one in which no item started or ended. After moving the camera, wait again. In this example `levels` and `treeLevels` are ladders from `LodLoader`, `gpu` the renderer's LodGpu, `instanceMatrix` an attribute of tree matrices, and `viewpoint` the camera position to capture.
+To capture one frame, even with nothing cached, place the camera and render, then wait a frame; while the manager is loading, compile with `renderer.compileAsync(scene, camera)`, render again and wait a frame; capture after a quiet frame, one in which no item started or ended. After moving the camera, wait again. In this example `levels` and `treeLevels` are ladders from `LodLoader`, `pool` the app's LodPool, `instanceMatrix` an attribute of tree matrices, and `viewpoint` the camera position to capture.
 
 ```ts
 import { LoadingManager } from "three/webgpu";
 import { InstancedLod, Lod } from "@drawcall/lod";
 
 const manager = new LoadingManager();
-const lod = new Lod(levels, gpu, { manager });
-const trees = new InstancedLod(treeLevels, gpu, { manager });
+const lod = new Lod(levels, { manager });
+const trees = new InstancedLod(treeLevels, pool, { manager });
 trees.addChunk({ instanceMatrix });
 scene.add(lod, trees);
 

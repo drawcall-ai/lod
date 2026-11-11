@@ -1,9 +1,8 @@
 import type { Camera, Object3D, Object3DEventMap, Renderer } from "three/webgpu";
 import type { d } from "typegpu";
 import { nextTask } from "../task.js";
-import type { LodGpu } from "../gpu.js";
 import { isObject3D, isScene, rootOf } from "../three.js";
-import type { CompileFor } from "./compile/index.js";
+import { compilerOf, type CompileFor } from "./compile/index.js";
 import { CameraRenders } from "./cameras.js";
 import type { RenderContext } from "./compile/contexts.js";
 import { has, type DrawLevels } from "./draw.js";
@@ -12,6 +11,7 @@ import { LoadingItem } from "./item.js";
 import { CameraRequests } from "./requests.js";
 import { ChunkWait } from "./wait.js";
 import { ContextCompiles } from "./compiles.js";
+import { renderingNow } from "./renderer.js";
 
 /** How long an arriving level fades in for, over what drew in its place. */
 export const ARRIVAL_MS = 200;
@@ -50,8 +50,9 @@ interface Loading {
  * still building, in any context that shares it, so a level a camera may draw now builds as it first draws instead.
  * Nothing is evicted: a level stays loaded until the Lod is disposed.
  *
- * A Lod draws with its LodGpu's renderer, whose renders it learns its cameras from. It holds an item on its LoadingManager while anything a camera wants is missing, compiling or arriving,
- * and an InstancedLod's while the GPU has not shown its chunks taken in (see `chunksChanged`).
+ * A Lod draws with the first of `Lod.renderers` that renders it, whose renders it learns its cameras from. Once one
+ * has, it holds an item on its LoadingManager while anything a camera wants is missing, compiling or arriving, and an
+ * InstancedLod's while the GPU has not shown its chunks taken in (see `chunksChanged`).
  */
 export class LodLevelLoadManager {
   /** The bits of the levels that draw: given ones from the start, deferred ones once loaded and compiled. */
@@ -62,8 +63,6 @@ export class LodLevelLoadManager {
   error: Error | undefined;
   /** Whether a render has updated the Lod: its shaders are being or have been built. */
   started = false;
-  /** What draws the Lod: its LodGpu's renderer. */
-  readonly renderer: Renderer;
   /** The cameras rendering the Lod, and what they asked for. */
   readonly requests: CameraRequests;
   /** Its item on a LoadingManager. */
@@ -93,10 +92,11 @@ export class LodLevelLoadManager {
   private readonly releases: (() => void)[];
   /** An InstancedLod's chunks, while they wait to be shown taken in (see `chunksChanged`); null for a Lod. */
   private readonly wait: ChunkWait | null;
+  /** What draws the Lod, once a render has updated it (see `renderer`). */
+  private drawnWith: Renderer | null = null;
 
   constructor(
     private readonly lod: Object3D<LodEventMap>,
-    private readonly gpu: LodGpu,
     /** The LoadingManager item's name, which errors name too: the kind of Lod and its uuid. */
     private readonly name: string,
     /** The levels as the Lod was given them: it holds them (see `LodLevel.hold`) until it is disposed. */
@@ -109,19 +109,18 @@ export class LodLevelLoadManager {
     /** An InstancedLod's read of whether the GPU shows every chunk taken in (see `ChunkWait`); null for a Lod. */
     readChunks: (() => Promise<boolean>) | null,
   ) {
-    if (gpu.disposed) throw new Error("LodGpu: disposed");
     this.loaded = this.before = levels.reduce((bits, level, i) => (level.object ? bits | (1 << i) : bits), 0);
     this.empty = empty;
     this.coarsest = coarsest;
     this.order = levels.length === 0 ? [] : [coarsest, ...[...levels.keys()].reverse().filter((level) => level !== coarsest)];
     this.releases = [...new Set(levels.flatMap(({ hold }) => (hold ? [hold] : [])))].map((hold) => hold());
-    this.renderer = gpu.renderer;
-    this.requests = new CameraRequests(this.renderer, this.seen);
+    const renderer = () => this.renderer();
+    this.requests = new CameraRequests(renderer, this.seen);
     this.compiles = new ContextCompiles(
       (context, bits) => this.compileLevels(context, bits),
       (error) => this.report(error),
     );
-    this.item = new LoadingItem(lod, name, this.renderer);
+    this.item = new LoadingItem(lod, name, renderer);
     this.wait =
       readChunks &&
       new ChunkWait(
@@ -135,6 +134,20 @@ export class LodLevelLoadManager {
   get progress(): number {
     if (this.arrival === undefined) return 1;
     return Math.min((performance.now() - this.arrival) / ARRIVAL_MS, 1);
+  }
+
+  /**
+   * The renderer that draws the Lod: the first of `Lod.renderers` whose render or compile updated it, bound then.
+   * Another renderer drawing it throws, as does asking before one has.
+   */
+  renderer(): Renderer {
+    const now = renderingNow();
+    if (!this.drawnWith) {
+      if (!now) throw new Error(`${this.name}: render it first, with a renderer added to Lod.renderers`);
+      this.drawnWith = now;
+    }
+    if (now && now !== this.drawnWith) throw new Error(`${this.name}: another renderer than the first that rendered it drew it`);
+    return this.drawnWith;
   }
 
   get pending(): boolean {
@@ -179,7 +192,7 @@ export class LodLevelLoadManager {
    * at.
    */
   heightOf(camera: Camera, shadow: boolean): number {
-    return this.seen.heightOf(camera, this.renderer, shadow);
+    return this.seen.heightOf(camera, this.renderer(), shadow);
   }
 
   /** What compiles for `cameras` are for: the shadow maps they drew, and the targets disposed. */
@@ -245,7 +258,7 @@ export class LodLevelLoadManager {
     if (this.disposed || !this.seen.holds(context)) return;
     const objects = this.order.filter((level) => has(bits, level)).flatMap((level) => this.drawnBy(level));
     const compileFor = this.compileFor(this.requests.cameras());
-    await Promise.all(objects.map((object) => this.gpu.compiler.compileAsync(object, context, compileFor)));
+    await Promise.all(objects.map((object) => compilerOf(this.renderer()).compileAsync(object, context, compileFor)));
   }
 
   /**
@@ -268,7 +281,7 @@ export class LodLevelLoadManager {
         const prepared = this.prepare(level, object);
         try {
           const compileFor = this.compileFor(cameras);
-          await Promise.all([...contexts].map((other) => this.gpu.compiler.compileAsync(prepared.object, other, compileFor)));
+          await Promise.all([...contexts].map((other) => compilerOf(this.renderer()).compileAsync(prepared.object, other, compileFor)));
         } catch (error) {
           prepared.discard();
           throw error;
@@ -302,9 +315,11 @@ export class LodLevelLoadManager {
   /**
    * Hold the item while levels a camera wants are missing, compiling or arriving, or chunks wait to be shown taken in,
    * and end it once they are done, so a host waiting for its LoadingManager renders its cameras complete. Called at
-   * the end of each request.
+   * the end of each request. Before a render has updated the Lod it holds none: a host loading the Lod renders it
+   * only once its LoadingManager is done.
    */
   private sync(): void {
+    if (!this.drawnWith) return;
     this.item.sync(!this.disposed && !this.error && (this.pending || (this.wait !== null && this.wait.waiting) || this.progress < 1));
   }
 

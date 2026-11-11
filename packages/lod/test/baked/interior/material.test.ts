@@ -26,7 +26,7 @@ import { box } from "../../box.js";
 import { house, interior } from "../../house.js";
 import { InteriorMappingMaterial } from "../../../src/baked/interior/material.js";
 import { isStandardNode } from "../../../src/three.js";
-import { GPU_TIMEOUT, bakeRenderer, render as draw, renderer, gpu } from "../../renderer.js";
+import { GPU_TIMEOUT, bakeRenderer, render as draw, renderer } from "../../renderer.js";
 import { must } from "../../must.js";
 import { oneChunk } from "../../instances.js";
 
@@ -121,7 +121,7 @@ describe("interiors", { timeout: GPU_TIMEOUT }, () => {
     source.position.set(0.3, 0, 0);
     const baked = await bakeMesh(source, { low: box(), textureSize: 128, interior: rooms, renderer: bakeRenderer });
     const turn = new Matrix4().makeRotationY(0.4);
-    const lod = new Lod([{ object: source.clone() }, { object: baked.clone() }], gpu);
+    const lod = new Lod([{ object: source.clone() }, { object: baked.clone() }]);
     lod.quaternion.setFromRotationMatrix(turn);
     const instanced = oneChunk([{ object: source.clone() }, { object: baked.clone() }], [turn]);
     instanced.forceLevel = 1;

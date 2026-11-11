@@ -5,7 +5,7 @@ import type { Attributes, ChunkRange } from "./chunk.js";
 import { PoolPasses } from "./passes.js";
 import { PAGE } from "./workgroup.js";
 
-// Every instance of every InstancedLod of a LodGpu lives in its page pool: fixed pages of `PAGE` instances, which chunks,
+// Every instance of every InstancedLod of a LodPool lives in its page pool: fixed pages of `PAGE` instances, which chunks,
 // from the CPU or the GPU, are copied into, and which updateInstance visits one workgroup per page (see update.ts).
 //
 // In the first render after chunks were added, changed or removed, these passes run: one workgroup
@@ -21,9 +21,6 @@ import { PAGE } from "./workgroup.js";
 
 /** Windows of `PAGE` spots per page of instances that chunks may span: chunks hold far more spots than instances. */
 const WINDOWS_PER_PAGE = 16;
-
-/** WebGPU's guaranteed maxStorageBufferBindingSize: the pool's matrices are one binding. */
-const MAX_BINDING = 128 * 2 ** 20;
 
 /** A chunk to take in: its attributes and its range of them, where its instance count lies, and its InstancedLod's row. */
 export interface PoolChunk extends Pick<ChunkRange, "start" | "count" | "countIndex"> {
@@ -44,7 +41,7 @@ interface Run {
   count: number;
 }
 
-/** The page pool of a LodGpu, and the passes that fill and free it. */
+/** The page pool of a LodPool, and the passes that fill and free it. */
 export class InstancePagePool {
   /** Room for instances, in pages of `PAGE`. */
   readonly capacity: number;
@@ -80,16 +77,12 @@ export class InstancePagePool {
       ["maxInstanceCount", maxInstanceCount],
       ["maxChunkCount", maxChunkCount],
     ] as const) {
-      if (!Number.isInteger(value) || value < 1) throw new RangeError(`LodGpu: ${name} must be a positive integer, got ${value}`);
+      if (!Number.isInteger(value) || value < 1) throw new RangeError(`LodPool: ${name} must be a positive integer, got ${value}`);
     }
     // A part-filled page per chunk besides the pages that fill.
     const pages = maxChunkCount + Math.ceil(maxInstanceCount / PAGE);
     if (pages >= 2 ** PAGE_BITS)
-      throw new RangeError(`LodGpu: ${pages} pages of ${PAGE} instances outgrow the ${2 ** PAGE_BITS} a pool lists: lower maxInstanceCount or maxChunkCount`);
-    if (pages * PAGE * 64 > MAX_BINDING)
-      throw new RangeError(
-        `LodGpu: the matrices of ${pages} pages of ${PAGE} instances outgrow a storage binding of ${MAX_BINDING} bytes: lower maxInstanceCount or maxChunkCount`,
-      );
+      throw new RangeError(`LodPool: ${pages} pages of ${PAGE} instances outgrow the ${2 ** PAGE_BITS} a pool lists: lower maxInstanceCount or maxChunkCount`);
     const windows = WINDOWS_PER_PAGE * pages;
     this.pages = pages;
     this.capacity = pages * PAGE;
@@ -127,6 +120,15 @@ export class InstancePagePool {
     return this.pool.colors;
   }
 
+  /** Throw unless the matrices, one storage binding, fit in `limit` bytes: the device's maxStorageBufferBindingSize. */
+  checkBinding(limit: number): void {
+    const bytes = this.capacity * 64;
+    if (bytes <= limit) return;
+    throw new RangeError(
+      `LodPool: the matrices of ${this.pages} pages of ${PAGE} instances, ${bytes} bytes, outgrow the device's storage binding of ${limit} bytes: lower maxInstanceCount or maxChunkCount, or raise maxStorageBufferBindingSize in the renderer's requiredLimits`,
+    );
+  }
+
   /** Whether the next run takes chunks in or frees them. */
   get pending(): boolean {
     return this.due.size > 0 || this.removed;
@@ -135,12 +137,12 @@ export class InstancePagePool {
   /** Take `chunk` into a free slot at the next run; its slot. */
   add(chunk: PoolChunk): number {
     const slot = this.free.pop();
-    if (slot === undefined) throw new Error(`InstancedLod: all ${this.pool.slots} chunk slots are taken: raise LodGpu's maxChunkCount`);
+    if (slot === undefined) throw new Error(`InstancedLod: all ${this.pool.slots} chunk slots are taken: raise LodPool's maxChunkCount`);
     const windows = Math.ceil(chunk.count / PAGE);
     const base = this.take(windows);
     if (base === null) {
       this.free.push(slot);
-      throw new Error(`InstancedLod: chunks span more than the pool's ${this.pool.table.count} windows of ${PAGE} spots: raise LodGpu's maxInstanceCount`);
+      throw new Error(`InstancedLod: chunks span more than the pool's ${this.pool.table.count} windows of ${PAGE} spots: raise LodPool's maxInstanceCount`);
     }
     this.held[slot] = { chunk, base, windows };
     this.change(slot);
@@ -258,7 +260,7 @@ export class InstancePagePool {
     }
     if (short > 0) {
       throw new Error(
-        `InstancedLod: ${short} chunk${short === 1 ? "" : "s"} lack pages, holding ${got} of the ${needed} pages they need: raise LodGpu's maxInstanceCount (its pool has ${this.pool.pages} pages of ${PAGE})`,
+        `InstancedLod: ${short} chunk${short === 1 ? "" : "s"} lack pages, holding ${got} of the ${needed} pages they need: raise LodPool's maxInstanceCount (its pool has ${this.pool.pages} pages of ${PAGE})`,
       );
     }
     return instances;
@@ -284,7 +286,7 @@ export class InstancePagePool {
 /**
  * Drop the CPU arrays of `attributes`, buffers only the GPU writes, once a pass has run with them: they are never read
  * again, and they are most of what they cost on the CPU. This relies on three never uploading them again (as of three
- * r186): nothing marks them for an update, and a LodGpu's renderer, initialised, made each buffer as the pass ran.
+ * r186): nothing marks them for an update, and the renderer made each buffer as the pass ran.
  */
 export function releaseArrays(attributes: readonly StorageInstancedBufferAttribute[]): void {
   for (const attribute of attributes) attribute.array = new Float32Array(0);

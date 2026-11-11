@@ -1,6 +1,6 @@
 import { Color, LoadingManager, PerspectiveCamera, Scene, type BufferAttribute, type Camera, type Object3D } from "three/webgpu";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { LodGpu } from "../../../src/gpu.js";
+import { LodPool } from "../../../src/pool.js";
 import { InstancedLod } from "../../../src/instanced/index.js";
 import { PAGE } from "../../../src/instanced/pages/workgroup.js";
 import { DRAW_BYTES } from "../../../src/instanced/rows.js";
@@ -12,8 +12,8 @@ import { CAPACITY, camera, cpuChunk, gpuChunk, instancedLod, picked, produce } f
 
 const read = (attribute: BufferAttribute) => renderer.getArrayBufferAsync(attribute);
 
-/** A LodGpu whose pool has 5 pages: room for 512 instances in 3 chunks. */
-const small = () => new LodGpu(renderer, { maxInstanceCount: 2 * PAGE, maxChunkCount: 3 });
+/** A LodPool of 5 pages: room for 512 instances in 3 chunks. */
+const small = () => new LodPool({ maxInstanceCount: 2 * PAGE, maxChunkCount: 3 });
 
 /** Per level's draw, what `camera`'s lists hold: each instance's spot, scale, colour and fade. */
 async function drawn(lod: InstancedLod, camera: Camera): Promise<string[][]> {
@@ -86,7 +86,7 @@ async function until(scene: Scene, done: () => boolean): Promise<void> {
 
 afterEach(() => vi.restoreAllMocks());
 
-describe("a LodGpu's page pool", { timeout: GPU_TIMEOUT }, () => {
+describe("a LodPool's page pool", { timeout: GPU_TIMEOUT }, () => {
   it("draws, thins and scales the instances an app's compute pass wrote and counted as it does the same instances from the CPU", async () => {
     const cpu = instancedLod();
     const gpu = instancedLod();
@@ -184,7 +184,7 @@ describe("a LodGpu's page pool", { timeout: GPU_TIMEOUT }, () => {
       });
       await until(scene, () => lod.error !== undefined);
       expect(lod.error?.message).toContain("lack pages");
-      expect(lod.error?.message).toContain("raise LodGpu's maxInstanceCount (its pool has 5 pages of 256)");
+      expect(lod.error?.message).toContain("raise LodPool's maxInstanceCount (its pool has 5 pages of 256)");
       expect(errors).toEqual([lod.error]);
       expect(log).toHaveBeenCalledWith(lod.error);
       await Promise.resolve();
@@ -206,6 +206,10 @@ describe("a LodGpu's page pool", { timeout: GPU_TIMEOUT }, () => {
       produce(0, 300, 0);
       const chunk = lod.addChunk(gpuChunk(300, 0));
       await Promise.resolve();
+      // None before a render: a host loading the InstancedLod renders it only once its LoadingManager is done.
+      expect(items.open).toBe(0);
+      renderer.render(scene, camera);
+      await Promise.resolve();
       expect(items.open).toBe(1);
       await until(scene, () => items.open === 0);
       // A chunk taking its slot over in one frame: its own generation must reach the GPU's state.
@@ -225,16 +229,16 @@ describe("a LodGpu's page pool", { timeout: GPU_TIMEOUT }, () => {
     }
   });
 
-  it("takes in chunks of two LodGpus in one render, each pool holding its own instances", async () => {
-    // A small LodGpu's pool and a large one's, then each alone. The picked spots: 171 of the small one's 512, 256 of the
+  it("takes in chunks of two LodPools in one render, each pool holding its own instances", async () => {
+    // A small LodPool and a large one, then each alone. The picked spots: 171 of the small one's 512, 256 of the
     // large one's 768.
     const pools = [small(), small()];
-    const make = (pool: LodGpu) => [
+    const make = (pool: LodPool) => [
       { lod: instancedLod(pool), chunk: () => cpuChunk(0, 2 * PAGE) },
       { lod: instancedLod(), chunk: () => cpuChunk(2 * PAGE, 3 * PAGE) },
     ];
     const [first, second] = pools;
-    if (!first || !second) throw new Error("two LodGpus");
+    if (!first || !second) throw new Error("two LodPools");
     const together = make(first);
     const alone = make(second);
     try {

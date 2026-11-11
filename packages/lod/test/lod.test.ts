@@ -17,7 +17,7 @@ import { fadeSourceOf } from "../src/levels/fade.js";
 import { ARRIVAL_MS } from "../src/levels/manager.js";
 import { Lod } from "../src/lod.js";
 import { box } from "./box.js";
-import { GPU_TIMEOUT, render, renderer, nextLevel, gpu } from "./renderer.js";
+import { GPU_TIMEOUT, render, renderer, nextLevel, updateInRender } from "./renderer.js";
 
 /** Bounding diameter of `box()`: the box diagonal. */
 const DIAMETER = 2 * Math.sqrt(3);
@@ -26,7 +26,7 @@ const tan = Math.tan(Math.PI / 6);
 
 /** A source and two levels used up to 400 and 100 px tall. */
 function lod(): Lod {
-  const result = new Lod([{ object: box() }, { object: box() }, { object: box() }], gpu);
+  const result = new Lod([{ object: box() }, { object: box() }, { object: box() }]);
   setMaxPixels(result, [400, 100]);
   return result;
 }
@@ -39,7 +39,7 @@ function setMaxPixels(target: Lod, values: number[]): void {
   });
 }
 
-/** The canvas's height, which a Lod measures on outside a render. */
+/** The canvas's height, which a Lod measures on in a render without a target. */
 const CANVAS = renderer.getSize(new Vector2()).y;
 
 /** Place `camera` where the bounding sphere is `pixels` tall on a `height` px screen. */
@@ -48,11 +48,11 @@ function place(pixels: number, height = CANVAS, from: Camera = camera): void {
   from.updateMatrixWorld();
 }
 
-/** Update `target`, which has not drawn yet, seen where it is `pixels` tall on the canvas, which it measures on outside a render. */
+/** Update `target` in a render, seen where it is `pixels` tall on the canvas. */
 function seenAt(target: Lod, pixels: number, from: Camera = camera): Lod {
   place(pixels, CANVAS, from);
   target.updateMatrixWorld();
-  target.update(from);
+  updateInRender(target, from);
   return target;
 }
 
@@ -111,7 +111,7 @@ describe("Lod", { timeout: GPU_TIMEOUT }, () => {
   });
 
   it("leaves a nested Lod's levels to it and switches to it at once", () => {
-    const outer = new Lod([{ object: box() }, { object: new Lod([{ object: box() }, { object: box() }], gpu) }], gpu);
+    const outer = new Lod([{ object: box() }, { object: new Lod([{ object: box() }, { object: box() }]) }]);
     const inner = outer.levels[1]?.object;
     if (!(inner instanceof Lod)) throw new Error("Missing nested Lod");
     setMaxPixels(outer, [400]);
@@ -126,7 +126,7 @@ describe("Lod", { timeout: GPU_TIMEOUT }, () => {
     const source = box();
     const level = box();
     level.position.x = 10;
-    const target = new Lod([{ object: source }, { object: level }], gpu);
+    const target = new Lod([{ object: source }, { object: level }]);
     target.updateMatrixWorld();
     const hits = new Raycaster(new Vector3(0.3, 0.2, 10), new Vector3(0, 0, -1)).intersectObject(target);
     expect(hits.map((hit) => hit.object)).toEqual([target.levels[0]?.object]);
@@ -141,7 +141,7 @@ describe("Lod", { timeout: GPU_TIMEOUT }, () => {
       mesh.setMatrixAt(1, new Matrix4().makeTranslation(1.5, 0, 0));
       return mesh;
     };
-    const target = new Lod([{ object: pair() }, { object: pair() }], gpu);
+    const target = new Lod([{ object: pair() }, { object: pair() }]);
     const diameter = Math.hypot(5, 2, 2);
     const scene = new Scene().add(target);
     setMaxPixels(target, [40]);
@@ -171,7 +171,7 @@ describe("Lod", { timeout: GPU_TIMEOUT }, () => {
 
 it.each([false, true])("fades in an installed source without popping (height fade: %s)", { timeout: GPU_TIMEOUT }, async (heightFade) => {
   const deferred = { load: async () => box(), maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) };
-  const lod = new Lod([deferred, { object: box() }], gpu);
+  const lod = new Lod([deferred, { object: box() }]);
   const coarse = lod.levels[1]?.object;
   if (!coarse) throw new Error("Missing coarse object");
   lod.forceLevel = heightFade ? null : 0;
@@ -216,7 +216,7 @@ it("draws nothing, not even a given source, until its coarsest level has loaded,
   let release = () => {};
   const gate = new Promise<void>((resolve) => (release = resolve));
   const coarse = { load: async () => (await gate, box()), maxPixels: 5, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) };
-  const lod = new Lod([{ object: box() }, coarse], gpu);
+  const lod = new Lod([{ object: box() }, coarse]);
   const scene = new Scene().add(lod);
   lod.position.z = -5;
   try {

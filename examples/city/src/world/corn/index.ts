@@ -1,5 +1,5 @@
 import * as THREE from "three/webgpu";
-import { InstancedLod, Lod, type LodGpu, type Wind } from "@drawcall/lod";
+import { InstancedLod, Lod, type LodPool, type Wind } from "@drawcall/lod";
 import { loader, scripts } from "../../loading.ts";
 import { heroPlant } from "./hero.ts";
 import { sourceBox } from "../bounds.ts";
@@ -41,7 +41,7 @@ export class Corn extends THREE.Object3D {
     this.add(plants, ...covers.map((cover) => cover.lod), hero, ladybird);
   }
 
-  static async build(plan: Plan, gpu: LodGpu): Promise<Corn> {
+  static async build(plan: Plan, pool: LodPool): Promise<Corn> {
     const designs = Array.from({ length: DESIGNS }, (_, d) => layout(d));
     const tiles = cut(plan, DESIGNS, TOP);
     const spot = heroSpot(tiles, designs);
@@ -57,13 +57,13 @@ export class Corn extends THREE.Object3D {
         const levels = await loader.loadAsync(plantRequest(cornLadder(variant)));
         // Room for a chunk per tile held, each with as many of this variant's plants as a block design has most.
         const perTile = Math.max(...designs.map((plants) => plants.filter((plant) => plant.variant === variant).length));
-        const lod = new InstancedLod(levels, gpu, { maxInstanceCount: ROOM * perTile });
+        const lod = new InstancedLod(levels, pool, { maxInstanceCount: ROOM * perTile });
         lod.name = `corn plant ${variant}`;
         const box = sourceBox(lod.levels);
         return { lod, size: box.getSize(new THREE.Vector3()).length() };
       }),
     );
-    const details = await heroPlant(spot, plan.terrain, gpu);
+    const details = await heroPlant(spot, plan.terrain);
     const lods = plants.map(({ lod }) => lod);
     const field = new FieldTiles(tiles, designs, plan.terrain, spot, lods);
     let corn: Corn | undefined;
@@ -78,7 +78,7 @@ export class Corn extends THREE.Object3D {
       room: ROOM,
     });
     corn = new Corn(
-      covers({ canopies, walls: { x, z } }, tiles, skirt, gpu),
+      covers({ canopies, walls: { x, z } }, tiles, skirt, pool),
       skirt,
       near,
       details.hero,

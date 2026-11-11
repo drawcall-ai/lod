@@ -1,7 +1,7 @@
 import { IndirectStorageBufferAttribute, StorageBufferAttribute } from "three/webgpu";
 import { MAX_LEVELS } from "../levels/draw.js";
 
-// Where every InstancedLod of a LodGpu lies in a camera's buffers: its row of what it sorts by, its lists and its
+// Where every InstancedLod of a LodPool lies in a camera's buffers: its row of what it sorts by, its lists and its
 // indirect draws. A row's place follows from the rows before it: once a row was registered, freed or given draws, the
 // next use lays every row out anew (see `RowLayout.layOut`).
 
@@ -72,7 +72,7 @@ export interface CameraBuffers {
   users: number;
 }
 
-/** The rows of every InstancedLod of a LodGpu, where their lists and draws lie, and the buffers every camera shares. */
+/** The rows of every InstancedLod of a LodPool, where their lists and draws lie, and the buffers every camera shares. */
 export class RowLayout {
   private readonly rows: (Row | null)[] = [];
   private readonly free: number[] = [];
@@ -194,7 +194,7 @@ export class RowLayout {
 
   private rowAt(row: number): Row {
     const found = this.rows[row];
-    if (!found) throw new Error(`LodGpu: row ${row} holds no InstancedLod`);
+    if (!found) throw new Error(`LodPool: row ${row} holds no InstancedLod`);
     return found;
   }
 

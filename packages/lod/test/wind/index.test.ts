@@ -29,7 +29,7 @@ import { Lod } from "../../src/lod.js";
 import { readBytes } from "../../src/bake.js";
 import { isMesh } from "../../src/three.js";
 import { Wind } from "../../src/wind/index.js";
-import { GPU_TIMEOUT, bakeRenderer, render as draw, renderer, gpu } from "../renderer.js";
+import { GPU_TIMEOUT, bakeRenderer, render as draw, renderer, updateInRender } from "../renderer.js";
 import { chunkOf, oneChunk } from "../instances.js";
 
 /** Asymmetric, with a child transform: every part must use the same root-space sway. */
@@ -190,7 +190,7 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
       maxPixels: Infinity,
       box: new Box3(new Vector3(-0.35, 0, -0.35), new Vector3(0.35, 3, 0.35)),
     };
-    const lod = kind === "Lod" ? new Lod([level], gpu) : oneChunk([level], 1);
+    const lod = kind === "Lod" ? new Lod([level]) : oneChunk([level], 1);
     const wind = new Wind({ direction: [1, 0], speed: 0.25 });
     wind.apply(lod, { amplitude: 0.9, baseY: 0, height: 3 });
     wind.time = 1;
@@ -236,7 +236,7 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
       maxPixels: Infinity,
       box: new Box3(new Vector3(-0.5, -0.5, -0.5), new Vector3(0.5, 0.5, 0.5)),
     };
-    const lod = kind === "Lod" ? new Lod([level], gpu) : oneChunk([level], 1);
+    const lod = kind === "Lod" ? new Lod([level]) : oneChunk([level], 1);
     const camera = new PerspectiveCamera(30, 1, 0.1, 100);
     camera.position.z = 5;
     try {
@@ -266,7 +266,7 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
         const draw = object && fadeSourceOf(object);
         return draw?.kind === "object" ? draw.fade : null;
       });
-    const still = new Lod([{ object: cube() }, { object: cube() }, { object: cube() }], gpu);
+    const still = new Lod([{ object: cube() }, { object: cube() }, { object: cube() }]);
     still.levels.forEach((level, i) => (level.maxPixels = [Infinity, 400, 100][i] ?? Infinity));
     const moving = still.clone();
     wind.apply(moving, { amplitude: 0.8 });
@@ -274,7 +274,7 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
       for (const lod of [still, moving]) {
         lod.position.z = -distance(height);
         lod.updateMatrixWorld();
-        lod.update(camera);
+        updateInRender(lod, camera);
       }
       expect(moving.levels.map((level) => level.object?.visible)).toEqual(still.levels.map((level) => level.object?.visible));
       expect(fades(moving)).toEqual(fades(still));
@@ -401,7 +401,7 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
     const data = await baked();
     const wind = new Wind({ direction: [1, 0.4], speed: 0.6 });
     const objects = [
-      placed(new Lod([{ object: plant() }, { object: new ImpostorMesh(data) }], gpu)),
+      placed(new Lod([{ object: plant() }, { object: new ImpostorMesh(data) }])),
       placed(oneChunk([{ object: plant() }, { object: new ImpostorMesh(data) }], 1)),
       placed(new ImpostorMesh(data)),
     ];

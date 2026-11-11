@@ -8,16 +8,15 @@ Requires Three.js `WebGPURenderer` (`three/webgpu`).
 npm install @drawcall/lod three typegpu
 ```
 
-Load a model into an existing Three.js scene. Each level loads once the camera needs it, finer ones as the camera approaches. Make one `LodGpu` per renderer once it is initialised and give it to every `Lod` and `InstancedLod` drawing with that renderer; dispose it after them:
+Load a model into an existing Three.js scene. Each level loads once the camera needs it, finer ones as the camera approaches. Add the renderer to `Lod.renderers` once; loading code needs no renderer, as each Lod draws with the first of them that renders it.
 
 ```ts
-import { Lod, LodGpu, LodLoader } from "@drawcall/lod";
+import { Lod, LodLoader } from "@drawcall/lod";
 
-await renderer.init();
-const gpu = new LodGpu(renderer);
+Lod.renderers.add(renderer);
 const loader = new LodLoader();
 const levels = await loader.loadAsync("/models/tree.glb");
-scene.add(new Lod(levels, gpu));
+scene.add(new Lod(levels));
 ```
 
 Add the [vitecache](https://github.com/drawcall-ai/vitecache) Vite plugin to the host. Each level writes its cache file when it first loads in the dev server; `vite build` does not generate them, so deploy the cache directory with the app. For procedural assets, register a GLTSLoader on the loading manager and pass a `.glts` URL; the LOD skill below covers caching their expensive generation.

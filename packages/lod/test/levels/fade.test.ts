@@ -18,7 +18,7 @@ import { ImpostorMesh } from "../../src/impostor/mesh/index.js";
 import { Lod } from "../../src/lod.js";
 import { isMesh } from "../../src/three.js";
 import { Wind } from "../../src/wind/index.js";
-import { GPU_TIMEOUT, bakeRenderer, render, renderer, gpu } from "../renderer.js";
+import { GPU_TIMEOUT, bakeRenderer, render, renderer } from "../renderer.js";
 import { chunkOf, oneChunk } from "../instances.js";
 import { box } from "../box.js";
 
@@ -89,7 +89,7 @@ const at = (point: { x: number; z: number }, scale = 1) => new Matrix4().makeSca
 describe("casters smaller than a shadow texel", { timeout: GPU_TIMEOUT }, () => {
   it("cast nothing: a Lod's meshes, by the whole object", async () => {
     // 3.5 units across its bounding sphere, narrower than a texel; 3× that, wider.
-    const lods = new Group().add(placed(new Lod([{ object: box() }], gpu), SMALL), placed(new Lod([{ object: box() }], gpu), LARGE, 3));
+    const lods = new Group().add(placed(new Lod([{ object: box() }]), SMALL), placed(new Lod([{ object: box() }]), LARGE, 3));
     const [small, large] = await shadowAt(lods, SMALL, LARGE);
     expect(small).toBeLessThan(0.1);
     expect(large).toBeGreaterThan(0.15);

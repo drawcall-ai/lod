@@ -28,7 +28,7 @@ import { Lod } from "../../src/lod.js";
 import { Wind } from "../../src/wind/index.js";
 import { ImpostorMesh } from "../../src/impostor/mesh/index.js";
 import type { Impostor } from "../../src/impostor/impostor.js";
-import { GPU_TIMEOUT, eventually, render, renderer, nextLevel, gpu } from "../renderer.js";
+import { GPU_TIMEOUT, eventually, render, renderer, nextLevel, pool, updateInRender } from "../renderer.js";
 import { chunkOf, drawnSlots, instanceColor, instanceMatrix, oneChunk } from "../instances.js";
 import { must } from "../must.js";
 import { box } from "../box.js";
@@ -143,7 +143,7 @@ describe("InstancedLod", { timeout: GPU_TIMEOUT }, () => {
     await renderSorted(lod, camera);
     expect([0, 1].map((i) => chunkOf(lod).getLevelAt(i, camera))).toEqual([0, 1]);
     expect(await distances(lod, camera)).toEqual([[Math.round(distanceAt(20))]]);
-    expect(() => new InstancedLod([{ object: new Group() }], gpu)).toThrow(/no level has visible geometry/);
+    expect(() => new InstancedLod([{ object: new Group() }], pool)).toThrow(/no level has visible geometry/);
     lod.dispose();
   });
 
@@ -276,7 +276,7 @@ describe("an InstancedLod in shadow maps", { timeout: GPU_TIMEOUT }, () => {
 
 describe("an InstancedLod's chunks", { timeout: GPU_TIMEOUT }, () => {
   it("adds and removes chunks, each drawing its own colours or white", async () => {
-    const lod = new InstancedLod([{ object: box("source") }], gpu);
+    const lod = new InstancedLod([{ object: box("source") }], pool);
     const camera = new PerspectiveCamera(60, 1, 0.1, 1e5);
     try {
       const a = lod.addChunk({ instanceMatrix: instanceMatrix(onAxis([10, 11])) });
@@ -314,7 +314,7 @@ describe("an InstancedLod's chunks", { timeout: GPU_TIMEOUT }, () => {
   });
 
   it("renders before its first chunk, then draws the chunks added after", async () => {
-    const lod = new InstancedLod([{ object: box("source") }], gpu);
+    const lod = new InstancedLod([{ object: box("source") }], pool);
     const camera = new PerspectiveCamera(60, 1, 0.1, 1e5);
     const errors = vi.spyOn(console, "error");
     try {
@@ -332,7 +332,7 @@ describe("an InstancedLod's chunks", { timeout: GPU_TIMEOUT }, () => {
     const camera = new PerspectiveCamera(60, 1, 0.1, 1e5);
     /** Storage buffers made by the first sort of an InstancedLod with two chunks over `attributes`. */
     const buffers = async (attributes: [ReturnType<typeof instanceMatrix>, ReturnType<typeof instanceMatrix>]) => {
-      const lod = new InstancedLod([{ object: box("source") }], gpu);
+      const lod = new InstancedLod([{ object: box("source") }], pool);
       const chunks = [lod.addChunk({ instanceMatrix: attributes[0], count: 2 }), lod.addChunk({ instanceMatrix: attributes[1], start: 2, count: 2 })];
       const before = renderer.info.memory.storageAttributes;
       await renderSorted(lod, camera);
@@ -527,7 +527,7 @@ describe("an InstancedLod's bounds", { timeout: GPU_TIMEOUT }, () => {
   it("is bounded, for three's Box3.setFromObject, around every instance at every level, an impostor card's level too", () => {
     const tall = Object.assign(new Mesh(new BoxGeometry(2, 10, 2), new MeshBasicMaterial()), { name: "tall" });
     tall.position.y = 5;
-    const lod = new InstancedLod([{ object: box("source") }, { object: tall }, { object: new ImpostorMesh(impostor()) }], gpu);
+    const lod = new InstancedLod([{ object: box("source") }, { object: tall }, { object: new ImpostorMesh(impostor()) }], pool);
     const spots = [new Matrix4().makeTranslation(-30, 0, 0), new Matrix4().makeScale(2, 2, 2).setPosition(30, 0, 5)];
     lod.addChunk({ instanceMatrix: instanceMatrix(spots) });
     lod.position.set(0, 100, 0);
@@ -558,6 +558,7 @@ describe("an InstancedLod's bounds", { timeout: GPU_TIMEOUT }, () => {
     expect(new Vector3().fromBufferAttribute(coarse.geometry.getAttribute("position"), 0).toArray()).toEqual([10, 5, 1]);
     for (const name of ["normal", "tangent"]) expect(translated.geometry.getAttribute(name).array).toEqual(coarse.geometry.getAttribute(name).array);
     must(lod.levels[1]).maxPixels = 70;
+    updateInRender(lod, camera());
     // The source's max-axis sphere gives ~52px. Using the full geometry envelope would choose level zero here.
     expect(chunkOf(lod).getLevelAt(0, camera())).toBe(1);
     contains(lod, new Matrix4());
@@ -637,11 +638,12 @@ describe("an InstancedLod's shaders", { timeout: GPU_TIMEOUT }, () => {
 });
 
 it(
-  "reports another renderer than its LodGpu's that draws an InstancedLod as its error, and goes on drawing with its own",
+  "reports another renderer than the first that drew an InstancedLod as its error, and goes on drawing with the first",
   { timeout: GPU_TIMEOUT },
   async () => {
     const other = new WebGPURenderer({ antialias: false });
     await other.init();
+    Lod.renderers.add(other);
     const lod = oneChunk([{ object: box() }], 1);
     const scene = new Scene().add(lod);
     const camera = new PerspectiveCamera(60, 1, 0.1, 100);
@@ -653,13 +655,14 @@ it(
       for (let i = 0; i < 2; i++) await render(scene, camera);
       expect(lod.error).toBeUndefined();
       other.render(scene, camera);
-      expect(lod.error?.message).toMatch(/another renderer than its LodGpu's drew it/);
+      expect(lod.error?.message).toMatch(/another renderer than the first that rendered it drew it/);
       expect(failed).toHaveBeenCalledWith(lod.error);
       expect(logged).toHaveBeenCalledWith(lod.error);
       expect((await render(scene, camera)).some((value) => value > 0)).toBe(true);
     } finally {
       logged.mockRestore();
       lod.dispose();
+      Lod.renderers.delete(other);
       other.dispose();
     }
   },
