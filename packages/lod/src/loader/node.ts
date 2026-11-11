@@ -185,22 +185,19 @@ function canvas(): Canvas {
 
 async function session<T>(state: Session, run: () => Promise<T>): Promise<T> {
   users++;
+  // A failed restore failed the session that ran it. Sessions running together share one install.
+  const shared = (installed ??= restored.catch(() => {}).then(install));
   try {
-    // A failed restore failed the session that ran it.
-    installed ??= restored.catch(() => {}).then(install);
-    current = (await installed).canvas;
+    current = (await shared).canvas;
     return await sessions.run(state, run);
   } finally {
     if (--users === 0) {
-      const restoring = installed;
       installed = current = undefined;
       // A failed install failed the run above.
-      restored = restoring
-        ? restoring.then(
-            ({ restore }) => restore(),
-            () => {},
-          )
-        : restored;
+      restored = shared.then(
+        ({ restore }) => restore(),
+        () => {},
+      );
       await restored;
     }
   }
