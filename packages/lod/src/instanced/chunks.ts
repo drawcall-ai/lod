@@ -81,8 +81,15 @@ export class ChunkSet {
   /** Hold `parameters`' instances as a chunk, copied into the pool at its next run. */
   add(parameters: InstancedLodChunkParameters): InstancedLodChunk {
     const state: ChunkState = { originBox: new Box3(), minScale: 0, maxScale: 0, boundingBox: new Box3(), held: false };
-    const chunk = parameters.instance !== undefined ? new InstancedLodGpuChunk(parameters, state) : new InstancedLodCpuChunk(parameters, state, this.levelAt);
-    const slot = chunk instanceof InstancedLodGpuChunk ? this.take(chunk, chunk.instance) : this.takeMirrored(chunk);
+    if (parameters.instance !== undefined) {
+      const chunk = new InstancedLodGpuChunk(parameters, state);
+      return this.hold(chunk, state, this.take(chunk, chunk.instance));
+    }
+    const chunk = new InstancedLodCpuChunk(parameters, state, this.levelAt);
+    return this.hold(chunk, state, this.takeMirrored(chunk));
+  }
+
+  private hold(chunk: InstancedLodChunk, state: ChunkState, slot: number): InstancedLodChunk {
     state.held = true;
     this.held.set(chunk, { slot, state });
     this.version++;
