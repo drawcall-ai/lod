@@ -4,6 +4,7 @@ import type seedrandom from "seedrandom";
 import { footing, inRect, PAVEMENT, spot, type Rect, type Road, type Spot } from "./plan.ts";
 import { fence, frontHedge, garden } from "./gardens.ts";
 import type { Terrain } from "./terrain.ts";
+import { at } from "../at.ts";
 
 /** The street names on the signs at the crossings, each a sign of its own (see props.ts). */
 export const SIGN_NAMES = ["Maple St", "Church Rd", "Mill Lane", "Oak Ave", "High St", "Elm St"] as const;
@@ -145,7 +146,7 @@ export function town(centre: { x: number; z: number; angle: number; radius: numb
     const p = node(i, j)
       .addScaledVector(u, STREET_WIDTH / 2 + 1)
       .addScaledVector(v, STREET_WIDTH / 2 + 1);
-    const name = SIGN_NAMES[names++ % SIGN_NAMES.length] ?? SIGN_NAMES[0];
+    const name = at(SIGN_NAMES, names++ % SIGN_NAMES.length);
     town.signs.set(name, [...(town.signs.get(name) ?? []), spot(terrain, p.x, p.y, centre.angle + (-0.1 + 0.2 * r()))]);
   }
   plazaFurniture(plaza, terrain, add);
