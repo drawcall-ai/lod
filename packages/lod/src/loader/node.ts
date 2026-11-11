@@ -148,7 +148,9 @@ class ScriptLoader extends Loader<Object3D> {
     const scene = await (await this.loader).loadAsync(url);
     const { packages, runtimeModules } = scene.source;
     if (runtimeModules.length > 0)
-      throw new Error(`CachedLodLoader: cannot precompute "${url}": it imports ${runtimeModules.join(", ")} from a CDN at runtime, which a stored level cannot be checked against`);
+      throw new Error(
+        `CachedLodLoader: cannot precompute "${url}": it imports ${runtimeModules.join(", ")} from a CDN at runtime, which a stored level cannot be checked against`,
+      );
     const state = sessions.getStore();
     if (!state) throw new Error(`CachedLodLoader: "${url}" loaded outside loadAsync`);
     for (const name of packages) state.packages.add(name);
