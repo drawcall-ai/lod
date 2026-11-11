@@ -6,6 +6,7 @@ import { Land } from "../land.ts";
 import { Terrain } from "../terrain.ts";
 import { HOUSE_VARIANTS } from "../../../public/house/params.ts";
 import { type Plan, type Spot, type Rect, type Road } from "../plan.ts";
+import { SIGN_NAMES, type SignName } from "../town.ts";
 
 type Files = Record<string, Uint8Array>;
 
@@ -55,7 +56,7 @@ export async function decode(files: Files): Promise<Plan> {
     garden: spots(data.garden),
     hedges: list(data.hedges, spot),
     church: spot(data.church),
-    signs: spots(data.signs),
+    signs: new Map([...spots(data.signs)].map(([name, at]) => [signName(name), at])),
     models: spots(data.models),
   };
   restoreRoadShapes(world, {
@@ -112,6 +113,12 @@ function road(value: unknown): Road {
     }),
   };
 }
+function signName(name: string): SignName {
+  const known = SIGN_NAMES.find((sign) => sign === name);
+  if (!known) throw new Error(`Invalid plan sign ${name}`);
+  return known;
+}
+
 function spots(value: unknown): Map<string, Spot[]> {
   return new Map(
     list(value, (entry): [string, Spot[]] => {

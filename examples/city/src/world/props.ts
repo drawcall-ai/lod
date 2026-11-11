@@ -4,7 +4,7 @@ import { arriving, manager } from "../loading.ts";
 import { spread } from "./place.ts";
 import type { Plan } from "./plan.ts";
 import { gardenObjects } from "./garden-objects.ts";
-import type { SIGN_NAMES } from "./town.ts";
+import type { SignName } from "./town.ts";
 
 const shadows = arriving((object) => object.traverse((node) => (node.castShadow = node.receiveShadow = true)));
 
@@ -99,7 +99,7 @@ const fence = () =>
   });
 
 /** A street sign per name, which its query paints on. */
-const SIGNS: Record<(typeof SIGN_NAMES)[number], () => Promise<LodLevel[]>> = {
+const SIGNS: Record<SignName, () => Promise<LodLevel[]>> = {
   "Maple St": () =>
     new CachedLodLoader(manager, arriving()).loadAsync({
       url: "/sign/index.glts?text=Maple+St",
@@ -165,14 +165,8 @@ export async function props(plan: Plan, gpu: LodGpu): Promise<THREE.Group> {
     return spread(gpu, id, [await load()], spots);
   });
   if (plan.fences.length) pending.push(fence().then((levels) => spread(gpu, "fence", [levels], plan.fences)));
-  for (const [name, spots] of plan.signs) pending.push(sign(name)().then((levels) => spread(gpu, `sign ${name}`, [levels], spots)));
+  for (const [name, spots] of plan.signs) pending.push(SIGNS[name]().then((levels) => spread(gpu, `sign ${name}`, [levels], spots)));
   pending.push(gardenObjects(plan, gpu));
   root.add(...(await Promise.all(pending)).flat());
   return root;
-}
-
-function sign(name: string): () => Promise<LodLevel[]> {
-  const load = Object.entries(SIGNS).find(([known]) => known === name)?.[1];
-  if (!load) throw new Error(`No sign reads ${name}`);
-  return load;
 }

@@ -7,6 +7,7 @@ import type { Terrain } from "./terrain.ts";
 
 /** The street names on the signs at the crossings, each a sign of its own (see props.ts). */
 export const SIGN_NAMES = ["Maple St", "Church Rd", "Mill Lane", "Oak Ave", "High St", "Elm St"] as const;
+export type SignName = (typeof SIGN_NAMES)[number];
 
 const BLOCK = { u: 84, v: 64 };
 export const STREET_WIDTH = 7;
@@ -29,7 +30,7 @@ export interface Town {
   plaza: Rect;
   houses: { variant: number; spot: Spot }[];
   fences: Spot[];
-  signs: Map<string, Spot[]>;
+  signs: Map<SignName, Spot[]>;
   models: Map<string, Spot[]>;
 }
 
