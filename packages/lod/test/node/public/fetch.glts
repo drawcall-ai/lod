@@ -1,0 +1,5 @@
+// Fetches a URL off the public directory, which no stored level could be checked against.
+import { scene } from "@drawcall/glts";
+import { Mesh, BoxGeometry, MeshStandardMaterial } from "three/webgpu";
+await fetch("https://example.invalid/data.bin");
+scene.add(new Mesh(new BoxGeometry(), new MeshStandardMaterial()));

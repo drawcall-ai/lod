@@ -20,6 +20,8 @@ interface Session {
   publicDir: string;
   /** The public files the session's loads read, relative to `root`. */
   read: Set<string>;
+  /** The installed packages the session's .glts sources import. */
+  packages: Set<string>;
 }
 
 /** The session of each load, by its async context: the served fetch is global. */
@@ -27,7 +29,9 @@ const sessions = new AsyncLocalStorage<Session>();
 
 /**
  * CachedLodLoader in Node, as the vitecache plugin runs it: `loadAsync` builds and saves every level of the ladder, each
- * with the public files the ladder's loads read and the installed version of three. Served paths such as
+ * with the public files the ladder's loads read and the installed versions of three and of the packages its .glts
+ * sources import. A load that reads anything else, such as a URL off the public directory or a module a .glts source
+ * imports from a CDN, fails, since no stored level could be checked against it. Served paths such as
  * `/trees/oak.glts` load from the public directory, and `.glts` sources through a GLTSLoader of the load's own; bakes
  * draw on a WebGPU device of @drawcall/webgpu. The project root and public directory are vitecache's: those of the
  * Vite project while the vitecache plugin runs, else `options.root` (or the working directory) and its `public`.
@@ -49,7 +53,7 @@ export class CachedLodLoader extends BrowserCachedLodLoader {
 
   override loadAsync(request: LodRequest): Promise<LodLevel[]> {
     const { root, publicDir } = this.site;
-    return session({ root, publicDir, read: new Set() }, async () => {
+    return session({ root, publicDir, read: new Set(), packages: new Set() }, async () => {
       const loader = new SessionLoader(root, this.options);
       loader.setPath(this.path).setResourcePath(this.resourcePath).setCrossOrigin(this.crossOrigin);
       try {
@@ -102,9 +106,11 @@ class SessionLoader extends BrowserCachedLodLoader {
   }
 
   protected override inputs(): Input[] {
-    const read = sessions.getStore()?.read;
-    if (!read) throw new Error("CachedLodLoader: a level was built outside loadAsync");
-    return [...[...read].sort().map((path) => ({ path })), { package: "three" }];
+    const state = sessions.getStore();
+    if (!state) throw new Error("CachedLodLoader: a level was built outside loadAsync");
+    // three builds every level, whatever its source imports.
+    const packages = [...new Set(["three", ...state.packages])].sort();
+    return [...[...state.read].sort().map((path) => ({ path })), ...packages.map((name) => ({ package: name }))];
   }
 }
 
@@ -120,7 +126,10 @@ function servingManager(): LoadingManager {
   return manager;
 }
 
-/** Loads `.glts` sources with a GLTSLoader made at the first load, resolving their packages as the app at `root` does. */
+/**
+ * Loads `.glts` sources with a GLTSLoader made at the first load, resolving their packages as the app at `root` does,
+ * and records the packages each imports.
+ */
 class ScriptLoader extends Loader<Object3D> {
   private loader: Promise<GLTSLoader> | undefined;
 
@@ -135,7 +144,14 @@ class ScriptLoader extends Loader<Object3D> {
     this.loader ??= import("@drawcall/glts").then(
       ({ GLTSLoader }) => new GLTSLoader(this.manager, { resolve: (specifier) => resolveImport(specifier, this.root) }),
     );
-    return (await this.loader).loadAsync(url);
+    const scene = await (await this.loader).loadAsync(url);
+    const { packages, runtimeModules } = scene.source;
+    if (runtimeModules.length > 0)
+      throw new Error(`CachedLodLoader: cannot precompute "${url}": it imports ${runtimeModules.join(", ")} from a CDN at runtime, which a stored level cannot be checked against`);
+    const state = sessions.getStore();
+    if (!state) throw new Error(`CachedLodLoader: "${url}" loaded outside loadAsync`);
+    for (const name of packages) state.packages.add(name);
+    return scene;
   }
 
   /** Free the GLTSLoader and the scenes it loaded, resolving once freed; the next load makes another. */
@@ -193,7 +209,9 @@ async function install(): Promise<{ canvas: Canvas; restore: () => Promise<void>
 async function serve(fetch: typeof globalThis.fetch, input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const url = new URL(input instanceof Request ? input.url : input);
   const state = sessions.getStore();
-  if (url.origin !== placeholderOrigin || !state) return fetch(input, init);
+  if (!state || url.protocol === "data:" || url.protocol === "blob:") return fetch(input, init);
+  if (url.origin !== placeholderOrigin)
+    throw new Error(`CachedLodLoader: cannot precompute a load that fetches ${url.href}, which a stored level cannot be checked against`);
   const file = join(state.publicDir, decodeURIComponent(url.pathname));
   try {
     const bytes = await readFile(file);

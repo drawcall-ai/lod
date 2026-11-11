@@ -15,7 +15,7 @@ const saved = async () => {
   return Promise.all(names.map(async (name) => [name, (await stat(join(directory, name))).mtimeMs]));
 };
 
-it("builds and saves every level with the public files the ladder read, which a second load reads", { timeout: 120_000 }, async () => {
+it("builds and saves every level with the public files and packages the ladder read, which a second load reads", { timeout: 120_000 }, async () => {
   const request: LodRequest = {
     url: "/box.glts?size=2",
     levels: [
@@ -35,6 +35,7 @@ it("builds and saves every level with the public files the ladder read, which a 
     expect(inputs.map(({ dependency }: { dependency: unknown }) => dependency)).toEqual([
       { path: "public/box.glts" },
       { path: "public/box.ts" },
+      { package: "@drawcall/glts" },
       { package: "three" },
     ]);
   }
@@ -51,4 +52,11 @@ it("runs loads on one loader concurrently, each with its own GLTSLoader", { time
 
 it("refuses a manager, which would load what it cannot record", () => {
   expect(() => new CachedLodLoader(new LoadingManager())).toThrow(/without a manager/);
+});
+
+it("fails a load that fetches what it cannot record", { timeout: 120_000 }, async () => {
+  // GLTS reports the script's failure, caused by the refused fetch.
+  await expect(new CachedLodLoader(undefined, { root }).loadAsync("/fetch.glts")).rejects.toMatchObject({
+    cause: { message: expect.stringMatching(/cannot precompute/) },
+  });
 });
