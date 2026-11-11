@@ -1,11 +1,11 @@
 import type { Materials } from "../shared/materials.ts";
 import * as THREE from "three/webgpu";
 import { box, Parts } from "../shared/geometry.ts";
-import type { Building } from "../house/model.ts";
-import type { HouseParams } from "../house/params.ts";
-import { detail as houseDetail } from "../house/detail.ts";
-import { low as houseLow } from "../house/low.ts";
-import * as M from "../house/materials.ts";
+import type { Building } from "./model.ts";
+import type { HouseParams } from "./params.ts";
+import { detail as houseDetail } from "./detail.ts";
+import { low as houseLow } from "./low.ts";
+import * as M from "./materials.ts";
 
 /** The church: a house's hall and rooms, with a bell tower and slate spire. */
 export const church = (): Building => ({ params: churchParams(), low: churchLow, detail: churchDetail });

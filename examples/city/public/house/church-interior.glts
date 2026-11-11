@@ -1,7 +1,7 @@
 // The church's rooms, which its baked level shows through the windows.
 import { loadingManager, onDispose, scene } from "@drawcall/glts";
-import { church } from "./model.ts";
-import { houseInterior } from "../house/interior.ts";
+import { church } from "./church.ts";
+import { houseInterior } from "./interior.ts";
 import { dispose } from "../shared/dispose.ts";
 import { Materials } from "../shared/materials.ts";
 

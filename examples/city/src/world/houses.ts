@@ -101,9 +101,9 @@ if (HOUSES.length !== HOUSE_VARIANTS) throw new Error(`houses.ts loads ${HOUSES.
 
 const church = () =>
   new CachedLodLoader(manager, shadows).loadAsync({
-    url: "/church/index.glts",
+    url: "/house/church.glts",
     levels: [
-      { type: "baked", low: "/church/low.glts", interior: "/church/interior.glts", textureSize: 1024, maxPixels: 560 },
+      { type: "baked", low: "/house/church-low.glts", interior: "/house/church-interior.glts", textureSize: 1024, maxPixels: 560 },
       { type: "impostor", layout: "hemi", frames: 8, resolution: 128, maxPixels: 144 },
     ],
   });
