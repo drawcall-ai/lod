@@ -3,9 +3,10 @@ import seedrandom from "seedrandom";
 import { arriving, manager } from "../loading.ts";
 import { instancedAt, type Tint } from "./place.ts";
 import type { Plan } from "./plan.ts";
+import type { GardenThing } from "./gardens.ts";
 
 /** Each garden thing, by name. */
-const THINGS: Record<string, () => Promise<LodLevel[]>> = {
+const THINGS: Record<GardenThing, () => Promise<LodLevel[]>> = {
   letterbox: () =>
     new CachedLodLoader(manager, arriving()).loadAsync({
       url: "/letterbox/index.glts",
@@ -14,7 +15,7 @@ const THINGS: Record<string, () => Promise<LodLevel[]>> = {
         { type: "empty", maxPixels: 3 },
       ],
     }),
-  "patio set": () =>
+  "patio-set": () =>
     new CachedLodLoader(manager, arriving()).loadAsync({
       url: "/patio-set/index.glts",
       levels: [
@@ -38,7 +39,7 @@ const THINGS: Record<string, () => Promise<LodLevel[]>> = {
         { type: "empty", maxPixels: 3 },
       ],
     }),
-  "washing line": () =>
+  "washing-line": () =>
     new CachedLodLoader(manager, arriving()).loadAsync({
       url: "/washing-line/index.glts",
       levels: [
@@ -96,7 +97,6 @@ async function gardenThings(plan: Plan, gpu: LodGpu): Promise<InstancedLod[]> {
   return Promise.all(
     [...plan.garden].map(async ([name, spots]) => {
       const load = THINGS[name];
-      if (!load) throw new Error(`No garden thing ${name}`);
       const r = seedrandom(String(name.length));
       const paint: Tint = (_, __, color) => {
         const picked = paints[Math.floor(r() * paints.length)];

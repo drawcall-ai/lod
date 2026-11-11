@@ -8,6 +8,7 @@ import { farmland } from "./farmland.ts";
 import { Land, Use } from "./land.ts";
 import { Terrain } from "./terrain.ts";
 import { town, type SignName } from "./town.ts";
+import type { GardenThing } from "./gardens.ts";
 
 /** Where one copy of something stands: on the ground at x, z, turned by `angle` about y. */
 export interface Spot {
@@ -56,8 +57,8 @@ export interface Plan {
   houses: { variant: number; spot: Spot }[];
   /** Fence bays (2.4 m, running along the spot's +x). */
   fences: Spot[];
-  /** Garden things by name (each in its own public/ folder). */
-  garden: Map<string, Spot[]>;
+  /** Garden things by name. */
+  garden: Map<GardenThing, Spot[]>;
   hedges: Spot[];
   church: Spot;
   /** Street-name signs, by name. */

@@ -2,7 +2,7 @@ import * as THREE from "three/webgpu";
 import type { HouseParams } from "../../public/house/params.ts";
 import type seedrandom from "seedrandom";
 import { footing, inRect, PAVEMENT, spot, type Rect, type Road, type Spot } from "./plan.ts";
-import { fence, frontHedge, garden } from "./gardens.ts";
+import { fence, frontHedge, garden, type GardenThing } from "./gardens.ts";
 import type { Terrain } from "./terrain.ts";
 import { at } from "../at.ts";
 
@@ -22,8 +22,8 @@ export interface Town {
   paths: Road[];
   /** Where the church stands (its front facing the plaza). */
   church: Spot;
-  /** Garden things by name (each in its own public/ folder): sheds, letterboxes, greenhouses… */
-  garden: Map<string, Spot[]>;
+  /** Garden things by name: sheds, letterboxes, greenhouses… */
+  garden: Map<GardenThing, Spot[]>;
   /** Clipped hedge sections (2 m, running along the spot's +x). */
   hedges: Spot[];
   /** The east–west axis through the centre: the main road continues it on both sides. */
