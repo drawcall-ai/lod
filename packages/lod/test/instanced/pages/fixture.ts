@@ -1,7 +1,7 @@
 import { Box3, Color, Matrix4, PerspectiveCamera, StorageBufferAttribute, StorageInstancedBufferAttribute, Vector3 } from "three/webgpu";
 import { Fn, If, atomicAdd, atomicStore, float, instanceIndex, mat4, storage, uint, uniform, vec3 } from "three/tsl";
 import { InstancedLod } from "../../../src/instanced/index.js";
-import type { InstancedLodChunkParameters, InstancedLodInstance } from "../../../src/instanced/chunk.js";
+import type { InstancedLodCpuChunkParameters, InstancedLodGpuChunkParameters, InstancedLodInstance } from "../../../src/instanced/chunk.js";
 import { PAGE } from "../../../src/instanced/pages/workgroup.js";
 import { box } from "../../box.js";
 import { renderer, gpu } from "../../renderer.js";
@@ -84,21 +84,24 @@ export function produce(from: number, n: number, index: number, { by = 0, write 
 /** How lod reads the spots `produce` wrote, each in its place. */
 const inPlace: InstancedLodInstance = (index) => ({ matrix: matrices.element(index), color: colors.element(index) });
 
-/** How lod reads the spots `produce` counted into counter 0 and counter 1: none past the count. */
-const counted = [0, 1].map((counter): InstancedLodInstance => (index) => ({
-  matrix: index.lessThan(written.element(counter)).select(matrices.element(index), none),
-  color: colors.element(index),
-}));
+/** How lod reads the spots `produce` counted into counter `counter`: none past the count. */
+const countedBy =
+  (counter: 0 | 1): InstancedLodInstance =>
+  (index) => ({
+    matrix: index.lessThan(written.element(counter)).select(matrices.element(index), none),
+    color: colors.element(index),
+  });
+
+/** One function per counter, shared by its chunks as an app would: each new function compiles passes of its own. */
+const counted = [countedBy(0), countedBy(1)] as const;
 
 /**
  * The GPU chunk `produce` wrote: `n` spots from record `start`, the picked ones counted into counter `counter`, or
  * each in its place.
  */
-export function gpuChunk(n: number, counter: 0 | 1 | "in place", start = 0): InstancedLodChunkParameters {
-  const instance = counter === "in place" ? inPlace : counted[counter];
-  if (!instance) throw new Error(`no counter ${counter}`);
+export function gpuChunk(n: number, counter: 0 | 1 | "in place", start = 0): InstancedLodGpuChunkParameters {
   return {
-    instance,
+    instance: counter === "in place" ? inPlace : counted[counter],
     start,
     count: n,
     originBox: new Box3(new Vector3(-11, 0, -600), new Vector3(11, 1, -4)),
@@ -108,7 +111,7 @@ export function gpuChunk(n: number, counter: 0 | 1 | "in place", start = 0): Ins
 }
 
 /** The same picked spots from the CPU. */
-export function cpuChunk(from: number, n: number, by = 0): InstancedLodChunkParameters {
+export function cpuChunk(from: number, n: number, by = 0): InstancedLodCpuChunkParameters {
   const spots = Array.from({ length: n }, (_, i) => from + i)
     .filter(picked)
     .map((k) => spot(k, by));
