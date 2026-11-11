@@ -2,7 +2,7 @@
 // jittered grid; each spot's hash picks the one InstancedLod that draws it, how large it grows, how it turns and its
 // tint, so a tile planted again shows the same plants. Every InstancedLod has an output of its own: per slot of the ring, a whole tile's spots, each the finished
 // instance where it plants one and a matrix of scale 0 (no instance) elsewhere; the InstancedLod packs only the first.
-import { InstancedLod, type LodGpu, type LodLevel } from "@drawcall/lod";
+import { InstancedLod, type LodPool, type LodLevel } from "@drawcall/lod";
 import * as t3 from "@typegpu/three";
 import { storage } from "three/tsl";
 import * as THREE from "three/webgpu";
@@ -56,9 +56,8 @@ export interface Planting {
   tinted?: boolean;
 }
 
-/** Plants stands on `plan`'s ground, whose heights its passes share on the GPU. */
-export function planter(plan: Plan, gpu: LodGpu) {
-  const { renderer } = gpu;
+/** Plants stands on `plan`'s ground, whose heights its passes, run on `renderer`, share on the GPU. */
+export function planter(plan: Plan, pool: LodPool, renderer: THREE.Renderer) {
   const { heights } = plan.terrain;
   const ground = t3.instancedArray(heights, d.f32);
   const cells = Math.sqrt(heights.length) - 1;
@@ -161,7 +160,7 @@ export function planter(plan: Plan, gpu: LodGpu) {
     const area = Math.PI * (radius + tile) ** 2;
     const tiles = Math.min(Math.ceil(area / (tile * tile)), holding.size);
     const outputs = plantings.map((planting) => {
-      const lod = new InstancedLod(planting.levels, gpu, {
+      const lod = new InstancedLod(planting.levels, pool, {
         maxInstanceCount: Math.ceil(UNEVEN * tiles * capacity * (planting.to - planting.from)),
       });
       lod.name = planting.name;

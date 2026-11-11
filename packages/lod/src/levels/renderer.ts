@@ -27,6 +27,21 @@ export function callDepth(renderer: Renderer): number {
  */
 export const busy = (renderer: Renderer): boolean => callDepth(renderer) >= 0 || Reflect.get(renderer, "_compilationPromises") != null;
 
+/** The renderers Lods and InstancedLods may draw with (see `Lod.renderers`). */
+export const renderers = new Set<Renderer>();
+
+/**
+ * The renderer of `renderers` rendering now, else the one compiling: three's renderer calls a LOD's `update` with its
+ * camera only. Several at once throw, as which one updates the LOD is unknown.
+ */
+export function busyRenderer(): Renderer | undefined {
+  const busied = [...renderers].filter(busy);
+  const rendering = busied.filter((renderer) => callDepth(renderer) >= 0);
+  const found = rendering.length > 0 ? rendering : busied;
+  if (found.length > 1) throw new Error("Lod: several of Lod.renderers render or compile at once: which one updates it is unknown");
+  return found[0];
+}
+
 /**
  * Whether the scene `node` is in is being drawn into a shadow map: three's shadow map render
  * draws it with its own override material, and calls `update` on every LOD with the

@@ -3,7 +3,7 @@ import type { InstancedLod } from "../../src/instanced/index.js";
 import { DRAW_BYTES } from "../../src/instanced/rows.js";
 import { fadeSourceOf } from "../../src/levels/fade.js";
 import { isImpostorMesh, isMesh } from "../../src/three.js";
-import { gpu, render, renderer } from "../renderer.js";
+import { pool, render, renderer } from "../renderer.js";
 import { box } from "../box.js";
 import { chunkOf, drawnSlots, oneChunk } from "../instances.js";
 
@@ -57,7 +57,7 @@ export function instancesOf(mesh: Object3D) {
  * order. The camera's due sorts run first, as its next draw would run them.
  */
 export async function sortedLists(lod: InstancedLod, camera: Camera) {
-  gpu.sorter.run(camera);
+  pool.sorter.run(renderer, camera);
   return Promise.all(
     drawnMeshes(lod).map(async (mesh, index) => {
       const { indices, fades, args } = drawnSlots(mesh, camera);

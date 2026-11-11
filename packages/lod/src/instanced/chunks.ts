@@ -3,7 +3,7 @@ import { isStorageInstanced } from "../three.js";
 import { InstancedLodChunk, measureChunk, type ChunkState, type InstancedLodChunkParameters } from "./chunk.js";
 import type { Cull } from "./cull.js";
 import { Mirror } from "./mirror.js";
-import type { InstancePagePool } from "./pages/index.js";
+import type { InstancePages, PoolChunk } from "./pages/index.js";
 import type { Attributes } from "./pages/chunk.js";
 import { MAX_SURVIVOR_SCALE } from "./measure.js";
 
@@ -13,9 +13,10 @@ function onGpu(attribute: InstancedBufferAttribute | StorageInstancedBufferAttri
   return attribute;
 }
 
-/** One chunk the set holds: its pool slot and its state. */
+/** One chunk the set holds: what its pool slot takes in, the slot once its InstancedLod's first sort took it, and its state. */
 interface Held {
-  slot: number;
+  taken: Omit<PoolChunk, "row">;
+  slot: number | null;
   state: ChunkState;
 }
 
@@ -28,22 +29,24 @@ interface Shared {
 const grown = new Box3();
 
 /**
- * The chunks of one InstancedLod: their pool slots, the mirrors the pool reads CPU attributes through, and their
- * bounds, which load levels and cull the level meshes.
+ * The chunks of one InstancedLod: their pool slots, taken as it sorts, the mirrors the pool reads CPU attributes
+ * through, and their bounds, which load levels and cull the level meshes.
  */
 export class ChunkSet {
   private readonly held = new Map<InstancedLodChunk, Held>();
   private readonly mirrors = new Map<InstancedBufferAttribute, Shared>();
   /** Bumped whenever a chunk was added, removed or re-measured: what `heights` reads changed. */
   version = 0;
+  /** The chunks without a slot yet. */
+  private readonly unslotted = new Set<Held>();
+  /** The pages the slots are in, once `take` was called. */
+  private pages: InstancePages | null = null;
 
   /**
-   * Chunks over `pool`, for the InstancedLod sorting as row `row`, whose instances `bounds` bounds in the InstancedLod's space; `reach` tells how far from an
-   * instance's origin, in its space, every level and its sway reach, and `levelAt` is what a chunk's getLevelAt asks.
+   * Chunks whose instances `bounds` bounds in the InstancedLod's space; `reach` tells how far from an instance's origin,
+   * in its space, every level and its sway reach, and `levelAt` is what a chunk's getLevelAt asks.
    */
   constructor(
-    private readonly pool: InstancePagePool,
-    private readonly row: number,
     private readonly bounds: { readonly sphere: Sphere; readonly box: Box3 },
     private readonly reach: () => number,
     private readonly levelAt: (chunk: InstancedLodChunk, index: number, camera: Camera) => number | null,
@@ -60,7 +63,7 @@ export class ChunkSet {
 
   /** The pool slots of the chunks. */
   slots(): number[] {
-    return [...this.held.values()].map(({ slot }) => slot);
+    return [...this.held.values()].flatMap(({ slot }) => (slot === null ? [] : [slot]));
   }
 
   /** The chunks whose instances the CPU holds. */
@@ -97,9 +100,10 @@ export class ChunkSet {
           colors: instanceColor && { attribute: this.mirror(instanceColor, chunk).attribute, stride: 3 },
           counts: null,
         };
-    const slot = this.pool.add({ attributes, start: chunk.start, count: chunk.count, countIndex: chunk.instanceCountIndex, row: this.row });
+    const held: Held = { taken: { attributes, start: chunk.start, count: chunk.count, countIndex: chunk.instanceCountIndex }, slot: null, state };
     state.levelAt = (index, camera) => this.levelAt(chunk, index, camera);
-    this.held.set(chunk, { slot, state });
+    this.held.set(chunk, held);
+    this.unslotted.add(held);
     this.version++;
     return chunk;
   }
@@ -108,7 +112,7 @@ export class ChunkSet {
   remove(chunk: InstancedLodChunk): void {
     const held = this.held.get(chunk);
     if (!held) throw new Error("InstancedLod: the chunk is not one of its chunks");
-    this.pool.remove(held.slot);
+    this.release(held);
     held.state.levelAt = null;
     this.held.delete(chunk);
     this.version++;
@@ -135,7 +139,10 @@ export class ChunkSet {
         changed.add(chunk);
       }
     }
-    for (const chunk of changed) this.pool.change(this.heldOf(chunk).slot);
+    for (const chunk of changed) {
+      const { slot } = this.heldOf(chunk);
+      if (slot !== null) this.pages?.change(slot);
+    }
     if (changed.size > 0) this.version++;
     return changed.size > 0;
   }
@@ -184,14 +191,29 @@ export class ChunkSet {
 
   /** Free the chunks' slots and release the mirrors; the chunks no longer find their levels. */
   dispose(): void {
-    for (const { slot, state } of this.held.values()) {
-      this.pool.remove(slot);
-      state.levelAt = null;
+    for (const held of this.held.values()) {
+      this.release(held);
+      held.state.levelAt = null;
     }
     this.held.clear();
     this.version++;
     for (const { mirror } of this.mirrors.values()) mirror.dispose();
     this.mirrors.clear();
+  }
+
+  /** Take slots in `pages` for the chunks without one, for the InstancedLod sorting as row `row`. */
+  take(pages: InstancePages, row: number): void {
+    this.pages = pages;
+    for (const held of this.unslotted) {
+      held.slot = pages.add({ ...held.taken, row });
+      this.unslotted.delete(held);
+    }
+  }
+
+  /** Free `held`'s slot, or forget it has none. */
+  private release(held: Held): void {
+    this.unslotted.delete(held);
+    if (held.slot !== null) this.pages?.remove(held.slot);
   }
 
   /** The mirror of `attribute`, which `chunk` reads too. */

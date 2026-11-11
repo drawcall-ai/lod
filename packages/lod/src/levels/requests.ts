@@ -24,6 +24,7 @@ export class CameraRequests {
   private readonly inRound = new Set<Camera>();
 
   constructor(
+    /** The renderer drawing the Lod. */
     private readonly renderer: Renderer,
     /** What renders told of the cameras that drew the Lod. */
     private readonly seen: CameraRenders,

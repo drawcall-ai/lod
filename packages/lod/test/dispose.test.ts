@@ -6,7 +6,7 @@ import { InstancedLod } from "../src/instanced/index.js";
 import { decodeMeshAsync, encodeMeshAsync } from "../src/codec/mesh.js";
 import { Lod } from "../src/lod.js";
 import { isGLTSScene } from "../src/three.js";
-import { gpu } from "./renderer.js";
+import { pool } from "./renderer.js";
 
 it("lets a GLTS source release its resources while preserving shared host textures", async () => {
   const texture = new Texture();
@@ -58,7 +58,7 @@ it("frees a template's textures but leaves their ImageBitmap to the copies that 
   const map = new Texture(image);
   const disposed = vi.spyOn(map, "dispose");
   const source = new Mesh(new BoxGeometry(), new MeshBasicMaterial({ map }));
-  const lod = new Lod([{ object: source }], gpu);
+  const lod = new Lod([{ object: source }]);
   disposeRecursive(source);
   expect(disposed).toHaveBeenCalled();
   // A closed bitmap has no size: the copy could no longer upload it.
@@ -76,13 +76,11 @@ it.each([Lod, InstancedLod].map((Type) => ({ name: Type.name, Type })))(
     const released = vi.fn();
     const hold = vi.fn(() => released);
     const load = vi.fn(async () => new Mesh());
-    const lod = new Type(
-      [
-        { object: source, hold },
-        { load, maxPixels: 10, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]), hold },
-      ],
-      gpu,
-    );
+    const levels = [
+      { object: source, hold },
+      { load, maxPixels: 10, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]), hold },
+    ];
+    const lod = Type === Lod ? new Lod(levels) : new InstancedLod(levels, pool);
     const copy = lod.clone();
     expect(hold).toHaveBeenCalledTimes(2);
     lod.dispose();
@@ -95,7 +93,7 @@ it.each([Lod, InstancedLod].map((Type) => ({ name: Type.name, Type })))(
 );
 
 it("frees the draw state of every level mesh once, of the source and of each copy", () => {
-  const lod = new Lod([{ object: new Mesh(new BoxGeometry(), new MeshBasicMaterial()) }], gpu);
+  const lod = new Lod([{ object: new Mesh(new BoxGeometry(), new MeshBasicMaterial()) }]);
   const copy = lod.clone();
   const freed = new Map<object, number>();
   for (const root of [lod, copy]) root.traverse((node) => node.addEventListener("dispose", () => freed.set(node, (freed.get(node) ?? 0) + 1)));

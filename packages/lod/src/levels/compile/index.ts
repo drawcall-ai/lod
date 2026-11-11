@@ -11,9 +11,18 @@ export interface CompileFor {
   isDisposed(target: Target): boolean;
 }
 
+const compilers = new WeakMap<Renderer, Compiler>();
+
+/** What `renderer` prepares levels with: one Compiler per renderer, made the first time a level compiles for it. */
+export function compilerOf(renderer: Renderer): Compiler {
+  let compiler = compilers.get(renderer);
+  if (!compiler) compilers.set(renderer, (compiler = new Compiler(renderer)));
+  return compiler;
+}
+
 /**
- * What a LodGpu's renderer prepares for the levels arriving: the levels share its queue's budget and its pipeline
- * cache, which it shares the readiness of (see `sharePipelines`).
+ * What a renderer prepares for the levels arriving: the levels share its queue's budget and its pipeline cache, which
+ * it shares the readiness of (see `sharePipelines`).
  */
 export class Compiler {
   /** Uploaded since the last frame. */

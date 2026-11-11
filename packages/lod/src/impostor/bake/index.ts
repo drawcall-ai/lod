@@ -73,6 +73,16 @@ export function bakeImpostor(object: Object3D, renderer: Renderer, options: Bake
 
 async function bake(object: Object3D, renderer: Renderer, options: BakeImpostorOptions): Promise<Impostor> {
   checkBakeRenderer(renderer, "bakeImpostor");
+  const copy = sourceForBake(object);
+  try {
+    return await bakeSource(copy.root, renderer, options);
+  } finally {
+    copy.dispose();
+  }
+}
+
+/** Bake `source`, a copy of the object that the bake may move and change. */
+async function bakeSource(source: Object3D, renderer: Renderer, options: BakeImpostorOptions): Promise<Impostor> {
   const layout = options.layout ?? "full";
   const frames = options.frames ?? (layout === "hemi" ? 12 : 16);
   const resolution = options.resolution ?? 128;
@@ -83,7 +93,6 @@ async function bake(object: Object3D, renderer: Renderer, options: BakeImpostorO
   if (options.maxPixels !== undefined && !(options.maxPixels > 0)) throw new Error("bakeImpostor: maxPixels must be > 0");
   const cell = 2 ** Math.floor(Math.log2(resolution));
 
-  const source = sourceForBake(object);
   source.matrix.identity();
   source.matrix.decompose(source.position, source.quaternion, source.scale);
   // Bones are descendants, so this also moves them; getVertexPosition reads bone.matrixWorld.

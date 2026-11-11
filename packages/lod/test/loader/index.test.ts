@@ -20,7 +20,7 @@ import { Lod } from "../../src/lod.js";
 import { InteriorMappingMaterial } from "../../src/baked/interior/material.js";
 import { ImpostorMesh } from "../../src/impostor/mesh/index.js";
 import { CachedLodLoader } from "../../src/loader/index.js";
-import { GPU_TIMEOUT, eventually, nextLevel, render, gpu } from "../renderer.js";
+import { GPU_TIMEOUT, eventually, nextLevel, render, updateInRender } from "../renderer.js";
 import type { LodRequest } from "../../src/loader/request.js";
 
 vi.mock("vitecache", async () => ({ CacheEntry: (await import("./fixture.js")).CacheEntry }));
@@ -108,7 +108,7 @@ describe("CachedLodLoader", () => {
       expect(sourceMesh.material.map.image.data).toEqual(new Uint8Array([86, 98, 43, 0, 86, 98, 43, 255]));
     }
     // The last Lod holding the levels frees what the loader loaded, whoever asked for it.
-    new Lod(warm, gpu).dispose();
+    new Lod(warm).dispose();
     expect(released).toHaveBeenCalledTimes(2);
     const rewarmed = (await loader.loadAsync(request))[1];
     if (!rewarmed?.load) throw new Error("Expected lazy simplified level");
@@ -120,7 +120,7 @@ describe("CachedLodLoader", () => {
   it("frees what it loaded once the last Lod holding the levels, clones included, is disposed", { timeout: GPU_TIMEOUT }, async () => {
     const { manager } = sourceFixture(() => ({ scene: new Group().add(new Mesh(new SphereGeometry(1, 12, 8), new MeshStandardMaterial())) }), /\.glb$/);
     const levels = await new CachedLodLoader(manager).loadAsync({ url: "/models/shared.glb", levels: [{ type: "simplify", ratio: 0.5, maxPixels: 100 }] });
-    const [first, second] = [new Lod(levels, gpu), new Lod(levels, gpu)];
+    const [first, second] = [new Lod(levels), new Lod(levels)];
     const clone = first.clone();
     // Only the simplified level draws, which reads the source's materials: the source loads for them alone.
     for (const lod of [first, second, clone]) lod.forceLevel = 1;
@@ -142,7 +142,7 @@ describe("CachedLodLoader", () => {
       // Once its compiles have finished, the last holder frees the simplified level's geometry and the source's material.
       await eventually(() => expect(freed).toHaveBeenCalledTimes(2));
       // The freed levels are spent.
-      expect(() => new Lod(levels, gpu)).toThrow("call loadAsync again");
+      expect(() => new Lod(levels)).toThrow("call loadAsync again");
     } finally {
       for (const lod of [first, second, clone]) lod.dispose();
     }
@@ -203,7 +203,7 @@ describe("CachedLodLoader", () => {
     const levels = await new CachedLodLoader(manager).loadAsync({ url: "/unused.glb", levels: [{ type: "impostor", maxPixels: 100 }] });
     const disposed = vi.fn();
     sources[0]?.geometry.addEventListener("dispose", disposed);
-    new Lod(levels, gpu).dispose();
+    new Lod(levels).dispose();
     expect(disposed).toHaveBeenCalledOnce();
   });
 
@@ -311,10 +311,10 @@ describe("CachedLodLoader", () => {
     const loader = new CachedLodLoader(manager, { onLevel });
     for (let run = 0; run < 2; run++) {
       const levels = await loader.loadAsync(request);
-      const lod = new Lod(levels, gpu);
+      const lod = new Lod(levels);
       new Scene().add(lod);
       lod.updateMatrixWorld();
-      lod.update(camera);
+      updateInRender(lod, camera);
       expect(lod.error).toBeUndefined();
       // Far away the empty level would draw, but nothing does before the impostor, the coarsest level that draws.
       expect(lod.levels.flatMap(({ object }, index) => (object?.visible ? [index] : []))).toEqual([]);
@@ -354,7 +354,7 @@ describe("CachedLodLoader", () => {
     if (warm) {
       const levels = await loader.loadAsync(request);
       await levels[1]?.load?.();
-      new Lod(levels, gpu).dispose();
+      new Lod(levels).dispose();
       sources.length = 0;
     }
     const released = new Map<number, ReturnType<typeof vi.fn>>();

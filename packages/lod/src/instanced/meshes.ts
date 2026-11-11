@@ -1,4 +1,4 @@
-import { type Box3, BufferGeometry, type Camera, type Color, Matrix4, Mesh, type Object3D, type Sphere } from "three/webgpu";
+import { type Box3, BufferGeometry, type Camera, type Color, IndirectStorageBufferAttribute, Matrix4, Mesh, type Object3D, type Sphere } from "three/webgpu";
 import { setFadeSource, type DrawnInstances, type InstanceSlots } from "../levels/fade.js";
 import { levelMaterial } from "../levels/material.js";
 import { impostorInstances, type ImpostorMesh } from "../impostor/mesh/index.js";
@@ -9,6 +9,8 @@ import { DRAW_BYTES, type IndirectDraw } from "./rows.js";
 // ImpostorMesh for an impostor, each drawing every instance in its level's list for a camera with one indirect draw.
 
 const IDENTITY = new Matrix4();
+/** One indirect draw of nothing: what a level mesh draws before its InstancedLod's first sort. */
+const NOTHING = new IndirectStorageBufferAttribute(new Uint32Array(DRAW_BYTES / 4), 1);
 
 /** A mesh of a level's object and one of its material groups, placed in the instance's space. */
 export interface Part {
@@ -29,14 +31,14 @@ export interface MeshInputs {
   readonly bounds: Sphere;
   readonly box: Box3;
   /** Per camera, the instances in each level's list and where its indirect draws lie. */
-  readonly slots: (camera: Camera) => InstanceSlots;
+  readonly slots: (camera: Camera) => InstanceSlots | null;
   /** One instance's bounding radius in its own space, which shadow casters are cut off at. */
   readonly radius: number;
   /**
-   * Where `camera`'s indirect draws lie as a mesh draws for it with `renderer`, its lists sorted: the camera's due sorts,
-   * every InstancedLod's, run now. Never throws: three is rendering.
+   * Where `camera`'s indirect draws lie as `renderer` draws a mesh for it, its lists sorted: the camera's due sorts,
+   * every InstancedLod's, run now; null before the InstancedLod's first sort. Never throws: three is rendering.
    */
-  readonly drawFor: (renderer: unknown, camera: Camera) => InstanceSlots["args"];
+  readonly drawFor: (renderer: unknown, camera: Camera) => InstanceSlots["args"] | null;
 }
 
 /** `object`'s meshes and material groups, placed once in the instance's space, for level `level`. */
@@ -95,9 +97,12 @@ export function freeMesh(mesh: Mesh): void {
   mesh.geometry.dispose();
 }
 
-/** Point every mesh of `meshes` at `instances.matrices`, which changed: survivors scale, or no longer do. */
-export function drawMatrices(meshes: readonly Mesh[], instances: DrawnInstances): void {
-  for (const mesh of meshes) if (isImpostorMesh(mesh)) mesh.instanceMatrix = instances.matrices;
+/** Point every mesh of `meshes` at `instances`, which changed: survivors scale or no longer do, or the pool moved. */
+export function drawInstances(meshes: readonly Mesh[], instances: DrawnInstances): void {
+  for (const mesh of meshes) {
+    if (isImpostorMesh(mesh)) mesh.instanceMatrix = instances.matrices;
+    Object.assign(mesh, { instanceColor: instances.colors });
+  }
 }
 
 /**
@@ -129,7 +134,8 @@ function levelMesh({ template, placement, group }: Part, offset: () => number | 
     const start = offset();
     if (start === null) return;
     const args = drawFor(renderer, camera);
-    mesh.geometry.setIndirect(args.attribute, args.offset + start);
+    if (args) mesh.geometry.setIndirect(args.attribute, args.offset + start);
+    else mesh.geometry.setIndirect(NOTHING, 0);
   };
   return mesh;
 }

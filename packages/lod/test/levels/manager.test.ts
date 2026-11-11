@@ -18,7 +18,7 @@ import { ImpostorMesh } from "../../src/impostor/mesh/index.js";
 import { Lod } from "../../src/lod.js";
 import { readBytes } from "../../src/bake.js";
 import { InstancedLod } from "../../src/instanced/index.js";
-import { GPU_TIMEOUT, bakeRenderer, render, renderer, nextLevel, eventually, gpu } from "../renderer.js";
+import { GPU_TIMEOUT, bakeRenderer, render, renderer, nextLevel, eventually } from "../renderer.js";
 import { box } from "../box.js";
 import { chunkOf, oneChunk } from "../instances.js";
 import { gatedBox, visibleLevels, waitUntilIdle } from "./fixture.js";
@@ -44,7 +44,7 @@ it.each(["Lod", "InstancedLod"].flatMap((kind) => ["load", "compile"].map((waiti
       { load: coarse, maxPixels: 8, box: bounds },
       { object: new Object3D(), maxPixels: 1 },
     ];
-    const lod = kind === "Lod" ? new Lod(levels, gpu) : oneChunk(levels, 1);
+    const lod = kind === "Lod" ? new Lod(levels) : oneChunk(levels, 1);
     lod.position.z = -5;
     const camera = new PerspectiveCamera(60, 1, 0.1, 100);
     const scene = new Scene().add(lod);
@@ -97,7 +97,7 @@ it.each(["Lod", "InstancedLod"])(
       { load: coarse, maxPixels: 8, box: bounds },
       { object: new Object3D(), maxPixels: 1 },
     ];
-    const lod = kind === "Lod" ? new Lod(levels, gpu) : oneChunk(levels, 1);
+    const lod = kind === "Lod" ? new Lod(levels) : oneChunk(levels, 1);
     lod.position.z = -5;
     const camera = new PerspectiveCamera(60, 1, 0.1, 100);
     const scene = new Scene().add(lod);
@@ -135,13 +135,10 @@ it("lets a level arrive for a second camera rendering to its own target only onc
     return mesh;
   };
   const bounds = new Box3().setFromArray([-1, -1, -1, 1, 1, 1]);
-  const lod = new Lod(
-    [
-      { load: fine, maxPixels: Infinity, box: bounds },
-      { object: box(), maxPixels: 8 },
-    ],
-    gpu,
-  );
+  const lod = new Lod([
+    { load: fine, maxPixels: Infinity, box: bounds },
+    { object: box(), maxPixels: 8 },
+  ]);
   lod.position.z = -5;
   const main = new PerspectiveCamera(60, 1, 0.1, 100);
   const second = new PerspectiveCamera(60, 1, 0.1, 100);
@@ -189,7 +186,7 @@ it.each(["Lod", "InstancedLod"])(
   async (kind) => {
     const data = await bakeImpostor(new Mesh(new BoxGeometry(2, 2, 2), new MeshStandardMaterial()), bakeRenderer, { resolution: 64, layout: "full" });
     const levels = [{ object: box() }, { object: new ImpostorMesh(data) }];
-    const lod = kind === "Lod" ? new Lod(levels, gpu) : oneChunk(levels, 1);
+    const lod = kind === "Lod" ? new Lod(levels) : oneChunk(levels, 1);
     lod.position.z = -6;
     lod.forceLevel = 0;
     const scene = new Scene().add(lod);
@@ -225,7 +222,7 @@ it.each(["before its compile starts", "while its compile uploads textures"])(
   async (when) => {
     const map = new DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
     map.needsUpdate = true;
-    const lod = new Lod([{ object: new Mesh(new BoxGeometry(2, 2, 2), new MeshBasicNodeMaterial({ map })) }], gpu);
+    const lod = new Lod([{ object: new Mesh(new BoxGeometry(2, 2, 2), new MeshBasicNodeMaterial({ map })) }]);
     lod.position.z = -5;
     const camera = new PerspectiveCamera(60, 1, 0.1, 100);
     const scene = new Scene().add(lod);
@@ -276,7 +273,7 @@ async function deferredImpostor(kind: string) {
   };
   const deferred = { load: () => made, maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]), hold };
   const levels = [deferred, { object: box() }];
-  const lod = kind === "Lod" ? new Lod(levels, gpu) : oneChunk(levels, 1);
+  const lod = kind === "Lod" ? new Lod(levels) : oneChunk(levels, 1);
   lod.forceLevel = 0;
   lod.position.z = -5;
   const material = vi.spyOn(source.material, "dispose");
@@ -389,7 +386,7 @@ it.each(["Lod", "InstancedLod"].flatMap((kind) => [false, true].map((empty) => (
     const load = vi.fn(async () => new Mesh(new BoxGeometry(), new MeshBasicNodeMaterial()));
     const deferred = { load: load, maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) };
     const levels = empty ? [deferred, { object: new Object3D() }] : [deferred];
-    const lod = kind === "Lod" ? new Lod(levels, gpu) : oneChunk(levels, 1);
+    const lod = kind === "Lod" ? new Lod(levels) : oneChunk(levels, 1);
     lod.forceLevel = 0;
     lod.position.set(1000, 0, -5);
     const camera = new PerspectiveCamera(60, 1, 0.1, 100);
@@ -419,7 +416,7 @@ it.each(["Lod", "InstancedLod"].flatMap((kind) => [false, true].map((empty) => (
 it.each(["Lod", "InstancedLod"])("runs a level's load once per %s, a clone's included, each failing on its own", { timeout: GPU_TIMEOUT }, async (kind) => {
   const load = vi.fn<() => Promise<Object3D>>().mockRejectedValue(undefined);
   const levels = [{ load, maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) }];
-  const lod = kind === "Lod" ? new Lod(levels, gpu) : oneChunk(levels, 1);
+  const lod = kind === "Lod" ? new Lod(levels) : oneChunk(levels, 1);
   const clone = lod.clone();
   const camera = new PerspectiveCamera(60, 1, 0.1, 100);
   const scene = new Scene();
@@ -444,7 +441,7 @@ it.each(["Lod", "InstancedLod"])("runs a level's load once per %s, a clone's inc
 it("loads a Lod's level in a scene whose world matrices the app updates itself", { timeout: GPU_TIMEOUT }, async () => {
   const { level, release } = gatedBox();
   const manager = new LoadingManager();
-  const lod = new Lod([level, { object: box(), maxPixels: 1 }], gpu, { manager });
+  const lod = new Lod([level, { object: box(), maxPixels: 1 }], { manager });
   lod.position.z = -5;
   const camera = new PerspectiveCamera(60, 1, 0.1, 100);
   const scene = new Scene().add(lod);

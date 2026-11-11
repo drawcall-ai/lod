@@ -1,9 +1,9 @@
-import { RenderTarget, WebGPURenderer, type Camera, type Object3D, type Scene } from "three/webgpu";
+import { RenderTarget, Scene, WebGPURenderer, type Camera, type Object3D } from "three/webgpu";
 import { vi } from "vitest";
 import type { InstancedLod } from "../src/instanced/index.js";
-import type { Lod } from "../src/lod.js";
+import { Lod } from "../src/lod.js";
 import { createBakeRenderer, readBytes } from "../src/bake.js";
-import { LodGpu } from "../src/gpu.js";
+import { LodPool } from "../src/pool.js";
 
 /** A WebGPU renderer in the test browser, initialised, its canvas 64 px on the page. */
 export const renderer = new WebGPURenderer({ antialias: false });
@@ -11,9 +11,20 @@ renderer.setSize(64, 64);
 renderer.setClearColor(0x000000, 0);
 document.body.append(renderer.domElement);
 await renderer.init();
+Lod.renderers.add(renderer);
 
-/** What every Lod and InstancedLod of the tests shares. */
-export const gpu = new LodGpu(renderer);
+/** What every InstancedLod of the tests shares. */
+export const pool = new LodPool();
+
+/**
+ * Update `lod` for `camera` within a render of nothing else, as three's render does: a Lod draws with the first
+ * renderer that renders it, and measures with it.
+ */
+export function updateInRender(lod: Lod | InstancedLod, camera: Camera): void {
+  const scene = new Scene();
+  scene.onBeforeRender = () => lod.update(camera);
+  renderer.render(scene, camera);
+}
 
 /** A renderer for bakes, as CachedLodLoader makes one: its canvas, unlike `renderer`'s, is no square a bake frame may match. */
 export const bakeRenderer = await createBakeRenderer();

@@ -1,11 +1,11 @@
-import { Box3, Object3D, Sphere, type Camera, type Intersection, type LoadingManager, type Raycaster } from "three/webgpu";
+import { Box3, Object3D, Sphere, type Camera, type Intersection, type LoadingManager, type Mesh, type Raycaster, type Renderer } from "three/webgpu";
 import { at } from "../at.js";
 import { disposeCopies } from "../dispose.js";
 import { EncodedLevels, emptyLevels, levelsFrom, type LodLevel, type ThresholdedLevel } from "../levels/index.js";
 import { fadeSourceOf } from "../levels/fade.js";
 import { levelsToLoad } from "../levels/load.js";
 import { LodLevelLoadManager, type LodEventMap } from "../levels/manager.js";
-import type { LodGpu } from "../gpu.js";
+import type { LodPool } from "../pool.js";
 import { Lod, type LodOptions } from "../lod.js";
 import { inShadowMap } from "../levels/renderer.js";
 import { sameClass } from "../three.js";
@@ -17,20 +17,25 @@ import { cullIn, emptyCull, type CullDistance } from "./cull.js";
 import { MeshesByLevel, type Drawing } from "./levels.js";
 import { InstanceLists, frustumIn, listedOf } from "./lists.js";
 import { localCamera, shownBy, walk, type LocalCamera } from "./camera.js";
-import { drawMatrices } from "./meshes.js";
+import { drawInstances } from "./meshes.js";
 import { raycastInstances } from "./raycast.js";
 import { InstanceShape } from "./shape.js";
 import { MAX_SURVIVOR_SCALE, instanceLevel } from "./measure.js";
+
+/** The meshes drawing an InstancedLod's level, which its sorts show: what a bake draws of it is level 0's. */
+export const LEVEL_MESHES = Symbol("levelMeshes");
+/** Put an InstancedLod no render has updated in another LodPool, as a bake does with its copy (see `bakeCopy`). */
+export const REPOOL = Symbol("repool");
 
 /** How an InstancedLod is made. */
 export interface InstancedLodOptions extends LodOptions {
   /**
    * The most instances it draws for a camera, over all its chunks, CPU and GPU chunks alike: 16384 by default. Its
    * lists take 8 bytes per level that draws something per instance (about 400 KB with the defaults and three levels),
-   * and every camera that draws any InstancedLod of its LodGpu, each shadow map's included, holds the lists of every
-   * InstancedLod of that LodGpu. A camera that draws only a few InstancedLods, such as a minimap's or a reflection's,
-   * is bounded by giving those a LodGpu of their own. Chunks that together outgrow it are reported (see `error`),
-   * naming it as the limit to raise. Its LodGpu's pool holds the instances themselves (see `LodGpuOptions`).
+   * and every camera that draws any InstancedLod of its LodPool, each shadow map's included, holds the lists of every
+   * InstancedLod of that LodPool. A camera that draws only a few InstancedLods, such as a minimap's or a reflection's,
+   * is bounded by giving those a LodPool of their own. Chunks that together outgrow it are reported (see `error`),
+   * naming it as the limit to raise. Its LodPool holds the instances themselves (see `LodPoolOptions`).
    */
   maxInstanceCount?: number;
 }
@@ -47,7 +52,8 @@ const DEFAULT_INSTANCES = 16384;
  * parents should scale uniformly. Scale 0 draws nothing.
  *
  * Level templates are cloned, then their meshes are instanced; it sets each level mesh's `visible` per camera, so hide
- * the InstancedLod itself, never its level meshes. Skinned meshes, InstancedMeshes (except ImpostorMesh)
+ * the InstancedLod itself, never its level meshes, and show none of them yourself: one drawn before the InstancedLod's
+ * first render draws nothing and is its error. Skinned meshes, InstancedMeshes (except ImpostorMesh)
  * and nested Lods are unsupported. For external detail, leave level 0 empty and draw the instances that
  * `chunk.getLevelAt` reports there.
  *
@@ -55,8 +61,9 @@ const DEFAULT_INSTANCES = 16384;
  * `new Box3().setFromObject(lod)` bounds them once a level has loaded; with `precise` it walks a level's vertices once,
  * at no instance, as it cannot see them. Measure one instance by a level's `object`, scaled by its matrix.
  *
- * Instances live in its LodGpu's pool, and every InstancedLod of a LodGpu sorts for a camera in one compute call.
- * Requires WebGPU `indirect-first-instance`. Sequential cameras are supported; a nested render with a camera that the
+ * Instances live in its LodPool, and every InstancedLod of a LodPool sorts for a camera in one compute call. It draws
+ * with the first renderer of `Lod.renderers` that renders it (see `Lod.renderers`), as does every InstancedLod of its
+ * LodPool. Requires WebGPU `indirect-first-instance`. Sequential cameras are supported; a nested render with a camera that the
  * outer render also draws with replaces that camera's instance lists, so exclude this InstancedLod from it with camera
  * layers.
  */
@@ -83,18 +90,16 @@ export class InstancedLod extends Object3D<LodEventMap> {
   private readonly cull = emptyCull();
 
   /**
-   * `levels[0]` is the source. Empty only as the target of `copy`. It holds no instances until chunks are added. `gpu`
-   * is what it shares with every Lod drawing with its renderer.
+   * `levels[0]` is the source. Empty only as the target of `copy`. It holds no instances until chunks are added. `pool`
+   * holds its instances, and those of the InstancedLods it sorts with.
    */
   constructor(
     levels: readonly LodLevel[],
-    private readonly gpu: LodGpu,
+    private pool: LodPool,
     options: InstancedLodOptions = {},
   ) {
     super();
-    // Each level's draws start at its list (see update.ts).
-    if (!gpu.renderer.hasFeature("indirect-first-instance"))
-      throw new Error("InstancedLod: needs the GPU feature indirect-first-instance, which this device lacks");
+    if (pool.disposed) throw new Error("LodPool: disposed");
     const maxInstanceCount = options.maxInstanceCount ?? DEFAULT_INSTANCES;
     if (!Number.isInteger(maxInstanceCount) || maxInstanceCount < 1)
       throw new RangeError(`InstancedLod: maxInstanceCount must be a positive integer, got ${maxInstanceCount}`);
@@ -126,36 +131,39 @@ export class InstancedLod extends Object3D<LodEventMap> {
   /** What this InstancedLod is made of for `inputs` and `maxInstanceCount`: its levels, their meshes and their loading. */
   private init(inputs: readonly LodLevel[], maxInstanceCount: number): Built {
     const shape = new InstanceShape(inputs);
-    const { pool, renderer } = this.gpu;
-    const lists = new InstanceLists(this.gpu.sorter, listedOf(inputs), maxInstanceCount);
+    const lists = new InstanceLists(listedOf(inputs), maxInstanceCount);
     const chunks = new ChunkSet(
-      pool,
-      lists.row,
       this.bounds,
       () => shape.originReach,
       (chunk, index, camera) => this.levelAt(chunk, index, camera),
     );
-    const drawn = { matrices: pool.matrices, colors: pool.colors };
+    const { pages } = this.pool;
+    const drawn = { matrices: pages.matrices, colors: pages.colors };
     const drawing = { shape, lists, drawn };
     this.inputs = inputs;
     if (inputs.length > 0) this.levels.push(...levelsFrom(inputs, 2 * shape.ownRadius, "InstancedLod"));
     const encoded = new EncodedLevels(this.levels, emptyLevels(inputs), "InstancedLod");
     const drawFor = (renderer: unknown, camera: Camera) =>
       this.built.loads.guard(() => {
-        if (renderer !== this.gpu.renderer) throw new Error("InstancedLod: another renderer than its LodGpu's drew it");
-        lists.drawFor(camera);
+        const bound = this.built.loads.renderer;
+        if (!bound) throw new Error("InstancedLod: a level mesh drew before its first render; its level meshes' `visible` is the InstancedLod's to set");
+        if (renderer !== bound) throw new Error("InstancedLod: another renderer than the first that rendered it drew it");
+        lists.drawFor(bound, camera);
       });
     const meshes = new MeshesByLevel(this, this.levels, drawing, this.bounds, drawFor);
+    // Its sorts show them.
+    meshes.show(0);
     const loads = new LodLevelLoadManager(
       this,
-      this.gpu,
       `InstancedLod ${this.uuid}`,
       inputs,
       encoded.get(null, true),
       (level, loaded) => meshes.prepare(level, loaded),
       (level) => meshes.of(level),
       async () => {
-        const instances = await pool.status(renderer, chunks.slots());
+        const { renderer } = this.built.loads;
+        if (!renderer) return false;
+        const instances = await this.pool.pages.status(renderer, chunks.slots());
         if (instances !== null && instances > maxInstanceCount)
           throw new Error(`InstancedLod: its chunks hold ${instances} instances, more than its lists hold: raise its maxInstanceCount (${maxInstanceCount})`);
         return instances !== null;
@@ -191,6 +199,18 @@ export class InstancedLod extends Object3D<LodEventMap> {
     this.built.chunks.bound(this.cullDistance?.scaleSurvivors ? MAX_SURVIVOR_SCALE : 1);
   }
 
+  [LEVEL_MESHES](level: number): readonly Mesh[] {
+    return this.built.meshes.of(level);
+  }
+
+  [REPOOL](pool: LodPool): void {
+    if (this.built.loads.renderer) throw new Error("InstancedLod: a render has updated it: it draws with its LodPool");
+    this.pool = pool;
+    this.built.drawn.matrices = pool.pages.matrices;
+    this.built.drawn.colors = pool.pages.colors;
+    drawInstances(this.built.meshes.all(), this.built.drawn);
+  }
+
   [WIND](padding: number, slope: number, baseY: number): void {
     if (this.built.loads.started) throw new Error("InstancedLod: apply wind before the first render");
     this.built.shape.wind(padding, slope, baseY);
@@ -207,19 +227,24 @@ export class InstancedLod extends Object3D<LodEventMap> {
     // A shadow map draws nothing of an InstancedLod whose levels cast nothing; one not loaded yet may.
     const shadow = inShadowMap(this);
     if (shadow && !this.levels.some(({ object }, i) => !object || this.built.meshes.of(i).some((mesh) => mesh.castShadow))) return;
-    this.built.loads.guard(() => this.sort(camera, shadow));
+    this.built.loads.guard(() => {
+      const renderer = this.built.loads.bind();
+      if (renderer) this.sort(renderer, camera, shadow);
+    });
   }
 
-  /** Sort for `camera`, a shadow map's when `shadow`. */
-  private sort(camera: Camera, shadow: boolean): void {
+  /** Sort for `camera`, a shadow map's when `shadow`, drawn by `renderer`. */
+  private sort(renderer: Renderer, camera: Camera, shadow: boolean): void {
     const { loads, shape, lists, chunks, drawn, encoded, meshes } = this.built;
-    const { levels, eye, scale, ortho } = this.localCamera(camera, shadow);
+    this.pool.bind(renderer);
+    const { pages, sorter } = this.pool;
+    const { levels, eye, scale, ortho } = this.localCamera(camera, renderer, shadow);
     if (chunks.refresh()) this.measureBounds();
     // The pages change before any sorts with them.
-    const { pool } = this.gpu;
-    pool.prepare(this.gpu.renderer);
+    chunks.take(pages, lists.register(sorter));
+    pages.prepare(renderer);
     const survivors = this.cullDistance?.scaleSurvivors ?? false;
-    if (survivors !== (drawn.matrices !== pool.matrices)) this.scaleSurvivors(survivors);
+    if (survivors !== (drawn.matrices !== pages.matrices)) this.scaleSurvivors(survivors);
     const cull = cullIn(this.cullDistance, this.matrixWorld, this.cull);
     const local = { levels, eye, scale, ortho, cull };
     const found = lists.of(camera);
@@ -229,7 +254,7 @@ export class InstancedLod extends Object3D<LodEventMap> {
     // A shadow map draws from the levels its scene's cameras loaded.
     loads.request(camera, shadow ? levelsToLoad([], encoded.heights(levels)) : found.wanted, shadow);
     meshes.tint(Lod.debug);
-    lists.prune(camera, (other) => loads.requests.rendering(other));
+    lists.prune(camera, (other) => loads.rendering(other));
     const { loaded, before, progress } = loads;
     // Three projects this InstancedLod's children for the camera after this update.
     const shown = seen ? shownBy(found, levels, encoded, { loaded, before, progress }) : 0;
@@ -249,24 +274,26 @@ export class InstancedLod extends Object3D<LodEventMap> {
     meshes.show(found.written ? shown : 0);
   }
 
-  /** `camera` in this InstancedLod's space (see `localCamera`). */
-  private localCamera(camera: Camera, shadow: boolean): LocalCamera {
+  /** `camera` in this InstancedLod's space, drawn by `renderer` (see `localCamera`). */
+  private localCamera(camera: Camera, renderer: Renderer, shadow: boolean): LocalCamera {
     const { loads, encoded } = this.built;
-    return localCamera(camera, loads.heightOf(camera, shadow), this.matrixWorld, encoded, this.forceLevel);
+    return localCamera(camera, loads.heightOf(camera, renderer, shadow), this.matrixWorld, encoded, this.forceLevel);
   }
 
   /** Draw survivors' scaled matrices, or the pool's again. */
   private scaleSurvivors(survivors: boolean): void {
-    const { pool, sorter } = this.gpu;
-    this.built.drawn.matrices = survivors ? sorter.scaledMatrices : pool.matrices;
-    drawMatrices(this.built.meshes.all(), this.built.drawn);
+    const { pages, sorter } = this.pool;
+    this.built.drawn.matrices = survivors ? sorter.scaledMatrices : pages.matrices;
+    drawInstances(this.built.meshes.all(), this.built.drawn);
     this.measureBounds();
   }
 
   /** The level instance `index` of `chunk` draws most of its pixels with for `camera` (see `InstancedLodChunk.getLevelAt`). */
   private levelAt(chunk: InstancedLodChunk, index: number, camera: Camera): number | null {
+    const { renderer } = this.built.loads;
+    if (!renderer) throw new Error("InstancedLodChunk.getLevelAt: render the InstancedLod first: it measures with the renderer drawing it");
     const cull = cullIn(this.cullDistance, this.matrixWorld, this.cull);
-    const local = this.localCamera(camera, inShadowMap(this));
+    const local = this.localCamera(camera, renderer, inShadowMap(this));
     return instanceLevel(chunk.instanceMatrix.array, (chunk.start + index) * 16, cull, local, this.built.shape.source, this.built.loads.loaded);
   }
 
@@ -303,7 +330,7 @@ export class InstancedLod extends Object3D<LodEventMap> {
   }
 
   override clone(): this {
-    const clone = new InstancedLod([], this.gpu).copy(this);
+    const clone = new InstancedLod([], this.pool).copy(this);
     if (!sameClass(this, clone)) throw new Error("InstancedLod.clone: a subclass must override clone");
     return clone;
   }

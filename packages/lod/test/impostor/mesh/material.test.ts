@@ -23,7 +23,7 @@ import type { InstancedLod } from "../../../src/instanced/index.js";
 import { bakeImpostor } from "../../../src/impostor/bake/index.js";
 import { ImpostorMesh, impostorInstances } from "../../../src/impostor/mesh/index.js";
 import { Lod } from "../../../src/lod.js";
-import { GPU_TIMEOUT, bakeRenderer, render, renderer, eventually, gpu } from "../../renderer.js";
+import { GPU_TIMEOUT, bakeRenderer, render, renderer, eventually } from "../../renderer.js";
 import { chunkOf, oneChunk } from "../../instances.js";
 import { must } from "../../must.js";
 
@@ -42,11 +42,12 @@ async function drawingOnly(
   lod: InstancedLod,
   camera: Camera,
   only: number,
-  drawn: (camera: Camera) => InstanceSlots,
-): Promise<(camera: Camera) => InstanceSlots> {
+  drawn: (camera: Camera) => InstanceSlots | null,
+): Promise<(camera: Camera) => InstanceSlots | null> {
   const card = must(lod.children[0]);
   if (!(card instanceof ImpostorMesh)) throw new Error("not a card");
   const real = drawn(camera);
+  if (!real) throw new Error("the card has not sorted yet");
   const listed = new Uint32Array(await renderer.getArrayBufferAsync(real.indices));
   const matrices = new Float32Array(await renderer.getArrayBufferAsync(card.instanceMatrix));
   const { elements } = chunkOf(lod).getMatrixAt(only, new Matrix4());
@@ -54,7 +55,10 @@ async function drawingOnly(
   if (index === undefined) throw new Error(`instance ${only} is not listed`);
   const indices = new StorageBufferAttribute(new Uint32Array(listed.length).fill(index), 1);
   const fades = new StorageBufferAttribute(new Float32Array(listed.length), 1);
-  return (other) => ({ indices, fades, args: drawn(other).args });
+  return (other) => {
+    const slots = drawn(other);
+    return slots && { indices, fades, args: slots.args };
+  };
 }
 
 const pixel = (pixels: Uint8Array, x: number, y: number) => {
@@ -90,7 +94,7 @@ it.each([false, true])(
       [0, 1, 2].map((index) => at(2, 2 - index * 2)),
       { colors: colored ? undefined : [0, 1, 2].map(() => new Color("blue")) },
     );
-    const lod = new Lod([{ object: template }], gpu);
+    const lod = new Lod([{ object: template }]);
     const single = lod.levels[0]?.object;
     if (!(single instanceof ImpostorMesh)) throw new Error("Missing single card");
     const scene = new Scene().add(left, right, lod, new AmbientLight(0xffffff, 3));
@@ -165,7 +169,7 @@ it("shares shadow shader builds while each InstancedLod and single card holds it
     [{ object: template }],
     [0, 1, 2].map((index) => at(3, 0, 2 - index * 2)),
   );
-  const lod = new Lod([{ object: template.clone() }], gpu);
+  const lod = new Lod([{ object: template.clone() }]);
   for (const root of [left, right, lod])
     root.traverse((object) => {
       if (object instanceof Mesh) object.layers.set(1);

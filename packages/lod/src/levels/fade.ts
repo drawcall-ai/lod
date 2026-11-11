@@ -65,7 +65,7 @@ export interface InstanceSlots {
 /** What an InstancedLod's level meshes draw their instances from: every pool index's matrix, and its colour (RGB and a pad). */
 export interface DrawnInstances {
   matrices: StorageInstancedBufferAttribute;
-  readonly colors: StorageInstancedBufferAttribute;
+  colors: StorageInstancedBufferAttribute;
 }
 
 /** How a mesh of a level is drawn, which says where its fade and shadow size come from. */
@@ -82,7 +82,7 @@ export type FadeSource =
   | {
       kind: "instances";
       /** per camera, the instance and signed fade of each slot; null for none (an ImpostorMesh of its own, drawing every instance) */
-      slots: ((camera: Camera) => InstanceSlots) | null;
+      slots: ((camera: Camera) => InstanceSlots | null) | null;
       /** one instance's bounding radius in its own space */
       radius: number;
       tint: Color;

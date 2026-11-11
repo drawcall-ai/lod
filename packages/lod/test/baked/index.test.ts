@@ -26,7 +26,7 @@ import { ImpostorMesh } from "../../src/impostor/mesh/index.js";
 import { Lod } from "../../src/lod.js";
 import { must } from "../must.js";
 import { isStandardNode } from "../../src/three.js";
-import { GPU_TIMEOUT, render as draw, gpu } from "../renderer.js";
+import { GPU_TIMEOUT, render as draw } from "../renderer.js";
 import { oneChunk } from "../instances.js";
 
 /** A pattern of 8×8 colour blocks. */
@@ -90,7 +90,7 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
       // A plain grey box is off by 7 to 23 here.
       expect(difference(real, await render(baked, eye))).toBeLessThan(5);
     }
-    expect(new Lod([{ object: source }, { object: baked }], gpu).levels[1]?.maxPixels).not.toBe(512);
+    expect(new Lod([{ object: source }, { object: baked }]).levels[1]?.maxPixels).not.toBe(512);
   });
 
   it("bakes the textures of a source in which some meshes have no UVs", async () => {
@@ -153,7 +153,7 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
   it("bakes normals that turn with an instance: a rotated InstancedLod copy looks like a rotated Lod", async () => {
     const baked = await bakeMesh(textured(new BoxGeometry(1, 1, 1, 4, 4, 4)), { textureSize: 128 });
     const turn = new Matrix4().makeRotationY(Math.PI / 2);
-    const lod = new Lod([{ object: new Mesh(new BoxGeometry()) }, { object: baked.clone() }], gpu);
+    const lod = new Lod([{ object: new Mesh(new BoxGeometry()) }, { object: baked.clone() }]);
     lod.forceLevel = 1;
     lod.quaternion.setFromRotationMatrix(turn);
     const instanced = oneChunk([{ object: new Mesh(new BoxGeometry()) }, { object: baked.clone() }], [turn]);
@@ -230,7 +230,7 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
     const furnished = new Group().add(new Mesh(shell(), material), floor, partition);
     // The deviation, read through the default maxPixels it gives in a Lod: inversely proportional.
     const deviation = async (source: Object3D) =>
-      1 / must(new Lod([{ object: source }, { object: await bakeMesh(source, { low: new Mesh(shell()), textureSize: 64 }) }], gpu).levels[1]).maxPixels;
+      1 / must(new Lod([{ object: source }, { object: await bakeMesh(source, { low: new Mesh(shell()), textureSize: 64 }) }]).levels[1]).maxPixels;
     const [bare, inside] = [await deviation(plain), await deviation(furnished)];
     expect(Math.abs(inside - bare) / bare).toBeLessThan(0.1);
   });

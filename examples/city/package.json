@@ -14,14 +14,14 @@
     "smooth": "node --experimental-strip-types --no-warnings scripts/smooth.ts"
   },
   "dependencies": {
-    "@drawcall/glts": "^5.2.0",
+    "@drawcall/glts": "^6.0.0",
     "@drawcall/lod": "workspace:*",
     "@typegpu/three": "^0.12.2",
     "fflate": "^0.8.3",
     "seedrandom": "^3.0.5",
     "three": "^0.186.1",
     "typegpu": "^0.12.9",
-    "vitecache": "^0.4.0"
+    "vitecache": "^0.5.0"
   },
   "devDependencies": {
     "@gltf-transform/core": "^4.2.1",

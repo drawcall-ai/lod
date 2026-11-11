@@ -21,8 +21,9 @@ import { expect, it, vi } from "vitest";
 import { ImpostorMesh } from "../../../src/impostor/mesh/index.js";
 import * as surface from "../../../src/impostor/mesh/surface.js";
 import { Lod } from "../../../src/lod.js";
+import { compilerOf } from "../../../src/levels/compile/index.js";
 import { inShadowMap } from "../../../src/levels/renderer.js";
-import { GPU_TIMEOUT, renderer, eventually, gpu } from "../../renderer.js";
+import { GPU_TIMEOUT, renderer, eventually } from "../../renderer.js";
 
 vi.mock("../../../src/impostor/mesh/surface.js", { spy: true });
 
@@ -47,7 +48,7 @@ it("rejects a render pipeline that the backend could not compile", { timeout: GP
   const compile = vi.spyOn(GPUDevice.prototype, "createRenderPipelineAsync").mockRejectedValueOnce(failure);
   vi.spyOn(console, "error").mockImplementation(() => {});
   try {
-    await expect(gpu.compiler.compileAsync(mesh, context, alone)).rejects.toThrow("render pipeline compilation failed");
+    await expect(compilerOf(renderer).compileAsync(mesh, context, alone)).rejects.toThrow("render pipeline compilation failed");
     expect(compile).toHaveBeenCalledOnce();
   } finally {
     vi.restoreAllMocks();
@@ -108,13 +109,13 @@ it(
       }),
     );
     try {
-      await gpu.compiler.compileAsync(object, context, alone);
+      await compilerOf(renderer).compileAsync(object, context, alone);
       // Each upload filled the frame; the draws do not wait for one. Frames that empty the budget may follow.
       const drawn = () => log.slice(0, log.lastIndexOf("draw") + 1);
       expect(drawn()).toEqual(["map", "frame", "cube", "frame", "atlas", "atlas", "atlas", "draw", "draw", "draw"]);
       await new Promise((resolve) => request(resolve));
       log.length = 0;
-      await gpu.compiler.compileAsync(object, context, alone);
+      await compilerOf(renderer).compileAsync(object, context, alone);
       // Nothing left to upload: nothing waits.
       expect(drawn()).toEqual(["map", "cube", "atlas", "atlas", "atlas", "draw", "draw", "draw"]);
     } finally {
@@ -152,7 +153,9 @@ it(
     try {
       const done = new Set<number>();
       const levels = [...alike, ...alike, other].map((material, index) =>
-        gpu.compiler.compileAsync(new Mesh(geometry, material), context, alone).then(() => done.add(index)),
+        compilerOf(renderer)
+          .compileAsync(new Mesh(geometry, material), context, alone)
+          .then(() => done.add(index)),
       );
       // The other shader's pipeline is requested while the first is still being created.
       await eventually(() => expect(pipelines).toHaveBeenCalledTimes(2));
@@ -207,7 +210,9 @@ it(
       renderer.setRenderTarget(null);
       renderer.setMRT(null);
       await Promise.all(
-        object.children.map((draw) => gpu.compiler.compileAsync(draw, { camera, scene, target, mrt: outputs, cubeFace: 0, mipLevel: 0, depth: 0 }, alone)),
+        object.children.map((draw) =>
+          compilerOf(renderer).compileAsync(draw, { camera, scene, target, mrt: outputs, cubeFace: 0, mipLevel: 0, depth: 0 }, alone),
+        ),
       );
       expect(renderer.getRenderTarget()).toBeNull();
       expect(renderer.getMRT()).toBeNull();
@@ -265,7 +270,7 @@ it.each(["texture", "node"])(
     try {
       renderer.setRenderTarget(null);
       vi.mocked(surface.buildSurface).mockClear();
-      await gpu.compiler.compileAsync(card, { camera, scene, target, mrt: renderer.getMRT(), cubeFace: 0, mipLevel: 0, depth: 0 }, alone);
+      await compilerOf(renderer).compileAsync(card, { camera, scene, target, mrt: renderer.getMRT(), cubeFace: 0, mipLevel: 0, depth: 0 }, alone);
       expect(renderer.getRenderTarget()).toBeNull();
       expect(scene.background).toBe(kind === "texture" ? background : null);
       expect(scene.backgroundNode).toBe(backgroundNode);
@@ -303,13 +308,10 @@ it(
       return arriving;
     };
     const bounds = new Box3().setFromArray([-0.5, -0.5, -0.5, 0.5, 0.5, 0.5]);
-    const lod = new Lod(
-      [
-        { load, maxPixels: Infinity, box: bounds },
-        { object: loaded, maxPixels: 2 },
-      ],
-      gpu,
-    );
+    const lod = new Lod([
+      { load, maxPixels: Infinity, box: bounds },
+      { object: loaded, maxPixels: 2 },
+    ]);
     const scene = new Scene().add(light, ground, lod);
     const camera = new PerspectiveCamera(60, 1, 0.1, 100);
     camera.position.set(0, 2, 5);

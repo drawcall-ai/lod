@@ -15,7 +15,7 @@ import {
   type Object3D,
   type Renderer,
 } from "three/webgpu";
-import { readBytes } from "../../bake.js";
+import { bakeCopy, readBytes } from "../../bake.js";
 import { showDetail } from "../../source/detail.js";
 import { nextTask } from "../../task.js";
 import { linearToSrgb, srgbToLinear } from "../../source/sampler.js";
@@ -55,7 +55,8 @@ export interface Faces {
  * up for bakes (see `checkBakeRenderer`).
  */
 export async function renderFaces(interior: Object3D, placement: Matrix4, boxes: readonly Box3[], size: number, renderer: Renderer): Promise<Faces> {
-  const copy = interior.clone();
+  const baked = bakeCopy(interior.clone());
+  const copy = baked.root;
   copy.matrixAutoUpdate = false;
   copy.matrix.copy(placement);
   copy.visible = true;
@@ -113,6 +114,7 @@ export async function renderFaces(interior: Object3D, placement: Matrix4, boxes:
     }
   } finally {
     target.dispose();
+    baked.dispose();
   }
   // Light adds up in linear values: response = lit - glow.
   for (let i = 0; i < lit.length; i++) {

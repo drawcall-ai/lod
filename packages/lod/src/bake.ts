@@ -1,4 +1,9 @@
-import { Color, DataUtils, WebGPURenderer, type RenderTarget, type Renderer } from "three/webgpu";
+import { Color, DataUtils, WebGPURenderer, type Object3D, type RenderTarget, type Renderer } from "three/webgpu";
+import { disposeCopies } from "./dispose.js";
+import { REPOOL } from "./instanced/index.js";
+import { renderers } from "./levels/renderer.js";
+import { LodPool } from "./pool.js";
+import { isInstancedLod } from "./three.js";
 
 // What the GPU bakes (impostor frames, interior rooms) share: the renderer they draw with, one bake at a time on it,
 // and reading back what they drew.
@@ -37,6 +42,36 @@ export function checkBakeRenderer(renderer: Renderer, who: string): void {
 
 const BLACK = new Color(0x000000);
 
+/** A copy of what a bake draws, and what frees it once drawn. */
+export interface BakeCopy {
+  readonly root: Object3D;
+  /** Free every Lod and InstancedLod of the copy, and the LodPools made for it. */
+  dispose(): void;
+}
+
+/**
+ * `root`, a fresh copy of what a bake draws, each InstancedLod in it moved into a LodPool of its own, sized to its
+ * chunks: a LodPool draws with one renderer, which for the original is the app's, and its room is the app's.
+ */
+export function bakeCopy(root: Object3D): BakeCopy {
+  const pools: LodPool[] = [];
+  root.traverse((node) => {
+    if (!isInstancedLod(node)) return;
+    const chunks = [...node.chunks];
+    const instances = chunks.reduce((sum, { count }) => sum + count, 0);
+    const pool = new LodPool({ maxInstanceCount: Math.max(1, instances), maxChunkCount: Math.max(1, chunks.length) });
+    pools.push(pool);
+    node[REPOOL](pool);
+  });
+  return {
+    root,
+    dispose: () => {
+      disposeCopies(root);
+      for (const pool of pools) pool.dispose();
+    },
+  };
+}
+
 /**
  * The bake under way on each renderer and those queued after it. Bakes run one at a time on a renderer: each holds one
  * target's renders in flight, and a scene's bakes all at once queued GPU work seconds deep (macOS ends a device whose
@@ -44,9 +79,20 @@ const BLACK = new Color(0x000000);
  */
 const queues = new WeakMap<Renderer, Promise<unknown>>();
 
-/** Run `bake` on `renderer` once every bake queued on it before has settled. */
+/**
+ * Run `bake` on `renderer` once every bake queued on it before has settled, `renderer` among `Lod.renderers` meanwhile:
+ * the Lods and InstancedLods a bake draws draw with it.
+ */
 export function inTurn<T>(renderer: Renderer, bake: () => Promise<T>): Promise<T> {
-  const next = (queues.get(renderer) ?? Promise.resolve()).then(bake);
+  const next = (queues.get(renderer) ?? Promise.resolve()).then(async () => {
+    const added = !renderers.has(renderer);
+    renderers.add(renderer);
+    try {
+      return await bake();
+    } finally {
+      if (added) renderers.delete(renderer);
+    }
+  });
   // The queue goes on past a failed bake; its caller has the failure.
   queues.set(
     renderer,
