@@ -1,10 +1,10 @@
 import { loadingManager, onDispose, scene } from "@drawcall/glts";
 import * as THREE from "three/webgpu";
-import { HERO_VARIANT, VARIANTS } from "../corn/layout.ts";
-import { plant } from "../corn/model.ts";
-import { leafSeat } from "../corn/seat.ts";
+import { HERO_VARIANT, VARIANTS } from "./layout.ts";
+import { plant } from "./model.ts";
+import { leafSeat } from "./seat.ts";
 import { dispose } from "../shared/dispose.ts";
-import { ladybird } from "./model.ts";
+import { ladybird } from "./ladybird.ts";
 import { Materials } from "../shared/materials.ts";
 
 // A ladybird on the hero plant's leaf, placed where that leaf stands in the plant's space.

@@ -1,6 +1,6 @@
 import type { Materials } from "../shared/materials.ts";
 import * as THREE from "three/webgpu";
-import { box, merge, MeshBuilder, type Parts, pose, roundedPath, tint } from "../shared/geometry.ts";
+import { box, merge, MeshBuilder, type Parts, pose, roundedPath, tint } from "./geometry.ts";
 import seedrandom from "seedrandom";
 import { brick, concrete, paint, tiles, zinc } from "./materials.ts";
 import { chimneySize, chimneyZ, heights, type HouseParams } from "./params.ts";

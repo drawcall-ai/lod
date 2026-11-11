@@ -1,6 +1,6 @@
 import type { Materials } from "../shared/materials.ts";
 import * as THREE from "three/webgpu";
-import { box, Parts } from "../shared/geometry.ts";
+import { box, Parts } from "./geometry.ts";
 import type { Building } from "./model.ts";
 import type { HouseParams } from "./params.ts";
 import { detail as houseDetail } from "./detail.ts";

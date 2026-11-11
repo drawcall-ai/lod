@@ -1,6 +1,6 @@
 import type { Materials } from "../shared/materials.ts";
 import * as THREE from "three/webgpu";
-import { box, type Parts, tint } from "../shared/geometry.ts";
+import { box, type Parts, tint } from "./geometry.ts";
 import type seedrandom from "seedrandom";
 import { pick } from "./params.ts";
 import { type Box, type FloorPlan, type Flight, type Room, SLAB, type Side } from "./floorplan.ts";

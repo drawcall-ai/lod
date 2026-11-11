@@ -7,7 +7,7 @@ import { loadHero } from "./levels.ts";
 
 const loadLadybird = () =>
   new CachedLodLoader(manager, arriving()).loadAsync({
-    url: "/ladybird/index.glts?variant=2",
+    url: "/corn/ladybird.glts?variant=2",
     levels: [
       { type: "impostor", maxPixels: 20, resolution: 64 },
       { type: "empty", maxPixels: 2 },

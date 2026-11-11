@@ -6,7 +6,6 @@ import { mrt, normalView, output, packNormalToRGB, pass, pow, sample, unpackRGBT
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { ao } from "three/addons/tsl/display/GTAONode.js";
 import { GLTSLoader } from "@drawcall/glts";
-import { triangles } from "../../public/shared/geometry.ts";
 import { Materials } from "../../public/shared/materials.ts";
 import { buildItem, type Item, itemNames } from "./items.ts";
 import { Stage } from "./stage.ts";
@@ -142,3 +141,15 @@ declare global {
 await show(params.get("item") ?? itemNames(materials)[0] ?? "house-0");
 view(params.get("view") === "close" ? "close" : "medium");
 window.viewer = api;
+
+/** The triangles `object` draws, instances counted. */
+function triangles(object: THREE.Object3D): number {
+  let count = 0;
+  object.traverse((o) => {
+    if (!(o instanceof THREE.Mesh)) return;
+    const g: THREE.BufferGeometry = o.geometry;
+    const n = (g.index ? g.index.count : g.getAttribute("position").count) / 3;
+    count += o instanceof THREE.InstancedMesh ? n * o.count : n;
+  });
+  return count;
+}

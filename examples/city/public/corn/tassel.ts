@@ -1,6 +1,6 @@
 import type { Materials } from "../shared/materials.ts";
 import * as THREE from "three/webgpu";
-import { type Parts, tint, tube } from "../shared/geometry.ts";
+import { type Parts, tint, tube } from "./geometry.ts";
 import type seedrandom from "seedrandom";
 import { type Detail, tissue, tubeSegments } from "./tissue.ts";
 

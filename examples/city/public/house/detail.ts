@@ -1,6 +1,6 @@
 import type { Materials } from "../shared/materials.ts";
 import * as THREE from "three/webgpu";
-import { box, Parts } from "../shared/geometry.ts";
+import { box, Parts } from "./geometry.ts";
 import seedrandom from "seedrandom";
 import * as M from "./materials.ts";
 import { type Dressing, doorUnit, windowUnit } from "./openings.ts";

@@ -1,6 +1,6 @@
 import type { Materials } from "../shared/materials.ts";
 import * as THREE from "three/webgpu";
-import { MeshBuilder, type Parts, tube } from "../shared/geometry.ts";
+import { MeshBuilder, type Parts, tube } from "./geometry.ts";
 import type seedrandom from "seedrandom";
 import { huskMaterial } from "./leaf.ts";
 import { type Detail, tissue, tubeSegments } from "./tissue.ts";

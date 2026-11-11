@@ -100,7 +100,7 @@ function interiorPlanItem(materials: Materials, variant: number): Content {
 
 /** The hero ladybird and its actual plant, framed tight around the beetle. */
 async function ladybirdItem(materials: Materials, load: Load): Promise<Content> {
-  const [plant, ladybird] = await Promise.all([load(`corn/index.glts?variant=${HERO_VARIANT}&hero=1`), load(`ladybird/index.glts?variant=${HERO_VARIANT}`)]);
+  const [plant, ladybird] = await Promise.all([load(`corn/index.glts?variant=${HERO_VARIANT}&hero=1`), load(`corn/ladybird.glts?variant=${HERO_VARIANT}`)]);
   const object = new THREE.Group().add(plant, ladybird);
   return { object, focus: new THREE.Box3().setFromObject(ladybird), ground: terrain(materials) };
 }

@@ -1,6 +1,6 @@
 import * as THREE from "three/webgpu";
 import { Foliage, type FoliageOptions, foliage } from "@drawcall/lod";
-import { MeshBuilder } from "../shared/geometry.ts";
+import { MeshBuilder } from "./geometry.ts";
 import type { Materials } from "../shared/materials.ts";
 import seedrandom from "seedrandom";
 
