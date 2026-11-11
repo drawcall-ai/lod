@@ -82,7 +82,7 @@ export class ChunkSet {
   add(parameters: InstancedLodChunkParameters): InstancedLodChunk {
     const state: ChunkState = { originBox: new Box3(), minScale: 0, maxScale: 0, boundingBox: new Box3(), held: false };
     const chunk = parameters.instance !== undefined ? new InstancedLodGpuChunk(parameters, state) : new InstancedLodCpuChunk(parameters, state, this.levelAt);
-    const slot = this.pool.add({ source: this.sourceOf(chunk), start: chunk.start, count: chunk.count, row: this.row });
+    const slot = chunk instanceof InstancedLodGpuChunk ? this.take(chunk, chunk.instance) : this.takeMirrored(chunk);
     state.held = true;
     this.held.set(chunk, { slot, state });
     this.version++;
@@ -180,19 +180,33 @@ export class ChunkSet {
     this.mirrors.clear();
   }
 
-  /** What the pool reads `chunk`'s instances from: the app's function, or mirrors of its attributes. */
-  private sourceOf(chunk: InstancedLodCpuChunk | InstancedLodGpuChunk): ChunkSource {
-    if (chunk instanceof InstancedLodGpuChunk) return chunk.instance;
-    const { instanceMatrix, instanceColor } = chunk;
-    return { matrices: this.mirror(instanceMatrix, chunk).attribute, colors: instanceColor && this.mirror(instanceColor, chunk).attribute };
+  /** A pool slot for `chunk`, reading its instances from `source`. */
+  private take(chunk: InstancedLodChunk, source: ChunkSource): number {
+    return this.pool.add({ source, start: chunk.start, count: chunk.count, row: this.row });
   }
 
-  /** The mirror of `attribute`, which `chunk` reads too. */
-  private mirror(attribute: InstancedBufferAttribute, chunk: InstancedLodCpuChunk): Mirror {
-    const shared = this.mirrors.get(attribute) ?? { mirror: new Mirror(attribute), users: new Set() };
-    this.mirrors.set(attribute, shared);
+  /**
+   * A pool slot for `chunk`, reading its attributes through their mirrors, which keep `chunk` as a user only once the
+   * slot is taken: an add the pool refuses leaves no trace.
+   */
+  private takeMirrored(chunk: InstancedLodCpuChunk): number {
+    const matrices = this.mirrorOf(chunk.instanceMatrix);
+    const colors = chunk.instanceColor && this.mirrorOf(chunk.instanceColor);
+    const slot = this.take(chunk, { matrices: matrices.attribute, colors: colors && colors.attribute });
+    for (const mirror of [matrices, colors]) if (mirror) this.share(mirror, chunk);
+    return slot;
+  }
+
+  /** The mirror of `attribute`: the one its chunks share, or a new one. */
+  private mirrorOf(attribute: InstancedBufferAttribute): Mirror {
+    return this.mirrors.get(attribute)?.mirror ?? new Mirror(attribute);
+  }
+
+  /** Keep `mirror`, which `chunk` reads too. */
+  private share(mirror: Mirror, chunk: InstancedLodCpuChunk): void {
+    const shared = this.mirrors.get(mirror.source) ?? { mirror, users: new Set() };
+    this.mirrors.set(mirror.source, shared);
     shared.users.add(chunk);
-    return shared.mirror;
   }
 
   private heldOf(chunk: InstancedLodChunk): Held {

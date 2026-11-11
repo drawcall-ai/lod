@@ -1,9 +1,21 @@
-import { Box3, BoxGeometry, Color, InstancedBufferAttribute, Matrix4, Mesh, MeshBasicMaterial, StorageInstancedBufferAttribute, Vector3 } from "three/webgpu";
+import {
+  Box3,
+  BoxGeometry,
+  Color,
+  InstancedBufferAttribute,
+  Matrix4,
+  Mesh,
+  MeshBasicMaterial,
+  PerspectiveCamera,
+  StorageInstancedBufferAttribute,
+  Vector3,
+} from "three/webgpu";
 import { mat4 } from "three/tsl";
 import { describe, expect, it } from "vitest";
+import { LodGpu } from "../../src/gpu.js";
 import { InstancedLod } from "../../src/instanced/index.js";
 import { instanceColor, instanceMatrix } from "../instances.js";
-import { gpu } from "../renderer.js";
+import { gpu, renderer } from "../renderer.js";
 import { box } from "../box.js";
 
 const lod = () => new InstancedLod([{ object: box() }], gpu);
@@ -79,5 +91,22 @@ describe("InstancedLodChunk", () => {
     expect([chunk.originBox, chunk.minScale, chunk.maxScale]).toEqual([bounds.originBox, 1, 2]);
     expect(() => target.clone()).toThrow(/cannot be copied/);
     target.dispose();
+  });
+
+  it("leaves no trace of a chunk the pool lacks a slot for", () => {
+    const full = new LodGpu(renderer, { maxChunkCount: 1 });
+    const target = new InstancedLod([{ object: box() }], full);
+    try {
+      target.addChunk(gpuChunk);
+      const matrices = instanceMatrix([new Matrix4()]);
+      expect(() => target.addChunk({ instanceMatrix: matrices })).toThrow(/chunk slots are taken/);
+      // Taking in an edit of its attribute reads the mirrors of held chunks only.
+      matrices.needsUpdate = true;
+      target.update(new PerspectiveCamera());
+      expect(target.error).toBeUndefined();
+    } finally {
+      target.dispose();
+      full.dispose();
+    }
   });
 });
