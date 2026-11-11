@@ -82,7 +82,7 @@ export type FadeSource =
   | {
       kind: "instances";
       /** per camera, the instance and signed fade of each slot; null for none (an ImpostorMesh of its own, drawing every instance) */
-      slots: ((camera: Camera) => InstanceSlots) | null;
+      slots: ((camera: Camera) => InstanceSlots | null) | null;
       /** one instance's bounding radius in its own space */
       radius: number;
       tint: Color;

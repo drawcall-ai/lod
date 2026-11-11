@@ -87,8 +87,10 @@ export class MeshesByLevel {
       slots: (camera) => lists.slots(camera),
       radius: shape.fadeRadius,
       drawFor: (renderer, camera) => {
+        // A mesh shown by hand before the first sort has no lists to draw.
+        if (!lists.slots(camera)) return null;
         this.drawFor(renderer, camera);
-        return lists.slots(camera).args;
+        return lists.slots(camera)?.args ?? null;
       },
     });
   }

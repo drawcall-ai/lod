@@ -17,7 +17,15 @@ import { type Plan, TOWN } from "./plan.ts";
 const TILE = 6;
 
 /** Ground cover, planted on the GPU in the tiles near `camera`: `update` them before each frame. */
-export async function groundCover(library: Library, plan: Plan, zones: Zones, camera: THREE.Camera, pool: LodPool, renderer: THREE.Renderer, wind?: Wind): Promise<THREE.Group> {
+export async function groundCover(
+  library: Library,
+  plan: Plan,
+  zones: Zones,
+  camera: THREE.Camera,
+  pool: LodPool,
+  renderer: THREE.Renderer,
+  wind?: Wind,
+): Promise<THREE.Group> {
   // Grass samples ground in the vertex stage, where pixel derivatives are unavailable.
   const ground = groundShading(library, zones, float(0));
   const root = new THREE.Group();

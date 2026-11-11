@@ -46,5 +46,7 @@ export function chunkOf(lod: InstancedLod): InstancedLodChunk {
 export function drawnSlots(mesh: Object3D, camera: Camera): InstanceSlots {
   const source = fadeSourceOf(mesh);
   if (source?.kind !== "instances" || !source.slots) throw new Error("not a level mesh");
-  return source.slots(camera);
+  const slots = source.slots(camera);
+  if (!slots) throw new Error("the level mesh has not sorted yet");
+  return slots;
 }

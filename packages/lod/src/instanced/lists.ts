@@ -112,8 +112,9 @@ export class InstanceLists {
     return lists;
   }
 
-  /** Where `camera`'s lists and indirect draws lie. */
-  slots(camera: Camera): InstanceSlots {
+  /** Where `camera`'s lists and indirect draws lie; null before the first sort, which registers them. */
+  slots(camera: Camera): InstanceSlots | null {
+    if (!this.registered) return null;
     this.of(camera);
     const { sorter, row } = this.registration();
     return sorter.slotsOf(camera, row);

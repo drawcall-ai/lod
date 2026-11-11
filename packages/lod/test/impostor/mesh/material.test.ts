@@ -42,11 +42,12 @@ async function drawingOnly(
   lod: InstancedLod,
   camera: Camera,
   only: number,
-  drawn: (camera: Camera) => InstanceSlots,
-): Promise<(camera: Camera) => InstanceSlots> {
+  drawn: (camera: Camera) => InstanceSlots | null,
+): Promise<(camera: Camera) => InstanceSlots | null> {
   const card = must(lod.children[0]);
   if (!(card instanceof ImpostorMesh)) throw new Error("not a card");
   const real = drawn(camera);
+  if (!real) throw new Error("the card has not sorted yet");
   const listed = new Uint32Array(await renderer.getArrayBufferAsync(real.indices));
   const matrices = new Float32Array(await renderer.getArrayBufferAsync(card.instanceMatrix));
   const { elements } = chunkOf(lod).getMatrixAt(only, new Matrix4());
@@ -54,7 +55,10 @@ async function drawingOnly(
   if (index === undefined) throw new Error(`instance ${only} is not listed`);
   const indices = new StorageBufferAttribute(new Uint32Array(listed.length).fill(index), 1);
   const fades = new StorageBufferAttribute(new Float32Array(listed.length), 1);
-  return (other) => ({ indices, fades, args: drawn(other).args });
+  return (other) => {
+    const slots = drawn(other);
+    return slots && { indices, fades, args: slots.args };
+  };
 }
 
 const pixel = (pixels: Uint8Array, x: number, y: number) => {

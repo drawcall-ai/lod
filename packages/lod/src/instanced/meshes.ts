@@ -29,14 +29,14 @@ export interface MeshInputs {
   readonly bounds: Sphere;
   readonly box: Box3;
   /** Per camera, the instances in each level's list and where its indirect draws lie. */
-  readonly slots: (camera: Camera) => InstanceSlots;
+  readonly slots: (camera: Camera) => InstanceSlots | null;
   /** One instance's bounding radius in its own space, which shadow casters are cut off at. */
   readonly radius: number;
   /**
    * Where `camera`'s indirect draws lie as `renderer` draws a mesh for it, its lists sorted: the camera's due sorts,
-   * every InstancedLod's, run now. Never throws: three is rendering.
+   * every InstancedLod's, run now; null before the InstancedLod's first sort. Never throws: three is rendering.
    */
-  readonly drawFor: (renderer: unknown, camera: Camera) => InstanceSlots["args"];
+  readonly drawFor: (renderer: unknown, camera: Camera) => InstanceSlots["args"] | null;
 }
 
 /** `object`'s meshes and material groups, placed once in the instance's space, for level `level`. */
@@ -95,15 +95,11 @@ export function freeMesh(mesh: Mesh): void {
   mesh.geometry.dispose();
 }
 
-/**
- * Point the impostor cards of `meshes` at `instances`, which changed: survivors scale or no longer do, or the InstancedLod
- * moved to another pool. A plain mesh reads them through its fade source (see fade.ts).
- */
+/** Point every mesh of `meshes` at `instances`, which changed: survivors scale or no longer do, or the pool moved. */
 export function drawInstances(meshes: readonly Mesh[], instances: DrawnInstances): void {
   for (const mesh of meshes) {
-    if (!isImpostorMesh(mesh)) continue;
-    mesh.instanceMatrix = instances.matrices;
-    mesh.instanceColor = instances.colors;
+    if (isImpostorMesh(mesh)) mesh.instanceMatrix = instances.matrices;
+    Object.assign(mesh, { instanceColor: instances.colors });
   }
 }
 
@@ -136,6 +132,7 @@ function levelMesh({ template, placement, group }: Part, offset: () => number | 
     const start = offset();
     if (start === null) return;
     const args = drawFor(renderer, camera);
+    if (!args) return;
     mesh.geometry.setIndirect(args.attribute, args.offset + start);
   };
   return mesh;
