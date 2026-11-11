@@ -10,7 +10,7 @@ import { ceiling } from "../../public/house/furnishings.ts";
 import { Materials } from "../../public/house/materials.ts";
 import { seatMatrix } from "../world/corn/seat.ts";
 import { foliageModel } from "@drawcall/lod";
-import { MODEL_FOLIAGE } from "../world/trees.ts";
+import { MODEL_FOLIAGE } from "../world/foliage.ts";
 import { terrain } from "../render/ground/material.ts";
 import { surface, Textures } from "../render/materials.ts";
 

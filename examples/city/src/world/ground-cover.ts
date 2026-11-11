@@ -14,7 +14,7 @@ import {
 import { sourceBox } from "./bounds.ts";
 import { planter } from "./planting.ts";
 import { arriving, manager } from "../loading.ts";
-import { MODEL_FOLIAGE } from "./trees.ts";
+import { MODEL_FOLIAGE } from "./foliage.ts";
 import type { Textures } from "../render/materials.ts";
 import type { Zones } from "./zones.ts";
 import { groundShading, type Ground } from "../render/ground/shading.ts";

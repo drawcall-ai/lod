@@ -1,15 +1,13 @@
-import { CachedLodLoader, foliageLevels, foliageModel, type FoliageOptions, type InstancedLod, type LodGpu, type LodLevel, type Wind } from "@drawcall/lod";
+import { CachedLodLoader, foliageLevels, foliageModel, type InstancedLod, type LodGpu, type LodLevel, type Wind } from "@drawcall/lod";
 import * as THREE from "three/webgpu";
 import seedrandom from "seedrandom";
 import { arriving, manager } from "../loading.ts";
+import { MODEL_FOLIAGE } from "./foliage.ts";
 import { planter, type Planting } from "./planting.ts";
 import { Use } from "./land.ts";
 import { spread } from "./place.ts";
 import { sourceBox } from "./bounds.ts";
 import { inForest, type Plan } from "./plan.ts";
-
-/** The foliage shading of the fetched plant models' leaves. */
-export const MODEL_FOLIAGE: FoliageOptions = { translucency: 0.6 };
 
 /** Edge of a forest tile (m), and how far from the camera forests are held: all of the world from the tour's height. */
 const TILE = 96;
