@@ -1,4 +1,4 @@
-import { type Materials, surface } from "../shared/materials.ts";
+import { type Materials, surface } from "./materials.ts";
 import * as THREE from "three/webgpu";
 
 // Materials of the rooms. Rooms are lit by the sun through the windows and by the sky's

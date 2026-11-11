@@ -1,4 +1,4 @@
-import { type Materials, baseColor, surface } from "../../public/shared/materials.ts";
+import { type Textures, baseColor, surface } from "../render/materials.ts";
 import * as THREE from "three/webgpu";
 import { abs, attribute, fract, max, mix, step, vec3, vec4 } from "three/tsl";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
@@ -17,7 +17,7 @@ const cached = new WeakMap<Plan, RoadShapes>();
  * world x/z texture coordinates, so where two roads overlap they show the same texels;
  * main roads carry painted lines.
  */
-export function roads(materials: Materials, plan: Plan): THREE.Group {
+export function roads(textures: Textures, plan: Plan): THREE.Group {
   const shapes = roadShapes(plan);
   const group = new THREE.Group();
   group.name = "roads";
@@ -27,11 +27,11 @@ export function roads(materials: Materials, plan: Plan): THREE.Group {
     mesh.receiveShadow = true;
     group.add(mesh);
   };
-  add("asphalt", markings(materials));
-  add("tracks", surface(materials, "gravel_road", { normalScale: 1.2 }));
-  add("pavements", surface(materials, "brushed_concrete_04", { weather: 0.4 }));
-  add("beds", surface(materials, "farm_soil", { color: "#8a7a6a", normalScale: 1.2 }));
-  add("plaza", surface(materials, "cobblestone_floor_04", { normalScale: 1.5 }));
+  add("asphalt", markings(textures));
+  add("tracks", surface(textures, "gravel_road", { normalScale: 1.2 }));
+  add("pavements", surface(textures, "brushed_concrete_04", { weather: 0.4 }));
+  add("beds", surface(textures, "farm_soil", { color: "#8a7a6a", normalScale: 1.2 }));
+  add("plaza", surface(textures, "cobblestone_floor_04", { normalScale: 1.5 }));
   return group;
 }
 
@@ -227,8 +227,8 @@ function plazaGeometry(plan: Plan): THREE.BufferGeometry {
 }
 
 /** Asphalt with a dashed centre line and solid edge lines where `lane.y` is within the road. */
-function markings(materials: Materials): THREE.MeshStandardNodeMaterial {
-  const m = new THREE.MeshStandardNodeMaterial().copy(surface(materials, "asphalt_02", { normalScale: 0.8 }));
+function markings(textures: Textures): THREE.MeshStandardNodeMaterial {
+  const m = new THREE.MeshStandardNodeMaterial().copy(surface(textures, "asphalt_02", { normalScale: 0.8 }));
   const lane = attribute<"vec2">("lane", "vec2");
   const across = abs(lane.y);
   const centre = step(across, 0.07).mul(step(fract(lane.x.div(9)), 0.36));

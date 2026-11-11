@@ -1,36 +1,6 @@
-import { type Materials, surface } from "../shared/materials.ts";
 import * as THREE from "three/webgpu";
 import { mergeGeometries, mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
-import { glass } from "../house/materials.ts";
-
-const paints = {
-  letterbox: (materials: Materials) =>
-    materials.material("garden.ts:letterbox", () => new THREE.MeshStandardMaterial({ name: "letterbox", color: "#2f3d33", roughness: 0.45, metalness: 0.6 })),
-  slot: (materials: Materials) =>
-    materials.material("garden.ts:slot", () => new THREE.MeshStandardMaterial({ name: "slot", color: "#111111", roughness: 0.8 })),
-  aluminium: (materials: Materials) =>
-    materials.material("garden.ts:aluminium", () => new THREE.MeshStandardMaterial({ name: "aluminium", color: "#b8bcbd", metalness: 1, roughness: 0.4 })),
-  plants: (materials: Materials) =>
-    materials.material("garden.ts:plants", () => new THREE.MeshStandardMaterial({ name: "plants", color: "#3d6b2a", roughness: 0.9 })),
-  rope: (materials: Materials) =>
-    materials.material("garden.ts:rope", () => new THREE.MeshStandardMaterial({ name: "rope", color: "#c8b88a", roughness: 0.9 })),
-  seat: (materials: Materials) =>
-    materials.material("garden.ts:seat", () => new THREE.MeshStandardMaterial({ name: "seat", color: "#b03a2e", roughness: 0.6 })),
-  post: (materials: Materials) =>
-    materials.material("garden.ts:post", () => new THREE.MeshStandardMaterial({ name: "post", color: "#9da3a5", metalness: 0.8, roughness: 0.5 })),
-  line: (materials: Materials) =>
-    materials.material("garden.ts:line", () => new THREE.MeshStandardMaterial({ name: "line", color: "#e8e8e0", roughness: 0.7 })),
-  washing: (materials: Materials) =>
-    materials.material(
-      "garden.ts:washing",
-      () => new THREE.MeshStandardMaterial({ name: "washing", vertexColors: true, roughness: 0.9, side: THREE.DoubleSide }),
-    ),
-  "garden furniture": (materials: Materials) =>
-    materials.material(
-      "garden.ts:garden furniture",
-      () => new THREE.MeshStandardMaterial({ name: "garden furniture", color: "#ecebe6", metalness: 0.3, roughness: 0.5 }),
-    ),
-};
+import { glass, paints, surface } from "./materials.ts";
 
 // Things in a garden besides plants: buildings, furniture and the odds and ends of
 // family life. Each stands on y = 0, its front toward +z.
@@ -39,11 +9,11 @@ const paints = {
  * A garden shed, 2.4 × 1.8 m, its door on the front (+z): plank walls on a concrete
  * footing, a pitched roof of corrugated iron with a little overhang.
  */
-export function shed(materials: Materials, color: THREE.ColorRepresentation): THREE.Group {
+export function shed(manager: THREE.LoadingManager, color: THREE.ColorRepresentation): THREE.Group {
   const parts = new Parts();
-  const planks = surface(materials, "white_planks_clean", { color, weather: 0.9, roughness: 1.2 });
-  const iron = surface(materials, "corrugated_iron", { normalScale: 1.5, weather: 0.8 });
-  const concrete = surface(materials, "brushed_concrete_04", { weather: 0.6 });
+  const planks = surface(manager, "white_planks_clean", { color, weather: 0.9, roughness: 1.2 });
+  const iron = surface(manager, "corrugated_iron", { normalScale: 1.5, weather: 0.8 });
+  const concrete = surface(manager, "brushed_concrete_04", { weather: 0.6 });
   const w = 2.4;
   const d = 1.8;
   const h = 2.0;
@@ -62,16 +32,16 @@ export function shed(materials: Materials, color: THREE.ColorRepresentation): TH
         .rotateX(s > 0 ? pitch : Math.PI - pitch)
         .translate(0, 0.1 + h + (d / 2) * Math.tan(pitch) + 0.02, 0),
     );
-  parts.add(surface(materials, "distressed_painted_planks", { weather: 0.8 }), box(0.85, 1.75, 0.04).translate(0.4, 0.1 + 0.875, d / 2 + 0.02));
+  parts.add(surface(manager, "distressed_painted_planks", { weather: 0.8 }), box(0.85, 1.75, 0.04).translate(0.4, 0.1 + 0.875, d / 2 + 0.02));
   return parts.build("shed");
 }
 
 /** A letterbox on a post by the garden gate: a painted metal box with a slot and a rounded lid. */
-export function letterbox(materials: Materials): THREE.Group {
+export function letterbox(manager: THREE.LoadingManager): THREE.Group {
   const parts = new Parts();
-  const post = surface(materials, "wood_table_001", { color: "#6b5a48", weather: 0.8 });
-  const metal = paints["letterbox"](materials);
-  const dark = paints["slot"](materials);
+  const post = surface(manager, "wood_table_001", { color: "#6b5a48", weather: 0.8 });
+  const metal = paints.letterbox();
+  const dark = paints.slot();
   parts.add(post, box(0.08, 1.05, 0.08).translate(0, 0.525, 0));
   parts.add(metal, box(0.3, 0.32, 0.38).translate(0, 1.2, 0));
   parts.add(
@@ -86,10 +56,11 @@ export function letterbox(materials: Materials): THREE.Group {
 }
 
 /** A small greenhouse, 2.5 × 1.9 m: an aluminium frame, glass walls and roof on a low brick base. */
-export function greenhouse(materials: Materials): THREE.Group {
+export function greenhouse(manager: THREE.LoadingManager): THREE.Group {
   const parts = new Parts();
-  const frame = paints["aluminium"](materials);
-  const brick = surface(materials, "red_brick", { weather: 0.8 });
+  const frame = paints.aluminium();
+  const brick = surface(manager, "red_brick", { weather: 0.8 });
+  const panes = glass();
   const w = 2.5;
   const d = 1.9;
   const h = 1.6;
@@ -100,32 +71,32 @@ export function greenhouse(materials: Materials): THREE.Group {
   for (const s of [-1, 1]) parts.add(frame, box(w, 0.04, 0.04).translate(0, 0.4 + h, (s * d) / 2));
   const pane = (width: number, height: number) => new THREE.PlaneGeometry(width, height);
   for (const s of [-1, 1]) {
-    parts.add(glass(materials), pane(w, h).translate(0, 0.4 + h / 2, (s * d) / 2));
+    parts.add(panes, pane(w, h).translate(0, 0.4 + h / 2, (s * d) / 2));
     parts.add(
-      glass(materials),
+      panes,
       pane(d, h)
         .rotateY(Math.PI / 2)
         .translate((s * w) / 2, 0.4 + h / 2, 0),
     );
     const slope = Math.hypot(d / 2, ridge);
     parts.add(
-      glass(materials),
+      panes,
       pane(w, slope)
         .rotateX(-Math.PI / 2 + s * Math.atan2(ridge, d / 2))
         .translate(0, 0.4 + h + ridge / 2, (s * d) / 4),
     );
   }
   // tomatoes inside: a row of green
-  parts.add(paints["plants"](materials), box(w - 0.4, 0.9, 0.5).translate(0, 0.85, -d / 4));
+  parts.add(paints.plants(), box(w - 0.4, 0.9, 0.5).translate(0, 0.85, -d / 4));
   return parts.build("greenhouse");
 }
 
 /** A swing frame: two A-frames of timber, a beam, and two seats on ropes. */
-export function swing(materials: Materials): THREE.Group {
+export function swing(manager: THREE.LoadingManager): THREE.Group {
   const parts = new Parts();
-  const timber = surface(materials, "wood_table_001", { color: "#8a6a4a", weather: 0.7 });
-  const rope = paints["rope"](materials);
-  const seat = paints["seat"](materials);
+  const timber = surface(manager, "wood_table_001", { color: "#8a6a4a", weather: 0.7 });
+  const rope = paints.rope();
+  const seat = paints.seat();
   const h = 2.1;
   const span = 2.4;
   for (const x of [-span / 2, span / 2])
@@ -145,11 +116,11 @@ export function swing(materials: Materials): THREE.Group {
 }
 
 /** A washing line between two posts, with a row of washing pegged to it. */
-export function washingLine(materials: Materials): THREE.Group {
+export function washingLine(): THREE.Group {
   const parts = new Parts();
-  const post = paints["post"](materials);
-  const line = paints["line"](materials);
-  const cloth = paints["washing"](materials);
+  const post = paints.post();
+  const line = paints.line();
+  const cloth = paints.washing();
   const length = 5;
   for (const x of [-length / 2, length / 2]) parts.add(post, new THREE.CylinderGeometry(0.03, 0.03, 1.9, 6).translate(x, 0.95, 0));
   parts.add(line, new THREE.CylinderGeometry(0.004, 0.004, length, 4).rotateZ(Math.PI / 2).translate(0, 1.82, 0));
@@ -163,9 +134,9 @@ export function washingLine(materials: Materials): THREE.Group {
 }
 
 /** A patio set: a round table and four chairs, white painted metal. */
-export function patioSet(materials: Materials): THREE.Group {
+export function patioSet(): THREE.Group {
   const parts = new Parts();
-  const paint = paints["garden furniture"](materials);
+  const paint = paints["garden furniture"]();
   parts.add(paint, new THREE.CylinderGeometry(0.45, 0.45, 0.03, 20).translate(0, 0.72, 0));
   parts.add(paint, new THREE.CylinderGeometry(0.03, 0.03, 0.72, 8).translate(0, 0.36, 0));
   for (let k = 0; k < 4; k++) {

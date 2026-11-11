@@ -1,20 +1,15 @@
 import * as THREE from "three/webgpu";
-import type { Materials } from "../shared/materials.ts";
 
 /** Black chitin: glossy but not mirror-like. */
-export const blackMaterial = (materials: Materials) =>
-  materials.material(
-    "ladybird/materials.ts:blackMaterial",
-    () =>
-      new THREE.MeshPhysicalMaterial({
-        name: "ladybird-black",
-        color: "#0d0d0c",
-        vertexColors: true,
-        roughness: 0.35,
-        clearcoat: 0.7,
-        clearcoatRoughness: 0.2,
-      }),
-  );
+export const blackMaterial = () =>
+  new THREE.MeshPhysicalMaterial({
+    name: "ladybird-black",
+    color: "#0d0d0c",
+    vertexColors: true,
+    roughness: 0.35,
+    clearcoat: 0.7,
+    clearcoatRoughness: 0.2,
+  });
 
 /** [x across from the suture, z forward, radius] in footprint units, as `spot` takes them. */
 type Spot = [number, number, number];
@@ -33,61 +28,47 @@ const SPOTS: Spot[] = [
 ];
 
 /** Elytra: lacquer red with the spot pattern and a finely dimpled clear coat. */
-export const shellMaterial = (materials: Materials) =>
-  materials.material(
-    "ladybird/materials.ts:shellMaterial",
-    () =>
-      new THREE.MeshPhysicalMaterial({
-        name: "ladybird-elytra",
-        map: paint(1024, (x, z, texel) => {
-          // a radial gradient from the shell's crown, just forward of its centre, to its rim
-          const t = THREE.MathUtils.clamp((Math.hypot(x, z - 0.1) / 2 - 0.05) / 0.5, 0, 1);
-          let color = t < 0.85 ? mix(hex("#d8341a"), hex("#c0240f"), t / 0.85) : mix(hex("#c0240f"), hex("#8e1a0c"), (t - 0.85) / 0.15);
-          // a soft edge, about three texels wide: pigment, not a printed decal
-          for (const [sx, sz, r] of SPOTS) color = mix(color, hex("#14100e"), spot(x, z, sx, sz, r, 3 * texel));
-          // the suture between the elytra, from the rear to just behind the front spot
-          const suture = z < 0.84 ? THREE.MathUtils.clamp((0.005 - Math.abs(x)) / texel + 0.5, 0, 1) : 0;
-          return mix(color, [40, 6, 2], 0.85 * suture);
-        }),
-        // the punctation lies under the lacquer-like coat: it only breaks up the highlight, and
-        // spots and red share the one coat, so they reflect identically
-        clearcoatNormalMap: dimples(2048, 9000, 2.2, 0.0012),
-        clearcoatNormalScale: new THREE.Vector2(0.35, 0.35),
-        roughness: 0.55,
-        clearcoat: 1,
-        clearcoatRoughness: 0.15,
-      }),
-  );
+export const shellMaterial = () =>
+  new THREE.MeshPhysicalMaterial({
+    name: "ladybird-elytra",
+    map: paint(1024, (x, z, texel) => {
+      // a radial gradient from the shell's crown, just forward of its centre, to its rim
+      const t = THREE.MathUtils.clamp((Math.hypot(x, z - 0.1) / 2 - 0.05) / 0.5, 0, 1);
+      let color = t < 0.85 ? mix(hex("#d8341a"), hex("#c0240f"), t / 0.85) : mix(hex("#c0240f"), hex("#8e1a0c"), (t - 0.85) / 0.15);
+      // a soft edge, about three texels wide: pigment, not a printed decal
+      for (const [sx, sz, r] of SPOTS) color = mix(color, hex("#14100e"), spot(x, z, sx, sz, r, 3 * texel));
+      // the suture between the elytra, from the rear to just behind the front spot
+      const suture = z < 0.84 ? THREE.MathUtils.clamp((0.005 - Math.abs(x)) / texel + 0.5, 0, 1) : 0;
+      return mix(color, [40, 6, 2], 0.85 * suture);
+    }),
+    // the punctation lies under the lacquer-like coat: it only breaks up the highlight, and
+    // spots and red share the one coat, so they reflect identically
+    clearcoatNormalMap: dimples(2048, 9000, 2.2, 0.0012),
+    clearcoatNormalScale: new THREE.Vector2(0.35, 0.35),
+    roughness: 0.55,
+    clearcoat: 1,
+    clearcoatRoughness: 0.15,
+  });
 
 /** Pronotum: black with the cream patches in its front corners. */
-export const pronotumMaterial = (materials: Materials) =>
-  materials.material(
-    "ladybird/materials.ts:pronotumMaterial",
-    () =>
-      new THREE.MeshPhysicalMaterial({
-        name: "ladybird-pronotum",
-        map: paint(512, (x, z, texel) => mix(hex("#0d0d0c"), hex("#ede5cf"), Math.max(spot(x, z, -0.7, 0.5, 0.2, texel), spot(x, z, 0.7, 0.5, 0.2, texel)))),
-        roughness: 0.35,
-        clearcoat: 1,
-        clearcoatRoughness: 0.15,
-      }),
-  );
+export const pronotumMaterial = () =>
+  new THREE.MeshPhysicalMaterial({
+    name: "ladybird-pronotum",
+    map: paint(512, (x, z, texel) => mix(hex("#0d0d0c"), hex("#ede5cf"), Math.max(spot(x, z, -0.7, 0.5, 0.2, texel), spot(x, z, 0.7, 0.5, 0.2, texel)))),
+    roughness: 0.35,
+    clearcoat: 1,
+    clearcoatRoughness: 0.15,
+  });
 
 /** Head: black with two small pale spots between the eyes. */
-export const headMaterial = (materials: Materials) =>
-  materials.material(
-    "ladybird/materials.ts:headMaterial",
-    () =>
-      new THREE.MeshPhysicalMaterial({
-        name: "ladybird-head",
-        map: paint(256, (x, z, texel) =>
-          mix(hex("#0d0d0c"), hex("#e3dcc6"), Math.max(spot(x, z, -0.42, 0.25, 0.15, texel), spot(x, z, 0.42, 0.25, 0.15, texel))),
-        ),
-        roughness: 0.3,
-        clearcoat: 0.8,
-        clearcoatRoughness: 0.15,
-      }),
-  );
+export const headMaterial = () =>
+  new THREE.MeshPhysicalMaterial({
+    name: "ladybird-head",
+    map: paint(256, (x, z, texel) => mix(hex("#0d0d0c"), hex("#e3dcc6"), Math.max(spot(x, z, -0.42, 0.25, 0.15, texel), spot(x, z, 0.42, 0.25, 0.15, texel)))),
+    roughness: 0.3,
+    clearcoat: 0.8,
+    clearcoatRoughness: 0.15,
+  });
 
 /** An sRGB colour, 0–255 a channel. */
 type Rgb = [number, number, number];

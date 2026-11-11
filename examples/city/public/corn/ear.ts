@@ -1,13 +1,11 @@
-import type { Materials } from "../shared/materials.ts";
 import * as THREE from "three/webgpu";
 import { MeshBuilder, type Parts, tube } from "./geometry.ts";
 import type seedrandom from "seedrandom";
-import { huskMaterial } from "./leaf.ts";
-import { type Detail, tissue, tubeSegments } from "./tissue.ts";
+import { type CornMaterials, type Detail, tubeSegments } from "./tissue.ts";
 
 /** An ear on a short shank: wrapped husk leaves with flared tips, and a tuft of silk. Returns its middle. */
 export function ear(
-  materials: Materials,
+  materials: CornMaterials,
   parts: Parts,
   node: THREE.Vector3,
   stalkDir: THREE.Vector3,
@@ -21,7 +19,7 @@ export function ear(
   const shankEnd = start.clone().addScaledVector(axis, 0.05);
   const husk = new THREE.Color("#7f9a52");
   parts.add(
-    tissue(materials),
+    materials.tissue,
     tube(
       new THREE.LineCurve3(start, shankEnd),
       () => 0.008,
@@ -69,7 +67,7 @@ export function ear(
       if (!a || !d) break;
       for (let k = 0; k < 6; k++) b.quad(a[k] ?? 0, a[k + 1] ?? 0, d[k + 1] ?? 0, d[k] ?? 0);
     }
-    parts.add(huskMaterial(materials), b.geometry());
+    parts.add(materials.husk, b.geometry());
   }
   const tip = shankEnd.clone().addScaledVector(axis, length * 1.02);
   const silk = 24 + Math.floor(17 * r());
@@ -92,7 +90,7 @@ export function ear(
     const old = new THREE.Color("#8a5a34");
     if (drawn)
       parts.add(
-        tissue(materials),
+        materials.tissue,
         tube(
           new THREE.QuadraticBezierCurve3(from, mid, end),
           () => 0.0006,

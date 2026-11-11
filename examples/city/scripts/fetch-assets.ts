@@ -1,7 +1,8 @@
 // Downloads the city's CC0 assets from Poly Haven and ambientCG into public/assets/ (gitignored):
 // models become individual, centred variant GLBs (meshopt-compressed, with encoded
-// images shared per model: the prepared source's, with cut-outs filled as PNG). PBR sets become webp, plus one HDRI. Writes
-// public/assets/manifest.json with sizes, triangle counts and credits.
+// images shared per model: the prepared source's, with cut-outs filled as PNG). PBR sets become
+// textures/<id>/{diff,nor,arm}.webp, and the HDRI hdri/sky.hdr, at paths the assets load them from. Writes
+// public/assets/manifest.json with sizes, triangle counts, model variants and credits.
 //
 //   pnpm --filter @drawcall/lod-example-city assets
 //
@@ -10,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { NodeIO } from "@gltf-transform/core";
 import { ALL_EXTENSIONS } from "@gltf-transform/extensions";
 import { MeshoptDecoder, MeshoptEncoder } from "meshoptimizer";
-import { isManifest, type Manifest } from "../public/shared/manifest.ts";
+import { isManifest, type Manifest } from "./assets/manifest.ts";
 import { exists } from "./assets/files.ts";
 import { model } from "./assets/models.ts";
 import { ambientSet, environment, textureSet } from "./assets/textures.ts";
@@ -52,11 +53,8 @@ const textures = [
   "cobblestone_floor_04",
   "gravel_road",
 ];
-/**
- * ambientCG sets (they are procedural, so there is no measured size): id → metres per repeat.
- * Grass001 is a dense green lawn, which Poly Haven lacks.
- */
-const ambientTextures = { Grass001: 1.2 };
+/** ambientCG sets. Grass001 is a dense green lawn, which Poly Haven lacks. */
+const ambientTextures = ["Grass001"];
 const hdri = "kloofendal_48d_partly_cloudy_puresky";
 const out = fileURLToPath(new URL("../public/assets/", import.meta.url));
 
@@ -66,10 +64,10 @@ const previous = await readManifest();
 const manifest: Manifest = {
   models: {},
   textures: {},
-  hdri: previous?.hdri && (await exists(out + previous.hdri.file)) ? previous.hdri : await environment(hdri, out),
+  hdri: previous?.hdri && (await exists(`${out}hdri/sky.hdr`)) ? { credit: previous.hdri.credit } : await environment(hdri, out),
 };
 for (const id of textures) manifest.textures[id] = (await existingTexture(id)) ?? (await textureSet(id, out));
-for (const [id, metres] of Object.entries(ambientTextures)) manifest.textures[id] = (await existingTexture(id)) ?? (await ambientSet(id, metres, out));
+for (const id of ambientTextures) manifest.textures[id] = (await existingTexture(id)) ?? (await ambientSet(id, out));
 
 async function readManifest(): Promise<Manifest | undefined> {
   if (!(await exists(`${out}manifest.json`))) return undefined;
@@ -80,7 +78,8 @@ async function readManifest(): Promise<Manifest | undefined> {
 
 async function existingTexture(id: string): Promise<Manifest["textures"][string] | undefined> {
   const entry = previous?.textures[id];
-  return entry && (await Promise.all([entry.diff, entry.nor, entry.arm].map((file) => exists(out + file)))).every(Boolean) ? entry : undefined;
+  if (!entry || !(await Promise.all(["diff", "nor", "arm"].map((map) => exists(`${out}textures/${id}/${map}.webp`)))).every(Boolean)) return undefined;
+  return { bytes: entry.bytes, credit: entry.credit };
 }
 for (const id of models) manifest.models[id] = await model(id, io, out);
 await writeFile(`${out}manifest.json`, JSON.stringify(manifest, null, 2));

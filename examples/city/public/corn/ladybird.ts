@@ -1,4 +1,3 @@
-import type { Materials } from "../shared/materials.ts";
 import * as THREE from "three/webgpu";
 import { MeshBuilder, Parts, tint, tube } from "./geometry.ts";
 import { blackMaterial, shellMaterial, pronotumMaterial, headMaterial } from "./ladybird-materials.ts";
@@ -17,12 +16,13 @@ const ink = new THREE.Color("#ffffff");
  * most of the head; short antennae under the head; legs folded under the body so that at rest
  * mostly the tarsi show.
  */
-export function ladybird(materials: Materials): THREE.Group {
+export function ladybird(): THREE.Group {
+  const black = blackMaterial();
   const parts = new Parts();
   // elytra are centred 0.9 mm behind the origin; the pronotum abuts their front edge
-  parts.add(shellMaterial(materials), dome({ hw: 2.7, hl: 2.85, height: 2.1, z: -0.9, y: clearance, taper: 0.08, exponent: 0.55, lip: 0.1, seam: 0.035 }));
+  parts.add(shellMaterial(), dome({ hw: 2.7, hl: 2.85, height: 2.1, z: -0.9, y: clearance, taper: 0.08, exponent: 0.55, lip: 0.1, seam: 0.035 }));
   parts.add(
-    blackMaterial(materials),
+    black,
     tint(
       new THREE.CircleGeometry(1, 48)
         .scale(2.6, 2.75, 1)
@@ -32,9 +32,9 @@ export function ladybird(materials: Materials): THREE.Group {
     ),
   );
   // pronotum: its back emerges from the steep front of the elytra, its front edge hugs the head
-  parts.add(pronotumMaterial(materials), dome({ hw: 1.7, hl: 0.75, height: 0.8, z: 1.95, y: clearance + 0.1, taper: 0.32, exponent: 0.6, lip: 0, seam: 0 }));
+  parts.add(pronotumMaterial(), dome({ hw: 1.7, hl: 0.75, height: 0.8, z: 1.95, y: clearance + 0.1, taper: 0.32, exponent: 0.6, lip: 0, seam: 0 }));
   // head: tucked under the pronotum's front edge, only its front showing
-  parts.add(headMaterial(materials), dome({ hw: 0.6, hl: 0.38, height: 0.4, z: 2.62, y: clearance, taper: 0.2, exponent: 0.6, lip: 0, seam: 0 }));
+  parts.add(headMaterial(), dome({ hw: 0.6, hl: 0.38, height: 0.4, z: 2.62, y: clearance, taper: 0.2, exponent: 0.6, lip: 0, seam: 0 }));
 
   // antennae: short and clubbed, folded back under the head
   for (const s of [-1, 1]) {
@@ -45,7 +45,7 @@ export function ladybird(materials: Materials): THREE.Group {
       base.clone().add(new THREE.Vector3(s * 0.55, -0.08, 0.05)),
     );
     parts.add(
-      blackMaterial(materials),
+      black,
       tube(
         curve,
         (t) => 0.03 + 0.05 * t ** 6,
@@ -64,7 +64,7 @@ export function ladybird(materials: Materials): THREE.Group {
       const ankle = new THREE.Vector3(s * 2.15, 0.08, z + forward * 0.7);
       const toe = new THREE.Vector3(s * 2.6, 0.03, z + forward * 1.0 + (forward === 0 ? 0.2 : 0));
       parts.add(
-        blackMaterial(materials),
+        black,
         tube(
           new THREE.LineCurve3(hip, knee),
           (t) => 0.17 - 0.04 * t,
@@ -75,7 +75,7 @@ export function ladybird(materials: Materials): THREE.Group {
         ),
       );
       parts.add(
-        blackMaterial(materials),
+        black,
         tube(
           new THREE.LineCurve3(knee, ankle),
           (t) => 0.11 - 0.03 * t,
@@ -87,7 +87,7 @@ export function ladybird(materials: Materials): THREE.Group {
       );
       // three tarsal segments, each swelling then pinching
       parts.add(
-        blackMaterial(materials),
+        black,
         tube(
           new THREE.LineCurve3(ankle, toe),
           (t) => 0.045 + 0.035 * Math.abs(Math.sin(t * Math.PI * 3)),

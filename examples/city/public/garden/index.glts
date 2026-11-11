@@ -1,12 +1,11 @@
 import { loadingManager, onDispose, scene } from "@drawcall/glts";
-import type { Object3D } from "three/webgpu";
+import type { LoadingManager, Object3D } from "three/webgpu";
 import { dispose } from "../shared/dispose.ts";
 import { greenhouse, letterbox, patioSet, shed, swing, washingLine } from "./model.ts";
-import { Materials } from "../shared/materials.ts";
 
 const names = ["shed", "letterbox", "greenhouse", "swing", "washing line", "patio set"] as const;
-const models: Record<(typeof names)[number], (materials: Materials) => Object3D> = {
-  shed: (materials) => shed(materials, "#d9d4c8"),
+const models: Record<(typeof names)[number], (manager: LoadingManager) => Object3D> = {
+  shed: (manager) => shed(manager, "#d9d4c8"),
   letterbox,
   greenhouse,
   swing,
@@ -16,6 +15,6 @@ const models: Record<(typeof names)[number], (materials: Materials) => Object3D>
 const query = new URL(import.meta.url).searchParams.get("name") ?? "shed";
 const name = names.find((known) => known === query);
 if (!name) throw new Error(`garden: no model is named ${query}`);
-const object = models[name](await Materials.load(loadingManager));
+const object = models[name](loadingManager);
 onDispose(() => dispose(object));
 scene.add(object);

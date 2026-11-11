@@ -1,4 +1,4 @@
-import type { Materials } from "../shared/materials.ts";
+import type { Materials } from "./materials.ts";
 import * as THREE from "three/webgpu";
 import { box, Parts, tint } from "./geometry.ts";
 import seedrandom from "seedrandom";

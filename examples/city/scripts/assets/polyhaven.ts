@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import type { Credit } from "../../public/shared/manifest.ts";
+import type { Credit } from "./manifest.ts";
 import { cache, download, type FileRef } from "./files.ts";
 
 export const res = "2k";

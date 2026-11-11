@@ -1,16 +1,16 @@
-import { type Materials, surface } from "../shared/materials.ts";
 import * as THREE from "three/webgpu";
 import { mergeGeometries, mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
 import seedrandom from "seedrandom";
+import { paintMaterial } from "./materials.ts";
 
 /**
  * A painted picket fence along +x from the origin: square posts with pyramid caps every
  * 2.4 m, two rails behind the pickets, pointed pickets with irregular wear.
  */
-export function picketFence(materials: Materials, length: number, seed = 1): THREE.Group {
+export function picketFence(manager: THREE.LoadingManager, length: number, seed = 1): THREE.Group {
   const r = seedrandom(String(seed));
   const parts = new Parts();
-  const paint = surface(materials, "wood_table_001", { albedo: false, color: "#ffffff", vertexColors: true, normalScale: 0.4, roughness: 1.8, weather: 0.8 });
+  const paint = paintMaterial(manager);
   const white = new THREE.Color("#ebe8e0");
   const bays = Math.max(1, Math.round(length / 2.4));
   const bay = length / bays;

@@ -15,7 +15,7 @@ import { sourceBox } from "./bounds.ts";
 import { planter } from "./planting.ts";
 import { arriving, manager } from "../loading.ts";
 import { MODEL_FOLIAGE } from "./trees.ts";
-import type { Materials } from "../../public/shared/materials.ts";
+import type { Textures } from "../render/materials.ts";
 import type { Zones } from "./zones.ts";
 import { groundShading, type Ground } from "../render/ground/shading.ts";
 import { Use } from "./land.ts";
@@ -175,9 +175,9 @@ const GROUND_COVER: GroundKind[] = [
 ];
 
 /** Ground cover, planted on the GPU in the tiles near `camera`: `update` them before each frame. */
-export async function groundCover(materials: Materials, plan: Plan, zones: Zones, camera: THREE.Camera, gpu: LodGpu, wind?: Wind): Promise<THREE.Group> {
+export async function groundCover(textures: Textures, plan: Plan, zones: Zones, camera: THREE.Camera, gpu: LodGpu, wind?: Wind): Promise<THREE.Group> {
   // Grass samples ground in the vertex stage, where pixel derivatives are unavailable.
-  const ground = groundShading(materials, zones, float(0));
+  const ground = groundShading(textures, zones, float(0));
   const root = new THREE.Group();
   root.name = "ground cover";
   const reference = new THREE.PerspectiveCamera(50);

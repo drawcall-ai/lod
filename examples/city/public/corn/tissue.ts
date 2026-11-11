@@ -1,12 +1,21 @@
-import type { Materials } from "../shared/materials.ts";
 import * as THREE from "three/webgpu";
+import { dryLeafMaterial, huskMaterial, leafMaterial } from "./leaf.ts";
 
-/** Plant tissue coloured by vertex colours: stalk, sheaths, tassel, silk, roots. */
-export const tissue = (materials: Materials) =>
-  materials.material(
-    "corn/tissue.ts:tissue",
-    () => new THREE.MeshStandardMaterial({ name: "corn-tissue", vertexColors: true, roughness: 0.6, side: THREE.DoubleSide }),
-  );
+/** The materials of one script's corn plants, which every plant shares. */
+export interface CornMaterials {
+  /** Plant tissue coloured by vertex colours: stalk, sheaths, tassel, silk, roots. */
+  tissue: THREE.MeshStandardMaterial;
+  leaf: THREE.Material;
+  dryLeaf: THREE.Material;
+  husk: THREE.Material;
+}
+
+export const cornMaterials = (): CornMaterials => ({
+  tissue: new THREE.MeshStandardMaterial({ name: "corn-tissue", vertexColors: true, roughness: 0.6, side: THREE.DoubleSide }),
+  leaf: leafMaterial(),
+  dryLeaf: dryLeafMaterial(),
+  husk: huskMaterial(),
+});
 
 /**
  * How finely the round parts (stalk, sheaths, roots, silk, tassel) are tessellated:

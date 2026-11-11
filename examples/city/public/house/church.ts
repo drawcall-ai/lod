@@ -1,4 +1,3 @@
-import type { Materials } from "../shared/materials.ts";
 import * as THREE from "three/webgpu";
 import { box, Parts } from "./geometry.ts";
 import type { Building } from "./model.ts";
@@ -43,7 +42,7 @@ function tower(params: HouseParams) {
 }
 
 /** Brick hall with a bell tower and slate spire. */
-function churchDetail(materials: Materials, params: HouseParams): THREE.Group {
+function churchDetail(materials: M.Materials, params: HouseParams): THREE.Group {
   const parts = new Parts();
   const stone = M.churchStone(materials);
   const { size, height, x, shaft, spire } = tower(params);

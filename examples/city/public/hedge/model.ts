@@ -1,13 +1,13 @@
-import { type Materials, type Surface, surface } from "../shared/materials.ts";
 import * as THREE from "three/webgpu";
 import seedrandom from "seedrandom";
+import { hedgeMaterial } from "./materials.ts";
 
 /**
  * A clipped hedge, `length` metres along +x from the origin, about a metre high and 0.6 m
  * deep: a finely subdivided box whose surface bulges and dents a few centimetres, as
  * clipped privet does, under a leafy texture darkened toward the base.
  */
-export function hedge(materials: Materials, length: number, seed: number): THREE.Mesh {
+export function hedge(manager: THREE.LoadingManager, length: number, seed: number): THREE.Mesh {
   const r = seedrandom(String(seed));
   const height = 0.95 + 0.2 * r();
   const depth = 0.6;
@@ -35,12 +35,8 @@ export function hedge(materials: Materials, length: number, seed: number): THREE
   }
   g.setAttribute("color", new THREE.BufferAttribute(colors, 3));
   g.computeVertexNormals();
-  const mesh = new THREE.Mesh(g, hedgeMaterial(materials));
+  const mesh = new THREE.Mesh(g, hedgeMaterial(manager));
   mesh.name = "hedge";
   mesh.castShadow = mesh.receiveShadow = true;
   return mesh;
-}
-
-function hedgeMaterial(materials: Materials): Surface {
-  return surface(materials, "leafy_grass", { color: "#7f9a6a", vertexColors: true, normalScale: 2.5, roughness: 1.1 });
 }

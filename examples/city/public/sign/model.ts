@@ -1,6 +1,6 @@
 import * as THREE from "three/webgpu";
 import { mergeGeometries, mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
-import { type Materials, surface } from "../shared/materials.ts";
+import { galvanisedMaterial } from "./materials.ts";
 
 const plate = { w: 0.76, h: 0.17, corner: 0.02, thick: 0.002 };
 
@@ -8,9 +8,9 @@ const plate = { w: 0.76, h: 0.17, corner: 0.02, thick: 0.002 };
  * A street-name sign: a galvanised post with a domed cap, a cast bracket on top holding an
  * aluminium blade, printed on both faces with the name in white on green reflective sheeting.
  */
-export function streetSign(materials: Materials, text: string): THREE.Group {
+export function streetSign(manager: THREE.LoadingManager, text: string): THREE.Group {
   const parts = new Parts();
-  const galvanised = surface(materials, "metal_plate_02", { albedo: false, color: "#b9bdbd", metalness: 1, normalScale: 0.25, roughness: 0.8, weather: 0.6 });
+  const galvanised = galvanisedMaterial(manager);
   const height = 2.55;
   parts.add(galvanised, new THREE.CylinderGeometry(0.03, 0.03, height, 20).translate(0, height / 2, 0));
   parts.add(galvanised, new THREE.SphereGeometry(0.032, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2).translate(0, height, 0));
@@ -23,7 +23,7 @@ export function streetSign(materials: Materials, text: string): THREE.Group {
   const outline = roundedRect(plate.w, plate.h, plate.corner);
   const blade = new THREE.ExtrudeGeometry(outline, { depth: plate.thick, bevelEnabled: false, curveSegments: 4 });
   parts.add(galvanised, blade.translate(0, y, -plate.thick / 2));
-  const face = faceMaterial(materials, text);
+  const face = faceMaterial(text);
   for (const side of [0, 1]) {
     const g = new THREE.ShapeGeometry(outline, 4);
     const uv = g.getAttribute("uv");
@@ -51,19 +51,17 @@ function roundedRect(w: number, h: number, r: number): THREE.Shape {
 }
 
 /** Reflective sheeting printed with a border and the street name, plus faint grime. */
-function faceMaterial(materials: Materials, text: string): THREE.Material {
-  return materials.material(`sign:${text}`, () => {
-    const w = 1600;
-    const h = Math.round((w * plate.h) / plate.w);
-    const map = new THREE.DataTexture(face(text, w, h), w, h);
-    map.colorSpace = THREE.SRGBColorSpace;
-    map.anisotropy = 8;
-    map.generateMipmaps = true;
-    map.minFilter = THREE.LinearMipmapLinearFilter;
-    map.magFilter = THREE.LinearFilter;
-    map.needsUpdate = true;
-    return new THREE.MeshStandardMaterial({ name: "street-sign", map, roughness: 0.38, metalness: 0 });
-  });
+function faceMaterial(text: string): THREE.Material {
+  const w = 1600;
+  const h = Math.round((w * plate.h) / plate.w);
+  const map = new THREE.DataTexture(face(text, w, h), w, h);
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.anisotropy = 8;
+  map.generateMipmaps = true;
+  map.minFilter = THREE.LinearMipmapLinearFilter;
+  map.magFilter = THREE.LinearFilter;
+  map.needsUpdate = true;
+  return new THREE.MeshStandardMaterial({ name: "street-sign", map, roughness: 0.38, metalness: 0 });
 }
 
 const GREEN = [0x0f, 0x6b, 0x3d];

@@ -1,4 +1,3 @@
-import type { Materials } from "../shared/materials.ts";
 import * as THREE from "three/webgpu";
 import { box, Parts } from "./geometry.ts";
 import seedrandom from "seedrandom";
@@ -10,7 +9,7 @@ import { roof } from "./roof.ts";
 import { wallSlab } from "./wall.ts";
 
 /** The full-detail house: walls with openings, joinery, glass, roof, gutters, chimney. */
-export function detail(materials: Materials, p: HouseParams): THREE.Group {
+export function detail(materials: M.Materials, p: HouseParams): THREE.Group {
   const r = seedrandom(String(p.seed));
   const parts = new Parts();
   for (const f of facades(p)) facade(materials, parts.at(f.frame), f, p, r);
@@ -26,7 +25,7 @@ export function detail(materials: Materials, p: HouseParams): THREE.Group {
   return house;
 }
 
-function facade(materials: Materials, parts: Parts, f: Facade, p: HouseParams, r: seedrandom.PRNG) {
+function facade(materials: M.Materials, parts: Parts, f: Facade, p: HouseParams, r: seedrandom.PRNG) {
   const { eave, ridge } = heights(p);
   const half = f.length / 2;
   const outline = f.gable

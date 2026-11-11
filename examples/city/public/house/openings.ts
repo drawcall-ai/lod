@@ -1,8 +1,7 @@
-import type { Materials } from "../shared/materials.ts";
 import * as THREE from "three/webgpu";
 import { box, type Parts } from "./geometry.ts";
 import type seedrandom from "seedrandom";
-import { brass, glass } from "./materials.ts";
+import { type Materials, brass, glass } from "./materials.ts";
 import type { Opening } from "./wall.ts";
 
 /** Materials an opening is dressed with; null leaves the feature out. */

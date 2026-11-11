@@ -3,9 +3,9 @@ import { loadingManager, onDispose, scene } from "@drawcall/glts";
 import { church } from "./church.ts";
 import { houseInterior } from "./interior.ts";
 import { dispose } from "../shared/dispose.ts";
-import { Materials } from "../shared/materials.ts";
+import { Materials } from "./materials.ts";
 
-const rooms = houseInterior(await Materials.load(loadingManager), church().params);
+const rooms = houseInterior(new Materials(loadingManager), church().params);
 // Each room stands on its own under the scene, as the bake reads them.
 const parts = [...rooms.children];
 onDispose(() => parts.forEach(dispose));

@@ -8,7 +8,7 @@
 // window.city exposes the tour and frame measurements to scripts/tour.ts.
 import * as THREE from "three/webgpu";
 import { InstancedLod, Lod, LodGpu, Wind } from "@drawcall/lod";
-import { Materials } from "../public/shared/materials.ts";
+import { Textures } from "./render/materials.ts";
 import { terrainMaterial } from "./render/ground/material.ts";
 import { Fly } from "./flight/fly.ts";
 import { route } from "./flight/route.ts";
@@ -63,7 +63,7 @@ manager.onProgress = (url, loaded, total) => {
   ui.progress(`Loading ${url.split("/").pop()} (${loaded}/${total})`, (0.85 * loaded) / total);
 };
 
-const materials = await Materials.load(manager, new URL("/assets/", location.href));
+const textures = new Textures(manager);
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.5, 60000);
 const scene = new THREE.Scene();
 const pipeline = await Pipeline.create(scene, camera, Math.min(devicePixelRatio, 2));
@@ -76,7 +76,7 @@ pipeline.canvas.style.visibility = "hidden";
 document.body.prepend(pipeline.canvas);
 
 // late afternoon: the sun low in the south-west, raking across the town
-const [world, sky] = await Promise.all([loadPlan(Number(seed)), loadSky(materials, pipeline.renderer, 2.4)]);
+const [world, sky] = await Promise.all([loadPlan(Number(seed)), loadSky(manager, pipeline.renderer, 2.4)]);
 loaded("plan and sky");
 scene.background = sky.background;
 scene.environment = sky.environment;
@@ -102,18 +102,18 @@ const content = Promise.all([
   trees(world, gpu, wind),
   props(world, gpu),
   Corn.build(world, gpu),
-  groundCover(materials, world, zones, camera, gpu, wind),
+  groundCover(textures, world, zones, camera, gpu, wind),
 ]);
 // Let cache discovery start before constructing the ground on this thread.
 await new Promise<void>((resolve) => setTimeout(resolve, 0));
 if (terrain) {
-  const ground = world.terrain.mesh(terrainMaterial(materials, zones));
+  const ground = world.terrain.mesh(terrainMaterial(textures, zones));
   // the ground's shader is the costliest per pixel and much of it ends up under corn, grass
   // and houses: drawn last of the opaque objects, depth testing skips what they cover
   ground.renderOrder = 1;
   scene.add(ground);
 }
-scene.add(roads(materials, world), water(world.terrain));
+scene.add(roads(textures, world), water(world.terrain));
 
 const [buildings, forest, objects, corn, herbage] = await content;
 loaded("content");
@@ -208,7 +208,7 @@ function frame(dt: number): void {
 fitCamera(focus);
 sun.update(camera, focus, clearance());
 ui.progress("Preparing the first view…", 0.85);
-await materials.ready();
+await textures.ready();
 loaded("textures");
 await pipeline.compile();
 loaded("compiled");

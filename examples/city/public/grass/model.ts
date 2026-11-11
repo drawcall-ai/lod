@@ -1,7 +1,6 @@
 import * as THREE from "three/webgpu";
-import { attribute, dot, fract, mix, sin, smoothstep, step, vec2, vec3, vec4 } from "three/tsl";
+import { attribute, dot, fract, materialColor, mix, sin, smoothstep, step, vec2, vec3, vec4 } from "three/tsl";
 import { Foliage, foliage } from "@drawcall/lod";
-import { baseColor } from "../shared/materials.ts";
 import seedrandom from "seedrandom";
 
 export interface ClumpShape {
@@ -83,6 +82,7 @@ export function grassMaterial(): Foliage {
   const dry = step(0.83, seed).mul(smoothstep(0.3, 1, along));
   const tip = mix(base, base.mul(vec3(1.15, 1.08, 0.8)), smoothstep(0.6, 1, along).mul(seed));
   const straw = mix(tip, vec3(dot(base, vec3(0.3, 0.59, 0.11))).mul(vec3(1.6, 1.35, 0.8)), dry.mul(0.7));
-  m.colorNode = baseColor.mul(vec4(straw.mul(lift).mul(fract(seed.mul(7.13)).mul(0.4).add(0.8)), 1));
+  // the material has no map: its colour is a vec3
+  m.colorNode = vec4(materialColor.mul(straw.mul(lift).mul(fract(seed.mul(7.13)).mul(0.4).add(0.8))), 1);
   return m;
 }

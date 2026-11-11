@@ -1,17 +1,16 @@
-import type { Materials } from "../shared/materials.ts";
 import * as THREE from "three/webgpu";
 import { Parts, tube } from "./geometry.ts";
 import seedrandom from "seedrandom";
 import { ear } from "./ear.ts";
-import { dryLeafMaterial, leaf, leafMaterial } from "./leaf.ts";
+import { leaf } from "./leaf.ts";
 import { tassel } from "./tassel.ts";
-import { type Detail, tissue, tubeSegments } from "./tissue.ts";
+import { type CornMaterials, type Detail, tubeSegments } from "./tissue.ts";
 
 /** The hero plant's leaf tessellation (along, across each blade). */
 export const HERO_LEAF: [number, number] = [192, 24];
 
 /** Corn plant `variant`: the hero's finely tessellated close-up form, or a field plant's. */
-export function plant(materials: Materials, variant: number, hero = false, tassel = true): THREE.Group {
+export function plant(materials: CornMaterials, variant: number, hero = false, tassel = true): THREE.Group {
   // Seeds start at 1: the shapes the variants were tuned with, such as the hero leaf the ladybird sits on.
   return cornPlant(materials, variant + 1, { leafSegments: hero ? HERO_LEAF : [24, 4], detail: hero ? "fine" : "field", tassel });
 }
@@ -25,7 +24,7 @@ export function plant(materials: Materials, variant: number, hero = false, tasse
  * parts; `tassel: false` leaves the tassel off.
  */
 export function cornPlant(
-  materials: Materials,
+  materials: CornMaterials,
   seed: number,
   options: { leafSegments?: [number, number]; detail?: Detail; tassel?: boolean } = {},
 ): THREE.Group {
@@ -45,7 +44,7 @@ export function cornPlant(
     ...tubeSegments(detail, 120, 10),
     (t) => green.clone().lerp(new THREE.Color("#8a7a4a"), nodeBulge(t, nodes) * 0.6),
   );
-  parts.add(tissue(materials), stem);
+  parts.add(materials.tissue, stem);
 
   const ears: THREE.Vector3[] = [];
   let azimuth = Math.PI * 2 * r();
@@ -57,7 +56,7 @@ export function cornPlant(
     // the sheath wraps the stalk from this node most of the way up to the next
     const sheathColor = new THREE.Color("#4c6c36").offsetHSL(0, 0, -0.03 + 0.06 * r());
     parts.add(
-      tissue(materials),
+      materials.tissue,
       tube(
         new SubCurve(stalk, t, t + (next - t) * 0.85),
         (s) => radius(t + (next - t) * 0.85 * s) + 0.0022 * (1 - s * 0.5),
@@ -75,7 +74,7 @@ export function cornPlant(
     const age = dead ? 0 : Math.max(0, 1 - (i - 3) / 2) * (0.2 + 0.25 * r());
     const color = new THREE.Color("#ffffff").offsetHSL(0, 0, -0.05 + 0.08 * r()).lerp(new THREE.Color("#ffe9a0"), age);
     parts.add(
-      dead ? dryLeafMaterial(materials) : leafMaterial(materials),
+      dead ? materials.dryLeaf : materials.leaf,
       leaf(collar, azimuth, {
         length: (dead ? 0.35 + 0.2 * r() : 0.45 + 0.55 * bell) * (0.92 + 0.14 * r()),
         width: 0.06 + 0.045 * bell,
@@ -146,7 +145,7 @@ class SubCurve extends THREE.Curve<THREE.Vector3> {
 
 /** Brace roots from the lowest nodes, arching out and down into the soil. */
 function braceRoots(
-  materials: Materials,
+  materials: CornMaterials,
   parts: Parts,
   stalk: THREE.Curve<THREE.Vector3>,
   nodes: number[],
@@ -169,7 +168,7 @@ function braceRoots(
       const end = start.clone().addScaledVector(dir, reach).setY(-0.02);
       const c = new THREE.Color("#8f8a5e").lerp(new THREE.Color("#7a5048"), 0.5 * r());
       parts.add(
-        tissue(materials),
+        materials.tissue,
         tube(
           new THREE.QuadraticBezierCurve3(start, mid, end),
           (t) => 0.0035 * (1 - t * 0.4),

@@ -1,6 +1,6 @@
 import * as THREE from "three/webgpu";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
-import type { Materials } from "../shared/materials.ts";
+import type { Materials } from "./materials.ts";
 import { detail } from "./detail.ts";
 import { houseInterior } from "./interior.ts";
 import { low } from "./low.ts";

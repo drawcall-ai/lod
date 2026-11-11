@@ -1,25 +1,24 @@
-import { loadingManager, onDispose, scene } from "@drawcall/glts";
+import { onDispose, scene } from "@drawcall/glts";
 import * as THREE from "three/webgpu";
 import { HERO_VARIANT, VARIANTS } from "./layout.ts";
 import { plant } from "./model.ts";
 import { leafSeat } from "./seat.ts";
 import { dispose } from "../shared/dispose.ts";
 import { ladybird } from "./ladybird.ts";
-import { Materials } from "../shared/materials.ts";
+import { cornMaterials } from "./tissue.ts";
 
 // A ladybird on the hero plant's leaf, placed where that leaf stands in the plant's space.
 const query = new URL(import.meta.url).searchParams;
 const variantText = query.get("variant") ?? String(HERO_VARIANT);
 const variant = Number(variantText);
 if (!(/^\d+$/.test(variantText) && variant < VARIANTS)) throw new Error(`ladybird: variant must be a whole number below ${VARIANTS}, not ${variantText}`);
-const materials = await Materials.load(loadingManager);
-const hero = plant(materials, variant, true);
+const hero = plant(cornMaterials(), variant, true);
 const seat = leafSeat(hero);
 dispose(hero);
 const holder = new THREE.Group();
 holder.position.copy(seat.point);
 holder.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), seat.normal);
-const bug = ladybird(materials);
+const bug = ladybird();
 bug.rotation.y = seat.heading;
 holder.add(bug);
 onDispose(() => dispose(holder));

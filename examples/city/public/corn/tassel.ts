@@ -1,11 +1,10 @@
-import type { Materials } from "../shared/materials.ts";
 import * as THREE from "three/webgpu";
 import { type Parts, tint, tube } from "./geometry.ts";
 import type seedrandom from "seedrandom";
-import { type Detail, tissue, tubeSegments } from "./tissue.ts";
+import { type CornMaterials, type Detail, tubeSegments } from "./tissue.ts";
 
 /** Branched tassel: a central spike plus drooping side branches, all set with paired spikelets. */
-export function tassel(materials: Materials, parts: Parts, top: THREE.Vector3, dir: THREE.Vector3, length: number, r: seedrandom.PRNG, detail: Detail) {
+export function tassel(materials: CornMaterials, parts: Parts, top: THREE.Vector3, dir: THREE.Vector3, length: number, r: seedrandom.PRNG, detail: Detail) {
   // spikelets 9 mm apart, or for the field's plants three times as far and larger
   const pitch = detail === "fine" ? 0.009 : 0.027;
   const straw = new THREE.Color("#c4ae6a");
@@ -18,7 +17,7 @@ export function tassel(materials: Materials, parts: Parts, top: THREE.Vector3, d
       .add(new THREE.Vector3(-0.04 + 0.08 * r(), 0, -0.04 + 0.08 * r())),
   );
   parts.add(
-    tissue(materials),
+    materials.tissue,
     tube(
       spike,
       (t) => 0.0035 * (1 - t * 0.7),
@@ -45,7 +44,7 @@ export function tassel(materials: Materials, parts: Parts, top: THREE.Vector3, d
       .add(new THREE.Vector3(0, -len * (0.1 + 0.4 * r()), 0));
     const curve = new THREE.QuadraticBezierCurve3(at, mid, end);
     parts.add(
-      tissue(materials),
+      materials.tissue,
       tube(
         curve,
         (t) => 0.0018 * (1 - t * 0.5),
@@ -58,7 +57,7 @@ export function tassel(materials: Materials, parts: Parts, top: THREE.Vector3, d
 }
 
 /** Small paired spikelets hanging along a tassel branch, `pitch` apart. */
-function spikelets(materials: Materials, parts: Parts, curve: THREE.Curve<THREE.Vector3>, skip: number, r: seedrandom.PRNG, pitch: number) {
+function spikelets(materials: CornMaterials, parts: Parts, curve: THREE.Curve<THREE.Vector3>, skip: number, r: seedrandom.PRNG, pitch: number) {
   const length = curve.getLength();
   const count = Math.floor((length * (1 - skip)) / pitch);
   const size = pitch / 0.009;
@@ -81,5 +80,5 @@ function spikelets(materials: Materials, parts: Parts, curve: THREE.Curve<THREE.
       pieces.push(tint(g, c));
     }
   }
-  if (pieces.length) parts.add(tissue(materials), ...pieces);
+  if (pieces.length) parts.add(materials.tissue, ...pieces);
 }

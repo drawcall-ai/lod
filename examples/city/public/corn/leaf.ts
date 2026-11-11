@@ -1,7 +1,6 @@
 import * as THREE from "three/webgpu";
 import { Foliage, type FoliageOptions, foliage } from "@drawcall/lod";
 import { MeshBuilder } from "./geometry.ts";
-import type { Materials } from "../shared/materials.ts";
 import seedrandom from "seedrandom";
 
 /** Base, body and tip colours (sRGB) of a blade, plus its midrib. */
@@ -20,28 +19,24 @@ const dry: Palette = { base: "#a0905a", body: "#b39a62", tip: "#8a6e44", rib: "#
 export const LEAF_FOLIAGE: FoliageOptions = { translucency: 0.75 };
 
 /** Living maize blades; per-leaf variation comes through vertex colours. */
-export const leafMaterial = (materials: Materials) => bladeMaterial(materials, "corn-leaf", green, LEAF_FOLIAGE);
+export const leafMaterial = () => bladeMaterial("corn-leaf", green, LEAF_FOLIAGE);
 /** Dead lower leaves: straw coloured, hardly translucent. */
-export const dryLeafMaterial = (materials: Materials) => bladeMaterial(materials, "corn-leaf-dry", dry, { translucency: 0.25 });
+export const dryLeafMaterial = () => bladeMaterial("corn-leaf-dry", dry, { translucency: 0.25 });
 /** Ear husks: paler and more yellow than the blades, with the same parallel fibres. */
-export const huskMaterial = (materials: Materials) => bladeMaterial(materials, "corn-husk", husk, { translucency: 0.6 });
+export const huskMaterial = () => bladeMaterial("corn-husk", husk, { translucency: 0.6 });
 
-function bladeMaterial(materials: Materials, name: string, palette: Palette, shading: FoliageOptions): Foliage {
-  const material = materials.material(name, () => {
-    const { color, normal } = bladeTextures(palette);
-    const m = new Foliage({
-      name,
-      map: color,
-      normalMap: normal,
-      normalScale: new THREE.Vector2(0.5, 0.5),
-      vertexColors: true,
-      roughness: 0.48,
-      side: THREE.DoubleSide,
-    });
-    return foliage(m, shading);
+function bladeMaterial(name: string, palette: Palette, shading: FoliageOptions): Foliage {
+  const { color, normal } = bladeTextures(palette);
+  const m = new Foliage({
+    name,
+    map: color,
+    normalMap: normal,
+    normalScale: new THREE.Vector2(0.5, 0.5),
+    vertexColors: true,
+    roughness: 0.48,
+    side: THREE.DoubleSide,
   });
-  if (!(material instanceof Foliage)) throw new Error(`Invalid corn leaf material ${name}`);
-  return material;
+  return foliage(m, shading);
 }
 
 const size = 2048;

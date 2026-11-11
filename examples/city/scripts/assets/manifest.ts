@@ -1,6 +1,4 @@
-import { FileLoader, type LoadingManager } from "three/webgpu";
-
-/** Shape of assets/manifest.json, written by scripts/fetch-assets.ts. Paths are relative to assets/. */
+/** Shape of public/assets/manifest.json, which scripts/fetch-assets.ts writes for the credits. Paths are relative to public/assets/. */
 export interface Credit {
   name: string;
   authors: string[];
@@ -11,9 +9,10 @@ export interface Credit {
 export interface Manifest {
   /** Each variant is an independent GLB at `models/<id>/<variant>.glb`. */
   models: Record<string, { bytes: number; triangles: number; bounds: number[][]; variants: string[]; credit: Credit }>;
-  /** `size` is the real-world width and height in metres that one repeat of the texture covers. */
-  textures: Record<string, { diff: string; nor: string; arm: string; size: number[]; bytes: number; credit: Credit }>;
-  hdri: { file: string; credit: Credit };
+  /** Each set's maps are at `textures/<id>/diff.webp`, `nor.webp` and `arm.webp`. */
+  textures: Record<string, { bytes: number; credit: Credit }>;
+  /** At `hdri/sky.hdr`. */
+  hdri: { credit: Credit };
 }
 
 /**
@@ -26,11 +25,4 @@ export function isManifest(value: unknown): value is Manifest {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
-}
-
-/** Each execution loads the manifest itself; the HTTP cache serves the repeats. */
-export async function loadManifest(url: string, manager: LoadingManager): Promise<Manifest> {
-  const data: unknown = await new FileLoader(manager).setResponseType("json").loadAsync(url);
-  if (!isManifest(data)) throw new Error(`${url} is not an asset manifest`);
-  return data;
 }
