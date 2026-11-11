@@ -1,6 +1,6 @@
 import { Loader, LoadingManager, Mesh, RGBAFormat, Scene, type Object3D, type Renderer } from "three/webgpu";
 import { beforeEach, vi } from "vitest";
-import type { CacheEntryOptions, Input, SaveOptions } from "vitecache";
+import type { CacheEntryOptions } from "vitecache";
 import { boundingBox } from "../../src/source/detail.js";
 import type { Impostor } from "../../src/impostor/impostor.js";
 
@@ -8,7 +8,7 @@ export const cache = {
   files: new Map<string, Uint8Array>(),
   /** Whether each load() hit. */
   loaded: new Array<boolean>(),
-  saved: new Array<{ options: CacheEntryOptions; dependencies: readonly Input[] }>(),
+  saved: new Array<{ options: CacheEntryOptions }>(),
 };
 
 /** Mirrors vitecache as Node runs it: an entry per version and dependencies, which save() writes after a load(). */
@@ -24,9 +24,9 @@ export class CacheEntry {
     cache.loaded.push(bytes !== undefined);
     return bytes;
   }
-  async save(bytes: Uint8Array, { dependencies = [] }: SaveOptions = {}) {
+  async save(bytes: Uint8Array) {
     if (!this.loaded) throw new Error("Call CacheEntry.load() before computing the result to save.");
-    cache.saved.push({ options: this.options, dependencies });
+    cache.saved.push({ options: this.options });
     cache.files.set(this.key, bytes);
   }
 }

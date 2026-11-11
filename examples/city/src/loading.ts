@@ -5,7 +5,7 @@ import { castBothSides } from "./render/sun/casters.ts";
 
 /** The page's loading manager, which loads .glts sources with `scripts`. */
 export const manager = THREE.DefaultLoadingManager;
-export const scripts = new GLTSLoader(manager);
+const scripts = new GLTSLoader(manager);
 manager.addHandler(/\.glts$/, scripts);
 import.meta.hot?.dispose(() => scripts.dispose());
 

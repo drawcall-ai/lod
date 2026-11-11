@@ -40,20 +40,20 @@ const DEFAULT_LEVELS: readonly LodLevelRequest[] = [{ type: "impostor" }];
 /** A normalized request. */
 export type Ladder = ReturnType<typeof normalize>;
 
-/** `request` with its URLs resolved against `path`, and every asset URL it builds from named by its role. */
+/** `request` with its source URL resolved against `path`, and a baked level's low and interior URLs against the source. */
 export function normalize(request: LodRequest, path: string) {
   const input = typeof request === "string" ? { url: request } : request;
   const url = loaderPathURL(input.url, path);
-  const levels = structuredClone(input.levels ?? DEFAULT_LEVELS);
-  const urls: Record<string, string> = { source: url };
-  levels.forEach((level, position) => {
-    if (level.type !== "baked") return;
-    for (const name of ["low", "interior"] as const) {
-      const value = level[name];
-      if (value !== undefined) urls[auxiliary(position + 1, name)] = sourceRelativeURL(value, url);
-    }
-  });
-  return { url, levels, urls };
+  const levels = structuredClone(input.levels ?? DEFAULT_LEVELS).map((level) =>
+    level.type === "baked" ? { ...level, ...resolved(level, "low", url), ...resolved(level, "interior", url) } : level,
+  );
+  return { url, levels };
+}
+
+/** `level`'s `name` URL resolved against `source`, as the fields to spread over it. */
+function resolved(level: LodLevelRequest & { type: "baked" }, name: "low" | "interior", source: string) {
+  const value = level[name];
+  return value === undefined ? {} : { [name]: sourceRelativeURL(value, source) };
 }
 
 /** The request of ladder level `index`, which must be a derived level. */
@@ -62,6 +62,3 @@ export function derived(levels: readonly LodLevelRequest[], index: number): Deri
   if (!level || level.type === "empty") throw new Error(`CachedLodLoader: level ${index} is not derived`);
   return level;
 }
-
-/** The name of the low or interior asset of the baked level at ladder index `level`. */
-export const auxiliary = (level: number, name: "low" | "interior") => `auxiliary:${level}:${name}`;

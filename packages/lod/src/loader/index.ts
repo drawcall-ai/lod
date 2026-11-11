@@ -11,7 +11,7 @@ import { isMesh, isObject3D, rejectSkinned } from "../three.js";
 import { LodLoadContext } from "./context.js";
 import { entryOf } from "./entry.js";
 import { decodeLevel, encodeLevel, encodeShape, placedBox, readLevel, readShape, shapeOf, type Entry } from "./level.js";
-import { auxiliary, derived, normalize, type Ladder, type LodRequest } from "./request.js";
+import { derived, normalize, type Ladder, type LodRequest } from "./request.js";
 import { assetPath } from "./url.js";
 
 // The loader: it describes a ladder of levels from a source, builds each level when first loaded and stores it.
@@ -179,10 +179,9 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
 
   /** Build level `index` from `source`, encoded. */
   private async build(ladder: Ladder, index: number, source: Object3D): Promise<Uint8Array> {
-    const { urls } = ladder;
     const request = derived(ladder.levels, index);
     const load = (name: "low" | "interior") => {
-      const asset = urls[auxiliary(index, name)];
+      const asset = request.type === "baked" ? request[name] : undefined;
       return asset === undefined ? undefined : this.loadAsset(asset);
     };
     let low: Object3D | undefined, interior: Object3D | undefined, built: Object3D | undefined;
