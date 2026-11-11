@@ -1,8 +1,7 @@
-import { Box3, BoxGeometry, Color, InstancedBufferAttribute, Matrix4, Mesh, MeshBasicMaterial, PerspectiveCamera, Vector3 } from "three/webgpu";
+import { Box3, BoxGeometry, Color, InstancedBufferAttribute, Matrix4, Mesh, MeshBasicMaterial, StorageInstancedBufferAttribute, Vector3 } from "three/webgpu";
 import { mat4 } from "three/tsl";
 import { describe, expect, it } from "vitest";
 import { InstancedLod } from "../../src/instanced/index.js";
-import { isCpuChunk } from "../../src/instanced/chunk.js";
 import { instanceColor, instanceMatrix } from "../instances.js";
 import { gpu } from "../renderer.js";
 import { box } from "../box.js";
@@ -21,13 +20,16 @@ describe("InstancedLodChunk", () => {
     expect(() => target.addChunk({ instanceMatrix: matrices, instanceColor: new InstancedBufferAttribute(new Uint8Array(6), 3, true) })).toThrow(
       /holds floats/,
     );
-    expect(() => target.addChunk({ instanceMatrix: matrices, ...bounds })).toThrow(/measured from its instances/);
+    // As a caller without types would, giving a GPU chunk in the attribute form: it reads by an instance function.
+    expect(() => Reflect.apply(target.addChunk, target, [{ instanceMatrix: matrices, ...bounds }])).toThrow(/give an `instance` function/);
+    expect(() => target.addChunk({ instanceMatrix: new StorageInstancedBufferAttribute(2, 16) })).toThrow(/give an `instance` function/);
+    expect(() => target.addChunk({ instanceMatrix: matrices, originBox: undefined })).not.toThrow();
     expect(() => target.addChunk({ ...gpuChunk, minScale: 3 })).toThrow(/0 < minScale <= maxScale/);
     expect(() => target.addChunk({ ...gpuChunk, count: -1 })).toThrow(/integers of at least 0/);
     // As a caller without types would: a GPU chunk reads no attributes.
     expect(() => Reflect.apply(target.addChunk, target, [{ ...gpuChunk, instanceMatrix: matrices }])).toThrow(/give it no instanceMatrix/);
     expect(() => new InstancedLod([], gpu).addChunk({ instanceMatrix: matrices })).toThrow(/levels before chunks/);
-    expect([...target.chunks]).toEqual([]);
+    expect([...target.chunks]).toHaveLength(1);
     target.dispose();
   });
 
@@ -40,7 +42,6 @@ describe("InstancedLodChunk", () => {
       start: 1,
       count: 2,
     });
-    expect(isCpuChunk(chunk)).toBe(true);
     expect(chunk.getMatrixAt(0, new Matrix4()).elements[12]).toBe(2);
     chunk.setMatrixAt(1, new Matrix4().makeTranslation(9, 0, 0));
     expect(matrices.array[2 * 16 + 12]).toBe(9);
@@ -72,17 +73,10 @@ describe("InstancedLodChunk", () => {
     target.dispose();
   });
 
-  it("refuses the CPU methods of a GPU chunk, whose instances live on the GPU", () => {
+  it("keeps a GPU chunk's given bounds and copies no GPU chunk, whose instances live on the GPU", () => {
     const target = lod();
     const chunk = target.addChunk(gpuChunk);
-    expect(isCpuChunk(chunk)).toBe(false);
-    expect(chunk.originBox).toEqual(bounds.originBox);
-    const gpu = /a GPU chunk's instances live on the GPU/;
-    expect(() => chunk.getMatrixAt(0, new Matrix4())).toThrow(gpu);
-    expect(() => chunk.setMatrixAt(0, new Matrix4())).toThrow(gpu);
-    expect(() => chunk.getColorAt(0, new Color())).toThrow(gpu);
-    expect(() => chunk.setColorAt(0, new Color())).toThrow(gpu);
-    expect(() => chunk.getLevelAt(0, new PerspectiveCamera())).toThrow(gpu);
+    expect([chunk.originBox, chunk.minScale, chunk.maxScale]).toEqual([bounds.originBox, 1, 2]);
     expect(() => target.clone()).toThrow(/cannot be copied/);
     target.dispose();
   });

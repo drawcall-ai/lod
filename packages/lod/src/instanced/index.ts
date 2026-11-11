@@ -11,7 +11,14 @@ import { inShadowMap } from "../levels/renderer.js";
 import { sameClass } from "../three.js";
 import { WIND } from "../wind/hooks.js";
 import { copyWind } from "../wind/index.js";
-import type { CpuChunk, InstancedLodChunk, InstancedLodChunkParameters } from "./chunk.js";
+import type {
+  InstancedLodChunk,
+  InstancedLodChunkParameters,
+  InstancedLodCpuChunk,
+  InstancedLodCpuChunkParameters,
+  InstancedLodGpuChunk,
+  InstancedLodGpuChunkParameters,
+} from "./chunk.js";
 import { ChunkSet } from "./chunks.js";
 import { cullIn, emptyCull, type CullDistance } from "./cull.js";
 import { MeshesByLevel, type Drawing } from "./levels.js";
@@ -170,6 +177,9 @@ export class InstancedLod extends Object3D<LodEventMap> {
    * until the GPU shows every chunk copied; a chunk the pool lacks pages for draws the instances it got until it is
    * removed, and is this InstancedLod's error (see `error`).
    */
+  addChunk(parameters: InstancedLodCpuChunkParameters): InstancedLodCpuChunk;
+  addChunk(parameters: InstancedLodGpuChunkParameters): InstancedLodGpuChunk;
+  addChunk(parameters: InstancedLodChunkParameters): InstancedLodChunk;
   addChunk(parameters: InstancedLodChunkParameters): InstancedLodChunk {
     if (this.disposed) throw new Error("InstancedLod: it was disposed");
     if (this.levels.length === 0) throw new Error("InstancedLod: give it levels before chunks");
@@ -263,8 +273,8 @@ export class InstancedLod extends Object3D<LodEventMap> {
     this.measureBounds();
   }
 
-  /** The level instance `index` of `chunk` draws most of its pixels with for `camera` (see `InstancedLodChunk.getLevelAt`). */
-  private levelAt(chunk: CpuChunk, index: number, camera: Camera): number | null {
+  /** The level instance `index` of `chunk` draws most of its pixels with for `camera` (see `InstancedLodCpuChunk.getLevelAt`). */
+  private levelAt(chunk: InstancedLodCpuChunk, index: number, camera: Camera): number | null {
     const cull = cullIn(this.cullDistance, this.matrixWorld, this.cull);
     const local = this.localCamera(camera, inShadowMap(this));
     return instanceLevel(chunk.instanceMatrix.array, (chunk.start + index) * 16, cull, local, this.built.shape.source, this.built.loads.loaded);
@@ -276,7 +286,7 @@ export class InstancedLod extends Object3D<LodEventMap> {
    * of the source on layers the raycaster does not test, are not hit.
    */
   override raycast(raycaster: Raycaster, intersects: Intersection[]): boolean {
-    raycastInstances(this, { parts: this.built.meshes.source, rest: this.built.shape.rest }, this.built.chunks.cpu(), raycaster, intersects);
+    raycastInstances(this, { parts: this.built.meshes.source, rest: this.built.shape.rest }, this.built.chunks.keys(), raycaster, intersects);
     return false;
   }
 

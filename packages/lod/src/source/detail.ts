@@ -1,6 +1,6 @@
 import { Box3, Matrix4, Vector3, type Mesh, type Object3D } from "three/webgpu";
 import type { InstancedLod } from "../instanced/index.js";
-import { isCpuChunk, type InstancedLodChunk } from "../instanced/chunk.js";
+import { InstancedLodCpuChunk } from "../instanced/chunk.js";
 import { isBatchedMesh, isImpostorMesh, isInstancedLod, isInstancedMesh, isLOD, isMesh } from "../three.js";
 
 // What an object is at full detail: its meshes, where they sit and the vertices they draw.
@@ -131,9 +131,9 @@ function boxes(node: Object3D, placement: Matrix4, box: Box3): void {
 }
 
 /** Every instance of `lod`'s chunks; a GPU chunk's live on the GPU, where the CPU cannot visit them. */
-function* instancesOf(lod: InstancedLod): Generator<{ chunk: InstancedLodChunk; index: number }> {
+function* instancesOf(lod: InstancedLod): Generator<{ chunk: InstancedLodCpuChunk; index: number }> {
   for (const chunk of lod.chunks) {
-    if (!isCpuChunk(chunk)) throw new Error("@drawcall/lod: a GPU chunk's instances live on the GPU: the CPU cannot visit its meshes");
+    if (!(chunk instanceof InstancedLodCpuChunk)) throw new Error("@drawcall/lod: a GPU chunk's instances live on the GPU: the CPU cannot visit its meshes");
     for (let index = 0; index < chunk.count; index++) yield { chunk, index };
   }
 }

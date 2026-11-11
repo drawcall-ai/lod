@@ -1,5 +1,5 @@
 import * as THREE from "three/webgpu";
-import { InstancedLod, Lod } from "@drawcall/lod";
+import { InstancedLod, InstancedLodCpuChunk, Lod } from "@drawcall/lod";
 
 /** Per level: instances drawing it this frame and their triangles. */
 export interface LevelCount {
@@ -22,7 +22,7 @@ export function countLevels(roots: readonly THREE.Object3D[], camera: THREE.Came
     const instances = lod.levels.map(() => 0);
     if (lod instanceof InstancedLod) {
       for (const chunk of lod.chunks) {
-        if (!chunk.instanceMatrix) continue;
+        if (!(chunk instanceof InstancedLodCpuChunk)) continue;
         for (let i = 0; i < chunk.count; i++) {
           const index = chunk.getLevelAt(i, camera);
           if (index === null) continue;

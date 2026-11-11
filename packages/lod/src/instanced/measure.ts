@@ -89,7 +89,7 @@ const origin = new Vector3();
 const toVec3f = ({ x, y, z }: Vector3) => d.vec3f(x, y, z);
 
 /**
- * The level the instance at `offset` of `matrices` draws most of its pixels with (see `InstancedLodChunk.getLevelAt`),
+ * The level the instance at `offset` of `matrices` draws most of its pixels with (see `InstancedLodCpuChunk.getLevelAt`),
  * thinned out by `cull` and seen by `camera`, both in the InstancedLod's space, of the levels of `loaded`, `source` the
  * source's sphere; null if it draws nothing.
  */

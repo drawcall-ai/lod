@@ -1,5 +1,14 @@
-import { Box3, InstancedBufferAttribute, type Camera, type Sphere, type Vector3 } from "three/webgpu";
-import { CpuChunk, GpuChunk, isCpuChunk, measureChunk, type ChunkState, type InstancedLodChunk, type InstancedLodChunkParameters } from "./chunk.js";
+import { Box3, InstancedBufferAttribute, type Sphere, type Vector3 } from "three/webgpu";
+import {
+  InstancedLodCpuChunk,
+  InstancedLodGpuChunk,
+  measureChunk,
+  type ChunkState,
+  type InstancedLodChunk,
+  type InstancedLodChunkParameters,
+  type InstancedLodCpuChunkParameters,
+  type LevelAt,
+} from "./chunk.js";
 import type { Cull } from "./cull.js";
 import { Mirror } from "./mirror.js";
 import type { InstancePagePool } from "./pages/index.js";
@@ -15,7 +24,7 @@ interface Held {
 /** A CPU attribute's mirror, shared by every chunk reading the attribute. */
 interface Shared {
   mirror: Mirror;
-  users: Set<CpuChunk>;
+  users: Set<InstancedLodCpuChunk>;
 }
 
 const grown = new Box3();
@@ -31,15 +40,16 @@ export class ChunkSet {
   version = 0;
 
   /**
-   * Chunks over `pool`, for the InstancedLod sorting as row `row`, whose instances `bounds` bounds in the InstancedLod's space; `reach` tells how far from an
-   * instance's origin, in its space, every level and its sway reach, and `levelAt` is what a chunk's getLevelAt asks.
+   * Chunks over `pool`, for the InstancedLod sorting as row `row`, whose instances `bounds` bounds in the InstancedLod's
+   * space; `reach` tells how far from an instance's origin, in its space, every level and its sway reach, and `levelAt`
+   * is what a CPU chunk's getLevelAt asks.
    */
   constructor(
     private readonly pool: InstancePagePool,
     private readonly row: number,
     private readonly bounds: { readonly sphere: Sphere; readonly box: Box3 },
     private readonly reach: () => number,
-    private readonly levelAt: (chunk: CpuChunk, index: number, camera: Camera) => number | null,
+    private readonly levelAt: LevelAt,
   ) {}
 
   get size(): number {
@@ -56,32 +66,24 @@ export class ChunkSet {
     return [...this.held.values()].map(({ slot }) => slot);
   }
 
-  /** The chunks whose instances the CPU holds. */
-  cpu(): CpuChunk[] {
-    return [...this.held.keys()].filter(isCpuChunk);
-  }
-
   /**
    * What makes chunks of their own with every chunk's instances, their attributes copied (see `InstancedLod.copy`). A
    * GPU chunk cannot be copied: its instances live on the GPU.
    */
-  copies(): InstancedLodChunkParameters[] {
-    const cpu = this.cpu();
-    if (cpu.length !== this.size) throw new Error("InstancedLod.copy: a GPU chunk's instances live on the GPU and cannot be copied");
-    return cpu.map(({ instanceMatrix, instanceColor, start, count }) => ({
-      instanceMatrix: copyOf(instanceMatrix),
-      instanceColor: instanceColor ? copyOf(instanceColor) : undefined,
-      start,
-      count,
-    }));
+  copies(): InstancedLodCpuChunkParameters[] {
+    return [...this.held.keys()].map((chunk) => {
+      if (!(chunk instanceof InstancedLodCpuChunk)) throw new Error("InstancedLod.copy: a GPU chunk's instances live on the GPU and cannot be copied");
+      const { instanceMatrix, instanceColor, start, count } = chunk;
+      return { instanceMatrix: copyOf(instanceMatrix), instanceColor: instanceColor ? copyOf(instanceColor) : undefined, start, count };
+    });
   }
 
-  /** Hold `parameters`' instances as a chunk, copied into the pool at its next run; `bound` bounds it. */
+  /** Hold `parameters`' instances as a chunk, copied into the pool at its next run. */
   add(parameters: InstancedLodChunkParameters): InstancedLodChunk {
-    const state: ChunkState = { originBox: new Box3(), minScale: 0, maxScale: 0, boundingBox: new Box3(), levelAt: null };
-    const chunk = parameters.instance ? new GpuChunk(parameters, state) : new CpuChunk(parameters, state);
+    const state: ChunkState = { originBox: new Box3(), minScale: 0, maxScale: 0, boundingBox: new Box3(), held: false };
+    const chunk = parameters.instance !== undefined ? new InstancedLodGpuChunk(parameters, state) : new InstancedLodCpuChunk(parameters, state, this.levelAt);
     const slot = this.pool.add({ source: this.sourceOf(chunk), start: chunk.start, count: chunk.count, row: this.row });
-    state.levelAt = this.levelAt;
+    state.held = true;
     this.held.set(chunk, { slot, state });
     this.version++;
     return chunk;
@@ -92,10 +94,10 @@ export class ChunkSet {
     const held = this.held.get(chunk);
     if (!held) throw new Error("InstancedLod: the chunk is not one of its chunks");
     this.pool.remove(held.slot);
-    held.state.levelAt = null;
+    held.state.held = false;
     this.held.delete(chunk);
     this.version++;
-    if (!isCpuChunk(chunk)) return;
+    if (!(chunk instanceof InstancedLodCpuChunk)) return;
     for (const attribute of [chunk.instanceMatrix, chunk.instanceColor]) {
       const shared = attribute && this.mirrors.get(attribute);
       if (!shared) continue;
@@ -108,7 +110,7 @@ export class ChunkSet {
 
   /**
    * Take in the CPU attributes' edits, those whose versions moved, for every chunk reading them: re-measured, and
-   * copied into the pool again at its next run. Whether any changed; `bound` bounds them.
+   * copied into the pool again at its next run. Whether any changed.
    */
   refresh(): boolean {
     const changed = new Set<InstancedLodChunk>();
@@ -170,7 +172,7 @@ export class ChunkSet {
   dispose(): void {
     for (const { slot, state } of this.held.values()) {
       this.pool.remove(slot);
-      state.levelAt = null;
+      state.held = false;
     }
     this.held.clear();
     this.version++;
@@ -179,14 +181,14 @@ export class ChunkSet {
   }
 
   /** What the pool reads `chunk`'s instances from: the app's function, or mirrors of its attributes. */
-  private sourceOf(chunk: CpuChunk | GpuChunk): ChunkSource {
-    if (!isCpuChunk(chunk)) return chunk.instance;
+  private sourceOf(chunk: InstancedLodCpuChunk | InstancedLodGpuChunk): ChunkSource {
+    if (chunk instanceof InstancedLodGpuChunk) return chunk.instance;
     const { instanceMatrix, instanceColor } = chunk;
     return { matrices: this.mirror(instanceMatrix, chunk).attribute, colors: instanceColor && this.mirror(instanceColor, chunk).attribute };
   }
 
   /** The mirror of `attribute`, which `chunk` reads too. */
-  private mirror(attribute: InstancedBufferAttribute, chunk: CpuChunk): Mirror {
+  private mirror(attribute: InstancedBufferAttribute, chunk: InstancedLodCpuChunk): Mirror {
     const shared = this.mirrors.get(attribute) ?? { mirror: new Mirror(attribute), users: new Set() };
     this.mirrors.set(attribute, shared);
     shared.users.add(chunk);
