@@ -199,7 +199,7 @@ function builds(models: Models): Map<string, Build> {
     ["corn-field", (textures, load) => cornFieldItem(textures, load)],
     ["fence", async (textures, load) => ({ object: await load("fence/index.glts?length=7.2"), ground: terrain(textures) })],
     [
-      "sign",
+      "street-sign",
       async (textures, load) => ({
         object: await load("street-sign/index.glts?text=Maple%20St"),
         focus: new THREE.Box3(new THREE.Vector3(-0.5, 2.3, -0.3), new THREE.Vector3(0.5, 2.9, 0.3)),

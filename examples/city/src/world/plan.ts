@@ -7,7 +7,7 @@ import { banks, CREEK, crossings } from "./creek.ts";
 import { farmland } from "./farmland.ts";
 import { Land, Use } from "./land.ts";
 import { Terrain } from "./terrain.ts";
-import { town, type SignName } from "./town.ts";
+import { town, type StreetName } from "./town.ts";
 import type { Fixture } from "./gardens.ts";
 
 /** Where one copy of something stands: on the ground at x, z, turned by `angle` about y. */
@@ -62,7 +62,7 @@ export interface Plan {
   hedges: Spot[];
   church: Spot;
   /** Street-name signs, by name. */
-  signs: Map<SignName, Spot[]>;
+  streetSigns: Map<StreetName, Spot[]>;
   /** Fetched models (props, trees, shrubs) by manifest id. */
   models: Map<string, Spot[]>;
 }
@@ -159,7 +159,7 @@ export function plan(seed: number): Plan {
     fixtures: built.fixtures,
     hedges: built.hedges,
     church: built.church,
-    signs: built.signs,
+    streetSigns: built.streetSigns,
     models,
   };
 }

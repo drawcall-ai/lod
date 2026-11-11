@@ -6,13 +6,13 @@ import { Land } from "../land.ts";
 import { Terrain } from "../terrain.ts";
 import { HOUSE_VARIANTS } from "../../../public/house/params.ts";
 import { type Plan, type Spot, type Rect, type Road } from "../plan.ts";
-import { SIGN_NAMES, type SignName } from "../town.ts";
+import { STREET_NAMES, type StreetName } from "../town.ts";
 import { FIXTURES, type Fixture } from "../gardens.ts";
 
 type Files = Record<string, Uint8Array>;
 
 export async function encode(world: Plan): Promise<Files> {
-  const { terrain, land, models, fixtures, signs, ...layout } = world;
+  const { terrain, land, models, fixtures, streetSigns, ...layout } = world;
   const material = new MeshBasicMaterial();
   const files: Files = {};
   const geometries = { terrain: terrain.mesh(material).geometry, ...roadShapes(world) };
@@ -21,7 +21,7 @@ export async function encode(world: Plan): Promise<Files> {
   return transform(
     {
       ...files,
-      layout: new TextEncoder().encode(JSON.stringify({ ...layout, models: [...models], fixtures: [...fixtures], signs: [...signs] })),
+      layout: new TextEncoder().encode(JSON.stringify({ ...layout, models: [...models], fixtures: [...fixtures], streetSigns: [...streetSigns] })),
       heights: new Uint8Array(terrain.heights.buffer, terrain.heights.byteOffset, terrain.heights.byteLength),
       cells: land.cells,
       parcels: land.parcels,
@@ -57,7 +57,7 @@ export async function decode(files: Files): Promise<Plan> {
     fixtures: new Map([...spots(data.fixtures)].map(([name, at]) => [fixture(name), at])),
     hedges: list(data.hedges, spot),
     church: spot(data.church),
-    signs: new Map([...spots(data.signs)].map(([name, at]) => [signName(name), at])),
+    streetSigns: new Map([...spots(data.streetSigns)].map(([name, at]) => [streetName(name), at])),
     models: spots(data.models),
   };
   restoreRoadShapes(world, {
@@ -120,9 +120,9 @@ function fixture(name: string): Fixture {
   return known;
 }
 
-function signName(name: string): SignName {
-  const known = SIGN_NAMES.find((sign) => sign === name);
-  if (!known) throw new Error(`Invalid plan sign ${name}`);
+function streetName(name: string): StreetName {
+  const known = STREET_NAMES.find((street) => street === name);
+  if (!known) throw new Error(`Invalid plan street name ${name}`);
   return known;
 }
 

@@ -5,7 +5,7 @@ import seedrandom from "seedrandom";
 import { instancedAt, spread } from "./place.ts";
 import type { Plan } from "./plan.ts";
 import { fixtures } from "./fixtures.ts";
-import type { SignName } from "./town.ts";
+import type { StreetName } from "./town.ts";
 
 const shadows = arriving((object) => object.traverse((node) => (node.castShadow = node.receiveShadow = true)));
 
@@ -100,7 +100,7 @@ const fence = () =>
   });
 
 /** A street sign per name, which its query paints on. */
-const SIGNS: Record<SignName, () => Promise<LodLevel[]>> = {
+const STREET_SIGNS: Record<StreetName, () => Promise<LodLevel[]>> = {
   "Maple St": () =>
     new CachedLodLoader(manager, arriving()).loadAsync({
       url: "/street-sign/index.glts?text=Maple+St",
@@ -197,7 +197,7 @@ export async function props(plan: Plan, gpu: LodGpu): Promise<THREE.Group> {
     return spread(gpu, id, [await load()], spots);
   });
   if (plan.fences.length) pending.push(fence().then((levels) => spread(gpu, "fence", [levels], plan.fences)));
-  for (const [name, spots] of plan.signs) pending.push(SIGNS[name]().then((levels) => spread(gpu, `sign ${name}`, [levels], spots)));
+  for (const [name, spots] of plan.streetSigns) pending.push(STREET_SIGNS[name]().then((levels) => spread(gpu, `street sign ${name}`, [levels], spots)));
   pending.push(fixtures(plan, gpu), hedges(plan, gpu));
   root.add(...(await Promise.all(pending)).flat());
   return root;
