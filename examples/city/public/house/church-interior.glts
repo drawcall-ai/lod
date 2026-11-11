@@ -5,8 +5,10 @@ import { houseInterior } from "./interior.ts";
 import { dispose } from "../shared/dispose.ts";
 import { Materials } from "./materials.ts";
 
-const rooms = houseInterior(new Materials(loadingManager), church().params);
+const materials = new Materials(loadingManager);
+const rooms = houseInterior(materials, church().params);
 // Each room stands on its own under the scene, as the bake reads them.
 const parts = [...rooms.children];
 onDispose(() => parts.forEach(dispose));
 scene.add(...parts);
+await materials.ready();

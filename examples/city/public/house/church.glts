@@ -4,6 +4,8 @@ import { church } from "./church.ts";
 import { dispose } from "../shared/dispose.ts";
 import { Materials } from "./materials.ts";
 
-const building = detailed(new Materials(loadingManager), church());
+const materials = new Materials(loadingManager);
+const building = detailed(materials, church());
 onDispose(() => dispose(building));
 scene.add(building);
+await materials.ready();

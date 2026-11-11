@@ -9,11 +9,12 @@ type TextureSet = keyof typeof TILE;
 
 /**
  * The materials and textures one building makes, each made once however many meshes use it: meshes merge by material.
- * The script disposes them with its meshes. Textures load through `manager`, so a script's load waits for them.
+ * The script disposes them with its meshes. Textures load through `manager`; await `ready` for them.
  */
 export class Materials {
   readonly #made = new Map<string, THREE.Material>();
   readonly #textures = new Map<string, THREE.Texture>();
+  readonly #loading: Promise<void>[] = [];
 
   /**
    * `assets` is public/assets, which scripts/fetch-assets.ts fills: beside this module, as scripts load it, unless a
@@ -44,12 +45,20 @@ export class Materials {
     texture.repeat.setScalar(1 / TILE[id]);
     texture.anisotropy = 8;
     texture.colorSpace = map === "diff" ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-    new THREE.ImageBitmapLoader(this.manager).setOptions({ imageOrientation: "flipY", premultiplyAlpha: "none" }).load(url, (image) => {
-      texture.image = image;
-      texture.needsUpdate = true;
-    });
+    const loader = new THREE.ImageBitmapLoader(this.manager).setOptions({ imageOrientation: "flipY", premultiplyAlpha: "none" });
+    this.#loading.push(
+      loader.loadAsync(url).then((image) => {
+        texture.image = image;
+        texture.needsUpdate = true;
+      }),
+    );
     this.#textures.set(url, texture);
     return texture;
+  }
+
+  /** Resolves once every texture made so far has loaded; rejects with the first that failed. */
+  async ready(): Promise<void> {
+    await Promise.all(this.#loading);
   }
 }
 

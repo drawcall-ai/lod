@@ -91,7 +91,7 @@ async function interiorItem(textures: Textures, load: Load, variant: number): Pr
  * storey side by side (ground floor on the left), each cut at 1.6 m above its floor,
  * ceilings and outer walls left out.
  */
-function interiorPlanItem(textures: Textures, variant: number): Content {
+async function interiorPlanItem(textures: Textures, variant: number): Promise<Content> {
   const p = houseParams(variant);
   const materials = new Materials(textures.manager, new URL("/assets/", location.href));
   const group = new THREE.Group();
@@ -110,6 +110,7 @@ function interiorPlanItem(textures: Textures, variant: number): Content {
     storey.position.y = -y0;
     group.add(storey);
   }
+  await materials.ready();
   return { object: group, ground: terrain(textures), from: new THREE.Vector3(0, 1, 0.12) };
 }
 
