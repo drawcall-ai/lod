@@ -64,28 +64,38 @@ const MODE = {
   orthoInside: 3,
 } as const;
 
-/** The lists of every camera drawing one InstancedLod: its row of a LodPool's sorts (see sort.ts). */
+/** The lists of every camera drawing one InstancedLod: its row of a LodPool's sorts (see sort.ts), from its first sort. */
 export class InstanceLists {
   private readonly cameras = new Map<Camera, CameraLists>();
-  readonly row: number;
+  /** The levels with a list, a mask. */
+  private readonly listed: number;
+  /** Every level mesh's indirect draw, in order. */
+  private readonly draws: IndirectDraw[] = [];
+  /** The sorts and row it is drawn with, once registered. */
+  private registered: { readonly sorter: Sorter; readonly row: number } | null = null;
 
   /** `listed` tells per level whether it has an instance list: whether it draws something; each lists `listSize` instances. */
   constructor(
-    private readonly sorter: Sorter,
     listed: readonly boolean[],
-    listSize: number,
+    private readonly listSize: number,
   ) {
-    this.row = sorter.register(
-      listed.reduce((mask, on, i) => (on ? mask | (1 << i) : mask), 0),
-      listSize,
-    );
+    this.listed = listed.reduce((mask, on, i) => (on ? mask | (1 << i) : mask), 0);
+  }
+
+  /** Its row among `sorter`'s, registered the first time. */
+  register(sorter: Sorter): number {
+    if (this.registered) return this.registered.row;
+    const row = sorter.register(this.listed, this.listSize);
+    if (this.draws.length > 0) sorter.appendDraws(row, this.draws);
+    this.registered = { sorter, row };
+    return row;
   }
 
   /** `camera`'s lists, made the first time it asks. */
   of(camera: Camera): CameraLists {
     const found = this.cameras.get(camera);
     if (found) return found;
-    this.sorter.hold(camera);
+    this.registration().sorter.hold(camera);
     const lists: CameraLists = {
       frustum: new Frustum(),
       written: false,
@@ -105,12 +115,16 @@ export class InstanceLists {
   /** Where `camera`'s lists and indirect draws lie. */
   slots(camera: Camera): InstanceSlots {
     this.of(camera);
-    return this.sorter.slotsOf(camera, this.row);
+    const { sorter, row } = this.registration();
+    return sorter.slotsOf(camera, row);
   }
 
   /** Every camera draws `draws` too, after the draws it has; where they start. */
   appendDraws(draws: readonly IndirectDraw[]): number {
-    return this.sorter.appendDraws(this.row, draws);
+    const first = this.draws.length;
+    this.draws.push(...draws);
+    if (this.registered) this.registered.sorter.appendDraws(this.registered.row, draws);
+    return first;
   }
 
   /** Sort for `camera` at its next draw, unless nothing it sorts by changed since its last sort. */
@@ -130,13 +144,14 @@ export class InstanceLists {
       key.camera(eye, scale, ortho, levels, cull, source).put(loaded).put(before).put(progress).put(reach);
     }
     if (!key.end()) return;
-    this.sorter.write(camera, this.row, { levels, eye, scale, ortho, cull, loaded, before, progress, source, reach, frustum });
+    const { sorter, row } = this.registration();
+    sorter.write(camera, row, { levels, eye, scale, ortho, cull, loaded, before, progress, source, reach, frustum });
     lists.written = true;
   }
 
   /** Sort every InstancedLod due for `camera` on `renderer`: before a level mesh draws for it. */
   drawFor(renderer: Renderer, camera: Camera): void {
-    this.sorter.run(renderer, camera);
+    this.registration().sorter.run(renderer, camera);
   }
 
   /** Give back the lists of every camera other than `camera` that `rendering` says stopped drawing, as a clone made for one frame does. */
@@ -146,12 +161,19 @@ export class InstanceLists {
 
   dispose(): void {
     for (const camera of [...this.cameras.keys()]) this.forget(camera);
-    this.sorter.unregister(this.row);
+    this.registered?.sorter.unregister(this.registered.row);
   }
 
   private forget(camera: Camera): void {
     this.cameras.delete(camera);
-    this.sorter.release(camera, this.row);
+    const { sorter, row } = this.registration();
+    sorter.release(camera, row);
+  }
+
+  /** The sorts and row it is drawn with: only a sort makes cameras' lists. */
+  private registration(): { readonly sorter: Sorter; readonly row: number } {
+    if (!this.registered) throw new Error("InstancedLod: its lists are used before its first sort");
+    return this.registered;
   }
 }
 

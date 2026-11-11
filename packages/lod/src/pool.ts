@@ -12,7 +12,10 @@ export interface LodPoolOptions {
    * `maxInstanceCount` instead (see `InstancedLodOptions`).
    */
   maxInstanceCount?: number;
-  /** The most chunks its InstancedLods hold at once: 256 by default. `addChunk` past it throws, naming it. */
+  /**
+   * The most chunks its InstancedLods hold at once: 256 by default. Chunks past it are reported as the render that
+   * takes them in draws (see `InstancedLod.error`), naming it.
+   */
   maxChunkCount?: number;
 }
 
@@ -32,10 +35,16 @@ export class LodPool {
   readonly sorter: Sorter;
   /** What draws its InstancedLods, once one has drawn (see `bind`). */
   private bound: Renderer | null = null;
+  private isDisposed = false;
 
   constructor({ maxInstanceCount = DEFAULT_INSTANCES, maxChunkCount = DEFAULT_CHUNKS }: LodPoolOptions = {}) {
     this.pages = new InstancePages(maxInstanceCount, maxChunkCount);
     this.sorter = new Sorter(this.pages);
+  }
+
+  /** Whether it was disposed: then no InstancedLod can be made with it. */
+  get disposed(): boolean {
+    return this.isDisposed;
   }
 
   /** `renderer` draws one of its InstancedLods: the first is checked to fit the pool, and no other may. */
@@ -54,6 +63,7 @@ export class LodPool {
    * InstancedLod can be made with it.
    */
   dispose(): void {
+    this.isDisposed = true;
     this.sorter.dispose();
     this.pages.dispose();
   }

@@ -154,6 +154,7 @@ export class Sorter {
     if (scaled && scaled.array.length > 0) releaseArrays([scaled]);
   }
 
+  /** Release its buffers; an InstancedLod disposed before, freeing its row later, touches only CPU arrays. */
   dispose(): void {
     this.disposed = true;
     for (const buffers of this.cameras.values()) disposeBuffers(buffers);

@@ -30,7 +30,8 @@ import { bakeImpostor } from "../../../src/impostor/bake/index.js";
 import { texelPixels, type Impostor } from "../../../src/impostor/impostor.js";
 import { frameDirection } from "../../../src/impostor/octahedral.js";
 import { ImpostorMesh } from "../../../src/impostor/mesh/index.js";
-import { GPU_TIMEOUT, bakeRenderer, eventually, pool, render, renderer } from "../../renderer.js";
+import { GPU_TIMEOUT, bakeRenderer, pool, render, renderer } from "../../renderer.js";
+import { disposeCopies } from "../../../src/dispose.js";
 import { oneChunk } from "../../instances.js";
 
 const bake = (object: Object3D, layout: Impostor["layout"] = "full") => bakeImpostor(object, bakeRenderer, { layout, resolution: 32 });
@@ -303,7 +304,7 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
     expect(differing / left.length).toBeLessThan(0.01);
   });
 
-  it("bakes copies of Lods and InstancedLods outside the app's LodPool, and frees them and their LodPools", async () => {
+  it("bakes copies of Lods and InstancedLods outside the app's LodPool, and frees them and their LodPools", { timeout: GPU_TIMEOUT }, async () => {
     let held = 0;
     const hold = () => {
       held++;
@@ -311,22 +312,23 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
     };
     const material = new MeshStandardMaterial();
     const lod = new Lod([{ object: new Mesh(new BoxGeometry(), material), hold }]);
-    const field = oneChunk([{ object: new Mesh(new BoxGeometry(), material) }], [new Matrix4().makeTranslation(2, 0, 0)]);
+    const field = () => oneChunk([{ object: new Mesh(new BoxGeometry(), material) }], [new Matrix4().makeTranslation(2, 0, 0)]);
+    // An InstancedLod beside a Lod, as a Lod's level, and under a Group that is one.
+    const subjects = [new Group().add(lod, field()), new Lod([{ object: field() }]), new Lod([{ object: new Group().add(field()) }])];
     const pools = vi.spyOn(LodPool.prototype, "dispose");
     const slots = vi.spyOn(pool.pages, "add");
     const rows = vi.spyOn(pool.sorter, "register");
     try {
-      await bake(new Group().add(lod, field));
+      for (const subject of subjects) await bake(subject);
       expect(slots).not.toHaveBeenCalled();
       expect(rows).not.toHaveBeenCalled();
       expect(held).toBe(1);
-      await eventually(() => expect(pools).toHaveBeenCalledTimes(1));
+      expect(pools).toHaveBeenCalledTimes(subjects.length);
     } finally {
       pools.mockRestore();
       slots.mockRestore();
       rows.mockRestore();
-      lod.dispose();
-      field.dispose();
+      for (const subject of subjects) disposeCopies(subject);
     }
     expect(held).toBe(0);
   });

@@ -17,15 +17,15 @@ import { cullIn, emptyCull, type CullDistance } from "./cull.js";
 import { MeshesByLevel, type Drawing } from "./levels.js";
 import { InstanceLists, frustumIn, listedOf } from "./lists.js";
 import { localCamera, shownBy, walk, type LocalCamera } from "./camera.js";
-import { drawMatrices } from "./meshes.js";
+import { drawInstances } from "./meshes.js";
 import { raycastInstances } from "./raycast.js";
 import { InstanceShape } from "./shape.js";
 import { MAX_SURVIVOR_SCALE, instanceLevel } from "./measure.js";
 
 /** The meshes drawing an InstancedLod's level, which its sorts show: what a bake draws of it is level 0's. */
 export const LEVEL_MESHES = Symbol("levelMeshes");
-/** What settles once a disposed InstancedLod has freed what it made, its row and lists in its LodPool among it. */
-export const FREED = Symbol("freed");
+/** Put an InstancedLod no render has updated in another LodPool, as a bake does with its copy (see `bakeCopy`). */
+export const REPOOL = Symbol("repool");
 
 /** How an InstancedLod is made. */
 export interface InstancedLodOptions extends LodOptions {
@@ -83,8 +83,6 @@ export class InstancedLod extends Object3D<LodEventMap> {
   /** What it is made of for its levels and sizes, which a copy makes anew. */
   private built: Built;
   private disposed = false;
-  /** What settles once it freed what it made, after `dispose`. */
-  private freed: Promise<void> | null = null;
   /** Around every instance, survivors grown: what every level mesh is culled and boxed by. */
   private readonly bounds = { sphere: new Sphere(), box: new Box3() };
   /** What `cullIn` writes cullDistance into, in this InstancedLod's space. */
@@ -96,10 +94,11 @@ export class InstancedLod extends Object3D<LodEventMap> {
    */
   constructor(
     levels: readonly LodLevel[],
-    private readonly pool: LodPool,
+    private pool: LodPool,
     options: InstancedLodOptions = {},
   ) {
     super();
+    if (pool.disposed) throw new Error("LodPool: disposed");
     const maxInstanceCount = options.maxInstanceCount ?? DEFAULT_INSTANCES;
     if (!Number.isInteger(maxInstanceCount) || maxInstanceCount < 1)
       throw new RangeError(`InstancedLod: maxInstanceCount must be a positive integer, got ${maxInstanceCount}`);
@@ -131,15 +130,13 @@ export class InstancedLod extends Object3D<LodEventMap> {
   /** What this InstancedLod is made of for `inputs` and `maxInstanceCount`: its levels, their meshes and their loading. */
   private init(inputs: readonly LodLevel[], maxInstanceCount: number): Built {
     const shape = new InstanceShape(inputs);
-    const { pages, sorter } = this.pool;
-    const lists = new InstanceLists(sorter, listedOf(inputs), maxInstanceCount);
+    const lists = new InstanceLists(listedOf(inputs), maxInstanceCount);
     const chunks = new ChunkSet(
-      pages,
-      lists.row,
       this.bounds,
       () => shape.originReach,
       (chunk, index, camera) => this.levelAt(chunk, index, camera),
     );
+    const { pages } = this.pool;
     const drawn = { matrices: pages.matrices, colors: pages.colors };
     const drawing = { shape, lists, drawn };
     this.inputs = inputs;
@@ -166,7 +163,7 @@ export class InstancedLod extends Object3D<LodEventMap> {
       async () => {
         const { renderer } = this.built.loads;
         if (!renderer) return false;
-        const instances = await pages.status(renderer, chunks.slots());
+        const instances = await this.pool.pages.status(renderer, chunks.slots());
         if (instances !== null && instances > maxInstanceCount)
           throw new Error(`InstancedLod: its chunks hold ${instances} instances, more than its lists hold: raise its maxInstanceCount (${maxInstanceCount})`);
         return instances !== null;
@@ -206,9 +203,12 @@ export class InstancedLod extends Object3D<LodEventMap> {
     return this.built.meshes.of(level);
   }
 
-  [FREED](): Promise<void> {
-    if (!this.freed) throw new Error("InstancedLod: it is not disposed");
-    return this.freed;
+  [REPOOL](pool: LodPool): void {
+    if (this.built.loads.renderer) throw new Error("InstancedLod: a render has updated it: it draws with its LodPool");
+    this.pool = pool;
+    this.built.drawn.matrices = pool.pages.matrices;
+    this.built.drawn.colors = pool.pages.colors;
+    drawInstances(this.built.meshes.all(), this.built.drawn);
   }
 
   [WIND](padding: number, slope: number, baseY: number): void {
@@ -237,10 +237,11 @@ export class InstancedLod extends Object3D<LodEventMap> {
   private sort(renderer: Renderer, camera: Camera, shadow: boolean): void {
     const { loads, shape, lists, chunks, drawn, encoded, meshes } = this.built;
     this.pool.bind(renderer);
+    const { pages, sorter } = this.pool;
     const { levels, eye, scale, ortho } = this.localCamera(camera, renderer, shadow);
     if (chunks.refresh()) this.measureBounds();
     // The pages change before any sorts with them.
-    const { pages } = this.pool;
+    chunks.take(pages, lists.register(sorter));
     pages.prepare(renderer);
     const survivors = this.cullDistance?.scaleSurvivors ?? false;
     if (survivors !== (drawn.matrices !== pages.matrices)) this.scaleSurvivors(survivors);
@@ -283,7 +284,7 @@ export class InstancedLod extends Object3D<LodEventMap> {
   private scaleSurvivors(survivors: boolean): void {
     const { pages, sorter } = this.pool;
     this.built.drawn.matrices = survivors ? sorter.scaledMatrices : pages.matrices;
-    drawMatrices(this.built.meshes.all(), this.built.drawn);
+    drawInstances(this.built.meshes.all(), this.built.drawn);
     this.measureBounds();
   }
 
@@ -344,7 +345,7 @@ export class InstancedLod extends Object3D<LodEventMap> {
     this.disposed = true;
     super.dispose();
     this.built.chunks.dispose();
-    this.freed = this.built.loads.dispose(() => {
+    this.built.loads.dispose(() => {
       this.built.meshes.dispose();
       this.built.lists.dispose();
       for (const { object } of this.levels) if (object) disposeCopies(object);

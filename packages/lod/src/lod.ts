@@ -279,7 +279,7 @@ export class Lod extends Object3D<LodEventMap> {
     if (this.disposed) return;
     this.disposed = true;
     super.dispose();
-    void this.loads.dispose(() => {
+    this.loads.dispose(() => {
       for (const { object } of this.levels) if (object) disposeCopies(object);
     });
   }

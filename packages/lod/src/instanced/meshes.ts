@@ -95,9 +95,16 @@ export function freeMesh(mesh: Mesh): void {
   mesh.geometry.dispose();
 }
 
-/** Point every mesh of `meshes` at `instances.matrices`, which changed: survivors scale, or no longer do. */
-export function drawMatrices(meshes: readonly Mesh[], instances: DrawnInstances): void {
-  for (const mesh of meshes) if (isImpostorMesh(mesh)) mesh.instanceMatrix = instances.matrices;
+/**
+ * Point the impostor cards of `meshes` at `instances`, which changed: survivors scale or no longer do, or the InstancedLod
+ * moved to another pool. A plain mesh reads them through its fade source (see fade.ts).
+ */
+export function drawInstances(meshes: readonly Mesh[], instances: DrawnInstances): void {
+  for (const mesh of meshes) {
+    if (!isImpostorMesh(mesh)) continue;
+    mesh.instanceMatrix = instances.matrices;
+    mesh.instanceColor = instances.colors;
+  }
 }
 
 /**
