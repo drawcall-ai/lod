@@ -139,7 +139,7 @@ function pixels(texture: Texture): Mip & { rowsUp: boolean } {
   const source = drawable(image);
   if (!source) throw new Error(`cannot read the image of texture "${texture.name}" on the CPU`);
   const { width, height } = source;
-  // Node has no 2D canvas, so @drawcall/webgpu reads its ImageBitmaps; they ignore flipY on upload.
+  // ImageBitmaps are read with @drawcall/webgpu, in browsers as in Node, which has no 2D canvas; they ignore flipY on upload.
   if (typeof ImageBitmap !== "undefined" && source instanceof ImageBitmap) return { data: readImageBitmap(source).data, width, height, rowsUp: true };
   const context = new OffscreenCanvas(width, height).getContext("2d", { willReadFrequently: true });
   if (!context) throw new Error("no 2D canvas to read textures with");

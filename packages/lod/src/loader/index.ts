@@ -67,7 +67,7 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
    * Describes the ladder from its source, which the first level loaded then takes. Empty levels load with it, as does
    * the source when it is the only drawable; other levels load when a camera needs them, including a coarse stand-in
    * while its first detail arrives, and each derived level is built when first loaded. A level whose default threshold
-   * is measured from it is built with the ladder.
+   * is measured from it is built with the ladder, and in Node every level is.
    *
    * What the levels load is freed when the last Lod holding them is disposed (see `LodLevel.hold`), which spends them:
    * a Lod made from them later throws, so call loadAsync again. Levels no Lod ever holds are never freed: they are
@@ -79,7 +79,8 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
     const context = new LodLoadContext(() => this.loadAsset(url), this.options.onLevel);
     this.manager.itemStart(url);
     try {
-      // A simplified or baked level's default threshold is measured from its deviation, so it is built with the ladder.
+      // Built with the ladder: every level in Node; elsewhere a simplified or baked level without maxPixels, whose
+      // default threshold is measured from its deviation.
       const eager = requests.flatMap((level, index) =>
         level.type !== "empty" && (this.buildsAll || (level.type !== "impostor" && level.maxPixels === undefined)) ? [index + 1] : [],
       );
@@ -212,7 +213,8 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
 
   /**
    * Free the renderer this loader made for its bakes, resolving once freed; a bake under way fails. Levels it loaded
-   * stay as they are, and a later bake makes a new renderer.
+   * stay as they are, and a later bake makes a new renderer. In Node each `loadAsync` frees what it made to load and
+   * bake with, the scenes of its GLTSLoader included, before it resolves, so there this frees nothing.
    */
   async dispose(): Promise<void> {
     const renderer = this.renderer;

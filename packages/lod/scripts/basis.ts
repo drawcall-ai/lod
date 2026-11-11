@@ -26,7 +26,7 @@ const NOTICE = `// Basis Universal, https://github.com/BinomialLLC/basis_univers
 const deflate = (bytes: Uint8Array) => Buffer.from(deflateSync(bytes, { level: 9 })).toString("base64");
 const inline = async (path: string) => deflate(await readFile(path));
 
-// The encoder imports from a data: URL, in browsers and in Node, as a `vite build` warmup runs it. Emscripten's Node
+// The encoder imports from a data: URL, in browsers and in Node, where the vitecache plugin's loads run it. Emscripten's Node
 // path needs a file: URL for createRequire, so the module takes its browser path everywhere: given its binary, it
 // needs nothing else.
 const NODE = `var ENVIRONMENT_IS_NODE=typeof process=="object"&&process.versions?.node&&process.type!="renderer";`;
