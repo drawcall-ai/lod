@@ -38,22 +38,19 @@ const sessions = new AsyncLocalStorage<Session>();
 export class CachedLodLoader extends BrowserCachedLodLoader {
   private readonly site: { root: string; publicDir: string };
 
-  constructor(
-    manager?: LoadingManager,
-    private readonly settings: CachedLodLoaderOptions = {},
-  ) {
+  constructor(manager?: LoadingManager, options: CachedLodLoaderOptions = {}) {
     if (manager)
       throw new Error(
         "CachedLodLoader: in Node, construct it without a manager: it serves the app's public files and loads .glts sources itself, which is how it records what each level was built from",
       );
-    super(undefined, settings);
-    this.site = site(settings.root);
+    super(undefined, options);
+    this.site = site(options.root);
   }
 
   override loadAsync(request: LodRequest): Promise<LodLevel[]> {
     const { root, publicDir } = this.site;
     return session({ root, publicDir, read: new Set() }, async () => {
-      const loader = new SessionLoader(root, this.settings);
+      const loader = new SessionLoader(root, this.options);
       loader.setPath(this.path).setResourcePath(this.resourcePath).setCrossOrigin(this.crossOrigin);
       try {
         return await loader.loadAsync(request);

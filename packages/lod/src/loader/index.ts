@@ -49,7 +49,7 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
 
   constructor(
     manager?: LoadingManager,
-    private readonly options: CachedLodLoaderOptions = {},
+    protected readonly options: CachedLodLoaderOptions = {},
   ) {
     super(manager);
   }
