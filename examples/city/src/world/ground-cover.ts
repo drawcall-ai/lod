@@ -1,10 +1,20 @@
 import * as THREE from "three/webgpu";
 import { cameraPosition, distance, float, positionWorld, vec4 } from "three/tsl";
-import { CachedLodLoader, ImpostorMesh, Lod, type CachedLodLoaderOptions, type LodGpu, type LodLevel, type Wind } from "@drawcall/lod";
+import {
+  CachedLodLoader,
+  foliageLevels,
+  foliageModel,
+  ImpostorMesh,
+  Lod,
+  type CachedLodLoaderOptions,
+  type LodGpu,
+  type LodLevel,
+  type Wind,
+} from "@drawcall/lod";
 import { sourceBox } from "./bounds.ts";
 import { planter } from "./planting.ts";
 import { arriving, manager } from "../loading.ts";
-import { foliageLevels, foliageModel, MODEL_FOLIAGE } from "../../public/shared/foliage.ts";
+import { MODEL_FOLIAGE } from "./trees.ts";
 import type { Materials } from "../../public/shared/materials.ts";
 import type { Zones } from "./zones.ts";
 import { groundShading, type Ground } from "../render/ground/shading.ts";

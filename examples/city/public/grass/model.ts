@@ -1,6 +1,6 @@
 import * as THREE from "three/webgpu";
 import { attribute, dot, fract, mix, sin, smoothstep, step, vec2, vec3, vec4 } from "three/tsl";
-import { Foliage, foliage } from "../shared/foliage.ts";
+import { Foliage, foliage } from "@drawcall/lod";
 import { baseColor } from "../shared/materials.ts";
 import { Random } from "../shared/random.ts";
 

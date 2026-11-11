@@ -18,3 +18,4 @@ export { type ImpostorMeshOptions, ImpostorMesh } from "./impostor/mesh/index.js
 export { cosine } from "./impostor/mesh/surface.js";
 export { type Impostor, type ImpostorLayout, type ImpostorMap } from "./impostor/impostor.js";
 export { encodeImpostorAsync, decodeImpostorAsync } from "./impostor/codec.js";
+export { type FoliageOptions, Foliage, foliage, foliageModel, foliageLevels } from "./foliage.js";

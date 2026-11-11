@@ -1,5 +1,4 @@
-import { CachedLodLoader, Lod, type LodLevel } from "@drawcall/lod";
-import { foliageLevels } from "../../../public/shared/foliage.ts";
+import { CachedLodLoader, foliageLevels, Lod, type LodLevel } from "@drawcall/lod";
 import { LEAF_FOLIAGE } from "../../../public/corn/leaf.ts";
 import { VARIANTS } from "../../../public/corn/layout.ts";
 import { arriving, manager } from "../../loading.ts";

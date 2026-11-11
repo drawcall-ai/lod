@@ -9,7 +9,8 @@ import { houseInterior } from "../../public/house/interior.ts";
 import { heights, houseParams, HOUSE_VARIANTS } from "../../public/house/params.ts";
 import { facades } from "../../public/house/facades.ts";
 import { ceiling } from "../../public/house/furnishings.ts";
-import { foliageModel, MODEL_FOLIAGE } from "../../public/shared/foliage.ts";
+import { foliageModel } from "@drawcall/lod";
+import { MODEL_FOLIAGE } from "../world/trees.ts";
 import { number } from "../../public/shared/parameters.ts";
 import { terrain } from "../render/ground/material.ts";
 
