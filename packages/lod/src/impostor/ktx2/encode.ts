@@ -1,4 +1,5 @@
 import { read, write } from "ktx-parse";
+import { inNode } from "../../node-process.js";
 
 /** One map's RGBA8 mip levels, `size >> level` square. */
 export interface Layer {
@@ -79,14 +80,8 @@ function strips(data: Uint8Array, size: number, srgb: boolean, parts: number): J
   return jobs;
 }
 
-/**
- * Whether jobs encode in this thread: Node does, as the vitecache plugin builds levels in it, since its Worker runs
- * neither module workers nor, under Vitest, this package's TypeScript.
- */
-const inline = typeof process !== "undefined" && process.versions?.node !== undefined;
-
 async function encodeJob(job: Job): Promise<Uint8Array> {
-  if (inline) return (await import("./uastc.js")).encode(job);
+  if (inNode) return (await import("./uastc.js")).encode(job);
   return new Promise((resolve, reject) => {
     queue.push({ job, resolve, reject });
     queue.sort((a, b) => b.job.width * b.job.height - a.job.width * a.job.height);
