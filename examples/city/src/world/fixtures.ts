@@ -63,7 +63,7 @@ export async function fixtures(plan: Plan, gpu: LodGpu): Promise<InstancedLod[]>
   return Promise.all(
     [...plan.fixtures].map(async ([name, spots]) => {
       const load = FIXTURES[name];
-      const r = seedrandom(String(name.length));
+      const r = seedrandom(name);
       const paint: Tint = (_, __, color) => {
         const picked = paints[Math.floor(r() * paints.length)];
         if (!picked) throw new Error("no shed paint picked");

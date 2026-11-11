@@ -9,8 +9,8 @@ import { STREET_WIDTH, type Town } from "./town.ts";
 export const HEDGE = 2;
 
 /** The fixtures a garden holds, each named as its asset folder in public/ (see fixtures.ts). */
-export const FIXTURES = ["letterbox", "patio-set", "shed", "greenhouse", "washing-line", "swing"] as const;
-export type Fixture = (typeof FIXTURES)[number];
+export const FIXTURE_NAMES = ["letterbox", "patio-set", "shed", "greenhouse", "washing-line", "swing"] as const;
+export type Fixture = (typeof FIXTURE_NAMES)[number];
 
 /** A lot's position along its street: `at(t, offset)` maps along-street and out-from-the-centre-line metres to x/z. */
 interface Lot {

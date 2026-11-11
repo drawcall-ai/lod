@@ -7,7 +7,7 @@ import { Terrain } from "../terrain.ts";
 import { HOUSE_VARIANTS } from "../../../public/house/params.ts";
 import { type Plan, type Spot, type Rect, type Road } from "../plan.ts";
 import { STREET_NAMES, type StreetName } from "../town.ts";
-import { FIXTURES, type Fixture } from "../gardens.ts";
+import { FIXTURE_NAMES, type Fixture } from "../gardens.ts";
 
 type Files = Record<string, Uint8Array>;
 
@@ -115,7 +115,7 @@ function road(value: unknown): Road {
   };
 }
 function fixture(name: string): Fixture {
-  const known = FIXTURES.find((fixture) => fixture === name);
+  const known = FIXTURE_NAMES.find((fixture) => fixture === name);
   if (!known) throw new Error(`Invalid plan garden fixture ${name}`);
   return known;
 }
