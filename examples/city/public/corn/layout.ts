@@ -1,5 +1,5 @@
 import * as THREE from "three/webgpu";
-import { Random } from "../shared/random.ts";
+import seedrandom from "seedrandom";
 
 /** Edge of a corn block (m): 8 rows 0.75 m apart. */
 export const BLOCK = 6;
@@ -29,18 +29,18 @@ export interface Plant {
  * least of all a bake's parallel rays, looks down long clean gaps between the plants.
  */
 export function layout(design: number): Plant[] {
-  const r = new Random(design + 11);
+  const r = seedrandom(String(design + 11));
   const plants: Plant[] = [];
   const sow = (x: number, z: number) =>
-    plants.push({ variant: r.int(0, VARIANTS - 1), x, z: z + r.range(-0.04, 0.04), yaw: r.range(0, 2 * Math.PI), lean: r.range(-0.07, 0.07) });
+    plants.push({ variant: Math.floor(VARIANTS * r()), x, z: z + (-0.04 + 0.08 * r()), yaw: 2 * Math.PI * r(), lean: -0.07 + 0.14 * r() });
   for (let row = 0; row < ROWS; row++) {
     const line = -BLOCK / 2 + (row + 0.5) * (BLOCK / ROWS);
-    const bends = [r.range(-0.04, 0.04), r.range(-0.02, 0.02), r.range(-0.012, 0.012)];
+    const bends = [-0.04 + 0.08 * r(), -0.02 + 0.04 * r(), -0.012 + 0.024 * r()];
     const wander = (x: number) => bends.reduce((sum, a, k) => sum + a * Math.sin(((k + 1) * Math.PI * (x + BLOCK / 2)) / BLOCK), 0);
-    for (let x = -BLOCK / 2 + r.range(0, SPACING); x < BLOCK / 2; x += SPACING * r.range(0.65, 1.35)) {
-      if (r.chance(0.04)) continue;
+    for (let x = -BLOCK / 2 + SPACING * r(); x < BLOCK / 2; x += SPACING * (0.65 + 0.7 * r())) {
+      if (r() < 0.04) continue;
       sow(x, line + wander(x));
-      if (r.chance(0.03)) sow(x + r.range(0.04, 0.07), line + wander(x));
+      if (r() < 0.03) sow(x + (0.04 + 0.03 * r()), line + wander(x));
     }
   }
   return plants;

@@ -1,6 +1,6 @@
 import * as THREE from "three/webgpu";
 import type { HouseParams } from "../../public/house/params.ts";
-import type { Random } from "../../public/shared/random.ts";
+import type seedrandom from "seedrandom";
 import { footing, inRect, PAVEMENT, spot, type Rect, type Road, type Spot } from "./plan.ts";
 import { fence, frontHedge, garden } from "./gardens.ts";
 import type { Terrain } from "./terrain.ts";
@@ -39,7 +39,7 @@ export interface Town {
  * behind a front garden with a picket fence; lamps, hydrants, benches, bins, signs and
  * parked cars line the streets.
  */
-export function town(centre: { x: number; z: number; angle: number; radius: number }, variants: HouseParams[], terrain: Terrain, r: Random): Town {
+export function town(centre: { x: number; z: number; angle: number; radius: number }, variants: HouseParams[], terrain: Terrain, r: seedrandom.PRNG): Town {
   const u = new THREE.Vector2(Math.cos(centre.angle), Math.sin(centre.angle));
   const v = new THREE.Vector2(-u.y, u.x);
   const node = (i: number, j: number) => new THREE.Vector2(centre.x, centre.z).addScaledVector(u, i * BLOCK.u).addScaledVector(v, j * BLOCK.v);
@@ -54,7 +54,7 @@ export function town(centre: { x: number; z: number; angle: number; radius: numb
     if (dj === 0 && j === 0) return;
     const a = node(i, j);
     const b = node(i + di, j + dj);
-    if (reach(a.clone().add(b).multiplyScalar(0.5)) > CORE && r.chance(0.18)) return;
+    if (reach(a.clone().add(b).multiplyScalar(0.5)) > CORE && r() < 0.18) return;
     segments.push({ a, b, core: reach(a) < CORE && reach(b) < CORE });
     for (const key of [`${i},${j}`, `${i + di},${j + dj}`]) degree.set(key, (degree.get(key) ?? 0) + 1);
   };
@@ -107,21 +107,21 @@ export function town(centre: { x: number; z: number; angle: number; radius: numb
         const p = at(t, kerb + 0.4);
         add("street_lamp_01", spot(terrain, p.x, p.y, Math.atan2(out.x, out.y) + Math.PI / 2));
       }
-      if (r.chance(0.4)) place(add, "fire_hydrant", at(r.range(10, length - 10), kerb + 0.5), Math.atan2(-out.x, -out.y), terrain);
-      if (s.core && r.chance(0.5)) {
-        const t = r.range(12, length - 14);
+      if (r() < 0.4) place(add, "fire_hydrant", at(10 + (length - 10 - 10) * r(), kerb + 0.5), Math.atan2(-out.x, -out.y), terrain);
+      if (s.core && r() < 0.5) {
+        const t = 12 + (length - 14 - 12) * r();
         place(add, "painted_wooden_bench", at(t, kerb + (s.core ? 0.9 : 1.6)), Math.atan2(-out.x, -out.y), terrain);
-        place(add, "metal_trash_can", at(t + 1.6, kerb + 0.8), r.range(0, 6.3), terrain);
+        place(add, "metal_trash_can", at(t + 1.6, kerb + 0.8), 6.3 * r(), terrain);
       }
-      if (r.chance(0.15)) place(add, "utility_box_01", at(r.range(8, length - 8), kerb + 0.6), Math.atan2(-out.x, -out.y), terrain);
+      if (r() < 0.15) place(add, "utility_box_01", at(8 + (length - 8 - 8) * r(), kerb + 0.6), Math.atan2(-out.x, -out.y), terrain);
       // lots: a house behind a front garden, fenced along the pavement
       const frontage = s.core ? 12 : 18;
-      for (let t = STREET_WIDTH + 4 + frontage / 2; t < length - STREET_WIDTH - 4 - frontage / 2; t += frontage + r.range(0, 4)) {
-        if (!s.core && r.chance(Math.min(0.85, (reach(at(t, 0)) - CORE) / (centre.radius * 1.4)))) continue;
-        const variant = r.int(0, variants.length - 1);
+      for (let t = STREET_WIDTH + 4 + frontage / 2; t < length - STREET_WIDTH - 4 - frontage / 2; t += frontage + 4 * r()) {
+        if (!s.core && r() < Math.min(0.85, (reach(at(t, 0)) - CORE) / (centre.radius * 1.4))) continue;
+        const variant = Math.floor(variants.length * r());
         const p = variants[variant];
         if (!p) throw new Error(`no house variant ${variant}`);
-        const setback = s.core ? r.range(3, 4.5) : r.range(5, 8);
+        const setback = s.core ? 3 + 1.5 * r() : 5 + 3 * r();
         const c = at(t, kerb + setback + p.depth / 2);
         const radius = Math.hypot(p.width, p.depth) / 2 + 0.8;
         if (!free(c.x, c.y, radius)) continue;
@@ -129,7 +129,7 @@ export function town(centre: { x: number; z: number; angle: number; radius: numb
         const angle = Math.atan2(-out.x, -out.y);
         town.houses.push({ variant, spot: { ...spot(terrain, c.x, c.y, angle), y: footing(terrain, c.x, c.y, radius) } });
         // along the pavement: a picket fence, a clipped hedge, or open lawn
-        const boundary = r.next();
+        const boundary = r();
         if (boundary < 0.45) fence(town.fences, terrain, at, along, t, frontage, kerb + 0.5, side);
         else if (boundary < 0.85) frontHedge(town.hedges, terrain, at, along, t, frontage, kerb + 0.6);
         garden(town, add, terrain, r, { at, along, side, t, frontage, kerb, setback, house: p, angle, core: s.core });
@@ -145,7 +145,7 @@ export function town(centre: { x: number; z: number; angle: number; radius: numb
       .addScaledVector(u, STREET_WIDTH / 2 + 1)
       .addScaledVector(v, STREET_WIDTH / 2 + 1);
     const name = SIGN_NAMES[names++ % SIGN_NAMES.length] ?? SIGN_NAMES[0];
-    town.signs.set(name, [...(town.signs.get(name) ?? []), spot(terrain, p.x, p.y, centre.angle + r.range(-0.1, 0.1))]);
+    town.signs.set(name, [...(town.signs.get(name) ?? []), spot(terrain, p.x, p.y, centre.angle + (-0.1 + 0.2 * r()))]);
   }
   plazaFurniture(plaza, terrain, add);
   return town;

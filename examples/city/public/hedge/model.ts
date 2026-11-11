@@ -1,6 +1,6 @@
 import { type Materials, type Surface, surface } from "../shared/materials.ts";
 import * as THREE from "three/webgpu";
-import { Random } from "../shared/random.ts";
+import seedrandom from "seedrandom";
 
 /**
  * A clipped hedge, `length` metres along +x from the origin, about a metre high and 0.6 m
@@ -8,8 +8,8 @@ import { Random } from "../shared/random.ts";
  * clipped privet does, under a leafy texture darkened toward the base.
  */
 export function hedge(materials: Materials, length: number, seed: number): THREE.Mesh {
-  const r = new Random(seed);
-  const height = r.range(0.95, 1.15);
+  const r = seedrandom(String(seed));
+  const height = 0.95 + 0.2 * r();
   const depth = 0.6;
   const g = new THREE.BoxGeometry(length, height, depth, Math.ceil(length * 8), 8, 5);
   g.translate(length / 2, height / 2, 0);
@@ -19,7 +19,7 @@ export function hedge(materials: Materials, length: number, seed: number): THREE
   const colors = new Float32Array(position.count * 3);
   const p = new THREE.Vector3();
   const n = new THREE.Vector3();
-  const phase = r.range(0, 100);
+  const phase = 100 * r();
   for (let i = 0; i < position.count; i++) {
     p.fromBufferAttribute(position, i);
     n.fromBufferAttribute(normal, i);

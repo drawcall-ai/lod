@@ -1,6 +1,6 @@
 import { HERO_VARIANT, BLOCK, plantTurn, type Plant } from "../../../public/corn/layout.ts";
 import * as THREE from "three/webgpu";
-import { Random } from "../../../public/shared/random.ts";
+import seedrandom from "seedrandom";
 import type { InstancedLod } from "@drawcall/lod";
 import type { NearTile, TileChunk } from "../near-tiles.ts";
 import { axes, type Field, type Plan } from "../plan.ts";
@@ -30,7 +30,7 @@ export function cut(plan: Plan, designs: number, top: number): Tile[] {
   const tiles: Tile[] = [];
   for (const [f, field] of plan.fields.entries()) {
     const { x: ax, z: az } = axes(field.angle);
-    const r = new Random(100 + f);
+    const r = seedrandom(String(100 + f));
     const across = (2 * field.halfX) / BLOCK;
     const along = (2 * field.halfZ) / BLOCK;
     for (let j = 0; j < along; j++)
@@ -39,7 +39,7 @@ export function cut(plan: Plan, designs: number, top: number): Tile[] {
         const lz = -field.halfZ + (j + 0.5) * BLOCK;
         const cx = field.x + ax.x * lx + az.x * lz;
         const cz = field.z + ax.y * lx + az.y * lz;
-        const flip = r.chance(0.5);
+        const flip = r() < 0.5;
         const s = flip ? -1 : 1;
         const slope = plan.terrain.slope(cx, cz);
         const x = new THREE.Vector3(s * ax.x, s * (slope.x * ax.x + slope.y * ax.y), s * ax.y);
@@ -54,7 +54,7 @@ export function cut(plan: Plan, designs: number, top: number): Tile[] {
         if (j === 0) wall("z", -1);
         if (j + 1 >= along) wall("z", 1);
         tiles.push({
-          design: r.int(0, designs - 1),
+          design: Math.floor(designs * r()),
           matrix,
           centre,
           field,

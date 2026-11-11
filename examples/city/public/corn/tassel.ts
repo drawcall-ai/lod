@@ -1,11 +1,11 @@
 import type { Materials } from "../shared/materials.ts";
 import * as THREE from "three/webgpu";
 import { type Parts, tint, tube } from "../shared/geometry.ts";
-import type { Random } from "../shared/random.ts";
+import type seedrandom from "seedrandom";
 import { type Detail, tissue, tubeSegments } from "./tissue.ts";
 
 /** Branched tassel: a central spike plus drooping side branches, all set with paired spikelets. */
-export function tassel(materials: Materials, parts: Parts, top: THREE.Vector3, dir: THREE.Vector3, length: number, r: Random, detail: Detail) {
+export function tassel(materials: Materials, parts: Parts, top: THREE.Vector3, dir: THREE.Vector3, length: number, r: seedrandom.PRNG, detail: Detail) {
   // spikelets 9 mm apart, or for the field's plants three times as far and larger
   const pitch = detail === "fine" ? 0.009 : 0.027;
   const straw = new THREE.Color("#c4ae6a");
@@ -15,7 +15,7 @@ export function tassel(materials: Materials, parts: Parts, top: THREE.Vector3, d
     top
       .clone()
       .addScaledVector(dir, length)
-      .add(new THREE.Vector3(r.range(-0.04, 0.04), 0, r.range(-0.04, 0.04))),
+      .add(new THREE.Vector3(-0.04 + 0.08 * r(), 0, -0.04 + 0.08 * r())),
   );
   parts.add(
     tissue(materials),
@@ -27,14 +27,14 @@ export function tassel(materials: Materials, parts: Parts, top: THREE.Vector3, d
     ),
   );
   spikelets(materials, parts, spike, 0.15, r, pitch);
-  const branches = r.int(10, 16);
+  const branches = 10 + Math.floor(7 * r());
   for (let i = 0; i < branches; i++) {
     // side branches leave the lower third of the central spike
-    const at = top.clone().addScaledVector(dir, length * r.range(0.05, 0.35));
-    const a = r.range(0, Math.PI * 2);
+    const at = top.clone().addScaledVector(dir, length * (0.05 + 0.3 * r()));
+    const a = Math.PI * 2 * r();
     const out = new THREE.Vector3(Math.cos(a), 0, Math.sin(a));
-    const len = r.range(0.15, 0.3);
-    const rise = r.range(0.4, 0.9);
+    const len = 0.15 + 0.15 * r();
+    const rise = 0.4 + 0.5 * r();
     const mid = at
       .clone()
       .addScaledVector(out, len * 0.5 * Math.sin(rise))
@@ -42,7 +42,7 @@ export function tassel(materials: Materials, parts: Parts, top: THREE.Vector3, d
     const end = at
       .clone()
       .addScaledVector(out, len * 0.85)
-      .add(new THREE.Vector3(0, -len * r.range(0.1, 0.5), 0));
+      .add(new THREE.Vector3(0, -len * (0.1 + 0.4 * r()), 0));
     const curve = new THREE.QuadraticBezierCurve3(at, mid, end);
     parts.add(
       tissue(materials),
@@ -58,7 +58,7 @@ export function tassel(materials: Materials, parts: Parts, top: THREE.Vector3, d
 }
 
 /** Small paired spikelets hanging along a tassel branch, `pitch` apart. */
-function spikelets(materials: Materials, parts: Parts, curve: THREE.Curve<THREE.Vector3>, skip: number, r: Random, pitch: number) {
+function spikelets(materials: Materials, parts: Parts, curve: THREE.Curve<THREE.Vector3>, skip: number, r: seedrandom.PRNG, pitch: number) {
   const length = curve.getLength();
   const count = Math.floor((length * (1 - skip)) / pitch);
   const size = pitch / 0.009;
@@ -73,11 +73,11 @@ function spikelets(materials: Materials, parts: Parts, curve: THREE.Curve<THREE.
         new THREE.Vector3(0, 1, 0),
         tangent
           .clone()
-          .add(new THREE.Vector3(s * 0.4, -0.5, r.range(-0.3, 0.3)))
+          .add(new THREE.Vector3(s * 0.4, -0.5, -0.3 + 0.6 * r()))
           .normalize(),
       );
       g.applyQuaternion(q).translate(at.x + s * 0.0015, at.y - 0.002, at.z);
-      const c = new THREE.Color("#cdb873").lerp(new THREE.Color(r.chance(0.3) ? "#9a6a58" : "#9fae62"), r.range(0, 0.45));
+      const c = new THREE.Color("#cdb873").lerp(new THREE.Color(r() < 0.3 ? "#9a6a58" : "#9fae62"), 0.45 * r());
       pieces.push(tint(g, c));
     }
   }

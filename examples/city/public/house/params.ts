@@ -1,4 +1,11 @@
-import { Random } from "../shared/random.ts";
+import seedrandom from "seedrandom";
+
+/** One of `items`, by `r`. */
+export function pick<T>(r: seedrandom.PRNG, items: readonly T[]): T {
+  const item = items[Math.floor(r() * items.length)];
+  if (item === undefined) throw new Error("pick from an empty list");
+  return item;
+}
 
 /**
  * Everything both house levels are built from. The footprint is centred on the origin,
@@ -34,29 +41,29 @@ const kneeWall = 0.35;
 /** House `variant` is 0-based, below `HOUSE_VARIANTS`. */
 export function houseParams(variant: number): HouseParams {
   const seed = variant + 1;
-  const r = new Random(seed);
-  const floors = r.pick([1, 2, 2, 2, 3]);
-  const width = r.range(8, 12.5);
-  const depth = r.range(7, 9.5);
-  const kind = r.pick(["stucco", "stucco", "brick", "whitewash"] as const);
-  const tiles = r.pick(["clay", "clay", "slate"] as const);
+  const r = seedrandom(String(seed));
+  const floors = pick(r, [1, 2, 2, 2, 3]);
+  const width = 8 + 4.5 * r();
+  const depth = 7 + 2.5 * r();
+  const kind = pick(r, ["stucco", "stucco", "brick", "whitewash"] as const);
+  const tiles = pick(r, ["clay", "clay", "slate"] as const);
   return {
     width,
     depth,
     floors,
-    floorHeight: r.range(2.75, 3.0),
-    plinth: r.range(0.35, 0.55),
-    wall: { kind, color: kind === "stucco" ? r.pick(["#f1ece2", "#efe1c4", "#e6d3b3", "#dfe3e0", "#f3dfcf", "#e9e6dc"]) : "#ffffff" },
+    floorHeight: 2.75 + 0.25 * r(),
+    plinth: 0.35 + 0.2 * r(),
+    wall: { kind, color: kind === "stucco" ? pick(r, ["#f1ece2", "#efe1c4", "#e6d3b3", "#dfe3e0", "#f3dfcf", "#e9e6dc"]) : "#ffffff" },
     roof: {
       tiles,
-      color: tiles === "clay" ? r.pick(["#9a4a30", "#8c4431", "#a0593b", "#7a3c2a"]) : r.pick(["#3c4045", "#45484c", "#353a40"]),
-      pitch: r.range(35, 48),
-      overhang: r.range(0.45, 0.65),
+      color: tiles === "clay" ? pick(r, ["#9a4a30", "#8c4431", "#a0593b", "#7a3c2a"]) : pick(r, ["#3c4045", "#45484c", "#353a40"]),
+      pitch: 35 + 13 * r(),
+      overhang: 0.45 + 0.2 * r(),
     },
-    trim: r.pick(["#f4f2ec", "#f4f2ec", "#2f3a35", "#e8e2d4", "#3a3f44"]),
-    door: r.pick(["#5a2a22", "#2e4a3c", "#24334a", "#6b4a2b", "#3a3a3a"]),
-    shutters: kind === "stucco" && r.chance(0.5) ? r.pick(["#4f6b56", "#5b7387", "#7a8a8f", "#8c5a3c"]) : null,
-    chimney: r.chance(0.75) ? { x: r.range(-0.3, 0.3) * width, height: r.range(0.7, 1.0), pots: r.int(1, 2) } : null,
+    trim: pick(r, ["#f4f2ec", "#f4f2ec", "#2f3a35", "#e8e2d4", "#3a3f44"]),
+    door: pick(r, ["#5a2a22", "#2e4a3c", "#24334a", "#6b4a2b", "#3a3a3a"]),
+    shutters: kind === "stucco" && r() < 0.5 ? pick(r, ["#4f6b56", "#5b7387", "#7a8a8f", "#8c5a3c"]) : null,
+    chimney: r() < 0.75 ? { x: (-0.3 + 0.6 * r()) * width, height: 0.7 + 0.3 * r(), pots: 1 + Math.floor(2 * r()) } : null,
     columns: Math.max(2, Math.floor(width / 2.6)),
     sideColumns: Math.max(1, Math.floor(depth / 3.2)),
     seed,

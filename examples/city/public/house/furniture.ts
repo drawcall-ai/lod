@@ -1,7 +1,8 @@
 import type { Materials } from "../shared/materials.ts";
 import * as THREE from "three/webgpu";
 import { box, type Parts, tint } from "../shared/geometry.ts";
-import type { Random } from "../shared/random.ts";
+import type seedrandom from "seedrandom";
+import { pick } from "./params.ts";
 import { type Box, type FloorPlan, type Flight, type Room, SLAB, type Side } from "./floorplan.ts";
 import * as M from "./furnishings.ts";
 
@@ -11,7 +12,7 @@ import * as M from "./furnishings.ts";
  * proportions of real furniture: seen through a window from a few metres, the
  * silhouettes and colours carry the room.
  */
-export function furnish(materials: Materials, parts: Parts, room: Room, plan: FloorPlan, r: Random): void {
+export function furnish(materials: Materials, parts: Parts, room: Room, plan: FloorPlan, r: seedrandom.PRNG): void {
   const b = room.box;
   if (room.kind === "stairwell") return stairwell(materials, parts, room, plan, r);
   skirting(materials, parts, b, r);
@@ -21,8 +22,8 @@ export function furnish(materials: Materials, parts: Parts, room: Room, plan: Fl
   const place = (along: number, out: number) => wall.at(along, out);
   const width = wall.length;
   const depth = wall.depth;
-  const fabric = () => new THREE.Color(r.pick(M.fabricColors));
-  const stain = () => new THREE.Color(r.pick(M.woodColors));
+  const fabric = () => new THREE.Color(pick(r, M.fabricColors));
+  const stain = () => new THREE.Color(pick(r, M.woodColors));
   switch (room.kind) {
     case "living":
       sofa(materials, parts.at(place(0, 0.5)), fabric());
@@ -73,13 +74,13 @@ export function furnish(materials: Materials, parts: Parts, room: Room, plan: Fl
       break;
     case "attic":
       for (let i = 0; i < 6; i++) {
-        const s = r.range(0.35, 0.6);
+        const s = 0.35 + 0.25 * r();
         parts.add(
           M.fabric(materials),
           tint(
-            box(s, s * r.range(0.6, 1), s)
+            box(s, s * (0.6 + 0.4 * r()), s)
               .translate(0, (s * 0.8) / 2, 0)
-              .applyMatrix4(place(r.range(-width / 2 + 0.5, width / 2 - 0.5), r.range(0.3, 0.9))),
+              .applyMatrix4(place(-width / 2 + 0.5 + (width - 1) * r(), 0.3 + 0.6 * r())),
             new THREE.Color("#a98b62"),
           ),
         );
@@ -128,8 +129,8 @@ function backWall(room: Room) {
 
 const turn = (angle: number) => new THREE.Matrix4().makeRotationY(angle);
 
-function skirting(materials: Materials, parts: Parts, b: Box, r: Random) {
-  const c = new THREE.Color(r.chance(0.6) ? "#f2efe8" : "#6e5a48");
+function skirting(materials: Materials, parts: Parts, b: Box, r: seedrandom.PRNG) {
+  const c = new THREE.Color(r() < 0.6 ? "#f2efe8" : "#6e5a48");
   const h = 0.08;
   const d = 0.012;
   const w = b.x1 - b.x0;
@@ -148,8 +149,8 @@ function lamp(materials: Materials, parts: Parts, b: Box) {
 }
 
 /** Two gathered panels beside a window, hung from a rail above it. */
-function curtains(materials: Materials, parts: Parts, b: Box, w: Room["windows"][number], r: Random) {
-  const c = new THREE.Color(r.pick(M.fabricColors)).lerp(new THREE.Color("#d8d2c4"), r.range(0, 0.35));
+function curtains(materials: Materials, parts: Parts, b: Box, w: Room["windows"][number], r: seedrandom.PRNG) {
+  const c = new THREE.Color(pick(r, M.fabricColors)).lerp(new THREE.Color("#d8d2c4"), 0.35 * r());
   const f = wallFrame(b, w.side);
   const top = Math.min(w.y + w.h + 0.2, b.y1 - 0.02) - b.y0;
   const bottom = Math.max(w.y - 0.15, b.y0 + 0.02) - b.y0;
@@ -173,7 +174,7 @@ function sofa(materials: Materials, parts: Parts, c: THREE.Color) {
   for (const x of [-0.53, 0, 0.53]) parts.add(M.fabric(materials), tint(box(0.52, 0.12, 0.66).translate(x, 0.48, 0.07), cushion));
 }
 
-function shelf(materials: Materials, parts: Parts, c: THREE.Color, r: Random) {
+function shelf(materials: Materials, parts: Parts, c: THREE.Color, r: seedrandom.PRNG) {
   const w = 1.0;
   const h = 1.9;
   const d = 0.32;
@@ -184,14 +185,11 @@ function shelf(materials: Materials, parts: Parts, c: THREE.Color, r: Random) {
     parts.add(M.wood(materials), tint(box(w - 0.06, 0.025, d).translate(0, y, 0), c));
     if (k === 4) continue;
     for (let x = -w / 2 + 0.05; x < w / 2 - 0.08;) {
-      const t = r.range(0.025, 0.05);
-      const bh = r.range(0.22, 0.32);
+      const t = 0.025 + 0.025 * r();
+      const bh = 0.22 + 0.1 * r();
       parts.add(
         M.gloss(materials),
-        tint(
-          box(t, bh, r.range(0.17, 0.24)).translate(x + t / 2, y + 0.0125 + bh / 2, 0.02),
-          new THREE.Color().setHSL(r.next(), r.range(0.2, 0.5), r.range(0.2, 0.5)),
-        ),
+        tint(box(t, bh, 0.17 + 0.07 * r()).translate(x + t / 2, y + 0.0125 + bh / 2, 0.02), new THREE.Color().setHSL(r(), 0.2 + 0.3 * r(), 0.2 + 0.3 * r())),
       );
       x += t + 0.003;
     }
@@ -216,9 +214,9 @@ function rug(materials: Materials, parts: Parts, w: number, d: number, c: THREE.
   parts.add(M.fabric(materials), tint(box(w, 0.01, d).translate(0, 0.005, 0), c));
 }
 
-function counter(materials: Materials, parts: Parts, length: number, r: Random) {
-  const front = new THREE.Color(r.pick(["#e8e4dc", "#5b6b5e", "#2f3b4a", "#c9bfae"]));
-  const top = new THREE.Color(r.pick(["#3a3a38", "#d8d2c6", "#7a6a58"]));
+function counter(materials: Materials, parts: Parts, length: number, r: seedrandom.PRNG) {
+  const front = new THREE.Color(pick(r, ["#e8e4dc", "#5b6b5e", "#2f3b4a", "#c9bfae"]));
+  const top = new THREE.Color(pick(r, ["#3a3a38", "#d8d2c6", "#7a6a58"]));
   parts.add(M.gloss(materials), tint(box(length, 0.86, 0.58).translate(0, 0.43, 0), front));
   parts.add(M.gloss(materials), tint(box(length + 0.02, 0.04, 0.62).translate(0, 0.88, 0.01), top));
   parts.add(M.gloss(materials), tint(box(length, 0.7, 0.34).translate(0, 1.85, -0.12), front));
@@ -246,9 +244,9 @@ function wardrobe(materials: Materials, parts: Parts, c: THREE.Color) {
  * its open side; each landing a floor slab around the opening over the flight below,
  * guarded by a balustrade; a doormat at the front door; a loft ladder up to the hatch.
  */
-function stairwell(materials: Materials, parts: Parts, room: Room, plan: FloorPlan, r: Random) {
+function stairwell(materials: Materials, parts: Parts, room: Room, plan: FloorPlan, r: seedrandom.PRNG) {
   const b = room.box;
-  const wood = new THREE.Color(r.pick(M.woodColors));
+  const wood = new THREE.Color(pick(r, M.woodColors));
   const white = new THREE.Color("#f2efe8");
   skirting(materials, parts, b, r);
   for (const f of plan.flights) flight(materials, parts, b, f, wood, white);

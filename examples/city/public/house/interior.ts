@@ -1,11 +1,11 @@
 import type { Materials } from "../shared/materials.ts";
 import * as THREE from "three/webgpu";
 import { box, Parts, tint } from "../shared/geometry.ts";
-import { Random } from "../shared/random.ts";
+import seedrandom from "seedrandom";
 import { type Box, floorPlan, type Hole, type Room, type Side } from "./floorplan.ts";
 import { furnish, wallFrame } from "./furniture.ts";
 import * as M from "./furnishings.ts";
-import type { HouseParams } from "./params.ts";
+import { type HouseParams, pick } from "./params.ts";
 
 const SIDES: readonly Side[] = ["front", "back", "east", "west"];
 
@@ -18,17 +18,17 @@ const SIDES: readonly Side[] = ["front", "back", "east", "west"];
  */
 export function houseInterior(materials: Materials, p: HouseParams): THREE.Group {
   const plan = floorPlan(p);
-  const r = new Random(p.seed * 31 + 7);
+  const r = seedrandom(String(p.seed * 31 + 7));
   const group = new THREE.Group();
   group.name = "interior";
   for (const room of plan.rooms) group.add(roomGroup(materials, room, plan, r));
   return group;
 }
 
-function roomGroup(materials: Materials, room: Room, plan: ReturnType<typeof floorPlan>, r: Random): THREE.Group {
+function roomGroup(materials: Materials, room: Room, plan: ReturnType<typeof floorPlan>, r: seedrandom.PRNG): THREE.Group {
   const parts = new Parts();
   const b = room.box;
-  const paint = new THREE.Color(room.kind === "stairwell" ? "#ece8df" : r.pick(M.wallColors));
+  const paint = new THREE.Color(room.kind === "stairwell" ? "#ece8df" : pick(r, M.wallColors));
   for (const side of SIDES)
     parts.add(
       M.plaster(materials),
@@ -92,7 +92,7 @@ function slab(b: Box, ceiling: boolean, hatch: { x0: number; x1: number; z0: num
 }
 
 /** Casing around a doorway on this room's side, and the leaf if this room hangs it, swung into the room. */
-function doorway(materials: Materials, parts: Parts, b: Box, door: Room["doors"][number], r: Random) {
+function doorway(materials: Materials, parts: Parts, b: Box, door: Room["doors"][number], r: seedrandom.PRNG) {
   const f = wallFrame(b, door.side);
   const u = f.u(door.along);
   const y = door.y - b.y0;
@@ -103,7 +103,7 @@ function doorway(materials: Materials, parts: Parts, b: Box, door: Room["doors"]
     parts.add(M.gloss(materials), tint(at(box(c, door.h + c, 0.018).translate(u + s * (door.w / 2 + c / 2), y + (door.h + c) / 2, 0.009)), trim));
   parts.add(M.gloss(materials), tint(at(box(door.w + 2 * c, c, 0.018).translate(u, y + door.h + c / 2, 0.009)), trim));
   if (door.leaf === null) return;
-  const leaf = new THREE.Color(r.chance(0.7) ? "#f1eee6" : "#8a6446");
+  const leaf = new THREE.Color(r() < 0.7 ? "#f1eee6" : "#8a6446");
   const width = door.w - 0.02;
   const hinge = new THREE.Matrix4().makeTranslation(u - door.w / 2 + 0.01, y, 0.03).multiply(new THREE.Matrix4().makeRotationY(-door.leaf));
   const place = (g: THREE.BufferGeometry) => at(g.applyMatrix4(hinge));

@@ -1,5 +1,5 @@
 import * as THREE from "three/webgpu";
-import type { Random } from "../../public/shared/random.ts";
+import type seedrandom from "seedrandom";
 import { smooth } from "./country.ts";
 import { type Land, Use } from "./land.ts";
 import { type Spot, spot } from "./plan.ts";
@@ -49,7 +49,7 @@ export function crossings(a: THREE.Vector2[], b: THREE.Vector2[]): THREE.Vector2
 }
 
 /** Marks the water on the land and plants the banks: willowy shrubs and trees in a broken line on both sides. */
-export function banks(land: Land, terrain: Terrain, r: Random, add: (id: string, spot: Spot) => void): void {
+export function banks(land: Land, terrain: Terrain, r: seedrandom.PRNG, add: (id: string, spot: Spot) => void): void {
   const course = CREEK.course;
   course.forEach((p, i) => {
     const q = course[i + 1];
@@ -64,18 +64,18 @@ export function banks(land: Land, terrain: Terrain, r: Random, add: (id: string,
     dir.normalize();
     for (let t = 0; t < length; t += 6)
       for (const side of [1, -1]) {
-        if (!r.chance(0.6)) continue;
+        if (r() >= 0.6) continue;
         const at = p
           .clone()
           .addScaledVector(dir, t)
-          .add(new THREE.Vector2(-dir.y, dir.x).multiplyScalar(side * r.range(5, 13)));
+          .add(new THREE.Vector2(-dir.y, dir.x).multiplyScalar(side * (5 + 8 * r())));
         const use = land.at(at.x, at.y);
         if (use !== Use.Lawn && use !== Use.Crop) continue;
-        const pick = r.next();
-        const angle = r.range(0, Math.PI * 2);
-        if (pick < 0.45) add("searsia_lucida", spot(terrain, at.x, at.y, angle, r.range(1.6, 2.4)));
-        else if (pick < 0.8) add("tree_small_02", spot(terrain, at.x, at.y, angle, r.range(2.2, 3.1)));
-        else add("shrub_02", spot(terrain, at.x, at.y, angle, r.range(1.2, 1.8)));
+        const pick = r();
+        const angle = Math.PI * 2 * r();
+        if (pick < 0.45) add("searsia_lucida", spot(terrain, at.x, at.y, angle, 1.6 + 0.8 * r()));
+        else if (pick < 0.8) add("tree_small_02", spot(terrain, at.x, at.y, angle, 2.2 + 0.9 * r()));
+        else add("shrub_02", spot(terrain, at.x, at.y, angle, 1.2 + 0.6 * r()));
       }
   }
 }

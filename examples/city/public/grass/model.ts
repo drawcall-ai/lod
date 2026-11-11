@@ -2,7 +2,7 @@ import * as THREE from "three/webgpu";
 import { attribute, dot, fract, mix, sin, smoothstep, step, vec2, vec3, vec4 } from "three/tsl";
 import { Foliage, foliage } from "@drawcall/lod";
 import { baseColor } from "../shared/materials.ts";
-import { Random } from "../shared/random.ts";
+import seedrandom from "seedrandom";
 
 export interface ClumpShape {
   /** Edge of the square patch the blades grow in (m). */
@@ -21,22 +21,22 @@ export interface ClumpShape {
  * for `grassMaterial`.
  */
 export function grassClump(seed: number, s: ClumpShape): THREE.BufferGeometry {
-  const r = new Random(seed);
+  const r = seedrandom(String(seed));
   const position: number[] = [];
   const normal: number[] = [];
   const blade: number[] = [];
   const index: number[] = [];
   const segments = 4;
   for (let b = 0; b < s.blades; b++) {
-    const x = r.range(-s.size / 2, s.size / 2);
-    const z = r.range(-s.size / 2, s.size / 2);
-    const height = r.range(s.height[0], s.height[1]);
-    const facing = r.range(0, Math.PI * 2);
-    const lean = r.range(0.05, 0.5);
-    const bend = r.range(0.3, 1.2);
+    const x = (2 * r() - 1) * (s.size / 2);
+    const z = (2 * r() - 1) * (s.size / 2);
+    const height = s.height[0] + (s.height[1] - s.height[0]) * r();
+    const facing = Math.PI * 2 * r();
+    const lean = 0.05 + 0.45 * r();
+    const bend = 0.3 + 0.9 * r();
     const lateral = new THREE.Vector3(Math.cos(facing), 0, Math.sin(facing));
     const forward = new THREE.Vector3(-lateral.z, 0, lateral.x);
-    const width = s.width * r.range(0.7, 1.3);
+    const width = s.width * (0.7 + 0.6 * r());
     const first = position.length / 3;
     const p = new THREE.Vector3(x, 0, z);
     for (let k = 0; k <= segments; k++) {

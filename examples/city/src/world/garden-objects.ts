@@ -1,7 +1,7 @@
 import { CachedLodLoader, type InstancedLod, type LodGpu, type LodLevel } from "@drawcall/lod";
-import { Random } from "../../public/shared/random.ts";
+import seedrandom from "seedrandom";
 import { arriving, manager } from "../loading.ts";
-import { instancedAt } from "./place.ts";
+import { instancedAt, type Tint } from "./place.ts";
 import type { Plan } from "./plan.ts";
 
 /** Each garden thing, by the name its query builds. */
@@ -97,8 +97,13 @@ async function gardenThings(plan: Plan, gpu: LodGpu): Promise<InstancedLod[]> {
     [...plan.garden].map(async ([name, spots]) => {
       const load = THINGS[name];
       if (!load) throw new Error(`No garden thing ${name}`);
-      const r = new Random(name.length);
-      return instancedAt(gpu, name, await load(), spots, name === "shed" ? (_, __, color) => color.set(r.pick(paints)) : undefined);
+      const r = seedrandom(String(name.length));
+      const paint: Tint = (_, __, color) => {
+        const picked = paints[Math.floor(r() * paints.length)];
+        if (!picked) throw new Error("no shed paint picked");
+        return color.set(picked);
+      };
+      return instancedAt(gpu, name, await load(), spots, name === "shed" ? paint : undefined);
     }),
   );
 }
@@ -108,8 +113,8 @@ async function hedges(plan: Plan, gpu: LodGpu): Promise<InstancedLod[]> {
     HEDGES.map(async (load, variant) => {
       const mine = plan.hedges.filter((_, i) => i % HEDGES.length === variant);
       if (!mine.length) return [];
-      const r = new Random(variant + 7);
-      return [instancedAt(gpu, `hedges ${variant}`, await load(), mine, (_, __, color) => color.multiplyScalar(r.range(0.85, 1.1)))];
+      const r = seedrandom(String(variant + 7));
+      return [instancedAt(gpu, `hedges ${variant}`, await load(), mine, (_, __, color) => color.multiplyScalar(0.85 + 0.25 * r()))];
     }),
   );
   return variants.flat();

@@ -1,6 +1,6 @@
 import { CachedLodLoader, foliageLevels, foliageModel, type FoliageOptions, type InstancedLod, type LodGpu, type LodLevel, type Wind } from "@drawcall/lod";
 import * as THREE from "three/webgpu";
-import { Random } from "../../public/shared/random.ts";
+import seedrandom from "seedrandom";
 import { arriving, manager } from "../loading.ts";
 import { planter, type Planting } from "./planting.ts";
 import { Use } from "./land.ts";
@@ -205,11 +205,11 @@ const SPECIES: Record<string, (() => Promise<LodLevel[]>)[]> = {
 
 /** Every tree a little different: lighter or darker, yellower or bluer green. */
 function foliageTint(seed: number, color: THREE.Color): THREE.Color {
-  const r = new Random(seed);
+  const r = seedrandom(String(seed));
   return color
     .setRGB(1, 1, 1)
-    .multiplyScalar(r.range(0.82, 1.1))
-    .lerp(r.chance(0.5) ? YELLOWER : BLUER, r.range(0, 0.35));
+    .multiplyScalar(0.82 + 0.28 * r())
+    .lerp(r() < 0.5 ? YELLOWER : BLUER, 0.35 * r());
 }
 
 const YELLOWER = new THREE.Color(1.1, 1.05, 0.7);

@@ -1,7 +1,7 @@
 import type { Materials } from "../shared/materials.ts";
 import * as THREE from "three/webgpu";
 import { Parts, tube } from "../shared/geometry.ts";
-import { Random } from "../shared/random.ts";
+import seedrandom from "seedrandom";
 import { ear } from "./ear.ts";
 import { dryLeafMaterial, leaf, leafMaterial } from "./leaf.ts";
 import { tassel } from "./tassel.ts";
@@ -30,11 +30,11 @@ export function cornPlant(
   options: { leafSegments?: [number, number]; detail?: Detail; tassel?: boolean } = {},
 ): THREE.Group {
   const detail = options.detail ?? "fine";
-  const r = new Random(seed);
+  const r = seedrandom(String(seed));
   const parts = new Parts();
-  const height = r.range(2.0, 2.5);
+  const height = 2.0 + 0.5 * r();
   const stalk = stalkCurve(height * 0.86, r);
-  const nodes = nodeHeights(r.int(16, 18));
+  const nodes = nodeHeights(16 + Math.floor(3 * r()));
   const radius = (t: number) => THREE.MathUtils.lerp(0.0135, 0.0065, t ** 1.2);
 
   // maize stalks are a slightly blue-grey green under their waxy bloom, not lime
@@ -48,14 +48,14 @@ export function cornPlant(
   parts.add(tissue(materials), stem);
 
   const ears: THREE.Vector3[] = [];
-  let azimuth = r.range(0, Math.PI * 2);
-  const earNodes = new Set([Math.round(nodes.length * 0.42), ...(r.chance(0.4) ? [Math.round(nodes.length * 0.42) - 1] : [])]);
+  let azimuth = Math.PI * 2 * r();
+  const earNodes = new Set([Math.round(nodes.length * 0.42), ...(r() < 0.4 ? [Math.round(nodes.length * 0.42) - 1] : [])]);
   for (let i = 1; i < nodes.length; i++) {
-    azimuth += Math.PI + r.range(-0.25, 0.25);
+    azimuth += Math.PI + (-0.25 + 0.5 * r());
     const t = nodes[i] ?? 0;
     const next = nodes[i + 1] ?? 1;
     // the sheath wraps the stalk from this node most of the way up to the next
-    const sheathColor = new THREE.Color("#4c6c36").offsetHSL(0, 0, r.range(-0.03, 0.03));
+    const sheathColor = new THREE.Color("#4c6c36").offsetHSL(0, 0, -0.03 + 0.06 * r());
     parts.add(
       tissue(materials),
       tube(
@@ -72,22 +72,22 @@ export function cornPlant(
     const bell = Math.exp(-(((rank - 0.4) / 0.33) ** 2));
     const dead = i <= 2;
     // living leaves just above the dead ones are yellowing
-    const age = dead ? 0 : Math.max(0, 1 - (i - 3) / 2) * r.range(0.2, 0.45);
-    const color = new THREE.Color("#ffffff").offsetHSL(0, 0, r.range(-0.05, 0.03)).lerp(new THREE.Color("#ffe9a0"), age);
+    const age = dead ? 0 : Math.max(0, 1 - (i - 3) / 2) * (0.2 + 0.25 * r());
+    const color = new THREE.Color("#ffffff").offsetHSL(0, 0, -0.05 + 0.08 * r()).lerp(new THREE.Color("#ffe9a0"), age);
     parts.add(
       dead ? dryLeafMaterial(materials) : leafMaterial(materials),
       leaf(collar, azimuth, {
-        length: (dead ? r.range(0.35, 0.55) : 0.45 + 0.55 * bell) * r.range(0.92, 1.06),
+        length: (dead ? 0.35 + 0.2 * r() : 0.45 + 0.55 * bell) * (0.92 + 0.14 * r()),
         width: 0.06 + 0.045 * bell,
-        rise: 0.32 + 0.18 * (1 - rank) + r.range(-0.08, 0.08),
-        droop: dead ? r.range(2.4, 2.9) : THREE.MathUtils.lerp(2.3, 1.1, THREE.MathUtils.smoothstep(rank, 0.5, 1)) + r.range(-0.25, 0.25),
-        twist: r.range(-0.8, 0.8),
+        rise: 0.32 + 0.18 * (1 - rank) + (-0.08 + 0.16 * r()),
+        droop: dead ? 2.4 + 0.5 * r() : THREE.MathUtils.lerp(2.3, 1.1, THREE.MathUtils.smoothstep(rank, 0.5, 1)) + (-0.25 + 0.5 * r()),
+        twist: -0.8 + 1.6 * r(),
         color,
-        seed: r.int(0, 1e9),
+        seed: Math.floor(1e9 * r()),
         segments: options.leafSegments,
       }),
     );
-    if (earNodes.has(i)) ears.push(ear(materials, parts, stalk.getPointAt(t), stalk.getTangentAt(t), azimuth + r.range(-0.3, 0.3), r, detail));
+    if (earNodes.has(i)) ears.push(ear(materials, parts, stalk.getPointAt(t), stalk.getTangentAt(t), azimuth + (-0.3 + 0.6 * r()), r, detail));
   }
   braceRoots(materials, parts, stalk, nodes, radius, r, detail);
   if (options.tassel !== false) tassel(materials, parts, stalk.getPointAt(1), stalk.getTangentAt(1), height * 0.17, r, detail);
@@ -103,10 +103,10 @@ export function cornPlant(
 }
 
 /** A slightly leaning, gently curved stalk axis. */
-function stalkCurve(height: number, r: Random): THREE.CatmullRomCurve3 {
-  const lean = new THREE.Vector2(r.range(-1, 1), r.range(-1, 1)).normalize().multiplyScalar(r.range(0.02, 0.07));
+function stalkCurve(height: number, r: seedrandom.PRNG): THREE.CatmullRomCurve3 {
+  const lean = new THREE.Vector2(-1 + 2 * r(), -1 + 2 * r()).normalize().multiplyScalar(0.02 + 0.05 * r());
   const points = [0, 0.25, 0.5, 0.75, 1].map(
-    (f) => new THREE.Vector3(lean.x * f * f + r.range(-0.008, 0.008), f * height, lean.y * f * f + r.range(-0.008, 0.008)),
+    (f) => new THREE.Vector3(lean.x * f * f + (-0.008 + 0.016 * r()), f * height, lean.y * f * f + (-0.008 + 0.016 * r())),
   );
   return new THREE.CatmullRomCurve3(points);
 }
@@ -151,23 +151,23 @@ function braceRoots(
   stalk: THREE.Curve<THREE.Vector3>,
   nodes: number[],
   radius: (t: number) => number,
-  r: Random,
+  r: seedrandom.PRNG,
   detail: Detail,
 ) {
   for (const n of nodes.slice(0, 2)) {
-    const count = r.int(6, 9);
+    const count = 6 + Math.floor(4 * r());
     const base = stalk.getPointAt(n);
     for (let i = 0; i < count; i++) {
-      const a = (i / count) * Math.PI * 2 + r.range(-0.3, 0.3);
+      const a = (i / count) * Math.PI * 2 + (-0.3 + 0.6 * r());
       const dir = new THREE.Vector3(Math.cos(a), 0, Math.sin(a));
-      const reach = r.range(0.04, 0.09) + base.y * 0.5;
+      const reach = 0.04 + 0.05 * r() + base.y * 0.5;
       const start = base.clone().addScaledVector(dir, radius(n) * 0.8);
       const mid = start
         .clone()
         .addScaledVector(dir, reach * 0.6)
         .setY(base.y * 0.7 + 0.005);
       const end = start.clone().addScaledVector(dir, reach).setY(-0.02);
-      const c = new THREE.Color("#8f8a5e").lerp(new THREE.Color("#7a5048"), r.range(0, 0.5));
+      const c = new THREE.Color("#8f8a5e").lerp(new THREE.Color("#7a5048"), 0.5 * r());
       parts.add(
         tissue(materials),
         tube(

@@ -1,7 +1,7 @@
 import type { Materials } from "../shared/materials.ts";
 import * as THREE from "three/webgpu";
 import { MeshBuilder, type Parts, tube } from "../shared/geometry.ts";
-import type { Random } from "../shared/random.ts";
+import type seedrandom from "seedrandom";
 import { huskMaterial } from "./leaf.ts";
 import { type Detail, tissue, tubeSegments } from "./tissue.ts";
 
@@ -12,7 +12,7 @@ export function ear(
   node: THREE.Vector3,
   stalkDir: THREE.Vector3,
   azimuth: number,
-  r: Random,
+  r: seedrandom.PRNG,
   detail: Detail,
 ): THREE.Vector3 {
   const out = new THREE.Vector3(Math.cos(azimuth), 0, Math.sin(azimuth));
@@ -30,18 +30,18 @@ export function ear(
       () => husk,
     ),
   );
-  const length = r.range(0.2, 0.25);
+  const length = 0.2 + 0.05 * r();
   const core = (t: number) => 0.024 * Math.sin(Math.PI * Math.min(1, 0.12 + t * 0.88)) ** 0.55 * (1 - 0.35 * t);
   const sideA = new THREE.Vector3().crossVectors(axis, out).normalize();
   const sideB = new THREE.Vector3().crossVectors(axis, sideA).normalize();
   const layers = 7;
   for (let l = 0; l < layers; l++) {
     const b = new MeshBuilder();
-    const center = r.range(0, Math.PI * 2);
-    const span = r.range(2.2, 3.4);
-    const extra = r.range(1.0, 1.28);
+    const center = Math.PI * 2 * r();
+    const span = 2.2 + 1.2 * r();
+    const extra = 1.0 + 0.28 * r();
     // the husk texture carries the colour; vertex colour only varies it, outer leaves paler
-    const c = new THREE.Color("#ffffff").lerp(new THREE.Color("#fff2c0"), 0.2 + 0.08 * l).multiplyScalar(r.range(0.92, 1.05));
+    const c = new THREE.Color("#ffffff").lerp(new THREE.Color("#fff2c0"), 0.2 + 0.08 * l).multiplyScalar(0.92 + 0.13 * r());
     const rows: number[][] = [];
     for (let i = 0; i <= 16; i++) {
       const t = i / 16;
@@ -72,14 +72,14 @@ export function ear(
     parts.add(huskMaterial(materials), b.geometry());
   }
   const tip = shankEnd.clone().addScaledVector(axis, length * 1.02);
-  const silk = r.int(24, 40);
+  const silk = 24 + Math.floor(17 * r());
   for (let i = 0; i < silk; i++) {
     // the field's plants keep every third strand: the tuft reads the same from a metre
     const drawn = detail === "fine" || i % 3 === 0;
-    const a = r.range(0, Math.PI * 2);
+    const a = Math.PI * 2 * r();
     const spread = sideA.clone().multiplyScalar(Math.cos(a)).addScaledVector(sideB, Math.sin(a));
-    const len = r.range(0.04, 0.11);
-    const from = tip.clone().addScaledVector(spread, r.range(0, 0.004));
+    const len = 0.04 + 0.07 * r();
+    const from = tip.clone().addScaledVector(spread, 0.004 * r());
     const mid = from
       .clone()
       .addScaledVector(axis, len * 0.5)
@@ -87,7 +87,7 @@ export function ear(
     const end = mid
       .clone()
       .addScaledVector(spread, len * 0.4)
-      .add(new THREE.Vector3(0, -len * r.range(0.3, 0.9), 0));
+      .add(new THREE.Vector3(0, -len * (0.3 + 0.6 * r()), 0));
     const young = new THREE.Color("#d8cf8a");
     const old = new THREE.Color("#8a5a34");
     if (drawn)

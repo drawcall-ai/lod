@@ -1,7 +1,7 @@
 import { CachedLodLoader, Lod, type LodGpu, type LodLevel } from "@drawcall/lod";
 import * as THREE from "three/webgpu";
 import { HOUSE_VARIANTS } from "../../public/house/params.ts";
-import { Random } from "../../public/shared/random.ts";
+import seedrandom from "seedrandom";
 import { arriving, manager } from "../loading.ts";
 import { instancedAt } from "./place.ts";
 import type { Plan } from "./plan.ts";
@@ -117,8 +117,8 @@ export async function houses(plan: Plan, gpu: LodGpu): Promise<THREE.Group> {
     const levels = await load();
     return [
       instancedAt(gpu, `house ${variant}`, levels, spots, (_, index, color) => {
-        const random = new Random(index * 31 + variant);
-        return color.multiplyScalar(random.range(0.88, 1.04)).lerp(WARMER, random.range(0, 0.4));
+        const random = seedrandom(String(index * 31 + variant));
+        return color.multiplyScalar(0.88 + 0.16 * random()).lerp(WARMER, 0.4 * random());
       }),
     ];
   });

@@ -1,7 +1,7 @@
 import type { Materials } from "../shared/materials.ts";
 import * as THREE from "three/webgpu";
 import { box, merge, MeshBuilder, type Parts, pose, roundedPath, tint } from "../shared/geometry.ts";
-import { Random } from "../shared/random.ts";
+import seedrandom from "seedrandom";
 import { brick, concrete, paint, tiles, zinc } from "./materials.ts";
 import { chimneySize, chimneyZ, heights, type HouseParams } from "./params.ts";
 
@@ -32,7 +32,7 @@ function slopeLength(p: HouseParams): number {
 
 /** Both slopes, the ridge, verges, fascia, gutters and downpipes. Shared geometry is built per slope. */
 export function roof(materials: Materials, parts: Parts, p: HouseParams) {
-  const r = new Random(p.seed * 7 + 1);
+  const r = seedrandom(String(p.seed * 7 + 1));
   for (const side of [0, 1]) {
     const sideParts = parts.at(pose(0, 0, 0, side * Math.PI));
     slope(materials, sideParts.at(slopeFrame(p)), p, r);
@@ -42,7 +42,7 @@ export function roof(materials: Materials, parts: Parts, p: HouseParams) {
   if (p.chimney) chimney(materials, parts, p, p.chimney);
 }
 
-function slope(materials: Materials, parts: Parts, p: HouseParams, r: Random) {
+function slope(materials: Materials, parts: Parts, p: HouseParams, r: seedrandom.PRNG) {
   const W = p.width + 2 * verge;
   const L = slopeLength(p);
   const trim = paint(materials, p.trim);
@@ -52,15 +52,15 @@ function slope(materials: Materials, parts: Parts, p: HouseParams, r: Random) {
 }
 
 /** Per-tile colour: the roof colour varied in lightness, with some weathered or lichen-spotted tiles. */
-function tileColor(base: THREE.Color, r: Random): THREE.Color {
-  const c = base.clone().offsetHSL(r.range(-0.01, 0.01), r.range(-0.12, 0.0), r.range(-0.04, 0.035));
-  if (r.chance(0.12)) c.multiplyScalar(r.range(0.65, 0.85));
-  if (r.chance(0.05)) c.lerp(new THREE.Color("#5f6150"), r.range(0.2, 0.4));
+function tileColor(base: THREE.Color, r: seedrandom.PRNG): THREE.Color {
+  const c = base.clone().offsetHSL(-0.01 + 0.02 * r(), -0.12 + 0.12 * r(), -0.04 + 0.075 * r());
+  if (r() < 0.12) c.multiplyScalar(0.65 + 0.2 * r());
+  if (r() < 0.05) c.lerp(new THREE.Color("#5f6150"), 0.2 + 0.2 * r());
   return c;
 }
 
 /** Clay pantiles: S-profiled tiles in overlapping rows, each tile its own piece with a visible lower edge. */
-function pantiles(p: HouseParams, W: number, L: number, r: Random): THREE.BufferGeometry {
+function pantiles(p: HouseParams, W: number, L: number, r: seedrandom.PRNG): THREE.BufferGeometry {
   const base = new THREE.Color(p.roof.color);
   const length = 0.42;
   const exposure = 0.335;
@@ -76,9 +76,9 @@ function pantiles(p: HouseParams, W: number, L: number, r: Random): THREE.Buffer
     const high = Math.max(0, low - length);
     for (let i = 0; i < count; i++) {
       const c = tileColor(base, r);
-      const x0 = -W / 2 + i * pitch + r.range(-0.004, 0.004);
-      const lift = r.range(0.018, 0.026);
-      const yaw = r.range(-0.012, 0.012);
+      const x0 = -W / 2 + i * pitch + (-0.004 + 0.008 * r());
+      const lift = 0.018 + 0.008 * r();
+      const yaw = -0.012 + 0.024 * r();
       const at = (u: number, t: number, down: number) => {
         const s = high + (low - high) * t;
         const x = x0 + u * pitch + yaw * (s - low);
@@ -117,7 +117,7 @@ function quad(b: MeshBuilder, ...ids: (number | undefined)[]) {
 }
 
 /** Natural slates: thin rectangles laid double-lap in half-bond, each slightly irregular. */
-function slates(p: HouseParams, W: number, L: number, r: Random): THREE.BufferGeometry {
+function slates(p: HouseParams, W: number, L: number, r: seedrandom.PRNG): THREE.BufferGeometry {
   const base = new THREE.Color(p.roof.color);
   const pieces: THREE.BufferGeometry[] = [];
   const length = 0.46;
@@ -133,11 +133,11 @@ function slates(p: HouseParams, W: number, L: number, r: Random): THREE.BufferGe
       const ww = w - (x0 - x);
       if (ww < 0.02) continue;
       const g = box(ww, 0.008, len)
-        .rotateX(-0.03 - r.range(0, 0.008))
-        .rotateY(r.range(-0.008, 0.008))
-        .translate(x0 + ww / 2, deck + batten + 0.004 + 0.012 + r.range(-0.002, 0.002), (low + high) / 2);
-      const c = base.clone().offsetHSL(r.range(-0.006, 0.006), r.range(-0.02, 0.02), r.range(-0.018, 0.018));
-      if (r.chance(0.03)) c.multiplyScalar(0.85);
+        .rotateX(-0.03 - 0.008 * r())
+        .rotateY(-0.008 + 0.016 * r())
+        .translate(x0 + ww / 2, deck + batten + 0.004 + 0.012 + (-0.002 + 0.004 * r()), (low + high) / 2);
+      const c = base.clone().offsetHSL(-0.006 + 0.012 * r(), -0.02 + 0.04 * r(), -0.018 + 0.036 * r());
+      if (r() < 0.03) c.multiplyScalar(0.85);
       pieces.push(tint(g, c));
     }
   }
@@ -145,7 +145,7 @@ function slates(p: HouseParams, W: number, L: number, r: Random): THREE.BufferGe
 }
 
 /** Half-round ridge tiles bedded in mortar along the ridge. */
-function ridgeTiles(materials: Materials, parts: Parts, p: HouseParams, r: Random) {
+function ridgeTiles(materials: Materials, parts: Parts, p: HouseParams, r: seedrandom.PRNG) {
   const { ridge } = heights(p);
   const a = (p.roof.pitch * Math.PI) / 180;
   const W = p.width + 2 * verge;

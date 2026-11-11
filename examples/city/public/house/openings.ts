@@ -1,7 +1,7 @@
 import type { Materials } from "../shared/materials.ts";
 import * as THREE from "three/webgpu";
 import { box, type Parts } from "../shared/geometry.ts";
-import type { Random } from "../shared/random.ts";
+import type seedrandom from "seedrandom";
 import { brass, glass } from "./materials.ts";
 import type { Opening } from "./wall.ts";
 
@@ -20,7 +20,7 @@ export interface Dressing {
 const inset = 0.11;
 
 /** A casement window in a wall frame (outer face z = 0): frame, sashes, glass, sill and trim. */
-export function windowUnit(materials: Materials, parts: Parts, o: Opening, d: Dressing, r: Random) {
+export function windowUnit(materials: Materials, parts: Parts, o: Opening, d: Dressing, r: seedrandom.PRNG) {
   const fw = 0.068;
   const fd = 0.075;
   const z = -inset - fd / 2;
@@ -29,7 +29,7 @@ export function windowUnit(materials: Materials, parts: Parts, o: Opening, d: Dr
   const sashes = o.w > 0.85 ? 2 : 1;
   const sw = (o.w - 2 * fw) / sashes;
   const sh = o.h - 2 * fw;
-  const bars = o.h > 1.1 && r.chance(0.5);
+  const bars = o.h > 1.1 && r() < 0.5;
   for (let i = 0; i < sashes; i++) {
     const cx = o.x - o.w / 2 + fw + sw * (i + 0.5);
     const cy = o.y + fw;

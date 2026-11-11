@@ -1,14 +1,14 @@
 import { type Materials, surface } from "../shared/materials.ts";
 import * as THREE from "three/webgpu";
 import { box, Parts, tint } from "../shared/geometry.ts";
-import { Random } from "../shared/random.ts";
+import seedrandom from "seedrandom";
 
 /**
  * A painted picket fence along +x from the origin: square posts with pyramid caps every
  * 2.4 m, two rails behind the pickets, pointed pickets with irregular wear.
  */
 export function picketFence(materials: Materials, length: number, seed = 1): THREE.Group {
-  const r = new Random(seed);
+  const r = seedrandom(String(seed));
   const parts = new Parts();
   const paint = surface(materials, "wood_table_001", { albedo: false, color: "#ffffff", vertexColors: true, normalScale: 0.4, roughness: 1.8, weather: 0.8 });
   const white = new THREE.Color("#ebe8e0");
@@ -34,11 +34,11 @@ export function picketFence(materials: Materials, length: number, seed = 1): THR
     new THREE.Vector2(-width / 2, 0.9),
   ]);
   for (let x = 0.045 + width / 2; x < length - 0.045 - width / 2; x += width + gap) {
-    const h = r.range(0.97, 1.01);
+    const h = 0.97 + 0.04 * r();
     const picket = new THREE.ExtrudeGeometry(outline, { depth: 0.02, bevelEnabled: true, bevelThickness: 0.003, bevelSize: 0.003, bevelSegments: 1 });
     picket
       .scale(1, h, 1)
-      .rotateZ(r.range(-0.01, 0.01))
+      .rotateZ(-0.01 + 0.02 * r())
       .translate(x, 0.05, 0.08 + 0.003);
     parts.add(paint, tint(picket, shade(white, r)));
   }
@@ -46,7 +46,7 @@ export function picketFence(materials: Materials, length: number, seed = 1): THR
 }
 
 /** Paint varies a little from board to board; some boards are greyer with age. */
-function shade(base: THREE.Color, r: Random): THREE.Color {
-  const c = base.clone().offsetHSL(0, r.range(-0.02, 0.02), r.range(-0.05, 0.02));
-  return r.chance(0.12) ? c.lerp(new THREE.Color("#b9b5a8"), r.range(0.2, 0.5)) : c;
+function shade(base: THREE.Color, r: seedrandom.PRNG): THREE.Color {
+  const c = base.clone().offsetHSL(0, -0.02 + 0.04 * r(), -0.05 + 0.07 * r());
+  return r() < 0.12 ? c.lerp(new THREE.Color("#b9b5a8"), 0.2 + 0.3 * r()) : c;
 }

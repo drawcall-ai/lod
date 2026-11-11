@@ -26,6 +26,9 @@ importers:
       fflate:
         specifier: ^0.8.3
         version: 0.8.3
+      seedrandom:
+        specifier: ^3.0.5
+        version: 3.0.5
       three:
         specifier: ^0.186.1
         version: 0.186.1
@@ -51,6 +54,9 @@ importers:
       '@types/node':
         specifier: ^24.13.6
         version: 24.19.1
+      '@types/seedrandom':
+        specifier: ^3.0.8
+        version: 3.0.8
       '@types/three':
         specifier: ^0.186.0
         version: 0.186.0
@@ -914,6 +920,9 @@ packages:
   '@types/node@24.19.1':
     resolution: {integrity: sha512-aS3/DG0oM05K0RIXXP+hKjinGG5IgSSVGzswZxW3O0sS3pH4/fycXundUC9XsszgKCk4gHXylTEK6hyFxVxnoQ==}
 
+  '@types/seedrandom@3.0.8':
+    resolution: {integrity: sha512-TY1eezMU2zH2ozQoAFAQFOPpvP15g+ZgSfTZt31AUUH/Rxtnz3H+A/Sv1Snw2/amp//omibc+AEkTaA8KUeOLQ==}
+
   '@types/stats.js@0.17.4':
     resolution: {integrity: sha512-jIBvWWShCvlBqBNIZt0KAshWpvSjhkwkEu4ZUcASoAvhmrgAUI2t1dXrjSL4xXVLB4FznPrIsX3nKXFl/Dt4vA==}
 
@@ -1275,6 +1284,9 @@ packages:
   safe-stable-stringify@2.5.0:
     resolution: {integrity: sha512-b3rppTKm9T+PsVCBEOUR46GWI7fdOs00VKZ1+9c1EWDaDMvjQc6tUwuFyIprgGgTcWoVHSKrU8H31ZHA2e0RHA==}
     engines: {node: '>=10'}
+
+  seedrandom@3.0.5:
+    resolution: {integrity: sha512-8OwmbklUNzwezjGInmZ+2clQmExQPvomqjL7LFqOYqtmuxRgQYqOD3mHaU+MvZn5FLUeVxVfQjwLZW/n/JFuqg==}
 
   semver@6.3.2:
     resolution: {integrity: sha512-GYrCADwpu6yV5OAvchkQ27Z5wwMxWAEMg5NNWjyHh/5DboFFqbdbvYNIvZouQpxXyeMPoTOh0vdPYKlf0ZswdQ==}
@@ -2209,6 +2221,8 @@ snapshots:
     dependencies:
       undici-types: 7.24.6
 
+  '@types/seedrandom@3.0.8': {}
+
   '@types/stats.js@0.17.4': {}
 
   '@types/three@0.186.0':
@@ -2558,6 +2572,8 @@ snapshots:
       '@rolldown/binding-win32-x64-msvc': 1.2.15
 
   safe-stable-stringify@2.5.0: {}
+
+  seedrandom@3.0.5: {}
 
   semver@6.3.2: {}
 

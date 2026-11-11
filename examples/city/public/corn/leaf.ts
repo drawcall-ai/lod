@@ -2,7 +2,7 @@ import * as THREE from "three/webgpu";
 import { Foliage, type FoliageOptions, foliage } from "@drawcall/lod";
 import { MeshBuilder } from "../shared/geometry.ts";
 import type { Materials } from "../shared/materials.ts";
-import { Random } from "../shared/random.ts";
+import seedrandom from "seedrandom";
 
 /** Base, body and tip colours (sRGB) of a blade, plus its midrib. */
 interface Palette {
@@ -52,7 +52,7 @@ const size = 2048;
  * ones between each pair, slight puckering near the margins, cell-scale mottling.
  */
 function bladeTextures(palette: Palette): { color: THREE.DataTexture; normal: THREE.DataTexture } {
-  const r = new Random(11);
+  const r = seedrandom(String(11));
   const height = new Float32Array(size);
   const tone = new Float32Array(size);
   const veins: { at: number; strength: number }[] = [];
@@ -60,8 +60,8 @@ function bladeTextures(palette: Palette): { color: THREE.DataTexture; normal: TH
   for (let k = 0; k < majors; k++) {
     const from = 0.06 + (k / majors) * 0.92;
     const to = 0.06 + ((k + 1) / majors) * 0.92;
-    veins.push({ at: from + r.range(-0.004, 0.004), strength: 1 });
-    for (let j = 1; j < 7; j++) veins.push({ at: from + ((to - from) * j) / 7 + r.range(-0.002, 0.002), strength: 0.3 });
+    veins.push({ at: from + (-0.004 + 0.008 * r()), strength: 1 });
+    for (let j = 1; j < 7; j++) veins.push({ at: from + ((to - from) * j) / 7 + (-0.002 + 0.004 * r()), strength: 0.3 });
   }
   for (let x = 0; x < size; x++) {
     // q: distance from the midrib in half-widths
@@ -182,7 +182,7 @@ interface LeafShape {
  * twisting, with crinkled margins.
  */
 export function leaf(base: THREE.Vector3, azimuth: number, s: LeafShape): THREE.BufferGeometry {
-  const r = new Random(s.seed);
+  const r = seedrandom(String(s.seed));
   const b = new MeshBuilder();
   const up = new THREE.Vector3(0, 1, 0);
   const out = new THREE.Vector3(Math.cos(azimuth), 0, Math.sin(azimuth));
@@ -190,8 +190,8 @@ export function leaf(base: THREE.Vector3, azimuth: number, s: LeafShape): THREE.
   const [segments, across] = s.segments ?? [48, 8];
   const p = base.clone();
   const rows: number[][] = [];
-  const ripple = r.range(50, 90);
-  const phase = r.range(0, 6);
+  const ripple = 50 + 40 * r();
+  const phase = 6 * r();
   const step = s.length / segments;
   const v = new THREE.Vector3();
   for (let i = 0; i <= segments; i++) {

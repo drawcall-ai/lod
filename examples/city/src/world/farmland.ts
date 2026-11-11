@@ -1,5 +1,5 @@
 import * as THREE from "three/webgpu";
-import { Random } from "../../public/shared/random.ts";
+import seedrandom from "seedrandom";
 import { Crop, type Land, Use } from "./land.ts";
 import { inForest, type Road, type Spot, spot } from "./plan.ts";
 import type { Forest } from "./zones.ts";
@@ -31,7 +31,7 @@ export function farmland(
   terrain: Terrain,
   roads: Road[],
   avoid: { town: { x: number; z: number; radius: number }; houses: Spot[]; forests: Forest[] },
-  r: Random,
+  r: seedrandom.PRNG,
   add: (id: string, spot: Spot) => void,
 ): void {
   const { town } = avoid;
@@ -48,9 +48,9 @@ export function farmland(
   const side = 2 * span;
   const segments = roads.flatMap((road) => road.points.slice(1).map((b, i) => ({ a: road.points[i] ?? b, b })));
   const regions = Array.from({ length: side * side }, (_, i) => {
-    const x = ((i % side) - span + 0.5 + r.range(-0.35, 0.35)) * REGION;
-    const z = (Math.floor(i / side) - span + 0.5 + r.range(-0.35, 0.35)) * REGION;
-    return { x, z, id: i, angle: roadAngle(segments, x, z), width: r.range(60, 150), length: r.range(160, 420) };
+    const x = ((i % side) - span + 0.5 + (-0.35 + 0.7 * r())) * REGION;
+    const z = (Math.floor(i / side) - span + 0.5 + (-0.35 + 0.7 * r())) * REGION;
+    return { x, z, id: i, angle: roadAngle(segments, x, z), width: 60 + 90 * r(), length: 160 + 260 * r() };
   });
   for (let k = 0; k < land.size * land.size; k++) {
     if (land.useOf(k) !== Use.Lawn) continue;
@@ -80,8 +80,8 @@ export function farmland(
     const length = region.length * (0.6 + 0.8 * hash(region.id, strip, 0));
     const field = Math.floor((u + hash(region.id, strip, 1) * length) / length);
     const id = Math.floor(hash(region.id, strip, field + 2) * 2 ** 30) + 1;
-    const parcel = new Random(id);
-    land.sow(k, pick(parcel), parcel.next(), region.angle + (parcel.chance(0.2) ? Math.PI / 2 : 0), id);
+    const parcel = seedrandom(String(id));
+    land.sow(k, pick(parcel), parcel(), region.angle + (parcel() < 0.2 ? Math.PI / 2 : 0), id);
   }
   hedgerows(land, terrain, r, add);
   avenues(roads, land, terrain, town, r, add);
@@ -119,14 +119,14 @@ function hash(a: number, b: number, c: number): number {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 
-function pick(r: Random): Crop {
-  let u = r.next();
+function pick(r: seedrandom.PRNG): Crop {
+  let u = r();
   for (const { crop, weight } of CROPS) if ((u -= weight) < 0) return crop;
   return Crop.Pasture;
 }
 
 /** Shrubs, and now and then a tree, along about half the boundaries between parcels. */
-function hedgerows(land: Land, terrain: Terrain, r: Random, add: (id: string, spot: Spot) => void) {
+function hedgerows(land: Land, terrain: Terrain, r: seedrandom.PRNG, add: (id: string, spot: Spot) => void) {
   const n = land.size;
   const hedged = (a: number, b: number) => {
     const lo = Math.min(a, b);
@@ -139,13 +139,13 @@ function hedgerows(land: Land, terrain: Terrain, r: Random, add: (id: string, sp
     const right = (k % n) + 1 < n ? land.parcelOf(k + 1) : 0;
     const below = k + n < n * n ? land.parcelOf(k + n) : 0;
     const other = right !== 0 && right !== p ? right : below !== 0 && below !== p ? below : 0;
-    if (other === 0 || !hedged(p, other) || !r.chance(0.42)) continue;
+    if (other === 0 || !hedged(p, other) || r() >= 0.42) continue;
     const { x, z } = land.centre(k);
-    const angle = r.range(0, Math.PI * 2);
-    const pick = r.next();
-    if (pick < 0.1) add("tree_small_02", spot(terrain, x, z, angle, r.range(2.0, 3.0)));
-    else if (pick < 0.18) add("searsia_lucida", spot(terrain, x, z, angle, r.range(1.6, 2.2)));
-    else add("shrub_02", spot(terrain, x, z, angle, r.range(1.2, 2.0)));
+    const angle = Math.PI * 2 * r();
+    const pick = r();
+    if (pick < 0.1) add("tree_small_02", spot(terrain, x, z, angle, 2.0 + 1 * r()));
+    else if (pick < 0.18) add("searsia_lucida", spot(terrain, x, z, angle, 1.6 + 0.6 * r()));
+    else add("shrub_02", spot(terrain, x, z, angle, 1.2 + 0.8 * r()));
   }
 }
 
@@ -155,12 +155,12 @@ function avenues(
   land: Land,
   terrain: Terrain,
   town: { x: number; z: number; radius: number },
-  r: Random,
+  r: seedrandom.PRNG,
   add: (id: string, spot: Spot) => void,
 ) {
   for (const road of roads.filter((x) => x.kind === "main")) {
     let along = 0;
-    let lined = r.chance(0.6);
+    let lined = r() < 0.6;
     road.points.forEach((p, i) => {
       const q = road.points[i + 1];
       if (!q) return;
@@ -172,7 +172,7 @@ function avenues(
         along += 14;
         if (along > 220) {
           along = 0;
-          lined = r.chance(0.6);
+          lined = r() < 0.6;
         }
         if (!lined) continue;
         const at = p.clone().addScaledVector(dir, t);
@@ -180,7 +180,7 @@ function avenues(
         for (const side of [1, -1]) {
           const tree = at.clone().addScaledVector(out, side * (road.width / 2 + 3.5));
           const use = land.at(tree.x, tree.y);
-          if (use === Use.Lawn || use === Use.Crop) add("tree_small_02", spot(terrain, tree.x, tree.y, r.range(0, 6.3), r.range(2.3, 3.0)));
+          if (use === Use.Lawn || use === Use.Crop) add("tree_small_02", spot(terrain, tree.x, tree.y, 6.3 * r(), 2.3 + 0.7 * r()));
         }
       }
     });
