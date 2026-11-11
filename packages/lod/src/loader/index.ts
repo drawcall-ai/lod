@@ -8,7 +8,6 @@ import { framePixels } from "../impostor/impostor.js";
 import { resolveThresholds, type LodLevel } from "../levels/index.js";
 import { meshoptDecoder } from "../meshopt.js";
 import { isMesh, isObject3D, rejectSkinned } from "../three.js";
-import { buildLevel } from "./build.js";
 import { LodLoadContext } from "./context.js";
 import { entryOf } from "./entry.js";
 import { decodeLevel, encodeLevel, encodeShape, placedBox, readLevel, readShape, shapeOf, type Entry } from "./level.js";
@@ -191,6 +190,8 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
       rejectSkinned(source, "CachedLodLoader");
       low = await load("low");
       interior = await load("interior");
+      // Only a miss builds: simplify, the bakes and their WASM stay out of pages whose levels are all stored.
+      const { buildLevel } = await import("./build.js");
       built = await buildLevel(source, request, { low, interior }, () => this.bakeRenderer());
       return await encodeLevel(built, request.type, shapeOf(source), materialsOf(source));
     } finally {
