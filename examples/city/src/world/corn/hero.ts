@@ -4,10 +4,11 @@ import { arriving, manager } from "../../loading.ts";
 import { sourceBox } from "../bounds.ts";
 import type { Terrain } from "../terrain.ts";
 import { loadHero } from "./levels.ts";
+import { seatMatrix } from "./seat.ts";
 
 const loadLadybird = () =>
   new CachedLodLoader(manager, arriving()).loadAsync({
-    url: "/corn/ladybird.glts?variant=2",
+    url: "/ladybird/index.glts",
     levels: [
       { type: "impostor", maxPixels: 20, resolution: 64 },
       { type: "empty", maxPixels: 2 },
@@ -29,8 +30,8 @@ export async function heroPlant(
   hero.rotation.y = spot.yaw;
   const ladybird = new Lod(ladybirdLevels, gpu);
   ladybird.name = "ladybird";
-  ladybird.position.copy(at);
-  ladybird.rotation.y = spot.yaw;
+  hero.updateMatrix();
+  hero.matrix.clone().multiply(seatMatrix()).decompose(ladybird.position, ladybird.quaternion, ladybird.scale);
   ladybird.updateMatrixWorld();
   const anchor = centre.applyMatrix4(ladybird.matrixWorld);
   return { hero, ladybird, anchors: { hero: at, ladybird: anchor } };

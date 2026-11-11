@@ -1,0 +1,193 @@
+import { disposeRecursive, loadingManager, onDispose, scene } from "@drawcall/glts";
+import * as THREE from "three/webgpu";
+import { mergeGeometries, mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
+import { clamp, Fn, materialColor, max, mix, mx_noise_float, positionGeometry, smoothstep, vec3, vec4 } from "three/tsl";
+
+/**
+ * A garden shed, 2.4 × 1.8 m, its door on the front (+z): plank walls on a concrete
+ * footing, a pitched roof of corrugated iron with a little overhang.
+ */
+function shed(manager: THREE.LoadingManager): THREE.Group {
+  const color = "#d9d4c8";
+  const parts = new Parts();
+  const planks = surface(manager, "white_planks_clean", { color, weather: 0.9, roughness: 1.2 });
+  const iron = surface(manager, "corrugated_iron", { normalScale: 1.5, weather: 0.8 });
+  const concrete = surface(manager, "brushed_concrete_04", { weather: 0.6 });
+  const w = 2.4;
+  const d = 1.8;
+  const h = 2.0;
+  const pitch = 0.45;
+  parts.add(concrete, box(w + 0.1, 0.1, d + 0.1).translate(0, 0.05, 0));
+  parts.add(planks, box(w, h, d).translate(0, 0.1 + h / 2, 0));
+  // gable ends under the ridge (the ridge runs along x)
+  const gable = new THREE.Shape([new THREE.Vector2(-d / 2, 0), new THREE.Vector2(d / 2, 0), new THREE.Vector2(0, (d / 2) * Math.tan(pitch))]);
+  for (const s of [-1, 1]) parts.add(planks, new THREE.ShapeGeometry(gable).rotateY(s * (Math.PI / 2)).translate((s * w) / 2, 0.1 + h, 0));
+  const slope = d / 2 / Math.cos(pitch) + 0.15;
+  for (const s of [-1, 1])
+    parts.add(
+      iron,
+      box(w + 0.3, 0.03, slope)
+        .translate(0, 0, slope / 2)
+        .rotateX(s > 0 ? pitch : Math.PI - pitch)
+        .translate(0, 0.1 + h + (d / 2) * Math.tan(pitch) + 0.02, 0),
+    );
+  parts.add(surface(manager, "distressed_painted_planks", { weather: 0.8 }), box(0.85, 1.75, 0.04).translate(0.4, 0.1 + 0.875, d / 2 + 0.02));
+  return parts.build("shed");
+}
+
+/** Metres one repeat of each Poly Haven texture set the shed uses covers, as Poly Haven measures them. */
+const TILE = { brushed_concrete_04: 2, corrugated_iron: 1.12, distressed_painted_planks: 1.6, white_planks_clean: 1.8 };
+
+interface SurfaceOptions {
+  /** Multiplies the base colour map. */
+  color?: THREE.ColorRepresentation;
+  normalScale?: number;
+  /** Multiplies the roughness map. */
+  roughness?: number;
+  /** Strength of procedural weathering (0–1). */
+  weather: number;
+}
+
+/**
+ * A weathered standard material from a Poly Haven texture set in public/assets/textures (see scripts/fetch-assets.ts),
+ * its maps loading through `manager`, so the script's load waits for them.
+ */
+function surface(manager: THREE.LoadingManager, id: keyof typeof TILE, { color = 0xffffff, normalScale = 1, roughness = 1, weather }: SurfaceOptions) {
+  const map = (name: "diff" | "nor" | "arm") => {
+    const texture = new THREE.Texture();
+    texture.flipY = false;
+    texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.setScalar(1 / TILE[id]);
+    texture.anisotropy = 8;
+    texture.colorSpace = name === "diff" ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+    const url = new URL(`../assets/textures/${id}/${name}.webp`, import.meta.url).href;
+    new THREE.ImageBitmapLoader(manager).setOptions({ imageOrientation: "flipY", premultiplyAlpha: "none" }).load(url, (image) => {
+      texture.image = image;
+      texture.needsUpdate = true;
+    });
+    return texture;
+  };
+  const arm = map("arm");
+  const m = new THREE.MeshStandardNodeMaterial({
+    name: id,
+    color,
+    map: map("diff"),
+    normalMap: map("nor"),
+    normalScale: new THREE.Vector2(normalScale, normalScale),
+    aoMap: arm,
+    roughnessMap: arm,
+    roughness,
+    // arm stores metalness in blue, which Poly Haven leaves at zero for non-metals
+    metalnessMap: arm,
+    metalness: 1,
+  });
+  // the map's colour (and alpha) darkened: three multiplies vertex colours in after
+  m.colorNode = baseColor.mul(vec4(grime(weather), 1));
+  return m;
+}
+
+/**
+ * Procedural weathering in object space (origin on the ground): broad blotchy discolouring, vertical rain streaks, and
+ * splash dirt along the bottom 60 cm. Tiling textures repeat every metre or two; this breaks the repetition the way
+ * real grime does.
+ */
+function grime(strength: number): THREE.Node<"vec3"> {
+  const p = positionGeometry;
+  // MaterialX's Perlin noise, which spans about [-1, 1], remapped to [0, 1], where the grime below was tuned
+  const noise = (q: THREE.Node<"vec3">) => mx_noise_float(q, 0.5, 0.5);
+  const blotch = noise(p.mul(0.6))
+    .mul(0.55)
+    .add(noise(p.mul(2.1)).mul(0.3))
+    .add(noise(p.mul(8)).mul(0.15));
+  const streak = noise(vec3(p.x.mul(7).add(p.z.mul(7)), p.y.mul(0.4), 0)).mul(noise(p.mul(1.3)));
+  const splash = smoothstep(0, 0.7, p.y).oneMinus();
+  const dirt = blotch
+    .sub(0.45)
+    .mul(0.7)
+    .add(max(streak.sub(0.3), 0).mul(1.6))
+    .add(splash.mul(noise(p.mul(5)).mul(0.5).add(0.45)));
+  return mix(vec3(1), vec3(0.5, 0.45, 0.37), clamp(dirt.mul(strength), -0.25, 0.9));
+}
+
+/**
+ * A material's colour times its map, its alpha included: three's `materialColor`, which builds to a vec4 where the
+ * material has a map, and to a vec3 (typed so) where not.
+ */
+const baseColor = Fn(() => {
+  const color = vec4(1).toVar();
+  color.assign(materialColor);
+  return color;
+})();
+
+/** A box with UVs in metres on every face, so tiling textures keep their real-world scale. */
+function box(w: number, h: number, d: number): THREE.BufferGeometry {
+  const g = new THREE.BoxGeometry(w, h, d);
+  const uv = g.getAttribute("uv");
+  // BoxGeometry faces in order ±x, ±y, ±z, four vertices each; [u span, v span] per face
+  const spans = [
+    [d, h],
+    [d, h],
+    [w, d],
+    [w, d],
+    [w, h],
+    [w, h],
+  ];
+  for (let i = 0; i < uv.count; i++) {
+    const [su = 1, sv = 1] = spans[Math.floor(i / 4)] ?? [];
+    uv.setXY(i, uv.getX(i) * su, uv.getY(i) * sv);
+  }
+  return g;
+}
+
+/**
+ * Collects geometry per material and builds one shadowed mesh per material. `at(matrix)`
+ * returns a view that places everything added through it in a local frame.
+ */
+class Parts {
+  constructor(
+    private readonly byMaterial = new Map<THREE.Material, THREE.BufferGeometry[]>(),
+    private readonly matrix?: THREE.Matrix4,
+  ) {}
+
+  at(matrix: THREE.Matrix4): Parts {
+    return new Parts(this.byMaterial, this.matrix ? this.matrix.clone().multiply(matrix) : matrix);
+  }
+
+  add(material: THREE.Material, ...geometries: THREE.BufferGeometry[]): void {
+    const list = this.byMaterial.get(material) ?? [];
+    for (const g of geometries) list.push(this.matrix ? g.applyMatrix4(this.matrix) : g);
+    this.byMaterial.set(material, list);
+  }
+
+  build(name: string): THREE.Group {
+    const group = new THREE.Group();
+    group.name = name;
+    for (const [material, list] of this.byMaterial) {
+      const mesh = new THREE.Mesh(merge(list), material);
+      mesh.name = `${name}:${material.name}`;
+      mesh.castShadow = mesh.receiveShadow = true;
+      group.add(mesh);
+    }
+    return group;
+  }
+}
+
+/** Merges geometries that share attributes; non-indexed inputs get an index first. */
+function merge(list: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  const parts = list.map((g) => (g.index ? strip(g) : mergeVertices(strip(g))));
+  const merged = mergeGeometries(parts);
+  if (!merged) throw new Error("mergeGeometries failed: inputs have different attributes");
+  return merged;
+}
+
+/** Keeps only the attributes all generators share, so any two parts can merge. */
+function strip(g: THREE.BufferGeometry): THREE.BufferGeometry {
+  for (const name of Object.keys(g.attributes)) if (!["position", "normal", "uv", "color"].includes(name)) g.deleteAttribute(name);
+  g.morphAttributes = {};
+  g.clearGroups();
+  return g;
+}
+
+const object = shed(loadingManager);
+onDispose(() => disposeRecursive(scene));
+scene.add(object);

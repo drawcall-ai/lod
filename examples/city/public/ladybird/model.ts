@@ -1,6 +1,6 @@
 import * as THREE from "three/webgpu";
 import { MeshBuilder, Parts, tint, tube } from "./geometry.ts";
-import { blackMaterial, shellMaterial, pronotumMaterial, headMaterial } from "./ladybird-materials.ts";
+import { blackMaterial, shellMaterial, pronotumMaterial, headMaterial } from "./materials.ts";
 
 /** The model is laid out in millimetres and scaled to metres at the end. */
 const mm = 0.001;

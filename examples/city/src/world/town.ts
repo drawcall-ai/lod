@@ -20,7 +20,7 @@ export interface Town {
   paths: Road[];
   /** Where the church stands (its front facing the plaza). */
   church: Spot;
-  /** Garden things by name (see `public/garden/model.ts`): sheds, letterboxes, greenhouses… */
+  /** Garden things by name (each in its own public/ folder): sheds, letterboxes, greenhouses… */
   garden: Map<string, Spot[]>;
   /** Clipped hedge sections (2 m, running along the spot's +x). */
   hedges: Spot[];

@@ -4,11 +4,11 @@ import { arriving, manager } from "../loading.ts";
 import { instancedAt, type Tint } from "./place.ts";
 import type { Plan } from "./plan.ts";
 
-/** Each garden thing, by the name its query builds. */
+/** Each garden thing, by name. */
 const THINGS: Record<string, () => Promise<LodLevel[]>> = {
   letterbox: () =>
     new CachedLodLoader(manager, arriving()).loadAsync({
-      url: "/garden/index.glts?name=letterbox",
+      url: "/letterbox/index.glts",
       levels: [
         { type: "impostor", layout: "hemi", maxPixels: 40, resolution: 64 },
         { type: "empty", maxPixels: 3 },
@@ -16,7 +16,7 @@ const THINGS: Record<string, () => Promise<LodLevel[]>> = {
     }),
   "patio set": () =>
     new CachedLodLoader(manager, arriving()).loadAsync({
-      url: "/garden/index.glts?name=patio+set",
+      url: "/patio-set/index.glts",
       levels: [
         { type: "impostor", layout: "hemi", maxPixels: 40, resolution: 64 },
         { type: "empty", maxPixels: 3 },
@@ -24,7 +24,7 @@ const THINGS: Record<string, () => Promise<LodLevel[]>> = {
     }),
   shed: () =>
     new CachedLodLoader(manager, arriving()).loadAsync({
-      url: "/garden/index.glts?name=shed",
+      url: "/shed/index.glts",
       levels: [
         { type: "impostor", layout: "hemi", maxPixels: 40, resolution: 64 },
         { type: "empty", maxPixels: 3 },
@@ -32,7 +32,7 @@ const THINGS: Record<string, () => Promise<LodLevel[]>> = {
     }),
   greenhouse: () =>
     new CachedLodLoader(manager, arriving()).loadAsync({
-      url: "/garden/index.glts?name=greenhouse",
+      url: "/greenhouse/index.glts",
       levels: [
         { type: "impostor", layout: "hemi", maxPixels: 40, resolution: 64 },
         { type: "empty", maxPixels: 3 },
@@ -40,7 +40,7 @@ const THINGS: Record<string, () => Promise<LodLevel[]>> = {
     }),
   "washing line": () =>
     new CachedLodLoader(manager, arriving()).loadAsync({
-      url: "/garden/index.glts?name=washing+line",
+      url: "/washing-line/index.glts",
       levels: [
         { type: "impostor", layout: "hemi", maxPixels: 40, resolution: 64 },
         { type: "empty", maxPixels: 3 },
@@ -48,7 +48,7 @@ const THINGS: Record<string, () => Promise<LodLevel[]>> = {
     }),
   swing: () =>
     new CachedLodLoader(manager, arriving()).loadAsync({
-      url: "/garden/index.glts?name=swing",
+      url: "/swing/index.glts",
       levels: [
         { type: "impostor", layout: "hemi", maxPixels: 40, resolution: 64 },
         { type: "empty", maxPixels: 3 },

@@ -134,7 +134,7 @@ export function garden(town: Town, add: (id: string, at: Spot) => void, terrain:
   }
 }
 
-/** Adds a garden thing (see `public/garden/model.ts`) by name. */
+/** Adds a garden thing (an asset in public/, one folder per thing) by name. */
 function item(town: Town, name: GardenItem, at: Spot): void {
   town.garden.set(name, [...(town.garden.get(name) ?? []), at]);
 }

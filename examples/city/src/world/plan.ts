@@ -56,7 +56,7 @@ export interface Plan {
   houses: { variant: number; spot: Spot }[];
   /** Fence bays (2.4 m, running along the spot's +x). */
   fences: Spot[];
-  /** Garden things by name (see `public/garden/model.ts`). */
+  /** Garden things by name (each in its own public/ folder). */
   garden: Map<string, Spot[]>;
   hedges: Spot[];
   church: Spot;

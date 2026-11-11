@@ -1,5 +1,206 @@
 import { disposeRecursive, loadingManager, onDispose, scene } from "@drawcall/glts";
-import { streetSign } from "./model.ts";
+import * as THREE from "three/webgpu";
+import { mergeGeometries, mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
+import { face } from "./face.ts";
+import { clamp, Fn, materialColor, max, mix, mx_noise_float, positionGeometry, smoothstep, vec3, vec4 } from "three/tsl";
+
+const plate = { w: 0.76, h: 0.17, corner: 0.02, thick: 0.002 };
+
+/**
+ * A street-name sign: a galvanised post with a domed cap, a cast bracket on top holding an
+ * aluminium blade, printed on both faces with the name in white on green reflective sheeting.
+ */
+function streetSign(manager: THREE.LoadingManager, text: string): THREE.Group {
+  const parts = new Parts();
+  const galvanised = galvanisedMaterial(manager);
+  const height = 2.55;
+  parts.add(galvanised, new THREE.CylinderGeometry(0.03, 0.03, height, 20).translate(0, height / 2, 0));
+  parts.add(galvanised, new THREE.SphereGeometry(0.032, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2).translate(0, height, 0));
+  parts.add(galvanised, new THREE.CylinderGeometry(0.036, 0.036, 0.1, 20).translate(0, height - 0.12, 0));
+  parts.add(galvanised, box(0.05, 0.04, 0.012).translate(0, height + 0.01, 0));
+
+  const y = height + 0.03 + plate.h / 2;
+  parts.add(galvanised, box(plate.w * 0.9, 0.012, 0.012).translate(0, y - plate.h / 2 - 0.006, 0));
+  parts.add(galvanised, box(plate.w * 0.9, 0.012, 0.012).translate(0, y + plate.h / 2 + 0.006, 0));
+  const outline = roundedRect(plate.w, plate.h, plate.corner);
+  const blade = new THREE.ExtrudeGeometry(outline, { depth: plate.thick, bevelEnabled: false, curveSegments: 4 });
+  parts.add(galvanised, blade.translate(0, y, -plate.thick / 2));
+  const face = faceMaterial(text);
+  for (const side of [0, 1]) {
+    const g = new THREE.ShapeGeometry(outline, 4);
+    const uv = g.getAttribute("uv");
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) / plate.w + 0.5, uv.getY(i) / plate.h + 0.5);
+    g.translate(0, 0, plate.thick / 2 + 0.0003)
+      .rotateY(side * Math.PI)
+      .translate(0, y, 0);
+    parts.add(face, g);
+  }
+  return parts.build("sign");
+}
+
+function roundedRect(w: number, h: number, r: number): THREE.Shape {
+  const s = new THREE.Shape();
+  s.moveTo(-w / 2 + r, -h / 2);
+  s.lineTo(w / 2 - r, -h / 2);
+  s.quadraticCurveTo(w / 2, -h / 2, w / 2, -h / 2 + r);
+  s.lineTo(w / 2, h / 2 - r);
+  s.quadraticCurveTo(w / 2, h / 2, w / 2 - r, h / 2);
+  s.lineTo(-w / 2 + r, h / 2);
+  s.quadraticCurveTo(-w / 2, h / 2, -w / 2, h / 2 - r);
+  s.lineTo(-w / 2, -h / 2 + r);
+  s.quadraticCurveTo(-w / 2, -h / 2, -w / 2 + r, -h / 2);
+  return s;
+}
+
+/** Reflective sheeting printed with a border and the street name, plus faint grime. */
+function faceMaterial(text: string): THREE.Material {
+  const w = 1600;
+  const h = Math.round((w * plate.h) / plate.w);
+  const map = new THREE.DataTexture(face(text, w, h), w, h);
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.anisotropy = 8;
+  map.generateMipmaps = true;
+  map.minFilter = THREE.LinearMipmapLinearFilter;
+  map.magFilter = THREE.LinearFilter;
+  map.needsUpdate = true;
+  return new THREE.MeshStandardMaterial({ name: "street-sign", map, roughness: 0.38, metalness: 0 });
+}
+
+/** A box with UVs in metres on every face, so tiling textures keep their real-world scale. */
+function box(w: number, h: number, d: number): THREE.BufferGeometry {
+  const g = new THREE.BoxGeometry(w, h, d);
+  const uv = g.getAttribute("uv");
+  // BoxGeometry faces in order ±x, ±y, ±z, four vertices each; [u span, v span] per face
+  const spans = [
+    [d, h],
+    [d, h],
+    [w, d],
+    [w, d],
+    [w, h],
+    [w, h],
+  ];
+  for (let i = 0; i < uv.count; i++) {
+    const [su = 1, sv = 1] = spans[Math.floor(i / 4)] ?? [];
+    uv.setXY(i, uv.getX(i) * su, uv.getY(i) * sv);
+  }
+  return g;
+}
+
+/**
+ * Collects geometry per material and builds one shadowed mesh per material. `at(matrix)`
+ * returns a view that places everything added through it in a local frame.
+ */
+class Parts {
+  constructor(
+    private readonly byMaterial = new Map<THREE.Material, THREE.BufferGeometry[]>(),
+    private readonly matrix?: THREE.Matrix4,
+  ) {}
+
+  at(matrix: THREE.Matrix4): Parts {
+    return new Parts(this.byMaterial, this.matrix ? this.matrix.clone().multiply(matrix) : matrix);
+  }
+
+  add(material: THREE.Material, ...geometries: THREE.BufferGeometry[]): void {
+    const list = this.byMaterial.get(material) ?? [];
+    for (const g of geometries) list.push(this.matrix ? g.applyMatrix4(this.matrix) : g);
+    this.byMaterial.set(material, list);
+  }
+
+  build(name: string): THREE.Group {
+    const group = new THREE.Group();
+    group.name = name;
+    for (const [material, list] of this.byMaterial) {
+      const mesh = new THREE.Mesh(merge(list), material);
+      mesh.name = `${name}:${material.name}`;
+      mesh.castShadow = mesh.receiveShadow = true;
+      group.add(mesh);
+    }
+    return group;
+  }
+}
+
+/** Merges geometries that share attributes; non-indexed inputs get an index first. */
+function merge(list: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  const parts = list.map((g) => (g.index ? strip(g) : mergeVertices(strip(g))));
+  const merged = mergeGeometries(parts);
+  if (!merged) throw new Error("mergeGeometries failed: inputs have different attributes");
+  return merged;
+}
+
+/** Keeps only the attributes all generators share, so any two parts can merge. */
+function strip(g: THREE.BufferGeometry): THREE.BufferGeometry {
+  for (const name of Object.keys(g.attributes)) if (!["position", "normal", "uv", "color"].includes(name)) g.deleteAttribute(name);
+  g.morphAttributes = {};
+  g.clearGroups();
+  return g;
+}
+
+/** Weathered galvanised steel: the relief and roughness of metal_plate_02 (2 m a repeat) under a flat metal colour. */
+function galvanisedMaterial(manager: THREE.LoadingManager): THREE.MeshStandardNodeMaterial {
+  const arm = texture(manager, "metal_plate_02", "arm", 2);
+  const m = new THREE.MeshStandardNodeMaterial({
+    name: "galvanised",
+    color: "#b9bdbd",
+    normalMap: texture(manager, "metal_plate_02", "nor", 2),
+    normalScale: new THREE.Vector2(0.25, 0.25),
+    aoMap: arm,
+    roughnessMap: arm,
+    roughness: 0.8,
+    metalness: 1,
+  });
+  m.colorNode = baseColor.mul(vec4(grime(0.6), 1));
+  return m;
+}
+
+/** Map `name` of Poly Haven set `id` in public/assets/textures (see scripts/fetch-assets.ts), one repeat over `size` metres. */
+function texture(manager: THREE.LoadingManager, id: string, name: "diff" | "nor" | "arm", size: number): THREE.Texture {
+  const texture = new THREE.Texture();
+  texture.flipY = false;
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.setScalar(1 / size);
+  texture.anisotropy = 8;
+  texture.colorSpace = name === "diff" ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+  const url = new URL(`../assets/textures/${id}/${name}.webp`, import.meta.url).href;
+  // through the script's manager, so its load waits for the image
+  new THREE.ImageBitmapLoader(manager).setOptions({ imageOrientation: "flipY", premultiplyAlpha: "none" }).load(url, (image) => {
+    texture.image = image;
+    texture.needsUpdate = true;
+  });
+  return texture;
+}
+
+/**
+ * Procedural weathering in object space (origin on the ground): broad blotchy discolouring, vertical rain streaks, and
+ * splash dirt along the bottom 60 cm. Tiling textures repeat every metre or two; this breaks the repetition the way
+ * real grime does.
+ */
+function grime(strength: number): THREE.Node<"vec3"> {
+  const p = positionGeometry;
+  // MaterialX's Perlin noise, which spans about [-1, 1], remapped to [0, 1], where the grime below was tuned
+  const noise = (q: THREE.Node<"vec3">) => mx_noise_float(q, 0.5, 0.5);
+  const blotch = noise(p.mul(0.6))
+    .mul(0.55)
+    .add(noise(p.mul(2.1)).mul(0.3))
+    .add(noise(p.mul(8)).mul(0.15));
+  const streak = noise(vec3(p.x.mul(7).add(p.z.mul(7)), p.y.mul(0.4), 0)).mul(noise(p.mul(1.3)));
+  const splash = smoothstep(0, 0.7, p.y).oneMinus();
+  const dirt = blotch
+    .sub(0.45)
+    .mul(0.7)
+    .add(max(streak.sub(0.3), 0).mul(1.6))
+    .add(splash.mul(noise(p.mul(5)).mul(0.5).add(0.45)));
+  return mix(vec3(1), vec3(0.5, 0.45, 0.37), clamp(dirt.mul(strength), -0.25, 0.9));
+}
+
+/**
+ * A material's colour times its map, its alpha included: three's `materialColor`, which builds to a vec4 where the
+ * material has a map, and to a vec3 (typed so) where not.
+ */
+const baseColor = Fn(() => {
+  const color = vec4(1).toVar();
+  color.assign(materialColor);
+  return color;
+})();
 
 const text = new URL(import.meta.url).searchParams.get("text") ?? "Maple St";
 const object = streetSign(loadingManager, text);

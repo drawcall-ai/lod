@@ -8,6 +8,7 @@ import { heights, houseParams, HOUSE_VARIANTS } from "../../public/house/params.
 import { facades } from "../../public/house/facades.ts";
 import { ceiling } from "../../public/house/furnishings.ts";
 import { Materials } from "../../public/house/materials.ts";
+import { seatMatrix } from "../world/corn/seat.ts";
 import { foliageModel } from "@drawcall/lod";
 import { MODEL_FOLIAGE } from "../world/trees.ts";
 import { terrain } from "../render/ground/material.ts";
@@ -115,7 +116,8 @@ async function interiorPlanItem(textures: Textures, variant: number): Promise<Co
 
 /** The hero ladybird and its actual plant, framed tight around the beetle. */
 async function ladybirdItem(textures: Textures, load: Load): Promise<Content> {
-  const [plant, ladybird] = await Promise.all([load(`corn/index.glts?variant=${HERO_VARIANT}&hero=1`), load(`corn/ladybird.glts?variant=${HERO_VARIANT}`)]);
+  const [plant, ladybird] = await Promise.all([load(`corn/index.glts?variant=${HERO_VARIANT}&hero=1`), load("ladybird/index.glts")]);
+  ladybird.applyMatrix4(seatMatrix());
   const object = new THREE.Group().add(plant, ladybird);
   return { object, focus: new THREE.Box3().setFromObject(ladybird), ground: terrain(textures) };
 }
