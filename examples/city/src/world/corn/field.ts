@@ -49,11 +49,11 @@ export function cut(plan: Plan, designs: number, top: number): Tile[] {
         const centre = new THREE.Vector3(0, top, 0).applyMatrix4(matrix);
         // outer sides in the field's frame (sign), seen from the block turned or not
         const walls: TileWall[] = [];
-        const wall = (which: Wall, sign: number) => walls.push({ wall: which, turned: sign * s < 0 });
-        if (i === 0) wall("x", -1);
-        if (i + 1 >= across) wall("x", 1);
-        if (j === 0) wall("z", -1);
-        if (j + 1 >= along) wall("z", 1);
+        const addWall = (wall: Wall, sign: number) => walls.push({ wall, turned: sign * s < 0 });
+        if (i === 0) addWall("x", -1);
+        if (i + 1 >= across) addWall("x", 1);
+        if (j === 0) addWall("z", -1);
+        if (j + 1 >= along) addWall("z", 1);
         tiles.push({
           design: Math.floor(designs * r()),
           matrix,

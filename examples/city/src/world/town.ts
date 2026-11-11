@@ -5,7 +5,7 @@ import { footing, inRect, PAVEMENT, spot, type Rect, type Road, type Spot } from
 import { fence, frontHedge, garden, type Fixture } from "./gardens.ts";
 import type { Terrain } from "./terrain.ts";
 
-/** The street names on the street signs at the crossings, each a street sign of its own (see props.ts). */
+/** The street names on the street signs at the junctions, each a street sign of its own (see props.ts). */
 export const STREET_NAMES = ["Maple St", "Church Rd", "Mill Lane", "Oak Ave", "High St", "Elm St"] as const;
 export type StreetName = (typeof STREET_NAMES)[number];
 
@@ -143,7 +143,7 @@ export function town(centre: { x: number; z: number; angle: number; radius: numb
       }
     }
   }
-  // a street sign at the corner of each crossing, the street names taking turns
+  // a street sign at the corner of each junction of three or more streets, the street names taking turns
   const names = cycle(STREET_NAMES);
   for (const { i, j, streets } of junctions.values()) {
     if (streets < 3) continue;
