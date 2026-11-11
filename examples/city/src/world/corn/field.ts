@@ -5,10 +5,11 @@ import type { InstancedLod } from "@drawcall/lod";
 import type { NearTile, TileChunk } from "../near-tiles.ts";
 import { axes, type Field, type Plan } from "../plan.ts";
 import type { Terrain } from "../terrain.ts";
+import type { Wall } from "../../../public/corn/block/model.ts";
 
 /** A side of a block on its field's boundary: rows end there (`x`) or run along it (`z`), on the block's +side or, turned, its -side. */
-export interface Wall {
-  axis: "x" | "z";
+export interface TileWall {
+  wall: Wall;
   turned: boolean;
 }
 
@@ -22,7 +23,7 @@ export interface Tile {
   field: Field;
   /** Turned half round. */
   flip: boolean;
-  walls: Wall[];
+  walls: TileWall[];
 }
 
 /** The fields cut into block tiles, each with one of `designs` designs, its frame and outer walls; `top` is the height of the tiles' centres. */
@@ -47,8 +48,8 @@ export function cut(plan: Plan, designs: number, top: number): Tile[] {
         const matrix = new THREE.Matrix4().makeBasis(x, new THREE.Vector3(0, 1, 0), z).setPosition(cx, plan.terrain.height(cx, cz), cz);
         const centre = new THREE.Vector3(0, top, 0).applyMatrix4(matrix);
         // outer sides in the field's frame (sign), seen from the block turned or not
-        const walls: Wall[] = [];
-        const wall = (axis: "x" | "z", sign: number) => walls.push({ axis, turned: sign * s < 0 });
+        const walls: TileWall[] = [];
+        const wall = (which: Wall, sign: number) => walls.push({ wall: which, turned: sign * s < 0 });
         if (i === 0) wall("x", -1);
         if (i + 1 >= across) wall("x", 1);
         if (j === 0) wall("z", -1);

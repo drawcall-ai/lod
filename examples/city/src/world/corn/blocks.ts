@@ -99,23 +99,23 @@ function canopyBlock(bake: THREE.Mesh, design: number, tiles: Tile[], skirt: Ski
   };
 }
 
-function wallBlock(bake: THREE.Mesh, which: Wall, tiles: Tile[], skirt: Skirt, gpu: LodGpu): Block {
+function wallBlock(bake: THREE.Mesh, wall: Wall, tiles: Tile[], skirt: Skirt, gpu: LodGpu): Block {
   // The bake's shell ends at the ground, inside the plants' bounds; up close the wall reaches into the soil.
   const geometry = bake.geometry.clone();
   const position = geometry.getAttribute("position");
   for (let i = 0; i < position.count; i++) if (position.getY(i) === 0) position.setY(i, -SINK);
-  const wall = new THREE.Mesh(geometry, rising(blockMaterial(bake), skirt));
-  wall.castShadow = wall.receiveShadow = true;
+  const mesh = new THREE.Mesh(geometry, rising(blockMaterial(bake), skirt));
+  mesh.castShadow = mesh.receiveShadow = true;
   const turn = new THREE.Matrix4().makeRotationY(Math.PI);
   const places = tiles.flatMap((tile) =>
     tile.walls
-      .filter((side) => side.axis === which)
-      .map((side) => ({ matrix: side.turned ? tile.matrix.clone().multiply(turn) : tile.matrix, at: tile.centre })),
+      .filter((tileWall) => tileWall.wall === wall)
+      .map((tileWall) => ({ matrix: tileWall.turned ? tile.matrix.clone().multiply(turn) : tile.matrix, at: tile.centre })),
   );
   return {
     kind: "wall",
-    lod: blockLod(gpu, `corn wall ${which}`, [wall], places),
-    diameter: new THREE.Box3().setFromObject(wall).getSize(new THREE.Vector3()).length(),
+    lod: blockLod(gpu, `corn wall ${wall}`, [mesh], places),
+    diameter: new THREE.Box3().setFromObject(mesh).getSize(new THREE.Vector3()).length(),
   };
 }
 
