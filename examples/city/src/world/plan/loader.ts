@@ -7,6 +7,7 @@ import { decode, encode } from "./codec.ts";
 const code: Input[] = [
   ...Object.keys(import.meta.glob(["/src/world/**/*.ts", "/public/**/*.ts"])).map((path) => ({ path: path.slice(1) })),
   { package: "three" },
+  { package: "seedrandom" },
 ];
 
 /** Plans the city, which takes seconds; the vitecache plugin plans the seeds the app loads literally. */
