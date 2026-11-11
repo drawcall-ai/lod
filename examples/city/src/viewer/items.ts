@@ -1,5 +1,4 @@
-import { dispose } from "../../public/shared/dispose.ts";
-import type { GLTSLoader, GLTSScene } from "@drawcall/glts";
+import { disposeRecursive, type GLTSLoader, type GLTSScene } from "@drawcall/glts";
 import * as THREE from "three/webgpu";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
@@ -231,9 +230,9 @@ export async function buildItem(scripts: GLTSLoader, models: Models, name: strin
     for (const scene of scenes) scene.dispose();
     scenes.clear();
     if (!shown) return;
-    dispose(shown.object);
+    disposeRecursive(shown.object);
     // The ground's material and textures, freed as a mesh's are.
-    dispose(new THREE.Mesh(undefined, shown.ground));
+    disposeRecursive(new THREE.Mesh(undefined, shown.ground));
   };
   const load: Load = async (path) => {
     const scene = await scripts.loadAsync(`/${path}`);

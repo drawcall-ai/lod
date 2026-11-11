@@ -1,5 +1,4 @@
-import { loadingManager, onDispose, scene } from "@drawcall/glts";
-import { dispose } from "../shared/dispose.ts";
+import { disposeRecursive, loadingManager, onDispose, scene } from "@drawcall/glts";
 import { hedge } from "./model.ts";
 
 const query = new URL(import.meta.url).searchParams;
@@ -11,5 +10,5 @@ const variant = Number(variantText);
 if (!/^\d+$/.test(variantText)) throw new Error(`hedge: variant must be a whole number, not ${variantText}`);
 // Seeds start at 1, which keeps the hedges the variants were first tuned with.
 const object = hedge(loadingManager, length, variant + 1);
-onDispose(() => dispose(object));
+onDispose(() => disposeRecursive(scene));
 scene.add(object);

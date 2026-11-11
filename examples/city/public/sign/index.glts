@@ -1,8 +1,7 @@
-import { loadingManager, onDispose, scene } from "@drawcall/glts";
-import { dispose } from "../shared/dispose.ts";
+import { disposeRecursive, loadingManager, onDispose, scene } from "@drawcall/glts";
 import { streetSign } from "./model.ts";
 
 const text = new URL(import.meta.url).searchParams.get("text") ?? "Maple St";
 const object = streetSign(loadingManager, text);
-onDispose(() => dispose(object));
+onDispose(() => disposeRecursive(scene));
 scene.add(object);

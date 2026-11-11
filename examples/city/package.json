@@ -14,7 +14,7 @@
     "smooth": "node --experimental-strip-types --no-warnings scripts/smooth.ts"
   },
   "dependencies": {
-    "@drawcall/glts": "^5.1.0",
+    "@drawcall/glts": "^5.2.0",
     "@drawcall/lod": "workspace:*",
     "@typegpu/three": "^0.12.2",
     "fflate": "^0.8.3",

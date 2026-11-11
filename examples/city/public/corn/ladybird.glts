@@ -1,9 +1,8 @@
-import { onDispose, scene } from "@drawcall/glts";
+import { disposeRecursive, onDispose, scene } from "@drawcall/glts";
 import * as THREE from "three/webgpu";
 import { HERO_VARIANT, VARIANTS } from "./layout.ts";
 import { plant } from "./model.ts";
 import { leafSeat } from "./seat.ts";
-import { dispose } from "../shared/dispose.ts";
 import { ladybird } from "./ladybird.ts";
 import { cornMaterials } from "./tissue.ts";
 
@@ -14,12 +13,12 @@ const variant = Number(variantText);
 if (!(/^\d+$/.test(variantText) && variant < VARIANTS)) throw new Error(`ladybird: variant must be a whole number below ${VARIANTS}, not ${variantText}`);
 const hero = plant(cornMaterials(), variant, true);
 const seat = leafSeat(hero);
-dispose(hero);
+disposeRecursive(hero);
 const holder = new THREE.Group();
 holder.position.copy(seat.point);
 holder.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), seat.normal);
 const bug = ladybird();
 bug.rotation.y = seat.heading;
 holder.add(bug);
-onDispose(() => dispose(holder));
+onDispose(() => disposeRecursive(scene));
 scene.add(holder);

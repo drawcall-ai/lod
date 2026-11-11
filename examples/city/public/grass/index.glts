@@ -1,7 +1,6 @@
 import * as THREE from "three/webgpu";
-import { onDispose, scene } from "@drawcall/glts";
+import { disposeRecursive, onDispose, scene } from "@drawcall/glts";
 import { grassClump, grassMaterial, type ClumpShape } from "./model.ts";
-import { dispose } from "../shared/dispose.ts";
 
 const query = new URL(import.meta.url).searchParams;
 const kind = query.get("kind") ?? "lawn";
@@ -16,5 +15,5 @@ const geometry = grassClump(variant + 1, shape);
 const material = grassMaterial();
 const object = new THREE.Mesh(geometry, material);
 object.receiveShadow = true;
-onDispose(() => dispose(object));
+onDispose(() => disposeRecursive(scene));
 scene.add(object);

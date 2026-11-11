@@ -1,8 +1,6 @@
-import { onDispose, scene } from "@drawcall/glts";
-import * as THREE from "three/webgpu";
+import { disposeRecursive, onDispose, scene } from "@drawcall/glts";
 import { patch } from "./model.ts";
 import { DESIGNS } from "../layout.ts";
-import { dispose } from "../../shared/dispose.ts";
 import { cornMaterials } from "../tissue.ts";
 
 // The plants a corn cover is baked from (see cover-low.glts).
@@ -13,10 +11,5 @@ if (!(/^\d+$/.test(designText) && design < DESIGNS)) throw new Error(`corn cover
 const axis = query.get("axis") ?? "";
 if (axis !== "" && axis !== "x" && axis !== "z") throw new Error(`corn cover: axis must be x or z, not ${axis}`);
 const plants = patch(cornMaterials(), design, axis);
-onDispose(() => {
-  plants.traverse((object) => {
-    if (object instanceof THREE.InstancedMesh) object.dispose();
-  });
-  dispose(plants);
-});
+onDispose(() => disposeRecursive(scene));
 scene.add(plants);

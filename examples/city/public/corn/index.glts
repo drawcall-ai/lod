@@ -1,7 +1,6 @@
-import { onDispose, scene } from "@drawcall/glts";
+import { disposeRecursive, onDispose, scene } from "@drawcall/glts";
 import { VARIANTS } from "./layout.ts";
 import { plant } from "./model.ts";
-import { dispose } from "../shared/dispose.ts";
 import { cornMaterials } from "./tissue.ts";
 
 const query = new URL(import.meta.url).searchParams;
@@ -11,5 +10,5 @@ if (!(/^\d+$/.test(variantText) && variant < VARIANTS)) throw new Error(`corn: v
 const hero = query.get("hero") ?? "0";
 if (hero !== "0" && hero !== "1") throw new Error(`corn: hero must be 0 or 1, not ${hero}`);
 const corn = plant(cornMaterials(), variant, hero === "1");
-onDispose(() => dispose(corn));
+onDispose(() => disposeRecursive(scene));
 scene.add(corn);

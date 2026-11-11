@@ -52,7 +52,7 @@
   },
   "devDependencies": {
     "@babel/core": "^7.29.13",
-    "@drawcall/glts": "^5.1.0",
+    "@drawcall/glts": "^5.2.0",
     "@drawcall/lod": "link:",
     "@typegpu/gl": "^0.12.9",
     "@typegpu/three": "^0.12.2",

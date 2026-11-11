@@ -1,10 +1,9 @@
-import { onDispose, scene } from "@drawcall/glts";
+import { disposeRecursive, onDispose, scene } from "@drawcall/glts";
 import { coverLow } from "./model.ts";
-import { dispose } from "../../shared/dispose.ts";
 
 // The shell a corn cover is baked onto, the same for every design: patch.glts's plants are baked onto it.
 const axis = new URL(import.meta.url).searchParams.get("axis") ?? "";
 if (axis !== "" && axis !== "x" && axis !== "z") throw new Error(`corn cover: axis must be x or z, not ${axis}`);
 const low = coverLow(axis);
-onDispose(() => dispose(low));
+onDispose(() => disposeRecursive(scene));
 scene.add(low);

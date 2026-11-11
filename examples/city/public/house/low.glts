@@ -1,8 +1,7 @@
 // The house's closed low shell, which its baked level's windows and walls are baked onto.
-import { onDispose, scene } from "@drawcall/glts";
+import { disposeRecursive, onDispose, scene } from "@drawcall/glts";
 import { house } from "./model.ts";
 import { HOUSE_VARIANTS } from "./params.ts";
-import { dispose } from "../shared/dispose.ts";
 
 const query = new URL(import.meta.url).searchParams;
 const variantText = query.get("variant") ?? "0";
@@ -11,5 +10,5 @@ if (!(/^\d+$/.test(variantText) && variant < HOUSE_VARIANTS))
   throw new Error(`house: variant must be a whole number below ${HOUSE_VARIANTS}, not ${variantText}`);
 const { params, low } = house(variant);
 const shell = low(params);
-onDispose(() => dispose(shell));
+onDispose(() => disposeRecursive(scene));
 scene.add(shell);

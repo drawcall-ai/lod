@@ -1,5 +1,4 @@
-import { loadingManager, onDispose, scene } from "@drawcall/glts";
-import { dispose } from "../shared/dispose.ts";
+import { disposeRecursive, loadingManager, onDispose, scene } from "@drawcall/glts";
 import { picketFence } from "./model.ts";
 
 const query = new URL(import.meta.url).searchParams;
@@ -7,5 +6,5 @@ const lengthText = query.get("length") ?? "2.4";
 const length = Number(lengthText);
 if (!(/^\d+(\.\d+)?$/.test(lengthText) && length >= 0.1 && length <= 100)) throw new Error(`fence: length must be in [0.1, 100] m, not ${lengthText}`);
 const fence = picketFence(loadingManager, length);
-onDispose(() => dispose(fence));
+onDispose(() => disposeRecursive(scene));
 scene.add(fence);

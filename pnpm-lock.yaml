@@ -15,8 +15,8 @@ importers:
   examples/city:
     dependencies:
       '@drawcall/glts':
-        specifier: ^5.1.0
-        version: 5.1.0(@types/node@24.19.1)(three@0.186.1)(typegpu@0.12.9)(typescript@5.9.3)(vite@8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15))
+        specifier: ^5.2.0
+        version: 5.2.0(@types/node@24.19.1)(three@0.186.1)(typegpu@0.12.9)(typescript@5.9.3)(vite@8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15))
       '@drawcall/lod':
         specifier: workspace:*
         version: link:../../packages/lod
@@ -110,8 +110,8 @@ importers:
         specifier: ^7.29.13
         version: 7.29.13
       '@drawcall/glts':
-        specifier: ^5.1.0
-        version: 5.1.0(@types/node@24.19.1)(three@0.186.1)(typegpu@0.12.9)(typescript@5.9.3)(vite@8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15))
+        specifier: ^5.2.0
+        version: 5.2.0(@types/node@24.19.1)(three@0.186.1)(typegpu@0.12.9)(typescript@5.9.3)(vite@8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15))
       '@drawcall/lod':
         specifier: 'link:'
         version: 'link:'
@@ -297,8 +297,8 @@ packages:
   '@dimforge/rapier3d-compat@0.12.0':
     resolution: {integrity: sha512-uekIGetywIgopfD97oDL5PfeezkFpNhwlzlaEYNOA0N6ghdsOvh/HYjSMek5Q2O1PYvRSDFcqFVJl4r4ZBwOow==}
 
-  '@drawcall/glts@5.1.0':
-    resolution: {integrity: sha512-pLKLLR3NxS4gcS8rqHIeYJcT6dfYybgSVbOyMdB+dF1rXbeJMDQRBfUsV+Gn6wPpetDlq/X3ZgI2nfXz4EcGMg==}
+  '@drawcall/glts@5.2.0':
+    resolution: {integrity: sha512-FCR7+ts8D0dGex1OJGRSeK9fdHoIeL47vN0ZEi3KDRaHrJdDqtsDWlrwwQusmpOhLbQaCbdLOJI1HfSVx9NWMQ==}
     engines: {node: ^22.18.0 || >=24.11.0}
     hasBin: true
     peerDependencies:
@@ -1772,7 +1772,7 @@ snapshots:
 
   '@dimforge/rapier3d-compat@0.12.0': {}
 
-  '@drawcall/glts@5.1.0(@types/node@24.19.1)(three@0.186.1)(typegpu@0.12.9)(typescript@5.9.3)(vite@8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15))':
+  '@drawcall/glts@5.2.0(@types/node@24.19.1)(three@0.186.1)(typegpu@0.12.9)(typescript@5.9.3)(vite@8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15))':
     dependencies:
       '@babel/standalone': 8.0.10
       '@babel/types': 8.0.10
