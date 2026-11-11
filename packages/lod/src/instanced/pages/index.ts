@@ -1,7 +1,7 @@
 import { type Renderer, StorageBufferAttribute, StorageInstancedBufferAttribute } from "three/webgpu";
 import { at } from "../../at.js";
 import { PAGE_BITS, type PoolBuffers } from "./buffers.js";
-import type { Attributes, ChunkRange } from "./chunk.js";
+import type { ChunkRange, ChunkSource } from "./chunk.js";
 import { PoolPasses } from "./passes.js";
 import { PAGE } from "./workgroup.js";
 
@@ -11,11 +11,11 @@ import { PAGE } from "./workgroup.js";
 // In the first render after chunks were added, changed or removed, these passes run: one workgroup
 // walks the chunk slots and pushes every removed or changed chunk's pages back on the free stack; per chunk taken in, a
 // pass with one workgroup per window of `PAGE` of its range counts the window's instances, those at a scale above 0 (an
-// app's pass marks "no instance" with scale 0); one workgroup then gives every such chunk the pages its instances need,
+// app marks "no instance" with scale 0); one workgroup then gives every such chunk the pages its instances need,
 // turning its windows' counts into where their instances start; per chunk again, a pass writes each instance into its
 // page, so a chunk's instances fill its pages in order, a spot without an instance costs no room, and the room past its
 // last instance draws nothing; last, one workgroup lists every page chunks hold, with its InstancedLod's row. That
-// render is the only time a chunk's attributes are read. A chunk that finds the stack short holds the pages it got, its
+// render is the only time a chunk's source is read. A chunk that finds the stack short holds the pages it got, its
 // instances clamped to them, until it is removed; `status` reports it. The CPU never learns a count: it knows only
 // which slots hold chunks and which windows they count in, and the GPU knows what each got.
 
@@ -25,9 +25,9 @@ const WINDOWS_PER_PAGE = 16;
 /** WebGPU's guaranteed maxStorageBufferBindingSize: the pool's matrices are one binding. */
 const MAX_BINDING = 128 * 2 ** 20;
 
-/** A chunk to take in: its attributes and its range of them, where its instance count lies, and its InstancedLod's row. */
-export interface PoolChunk extends Pick<ChunkRange, "start" | "count" | "countIndex"> {
-  readonly attributes: Attributes;
+/** A chunk to take in: its source and its range of it, and its InstancedLod's row. */
+export interface PoolChunk extends Pick<ChunkRange, "start" | "count"> {
+  readonly source: ChunkSource;
   readonly row: number;
 }
 
@@ -147,7 +147,7 @@ export class InstancePagePool {
     return slot;
   }
 
-  /** Take slot `slot`'s chunk in again at the next run: its attributes changed. */
+  /** Take slot `slot`'s chunk in again at the next run: its source changed. */
   change(slot: number): void {
     const { base, windows, chunk } = this.heldAt(slot);
     const generation = at(this.generations, slot) + 1;
@@ -156,10 +156,15 @@ export class InstancePagePool {
     this.due.add(slot);
   }
 
-  /** Free slot `slot`; its chunk's pages go back to the pool at the next run, its windows after it. */
+  /**
+   * Free slot `slot`; its chunk's pages go back to the pool at the next run, its windows after it, and the passes
+   * reading by its instance function once no chunk reads by it.
+   */
   remove(slot: number): void {
-    const { base, windows } = this.heldAt(slot);
+    const { base, windows, chunk } = this.heldAt(slot);
     this.held[slot] = null;
+    const { source } = chunk;
+    if (typeof source === "function" && !this.held.some((held) => held?.chunk.source === source)) this.passes?.forget(source);
     this.releasing.push({ first: base, count: windows });
     this.write(slot, [0, 0, at(this.generations, slot), 0]);
     this.due.delete(slot);
@@ -229,8 +234,8 @@ export class InstancePagePool {
   private run(renderer: Renderer, passes: PoolPasses, slot: number, pass: "count" | "write"): void {
     const { chunk, base, windows } = this.heldAt(slot);
     if (windows === 0) return;
-    const { attributes, start, count, countIndex } = chunk;
-    renderer.compute(passes.chunkPass(pass, attributes, { slot, base, start, count, countIndex }), [windows, 1, 1]);
+    const { source, start, count } = chunk;
+    renderer.compute(passes.chunkPass(pass, source, { slot, base, start, count }), [windows, 1, 1]);
   }
 
   /**

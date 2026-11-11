@@ -2,7 +2,7 @@
 // jittered grid; each spot's hash picks the one InstancedLod that draws it, how large it grows, how it turns and its
 // tint, so a tile planted again shows the same plants. Every InstancedLod has an output of its own: per slot of the ring, a whole tile's spots, each the finished
 // instance where it plants one and a matrix of scale 0 (no instance) elsewhere; the InstancedLod packs only the first.
-import { InstancedLod, type LodGpu, type LodLevel } from "@drawcall/lod";
+import { InstancedLod, type InstancedLodInstance, type LodGpu, type LodLevel } from "@drawcall/lod";
 import * as t3 from "@typegpu/three";
 import { storage } from "three/tsl";
 import * as THREE from "three/webgpu";
@@ -123,10 +123,11 @@ export function planter(plan: Plan, gpu: LodGpu) {
 
     /** The output of `planting`'s InstancedLod, and the pass that plants a tile into a slot of it. */
     const output = ({ from, to, scale: [low, high], tinted = false }: Planting) => {
-      const matrices = new THREE.StorageInstancedBufferAttribute(SLOTS * capacity, 16);
-      const colors = new THREE.StorageInstancedBufferAttribute(SLOTS * capacity, 3);
-      const matrixAt = t3.fromTSL(storage(matrices, "mat4", matrices.count), d.arrayOf(d.mat4x4f));
-      const colorAt = t3.fromTSL(storage(colors, "vec3", colors.count), d.arrayOf(d.vec3f));
+      const matrices = storage(new THREE.StorageInstancedBufferAttribute(SLOTS * capacity, 16), "mat4", SLOTS * capacity);
+      const colors = storage(new THREE.StorageInstancedBufferAttribute(SLOTS * capacity, 3), "vec3", SLOTS * capacity);
+      const matrixAt = t3.fromTSL(matrices, d.arrayOf(d.mat4x4f));
+      const colorAt = t3.fromTSL(colors, d.arrayOf(d.vec3f));
+      const instance: InstancedLodInstance = (index) => ({ matrix: matrices.element(index), color: colors.element(index) });
       const vary = tinted ? 1 : 0;
       const pass = t3
         .toTSL(() => {
@@ -155,7 +156,7 @@ export function planter(plan: Plan, gpu: LodGpu) {
           colorAt.$[at] = std.mix(d.vec3f(shade), hue, vary * 0.35 * (d.f32(shades >>> 17) / 32768));
         })
         .compute(capacity);
-      return { matrices, colors, pass };
+      return { instance, pass };
     };
 
     const area = Math.PI * (radius + tile) ** 2;
@@ -194,11 +195,10 @@ export function planter(plan: Plan, gpu: LodGpu) {
           slot.node.value = at;
           void renderer.compute(passes);
           const box = originBox(i, j);
-          return outputs.map(({ lod, planting, matrices, colors }) => ({
+          return outputs.map(({ lod, planting, instance }) => ({
             lod,
             parameters: {
-              instanceMatrix: matrices,
-              instanceColor: colors,
+              instance,
               start: at * capacity,
               count: capacity,
               originBox: box,

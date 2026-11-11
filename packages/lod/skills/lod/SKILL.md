@@ -84,7 +84,20 @@ Levels are chosen by on-screen size in CSS pixels on the actual render target, s
 
 ## Add instances in chunks and thin them with distance
 
-A fixed set of copies is one chunk. For copies that exist only near the camera, such as plants on patches of ground, add a chunk when a patch comes into reach and remove it when the camera moves on; a few chunks a frame cost about what they hold. Prefer whole chunks over parking unused instances at scale 0. When a compute pass of your own writes the copies, give `addChunk` its storage attributes and the bounds the CPU cannot measure (see `InstancedLodChunkParameters`).
+A fixed set of copies is one chunk. For copies that exist only near the camera, such as plants on patches of ground, add a chunk when a patch comes into reach and remove it when the camera moves on; a few chunks a frame cost about what they hold. Prefer whole chunks over parking unused instances at scale 0.
+
+When the copies live on the GPU, in records of your own layout, give `addChunk` a TSL function that reads record `index` into a matrix (scale 0 for no copy) and an optional colour, plus the bounds the CPU cannot measure. The records are read once, in the next render that updates the InstancedLod, without a staging copy. Share one function between chunks of the same records, each with its own `start`: lod builds its copy pass once per function. Here `spots` is a `vec4` storage node your compute pass wrote, per spot a position and in `w` a scale between 0.5 and 1.5, or 0 for no plant; `capacity` is the spots per patch, `slot` the patch's place in `spots`, and `patchBox` the box of its positions.
+
+```ts
+import { mat4 } from "three/tsl";
+import type { InstancedLodInstance } from "@drawcall/lod";
+
+const plant: InstancedLodInstance = (index) => {
+  const spot = spots.element(index);
+  return { matrix: mat4(spot.w, 0, 0, 0, 0, spot.w, 0, 0, 0, 0, spot.w, 0, spot.x, spot.y, spot.z, 1) };
+};
+const chunk = grass.addChunk({ instance: plant, start: slot * capacity, count: capacity, originBox: patchBox, minScale: 0.5, maxScale: 1.5 });
+```
 
 Give an InstancedLod a `cullDistance` to thin it out towards a distance instead of cutting it off. `scaleSurvivors` enlarges the copies that remain so that small things like grass cover about as much; leave it off for objects whose size reads, such as trees. Thinning does not change which levels load: let the ladder's last drawn level end near `far`, or add an empty level there.
 

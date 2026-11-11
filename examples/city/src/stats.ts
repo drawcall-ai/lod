@@ -22,7 +22,7 @@ export function countLevels(roots: readonly THREE.Object3D[], camera: THREE.Came
     const instances = lod.levels.map(() => 0);
     if (lod instanceof InstancedLod) {
       for (const chunk of lod.chunks) {
-        if (chunk.instanceMatrix instanceof THREE.StorageInstancedBufferAttribute) continue;
+        if (chunk.instance) continue;
         for (let i = 0; i < chunk.count; i++) {
           const index = chunk.getLevelAt(i, camera);
           if (index === null) continue;

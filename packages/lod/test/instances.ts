@@ -1,6 +1,6 @@
 import { InstancedBufferAttribute, Matrix4, type Camera, type Color, type Object3D } from "three/webgpu";
 import { InstancedLod, type InstancedLodOptions } from "../src/instanced/index.js";
-import type { InstancedLodChunk } from "../src/instanced/chunk.js";
+import { isCpuChunk, type InstancedLodCpuChunk } from "../src/instanced/chunk.js";
 import { fadeSourceOf, type InstanceSlots } from "../src/levels/fade.js";
 import type { LodLevel } from "../src/levels/index.js";
 import { gpu } from "./renderer.js";
@@ -35,10 +35,10 @@ export function oneChunk(
   return lod;
 }
 
-/** `lod`'s only chunk. */
-export function chunkOf(lod: InstancedLod): InstancedLodChunk {
+/** `lod`'s only chunk, from the CPU. */
+export function chunkOf(lod: InstancedLod): InstancedLodCpuChunk {
   const [chunk, ...others] = lod.chunks;
-  if (!chunk || others.length > 0) throw new Error("the InstancedLod holds no chunk or several");
+  if (!chunk || others.length > 0 || !isCpuChunk(chunk)) throw new Error("the InstancedLod holds no CPU chunk or several chunks");
   return chunk;
 }
 

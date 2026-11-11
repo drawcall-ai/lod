@@ -11,7 +11,7 @@ import { inShadowMap } from "../levels/renderer.js";
 import { sameClass } from "../three.js";
 import { WIND } from "../wind/hooks.js";
 import { copyWind } from "../wind/index.js";
-import type { InstancedLodChunk, InstancedLodChunkParameters } from "./chunk.js";
+import type { InstancedLodChunk, InstancedLodChunkParameters, InstancedLodCpuChunk, InstancedLodCpuChunkParameters } from "./chunk.js";
 import { ChunkSet } from "./chunks.js";
 import { cullIn, emptyCull, type CullDistance } from "./cull.js";
 import { MeshesByLevel, type Drawing } from "./levels.js";
@@ -170,6 +170,8 @@ export class InstancedLod extends Object3D<LodEventMap> {
    * until the GPU shows every chunk copied; a chunk the pool lacks pages for draws the instances it got until it is
    * removed, and is this InstancedLod's error (see `error`).
    */
+  addChunk(parameters: InstancedLodCpuChunkParameters): InstancedLodCpuChunk;
+  addChunk(parameters: InstancedLodChunkParameters): InstancedLodChunk;
   addChunk(parameters: InstancedLodChunkParameters): InstancedLodChunk {
     if (this.disposed) throw new Error("InstancedLod: it was disposed");
     if (this.levels.length === 0) throw new Error("InstancedLod: give it levels before chunks");
@@ -264,7 +266,7 @@ export class InstancedLod extends Object3D<LodEventMap> {
   }
 
   /** The level instance `index` of `chunk` draws most of its pixels with for `camera` (see `InstancedLodChunk.getLevelAt`). */
-  private levelAt(chunk: InstancedLodChunk, index: number, camera: Camera): number | null {
+  private levelAt(chunk: InstancedLodCpuChunk, index: number, camera: Camera): number | null {
     const cull = cullIn(this.cullDistance, this.matrixWorld, this.cull);
     const local = this.localCamera(camera, inShadowMap(this));
     return instanceLevel(chunk.instanceMatrix.array, (chunk.start + index) * 16, cull, local, this.built.shape.source, this.built.loads.loaded);

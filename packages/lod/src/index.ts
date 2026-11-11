@@ -7,7 +7,14 @@ export { Lod, type LodOptions } from "./lod.js";
 export { Wind, type WindOptions, type SwayOptions } from "./wind/index.js";
 export { InstancedLod, type InstancedLodOptions } from "./instanced/index.js";
 export { type CullDistance } from "./instanced/cull.js";
-export { InstancedLodChunk, type InstancedLodChunkParameters } from "./instanced/chunk.js";
+export {
+  InstancedLodChunk,
+  type InstancedLodChunkParameters,
+  type InstancedLodCpuChunk,
+  type InstancedLodCpuChunkParameters,
+  type InstancedLodGpuChunkParameters,
+  type InstancedLodInstance,
+} from "./instanced/chunk.js";
 export { type InstancedLodIntersection } from "./instanced/raycast.js";
 export { type LodLevel } from "./levels/index.js";
 export { type SimplifyOptions, simplify } from "./simplify/index.js";

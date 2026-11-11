@@ -1,16 +1,5 @@
-import {
-  Box3,
-  BoxGeometry,
-  Color,
-  InstancedBufferAttribute,
-  Matrix4,
-  Mesh,
-  MeshBasicMaterial,
-  PerspectiveCamera,
-  StorageBufferAttribute,
-  StorageInstancedBufferAttribute,
-  Vector3,
-} from "three/webgpu";
+import { Box3, BoxGeometry, Color, InstancedBufferAttribute, Matrix4, Mesh, MeshBasicMaterial, PerspectiveCamera, Vector3 } from "three/webgpu";
+import { mat4 } from "three/tsl";
 import { describe, expect, it } from "vitest";
 import { InstancedLod } from "../../src/instanced/index.js";
 import { instanceColor, instanceMatrix } from "../instances.js";
@@ -18,8 +7,8 @@ import { gpu } from "../renderer.js";
 import { box } from "../box.js";
 
 const lod = () => new InstancedLod([{ object: box() }], gpu);
-const gpuMatrices = () => new StorageInstancedBufferAttribute(new Float32Array(4 * 16), 16);
 const bounds = { originBox: new Box3(new Vector3(-1, 0, -1), new Vector3(1, 0, 1)), minScale: 1, maxScale: 2 };
+const gpuChunk = { instance: () => ({ matrix: mat4() }), count: 4, ...bounds };
 
 describe("InstancedLodChunk", () => {
   it("refuses parameters it cannot draw", () => {
@@ -31,15 +20,9 @@ describe("InstancedLodChunk", () => {
     expect(() => target.addChunk({ instanceMatrix: matrices, instanceColor: new InstancedBufferAttribute(new Uint8Array(6), 3, true) })).toThrow(
       /holds floats/,
     );
-    expect(() => target.addChunk({ instanceMatrix: matrices, instanceColor: new StorageInstancedBufferAttribute(new Float32Array(8), 4) })).toThrow(
-      /another kind/,
-    );
     expect(() => target.addChunk({ instanceMatrix: matrices, ...bounds })).toThrow(/measured from its instances/);
-    const counts = new StorageBufferAttribute(new Uint32Array(1), 1);
-    expect(() => target.addChunk({ instanceMatrix: matrices, instanceCount: counts })).toThrow(/only a GPU chunk/);
-    expect(() => target.addChunk({ instanceMatrix: gpuMatrices() })).toThrow(/needs its originBox, minScale and maxScale/);
-    expect(() => target.addChunk({ instanceMatrix: gpuMatrices(), ...bounds, minScale: 3 })).toThrow(/0 < minScale <= maxScale/);
-    expect(() => target.addChunk({ instanceMatrix: gpuMatrices(), ...bounds, instanceCount: counts, instanceCountIndex: 1 })).toThrow(/passes the end/);
+    expect(() => target.addChunk({ ...gpuChunk, minScale: 3 })).toThrow(/0 < minScale <= maxScale/);
+    expect(() => target.addChunk({ ...gpuChunk, count: -1 })).toThrow(/integers of at least 0/);
     expect(() => new InstancedLod([], gpu).addChunk({ instanceMatrix: matrices })).toThrow(/levels before chunks/);
     expect([...target.chunks]).toEqual([]);
     target.dispose();
@@ -86,7 +69,7 @@ describe("InstancedLodChunk", () => {
 
   it("refuses the CPU methods of a GPU chunk, whose instances live on the GPU", () => {
     const target = lod();
-    const chunk = target.addChunk({ instanceMatrix: gpuMatrices(), ...bounds });
+    const chunk = target.addChunk(gpuChunk);
     expect(chunk.originBox).toEqual(bounds.originBox);
     const gpu = /a GPU chunk's instances live on the GPU/;
     expect(() => chunk.getMatrixAt(0, new Matrix4())).toThrow(gpu);

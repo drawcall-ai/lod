@@ -1,7 +1,7 @@
 import { Box3, Color, Matrix4, PerspectiveCamera, StorageBufferAttribute, StorageInstancedBufferAttribute, Vector3 } from "three/webgpu";
 import { Fn, If, atomicAdd, atomicStore, float, instanceIndex, mat4, storage, uint, uniform, vec3 } from "three/tsl";
 import { InstancedLod } from "../../../src/instanced/index.js";
-import type { InstancedLodChunkParameters } from "../../../src/instanced/chunk.js";
+import type { InstancedLodChunkParameters, InstancedLodInstance } from "../../../src/instanced/chunk.js";
 import { PAGE } from "../../../src/instanced/pages/workgroup.js";
 import { box } from "../../box.js";
 import { renderer, gpu } from "../../renderer.js";
@@ -18,6 +18,8 @@ const countBuffer = new StorageBufferAttribute(new Uint32Array(4), 1);
 const matrices = storage(matrixBuffer, "mat4", CAPACITY);
 const colors = storage(colorBuffer, "vec3", CAPACITY);
 const counts = storage(countBuffer, "uint", 4).toAtomic();
+const written = storage(countBuffer, "uint", 4).toReadOnly();
+const none = mat4(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 const first = uniform(0, "uint");
 const total = uniform(0, "uint");
 const counter = uniform(0, "uint");
@@ -51,7 +53,7 @@ const pass = Fn(() => {
         colors.element(slot).assign(color);
       });
     }).Else(() => {
-      matrices.element(i).assign(chosen.or(mode.equal(2)).select(matrix, mat4(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)));
+      matrices.element(i).assign(chosen.or(mode.equal(2)).select(matrix, none));
       colors.element(i).assign(color);
     });
   });
@@ -71,13 +73,22 @@ export function produce(from: number, n: number, index: number, { by = 0, write 
   void renderer.compute(pass);
 }
 
-/** The GPU chunk `produce` wrote: `n` spots, of picked ones counted into counter `index`, or in place. */
-export function gpuChunk(n: number, index: number, inPlace = false): InstancedLodChunkParameters {
+/** How lod reads the spots `produce` wrote, each in its place. */
+const inPlace: InstancedLodInstance = (index) => ({ matrix: matrices.element(index), color: colors.element(index) });
+
+/** How lod reads the spots `produce` counted into counter 0 and counter 1: none past the count. */
+const counted = [0, 1].map((counter): InstancedLodInstance => (index) => ({
+  matrix: index.lessThan(written.element(counter)).select(matrices.element(index), none),
+  color: colors.element(index),
+}));
+
+/** The GPU chunk `produce` wrote: `n` spots, the picked ones counted into counter `counter`, or each in its place. */
+export function gpuChunk(n: number, counter: 0 | 1 | "in place"): InstancedLodChunkParameters {
+  const instance = counter === "in place" ? inPlace : counted[counter];
+  if (!instance) throw new Error(`no counter ${counter}`);
   return {
-    instanceMatrix: matrixBuffer,
-    instanceColor: colorBuffer,
+    instance,
     count: n,
-    ...(inPlace ? {} : { instanceCount: countBuffer, instanceCountIndex: index }),
     originBox: new Box3(new Vector3(-11, 0, -600), new Vector3(11, 1, -4)),
     minScale: 1,
     maxScale: 1.75,

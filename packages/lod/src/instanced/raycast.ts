@@ -1,6 +1,6 @@
 import { Matrix4, Ray, Sphere, type Intersection, type Mesh, type Object3D, type Raycaster } from "three/webgpu";
 import { stretch } from "../three.js";
-import type { InstancedLodChunk } from "./chunk.js";
+import type { InstancedLodCpuChunk, InstancedLodChunk } from "./chunk.js";
 import type { Part } from "./meshes.js";
 
 /** A hit on an InstancedLod: `object` is the InstancedLod, `instanceId` the instance's index in `chunk`. */
@@ -26,7 +26,7 @@ const hits: Intersection[] = [];
 export function raycastInstances(
   lod: Object3D,
   source: RaycastSource,
-  chunks: Iterable<InstancedLodChunk>,
+  chunks: Iterable<InstancedLodCpuChunk>,
   raycaster: Raycaster,
   intersects: Intersection[],
 ): void {

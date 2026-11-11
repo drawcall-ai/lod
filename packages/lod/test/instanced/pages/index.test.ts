@@ -121,7 +121,7 @@ describe("a LodGpu's page pool", { timeout: GPU_TIMEOUT }, () => {
     try {
       for (let i = 0; i < 3; i++) {
         produce(i * 2 * PAGE, 2 * PAGE, 0, { write: 1 });
-        lod.addChunk(gpuChunk(2 * PAGE, 0, true));
+        lod.addChunk(gpuChunk(2 * PAGE, "in place"));
         await frames(lod, above);
       }
       const spots = Array.from({ length: 6 * PAGE }, (_, k) => k).filter(picked);
@@ -178,7 +178,7 @@ describe("a LodGpu's page pool", { timeout: GPU_TIMEOUT }, () => {
       // Every spot, 512 a chunk: two pages each, six of the five there are.
       const chunks = [0, 1, 2].map((i) => {
         produce(i * 2 * PAGE, 2 * PAGE, 0, { write: 2 });
-        const chunk = lod.addChunk(gpuChunk(2 * PAGE, 0, true));
+        const chunk = lod.addChunk(gpuChunk(2 * PAGE, "in place"));
         renderer.render(scene, camera);
         return chunk;
       });
