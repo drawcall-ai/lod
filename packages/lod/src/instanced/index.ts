@@ -52,7 +52,8 @@ const DEFAULT_INSTANCES = 16384;
  * parents should scale uniformly. Scale 0 draws nothing.
  *
  * Level templates are cloned, then their meshes are instanced; it sets each level mesh's `visible` per camera, so hide
- * the InstancedLod itself, never its level meshes. Skinned meshes, InstancedMeshes (except ImpostorMesh)
+ * the InstancedLod itself, never its level meshes, and show none of them yourself: one drawn before the InstancedLod's
+ * first render draws nothing and is its error. Skinned meshes, InstancedMeshes (except ImpostorMesh)
  * and nested Lods are unsupported. For external detail, leave level 0 empty and draw the instances that
  * `chunk.getLevelAt` reports there.
  *
@@ -145,8 +146,7 @@ export class InstancedLod extends Object3D<LodEventMap> {
     const drawFor = (renderer: unknown, camera: Camera) =>
       this.built.loads.guard(() => {
         const bound = this.built.loads.renderer;
-        // A level mesh shown before a render updated the InstancedLod has no lists sorted to draw.
-        if (!bound) return;
+        if (!bound) throw new Error("InstancedLod: a level mesh drew before its first render; its level meshes' `visible` is the InstancedLod's to set");
         if (renderer !== bound) throw new Error("InstancedLod: another renderer than the first that rendered it drew it");
         lists.drawFor(bound, camera);
       });

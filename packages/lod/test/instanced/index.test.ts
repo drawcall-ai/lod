@@ -639,6 +639,23 @@ describe("an InstancedLod's shaders", { timeout: GPU_TIMEOUT }, () => {
   });
 });
 
+it("reports a level mesh shown by hand before the first render as its error, and draws nothing", { timeout: GPU_TIMEOUT }, async () => {
+  const lod = oneChunk([{ object: box() }], 1);
+  lod.autoUpdate = false;
+  for (const mesh of drawnMeshes(lod)) mesh.visible = true;
+  const camera = new PerspectiveCamera(60, 1, 0.1, 100);
+  camera.position.z = 5;
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const pixels = await render(new Scene().add(lod), camera);
+    expect(lod.error?.message).toMatch(/a level mesh drew before its first render/);
+    expect(pixels.some((value) => value > 0)).toBe(false);
+  } finally {
+    logged.mockRestore();
+    lod.dispose();
+  }
+});
+
 describe("renderers", () => {
   /** A renderer the app never added to Lod.renderers, as a loader's own would be. */
   const unknownRenderer = async () => {
