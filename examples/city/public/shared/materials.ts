@@ -1,7 +1,6 @@
 import * as THREE from "three/webgpu";
 import { loadManifest, type Manifest } from "./manifest.ts";
-import { Fn, clamp, float, materialColor, max, mix, positionGeometry, smoothstep, vec3, vec4 } from "three/tsl";
-import { noise3 } from "./noise.ts";
+import { Fn, clamp, float, materialColor, max, mix, mx_noise_float, positionGeometry, smoothstep, vec3, vec4 } from "three/tsl";
 
 /**
  * The materials and textures one asset makes, each made once however many meshes use it. The asset disposes them with
@@ -130,6 +129,8 @@ function weathered(m: THREE.MeshStandardMaterial, strength: number): THREE.MeshS
 
 function weatherColor(strength: THREE.Node<"float">): THREE.Node<"vec3"> {
   const p = positionGeometry;
+  // MaterialX's Perlin noise, which spans about [-1, 1], remapped to [0, 1], where the grime below was tuned
+  const noise3 = (q: THREE.Node<"vec3">) => mx_noise_float(q, 0.5, 0.5);
   const blotch = noise3(p.mul(0.6))
     .mul(0.55)
     .add(noise3(p.mul(2.1)).mul(0.3))

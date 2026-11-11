@@ -27,8 +27,9 @@ import {
   uniformArray,
   vec2,
   vec3,
+  mx_fractal_noise_float_2d,
+  mx_noise_float,
 } from "three/tsl";
-import { fbm, noise2 } from "../../../public/shared/noise.ts";
 import type { Zones } from "../../world/zones.ts";
 import { Crop, Use } from "../../world/land.ts";
 import { BLOCK, ROWS } from "../../../public/corn/layout.ts";
@@ -37,6 +38,11 @@ import { BLOCK, ROWS } from "../../../public/corn/layout.ts";
 const ROW = BLOCK / ROWS;
 
 type Node<T extends string> = THREE.Node<T>;
+
+/** MaterialX's Perlin noise, which spans about [-1, 1], remapped to [0, 1], where the thresholds below were tuned. */
+const noise2 = (p: Node<"vec2">) => mx_noise_float(p, 0.5, 0.5);
+/** Four octaves of it, also remapped to [0, 1]: their amplitudes sum to 1.875. */
+const fbm = (p: Node<"vec2">) => mx_fractal_noise_float_2d(p, 4, 2, 0.5, 0.5 / 1.875).add(0.5);
 
 /**
  * `map` at `uv` as given: `sample` applies the texture's repeat (its real-world size, set
