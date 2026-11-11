@@ -3,10 +3,10 @@ import seedrandom from "seedrandom";
 import { arriving, manager } from "../loading.ts";
 import { instancedAt, type Tint } from "./place.ts";
 import type { Plan } from "./plan.ts";
-import type { GardenThing } from "./gardens.ts";
+import type { Fixture } from "./gardens.ts";
 
-/** Each garden thing, by name. */
-const THINGS: Record<GardenThing, () => Promise<LodLevel[]>> = {
+/** Each garden fixture's ladder, by name. */
+const FIXTURES: Record<Fixture, () => Promise<LodLevel[]>> = {
   letterbox: () =>
     new CachedLodLoader(manager, arriving()).loadAsync({
       url: "/letterbox/index.glts",
@@ -57,46 +57,12 @@ const THINGS: Record<GardenThing, () => Promise<LodLevel[]>> = {
     }),
 };
 
-/** Hedge designs, which the gardens' hedges take turns with: each keeps its clipped outline through simplified geometry and a distant impostor. */
-const HEDGES: (() => Promise<LodLevel[]>)[] = [
-  () =>
-    new CachedLodLoader(manager, arriving()).loadAsync({
-      url: "/hedge/index.glts?length=2&variant=0",
-      levels: [
-        { type: "simplify", ratio: 0.1, maxPixels: 120 },
-        { type: "impostor", layout: "hemi", maxPixels: 30, resolution: 64 },
-        { type: "empty", maxPixels: 3 },
-      ],
-    }),
-  () =>
-    new CachedLodLoader(manager, arriving()).loadAsync({
-      url: "/hedge/index.glts?length=2&variant=1",
-      levels: [
-        { type: "simplify", ratio: 0.1, maxPixels: 120 },
-        { type: "impostor", layout: "hemi", maxPixels: 30, resolution: 64 },
-        { type: "empty", maxPixels: 3 },
-      ],
-    }),
-  () =>
-    new CachedLodLoader(manager, arriving()).loadAsync({
-      url: "/hedge/index.glts?length=2&variant=2",
-      levels: [
-        { type: "simplify", ratio: 0.1, maxPixels: 120 },
-        { type: "impostor", layout: "hemi", maxPixels: 30, resolution: 64 },
-        { type: "empty", maxPixels: 3 },
-      ],
-    }),
-];
-
-export async function gardenObjects(plan: Plan, gpu: LodGpu): Promise<InstancedLod[]> {
-  return (await Promise.all([gardenThings(plan, gpu), hedges(plan, gpu)])).flat();
-}
-
-async function gardenThings(plan: Plan, gpu: LodGpu): Promise<InstancedLod[]> {
+/** Each garden fixture of the plan over its spots; sheds come in a few paints. */
+export async function fixtures(plan: Plan, gpu: LodGpu): Promise<InstancedLod[]> {
   const paints = ["#ffffff", "#9fb0a0", "#b9a58c", "#8c9aa8", "#c9b9a0"];
   return Promise.all(
-    [...plan.garden].map(async ([name, spots]) => {
-      const load = THINGS[name];
+    [...plan.fixtures].map(async ([name, spots]) => {
+      const load = FIXTURES[name];
       const r = seedrandom(String(name.length));
       const paint: Tint = (_, __, color) => {
         const picked = paints[Math.floor(r() * paints.length)];
@@ -106,16 +72,4 @@ async function gardenThings(plan: Plan, gpu: LodGpu): Promise<InstancedLod[]> {
       return instancedAt(gpu, name, await load(), spots, name === "shed" ? paint : undefined);
     }),
   );
-}
-
-async function hedges(plan: Plan, gpu: LodGpu): Promise<InstancedLod[]> {
-  const variants = await Promise.all(
-    HEDGES.map(async (load, variant) => {
-      const mine = plan.hedges.filter((_, i) => i % HEDGES.length === variant);
-      if (!mine.length) return [];
-      const r = seedrandom(String(variant + 7));
-      return [instancedAt(gpu, `hedges ${variant}`, await load(), mine, (_, __, color) => color.multiplyScalar(0.85 + 0.25 * r()))];
-    }),
-  );
-  return variants.flat();
 }

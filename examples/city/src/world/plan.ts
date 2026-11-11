@@ -8,7 +8,7 @@ import { farmland } from "./farmland.ts";
 import { Land, Use } from "./land.ts";
 import { Terrain } from "./terrain.ts";
 import { town, type SignName } from "./town.ts";
-import type { GardenThing } from "./gardens.ts";
+import type { Fixture } from "./gardens.ts";
 
 /** Where one copy of something stands: on the ground at x, z, turned by `angle` about y. */
 export interface Spot {
@@ -57,8 +57,8 @@ export interface Plan {
   houses: { variant: number; spot: Spot }[];
   /** Fence bays (2.4 m, running along the spot's +x). */
   fences: Spot[];
-  /** Garden things by name. */
-  garden: Map<GardenThing, Spot[]>;
+  /** Garden fixtures by name. */
+  fixtures: Map<Fixture, Spot[]>;
   hedges: Spot[];
   church: Spot;
   /** Street-name signs, by name. */
@@ -156,7 +156,7 @@ export function plan(seed: number): Plan {
     forests: FORESTS,
     houses,
     fences: built.fences,
-    garden: built.garden,
+    fixtures: built.fixtures,
     hedges: built.hedges,
     church: built.church,
     signs: built.signs,

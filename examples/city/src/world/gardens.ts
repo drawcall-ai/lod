@@ -8,9 +8,9 @@ import { STREET_WIDTH, type Town } from "./town.ts";
 /** Length of one clipped hedge section (m). */
 export const HEDGE = 2;
 
-/** The things a garden holds, each named as its asset folder in public/ (see garden-objects.ts). */
-export const GARDEN_THINGS = ["letterbox", "patio-set", "shed", "greenhouse", "washing-line", "swing"] as const;
-export type GardenThing = (typeof GARDEN_THINGS)[number];
+/** The fixtures a garden holds, each named as its asset folder in public/ (see fixtures.ts). */
+export const FIXTURES = ["letterbox", "patio-set", "shed", "greenhouse", "washing-line", "swing"] as const;
+export type Fixture = (typeof FIXTURES)[number];
 
 /** A lot's position along its street: `at(t, offset)` maps along-street and out-from-the-centre-line metres to x/z. */
 interface Lot {
@@ -59,7 +59,7 @@ export function garden(town: Town, add: (id: string, at: Spot) => void, terrain:
   }
   // the letterbox by the gate, and often a tree or a big shrub in the front garden
   const box = at(t + 0.9, kerb + 0.7);
-  thing(town, "letterbox", spot(terrain, box.x, box.y, angle));
+  addFixture(town, "letterbox", spot(terrain, box.x, box.y, angle));
   if (setback > 3.5 && r() < 0.55) {
     const g = at(t + (r() < 0.5 ? 1 : -1) * (2.5 + (frontage / 2 - 4) * r()), kerb + setback * 0.45);
     if (r() < 0.5) add("tree_small_02", spot(terrain, g.x, g.y, 6.3 * r(), 1.1 + 0.5 * r()));
@@ -84,7 +84,7 @@ export function garden(town: Town, add: (id: string, at: Spot) => void, terrain:
   const terrace = Math.min(house.width - 1, 5);
   town.paths.push({ points: [at(t, back), at(t, back + 3)], width: terrace, kind: "path", pavement: false });
   town.paths.push({ points: [at(t, back + 3), at(t - driveSide * 1.5, back + yard - 1)], width: 0.8, kind: "drive", pavement: false });
-  if (r() < 0.55) thing(town, "patio-set", spot(terrain, at(t + 1, back + 1.6).x, at(t + 1, back + 1.6).y, 6.3 * r()));
+  if (r() < 0.55) addFixture(town, "patio-set", spot(terrain, at(t + 1, back + 1.6).x, at(t + 1, back + 1.6).y, 6.3 * r()));
   for (const s of [-1, 1]) {
     if (hedged.has(s)) continue;
     const from = at(t + s * (frontage / 2 - 0.7), kerb + 1.2);
@@ -105,7 +105,7 @@ export function garden(town: Town, add: (id: string, at: Spot) => void, terrain:
   }
   if (r() < 0.4) {
     const g = at(t - driveSide * (frontage / 2 - 2), back + yard - 2);
-    thing(town, "shed", spot(terrain, g.x, g.y, angle + (r() < 0.5 ? 0 : Math.PI / 2)));
+    addFixture(town, "shed", spot(terrain, g.x, g.y, angle + (r() < 0.5 ? 0 : Math.PI / 2)));
   }
   if (lot.core) return;
   if (r() < 0.35) {
@@ -123,21 +123,21 @@ export function garden(town: Town, add: (id: string, at: Spot) => void, terrain:
       }
   } else if (r() < 0.18) {
     const g = at(t + driveSide * frontage * 0.22, back + 7);
-    thing(town, "greenhouse", spot(terrain, g.x, g.y, angle));
+    addFixture(town, "greenhouse", spot(terrain, g.x, g.y, angle));
   }
   if (r() < 0.25) {
     const g = at(t - driveSide * 1, back + yard * 0.6);
-    thing(town, "washing-line", spot(terrain, g.x, g.y, Math.atan2(-lot.along.y, lot.along.x)));
+    addFixture(town, "washing-line", spot(terrain, g.x, g.y, Math.atan2(-lot.along.y, lot.along.x)));
   }
   if (r() < 0.15) {
     const g = at(t + driveSide * 2, back + yard - 3);
-    thing(town, "swing", spot(terrain, g.x, g.y, angle));
+    addFixture(town, "swing", spot(terrain, g.x, g.y, angle));
   }
 }
 
-/** Adds a garden thing by name. */
-function thing(town: Town, name: GardenThing, at: Spot): void {
-  town.garden.set(name, [...(town.garden.get(name) ?? []), at]);
+/** Adds a garden fixture by name. */
+function addFixture(town: Town, name: Fixture, at: Spot): void {
+  town.fixtures.set(name, [...(town.fixtures.get(name) ?? []), at]);
 }
 
 /** A clipped hedge along the lot front, open at the gate: two runs of 2 m sections. */

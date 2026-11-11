@@ -7,12 +7,12 @@ import { Terrain } from "../terrain.ts";
 import { HOUSE_VARIANTS } from "../../../public/house/params.ts";
 import { type Plan, type Spot, type Rect, type Road } from "../plan.ts";
 import { SIGN_NAMES, type SignName } from "../town.ts";
-import { GARDEN_THINGS, type GardenThing } from "../gardens.ts";
+import { FIXTURES, type Fixture } from "../gardens.ts";
 
 type Files = Record<string, Uint8Array>;
 
 export async function encode(world: Plan): Promise<Files> {
-  const { terrain, land, models, garden, signs, ...layout } = world;
+  const { terrain, land, models, fixtures, signs, ...layout } = world;
   const material = new MeshBasicMaterial();
   const files: Files = {};
   const geometries = { terrain: terrain.mesh(material).geometry, ...roadShapes(world) };
@@ -21,7 +21,7 @@ export async function encode(world: Plan): Promise<Files> {
   return transform(
     {
       ...files,
-      layout: new TextEncoder().encode(JSON.stringify({ ...layout, models: [...models], garden: [...garden], signs: [...signs] })),
+      layout: new TextEncoder().encode(JSON.stringify({ ...layout, models: [...models], fixtures: [...fixtures], signs: [...signs] })),
       heights: new Uint8Array(terrain.heights.buffer, terrain.heights.byteOffset, terrain.heights.byteLength),
       cells: land.cells,
       parcels: land.parcels,
@@ -54,7 +54,7 @@ export async function decode(files: Files): Promise<Plan> {
       return { variant, spot: spot(r.spot) };
     }),
     fences: list(data.fences, spot),
-    garden: new Map([...spots(data.garden)].map(([name, at]) => [gardenThing(name), at])),
+    fixtures: new Map([...spots(data.fixtures)].map(([name, at]) => [fixture(name), at])),
     hedges: list(data.hedges, spot),
     church: spot(data.church),
     signs: new Map([...spots(data.signs)].map(([name, at]) => [signName(name), at])),
@@ -114,9 +114,9 @@ function road(value: unknown): Road {
     }),
   };
 }
-function gardenThing(name: string): GardenThing {
-  const known = GARDEN_THINGS.find((thing) => thing === name);
-  if (!known) throw new Error(`Invalid plan garden thing ${name}`);
+function fixture(name: string): Fixture {
+  const known = FIXTURES.find((fixture) => fixture === name);
+  if (!known) throw new Error(`Invalid plan garden fixture ${name}`);
   return known;
 }
 

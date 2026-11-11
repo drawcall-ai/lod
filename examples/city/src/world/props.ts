@@ -1,9 +1,10 @@
 import * as THREE from "three/webgpu";
-import { CachedLodLoader, type LodGpu, type LodLevel } from "@drawcall/lod";
+import { CachedLodLoader, type InstancedLod, type LodGpu, type LodLevel } from "@drawcall/lod";
 import { arriving, manager } from "../loading.ts";
-import { spread } from "./place.ts";
+import seedrandom from "seedrandom";
+import { instancedAt, spread } from "./place.ts";
 import type { Plan } from "./plan.ts";
-import { gardenObjects } from "./garden-objects.ts";
+import { fixtures } from "./fixtures.ts";
 import type { SignName } from "./town.ts";
 
 const shadows = arriving((object) => object.traverse((node) => (node.castShadow = node.receiveShadow = true)));
@@ -156,6 +157,37 @@ const SIGNS: Record<SignName, () => Promise<LodLevel[]>> = {
     }),
 };
 
+/** Hedge designs, which the gardens' hedges take turns with: each keeps its clipped outline through simplified geometry and a distant impostor. */
+const HEDGES: (() => Promise<LodLevel[]>)[] = [
+  () =>
+    new CachedLodLoader(manager, arriving()).loadAsync({
+      url: "/hedge/index.glts?length=2&variant=0",
+      levels: [
+        { type: "simplify", ratio: 0.1, maxPixels: 120 },
+        { type: "impostor", layout: "hemi", maxPixels: 30, resolution: 64 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+  () =>
+    new CachedLodLoader(manager, arriving()).loadAsync({
+      url: "/hedge/index.glts?length=2&variant=1",
+      levels: [
+        { type: "simplify", ratio: 0.1, maxPixels: 120 },
+        { type: "impostor", layout: "hemi", maxPixels: 30, resolution: 64 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+  () =>
+    new CachedLodLoader(manager, arriving()).loadAsync({
+      url: "/hedge/index.glts?length=2&variant=2",
+      levels: [
+        { type: "simplify", ratio: 0.1, maxPixels: 120 },
+        { type: "impostor", layout: "hemi", maxPixels: 30, resolution: 64 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+];
+
 export async function props(plan: Plan, gpu: LodGpu): Promise<THREE.Group> {
   const root = new THREE.Group();
   root.name = "props";
@@ -166,7 +198,20 @@ export async function props(plan: Plan, gpu: LodGpu): Promise<THREE.Group> {
   });
   if (plan.fences.length) pending.push(fence().then((levels) => spread(gpu, "fence", [levels], plan.fences)));
   for (const [name, spots] of plan.signs) pending.push(SIGNS[name]().then((levels) => spread(gpu, `sign ${name}`, [levels], spots)));
-  pending.push(gardenObjects(plan, gpu));
+  pending.push(fixtures(plan, gpu), hedges(plan, gpu));
   root.add(...(await Promise.all(pending)).flat());
   return root;
+}
+
+/** The plan's hedge sections, the designs taking turns, each section a little lighter or darker. */
+async function hedges(plan: Plan, gpu: LodGpu): Promise<InstancedLod[]> {
+  const variants = await Promise.all(
+    HEDGES.map(async (load, variant) => {
+      const mine = plan.hedges.filter((_, i) => i % HEDGES.length === variant);
+      if (!mine.length) return [];
+      const r = seedrandom(String(variant + 7));
+      return [instancedAt(gpu, `hedges ${variant}`, await load(), mine, (_, __, color) => color.multiplyScalar(0.85 + 0.25 * r()))];
+    }),
+  );
+  return variants.flat();
 }
