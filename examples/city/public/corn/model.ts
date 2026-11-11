@@ -1,18 +1,18 @@
 import * as THREE from "three/webgpu";
-import { Parts, tube } from "./geometry.ts";
+import { type Detail, Parts, tube, tubeSegments } from "./geometry.ts";
 import seedrandom from "seedrandom";
 import { ear } from "./ear.ts";
 import { leaf } from "./leaf.ts";
 import { tassel } from "./tassel.ts";
-import { type CornMaterials, type Detail, tubeSegments } from "./tissue.ts";
+import type { Materials } from "./materials.ts";
 
 /** The hero plant's leaf tessellation (along, across each blade). */
 export const HERO_LEAF: [number, number] = [192, 24];
 
 /** Corn plant `variant`: the hero's finely tessellated close-up form, or a field plant's. */
-export function plant(materials: CornMaterials, variant: number, hero = false, tassel = true): THREE.Group {
+export function plant(materials: Materials, variant: number, hero = false, tassel = true): THREE.Group {
   // Seeds start at 1: the shapes the variants were tuned with, such as the hero leaf the ladybird sits on.
-  return cornPlant(materials, variant + 1, { leafSegments: hero ? HERO_LEAF : [24, 4], detail: hero ? "fine" : "field", tassel });
+  return seeded(materials, variant + 1, { leafSegments: hero ? HERO_LEAF : [24, 4], detail: hero ? "fine" : "field", tassel });
 }
 
 /**
@@ -23,11 +23,7 @@ export function plant(materials: CornMaterials, variant: number, hero = false, t
  * (along, across each blade) sets the leaves' tessellation, `detail` that of the round
  * parts; `tassel: false` leaves the tassel off.
  */
-export function cornPlant(
-  materials: CornMaterials,
-  seed: number,
-  options: { leafSegments?: [number, number]; detail?: Detail; tassel?: boolean } = {},
-): THREE.Group {
+function seeded(materials: Materials, seed: number, options: { leafSegments?: [number, number]; detail?: Detail; tassel?: boolean } = {}): THREE.Group {
   const detail = options.detail ?? "fine";
   const r = seedrandom(String(seed));
   const parts = new Parts();
@@ -145,7 +141,7 @@ class SubCurve extends THREE.Curve<THREE.Vector3> {
 
 /** Brace roots from the lowest nodes, arching out and down into the soil. */
 function braceRoots(
-  materials: CornMaterials,
+  materials: Materials,
   parts: Parts,
   stalk: THREE.Curve<THREE.Vector3>,
   nodes: number[],

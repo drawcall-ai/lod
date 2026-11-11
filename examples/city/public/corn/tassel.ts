@@ -1,10 +1,10 @@
 import * as THREE from "three/webgpu";
-import { type Parts, tint, tube } from "./geometry.ts";
+import { type Detail, type Parts, tint, tube, tubeSegments } from "./geometry.ts";
 import type seedrandom from "seedrandom";
-import { type CornMaterials, type Detail, tubeSegments } from "./tissue.ts";
+import type { Materials } from "./materials.ts";
 
 /** Branched tassel: a central spike plus drooping side branches, all set with paired spikelets. */
-export function tassel(materials: CornMaterials, parts: Parts, top: THREE.Vector3, dir: THREE.Vector3, length: number, r: seedrandom.PRNG, detail: Detail) {
+export function tassel(materials: Materials, parts: Parts, top: THREE.Vector3, dir: THREE.Vector3, length: number, r: seedrandom.PRNG, detail: Detail) {
   // spikelets 9 mm apart, or for the field's plants three times as far and larger
   const pitch = detail === "fine" ? 0.009 : 0.027;
   const straw = new THREE.Color("#c4ae6a");
@@ -57,7 +57,7 @@ export function tassel(materials: CornMaterials, parts: Parts, top: THREE.Vector
 }
 
 /** Small paired spikelets hanging along a tassel branch, `pitch` apart. */
-function spikelets(materials: CornMaterials, parts: Parts, curve: THREE.Curve<THREE.Vector3>, skip: number, r: seedrandom.PRNG, pitch: number) {
+function spikelets(materials: Materials, parts: Parts, curve: THREE.Curve<THREE.Vector3>, skip: number, r: seedrandom.PRNG, pitch: number) {
   const length = curve.getLength();
   const count = Math.floor((length * (1 - skip)) / pitch);
   const size = pitch / 0.009;

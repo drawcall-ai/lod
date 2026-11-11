@@ -1,7 +1,7 @@
 import { disposeRecursive, onDispose, scene } from "@drawcall/glts";
 import { VARIANTS } from "./layout.ts";
 import { plant } from "./model.ts";
-import { cornMaterials } from "./tissue.ts";
+import { materials } from "./materials.ts";
 
 const query = new URL(import.meta.url).searchParams;
 const variantText = query.get("variant") ?? "0";
@@ -9,6 +9,6 @@ const variant = Number(variantText);
 if (!(/^\d+$/.test(variantText) && variant < VARIANTS)) throw new Error(`corn: variant must be a whole number below ${VARIANTS}, not ${variantText}`);
 const hero = query.get("hero") ?? "0";
 if (hero !== "0" && hero !== "1") throw new Error(`corn: hero must be 0 or 1, not ${hero}`);
-const corn = plant(cornMaterials(), variant, hero === "1");
+const corn = plant(materials(), variant, hero === "1");
 onDispose(() => disposeRecursive(scene));
 scene.add(corn);

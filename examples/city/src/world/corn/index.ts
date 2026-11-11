@@ -9,7 +9,7 @@ import { covers, type Cover, type Skirt, skirt as skirtUniform } from "./covers.
 import { cut, FieldTiles, heroSpot } from "./field.ts";
 import { cutoff, PLANTS, setCutoff } from "./levels.ts";
 import { BLOCK, DESIGNS, layout } from "../../../public/corn/layout.ts";
-import { TOP } from "../../../public/corn/cover/shapes.ts";
+import { TOP } from "../../../public/corn/block/shapes.ts";
 
 /** Field blocks whose plants are drawn at once. */
 const ROOM = 128;

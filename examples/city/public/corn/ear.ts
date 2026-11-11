@@ -1,11 +1,11 @@
 import * as THREE from "three/webgpu";
-import { MeshBuilder, type Parts, tube } from "./geometry.ts";
+import { type Detail, MeshBuilder, type Parts, tube, tubeSegments } from "./geometry.ts";
 import type seedrandom from "seedrandom";
-import { type CornMaterials, type Detail, tubeSegments } from "./tissue.ts";
+import type { Materials } from "./materials.ts";
 
 /** An ear on a short shank: wrapped husk leaves with flared tips, and a tuft of silk. Returns its middle. */
 export function ear(
-  materials: CornMaterials,
+  materials: Materials,
   parts: Parts,
   node: THREE.Vector3,
   stalkDir: THREE.Vector3,

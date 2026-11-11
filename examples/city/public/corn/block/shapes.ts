@@ -8,12 +8,12 @@ import { BLOCK, ROWS, type Plant, plantTurn } from "../layout.ts";
 export const TOP = 1.95;
 /** How far the canopy rises over each row and dips between rows: seen across the rows, the ridges hide the furrows. */
 const RIDGE = 0.2;
-/** How far a cover reaches into the soil: below the lowest ground of a sloping block. */
+/** How far a wall reaches into the soil: below the lowest ground of a sloping block. */
 export const SINK = 0.3;
 /**
  * Share of the plants baked with their tassel. The bake looks straight down, where tassels
  * cover far more of the canopy than in any view across the field; with every plant
- * tasselled the cover is sprinkled with pale blobs where the plants hand over to it.
+ * tasselled the canopy is sprinkled with pale blobs where the plants hand over to it.
  */
 const TASSELLED = 0.35;
 

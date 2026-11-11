@@ -4,7 +4,7 @@ import { CachedLodLoader, InstancedLod, type LodGpu, type LodLevel } from "@draw
 import { manager } from "../../loading.ts";
 import { type Tile, vigour } from "./field.ts";
 import { BLOCK, DESIGNS } from "../../../public/corn/layout.ts";
-import { canopy, SINK, TOP } from "../../../public/corn/cover/shapes.ts";
+import { canopy, SINK, TOP } from "../../../public/corn/block/shapes.ts";
 
 const YELLOWER = new THREE.Color(1.05, 1, 0.85);
 
@@ -26,23 +26,23 @@ export interface Cover {
 const CANOPIES: (() => Promise<LodLevel[]>)[] = [
   () =>
     new CachedLodLoader(manager).loadAsync({
-      url: "/corn/cover/index.glts?design=0",
-      levels: [{ type: "baked", low: "/corn/cover/low.glts", textureSize: 256 }],
+      url: "/corn/block/index.glts?design=0",
+      levels: [{ type: "baked", low: "/corn/block/low.glts", textureSize: 256 }],
     }),
   () =>
     new CachedLodLoader(manager).loadAsync({
-      url: "/corn/cover/index.glts?design=1",
-      levels: [{ type: "baked", low: "/corn/cover/low.glts", textureSize: 256 }],
+      url: "/corn/block/index.glts?design=1",
+      levels: [{ type: "baked", low: "/corn/block/low.glts", textureSize: 256 }],
     }),
   () =>
     new CachedLodLoader(manager).loadAsync({
-      url: "/corn/cover/index.glts?design=2",
-      levels: [{ type: "baked", low: "/corn/cover/low.glts", textureSize: 256 }],
+      url: "/corn/block/index.glts?design=2",
+      levels: [{ type: "baked", low: "/corn/block/low.glts", textureSize: 256 }],
     }),
   () =>
     new CachedLodLoader(manager).loadAsync({
-      url: "/corn/cover/index.glts?design=3",
-      levels: [{ type: "baked", low: "/corn/cover/low.glts", textureSize: 256 }],
+      url: "/corn/block/index.glts?design=3",
+      levels: [{ type: "baked", low: "/corn/block/low.glts", textureSize: 256 }],
     }),
 ];
 
@@ -50,13 +50,13 @@ const CANOPIES: (() => Promise<LodLevel[]>)[] = [
 const WALLS: Record<Axis, () => Promise<LodLevel[]>> = {
   x: () =>
     new CachedLodLoader(manager).loadAsync({
-      url: "/corn/cover/index.glts?design=0&axis=x",
-      levels: [{ type: "baked", low: "/corn/cover/low.glts?axis=x", textureSize: 256 }],
+      url: "/corn/block/index.glts?design=0&wall=x",
+      levels: [{ type: "baked", low: "/corn/block/low.glts?wall=x", textureSize: 256 }],
     }),
   z: () =>
     new CachedLodLoader(manager).loadAsync({
-      url: "/corn/cover/index.glts?design=0&axis=z",
-      levels: [{ type: "baked", low: "/corn/cover/low.glts?axis=z", textureSize: 256 }],
+      url: "/corn/block/index.glts?design=0&wall=z",
+      levels: [{ type: "baked", low: "/corn/block/low.glts?wall=z", textureSize: 256 }],
     }),
 };
 

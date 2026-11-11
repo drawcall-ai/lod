@@ -149,3 +149,14 @@ export function tube(
   }
   return b.geometry();
 }
+
+/**
+ * How finely the round parts (stalk, sheaths, roots, silk, tassel) are tessellated:
+ * "fine" for close-ups, "field" for the plants of a field, seen from a metre or more.
+ */
+export type Detail = "fine" | "field";
+
+/** `segments` along and `radial` around a tube at `detail`. */
+export function tubeSegments(detail: Detail, segments: number, radial: number): [number, number] {
+  return detail === "fine" ? [segments, radial] : [Math.max(3, Math.round(segments * 0.35)), Math.max(4, Math.round(radial * 0.6))];
+}
