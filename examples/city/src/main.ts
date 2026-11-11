@@ -9,7 +9,6 @@
 import * as THREE from "three/webgpu";
 import { InstancedLod, Lod, LodGpu, Wind } from "@drawcall/lod";
 import { Materials } from "../public/shared/materials.ts";
-import { number } from "../public/shared/parameters.ts";
 import { terrainMaterial } from "./render/ground/material.ts";
 import { Fly } from "./flight/fly.ts";
 import { route } from "./flight/route.ts";
@@ -40,7 +39,11 @@ const params = new URLSearchParams(location.search);
 const shot = params.has("shot");
 const terrain = params.get("terrain") !== "0";
 Lod.debug = params.has("debug");
-Lod.quality = number(params, "quality", 1, 0.01, 100);
+const quality = params.get("quality") ?? "1";
+Lod.quality = Number(quality);
+if (!(/^\d+(\.\d+)?$/.test(quality) && Lod.quality >= 0.01 && Lod.quality <= 100)) throw new Error(`quality must be in [0.01, 100], not ${quality}`);
+const seed = params.get("seed") ?? "7";
+if (!(/^\d+$/.test(seed) && Number(seed) < 2 ** 32)) throw new Error(`seed must be a whole number below 2^32, not ${seed}`);
 if (shot) document.body.classList.add("shot");
 const started = performance.now();
 const loadStages: Record<string, number> = {};
@@ -73,7 +76,7 @@ pipeline.canvas.style.visibility = "hidden";
 document.body.prepend(pipeline.canvas);
 
 // late afternoon: the sun low in the south-west, raking across the town
-const [world, sky] = await Promise.all([loadPlan(number(params, "seed", 7, 0, 2 ** 32 - 1, true)), loadSky(materials, pipeline.renderer, 2.4)]);
+const [world, sky] = await Promise.all([loadPlan(Number(seed)), loadSky(materials, pipeline.renderer, 2.4)]);
 loaded("plan and sky");
 scene.background = sky.background;
 scene.environment = sky.environment;

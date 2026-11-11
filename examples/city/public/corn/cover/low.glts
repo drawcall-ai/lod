@@ -1,9 +1,10 @@
 import { onDispose, scene } from "@drawcall/glts";
 import { coverLow } from "./model.ts";
 import { dispose } from "../../shared/dispose.ts";
-import { choice } from "../../shared/parameters.ts";
 
 // The shell a corn cover is baked onto, the same for every design: patch.glts's plants are baked onto it.
-const low = coverLow(choice(new URL(import.meta.url).searchParams, "axis", ["x", "z"], ""));
+const axis = new URL(import.meta.url).searchParams.get("axis") ?? "";
+if (axis !== "" && axis !== "x" && axis !== "z") throw new Error(`corn cover: axis must be x or z, not ${axis}`);
+const low = coverLow(axis);
 onDispose(() => dispose(low));
 scene.add(low);

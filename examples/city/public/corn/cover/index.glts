@@ -4,12 +4,15 @@ import { patch } from "./model.ts";
 import { DESIGNS } from "../layout.ts";
 import { dispose } from "../../shared/dispose.ts";
 import { Materials } from "../../shared/materials.ts";
-import { choice, number } from "../../shared/parameters.ts";
 
 // The plants a corn cover is baked from (see cover-low.glts).
 const query = new URL(import.meta.url).searchParams;
-const design = number(query, "design", 0, 0, DESIGNS - 1, true);
-const plants = patch(await Materials.load(loadingManager), design, choice(query, "axis", ["x", "z"], ""));
+const designText = query.get("design") ?? "0";
+const design = Number(designText);
+if (!(/^\d+$/.test(designText) && design < DESIGNS)) throw new Error(`corn cover: design must be a whole number below ${DESIGNS}, not ${designText}`);
+const axis = query.get("axis") ?? "";
+if (axis !== "" && axis !== "x" && axis !== "z") throw new Error(`corn cover: axis must be x or z, not ${axis}`);
+const plants = patch(await Materials.load(loadingManager), design, axis);
 onDispose(() => {
   plants.traverse((object) => {
     if (object instanceof THREE.InstancedMesh) object.dispose();

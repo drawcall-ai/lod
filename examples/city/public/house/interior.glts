@@ -5,9 +5,13 @@ import { houseInterior } from "./interior.ts";
 import { HOUSE_VARIANTS } from "./params.ts";
 import { dispose } from "../shared/dispose.ts";
 import { Materials } from "../shared/materials.ts";
-import { number } from "../shared/parameters.ts";
 
-const { params } = house(number(new URL(import.meta.url).searchParams, "variant", 0, 0, HOUSE_VARIANTS - 1, true));
+const query = new URL(import.meta.url).searchParams;
+const variantText = query.get("variant") ?? "0";
+const variant = Number(variantText);
+if (!(/^\d+$/.test(variantText) && variant < HOUSE_VARIANTS))
+  throw new Error(`house: variant must be a whole number below ${HOUSE_VARIANTS}, not ${variantText}`);
+const { params } = house(variant);
 const rooms = houseInterior(await Materials.load(loadingManager), params);
 // Each room stands on its own under the scene, as the bake reads them.
 const parts = [...rooms.children];

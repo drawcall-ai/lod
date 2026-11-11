@@ -11,7 +11,6 @@ import { facades } from "../../public/house/facades.ts";
 import { ceiling } from "../../public/house/furnishings.ts";
 import { foliageModel } from "@drawcall/lod";
 import { MODEL_FOLIAGE } from "../world/trees.ts";
-import { number } from "../../public/shared/parameters.ts";
 import { terrain } from "../render/ground/material.ts";
 
 /** Something the viewer can show: the object, an optional close-up target, and the ground under it. */
@@ -162,6 +161,13 @@ async function terrainItem(materials: Materials, load: Load): Promise<Content> {
 
 type Build = (load: Load) => Promise<Content> | Content;
 
+/** The house variant ?variant= asks the interior plan of. */
+function planVariant(): number {
+  const variant = new URLSearchParams(location.search).get("variant") ?? "3";
+  if (!(/^\d+$/.test(variant) && Number(variant) < HOUSE_VARIANTS)) throw new Error(`variant must be a whole number below ${HOUSE_VARIANTS}, not ${variant}`);
+  return Number(variant);
+}
+
 /** Every viewable item by name; procedural ones first, then the fetched models. */
 function builds(materials: Materials): Map<string, Build> {
   const houses = Array.from({ length: HOUSE_VARIANTS }, (_, i): [string, Build] => [`house-${i}`, (load) => houseItem(materials, load, i, "house")]);
@@ -171,7 +177,7 @@ function builds(materials: Materials): Map<string, Build> {
     ...houses,
     ["house-low-0", (load) => houseItem(materials, load, 0, "house-low")],
     ["interior", (load) => interiorItem(materials, load, 1)],
-    ["interior-plan", () => interiorPlanItem(materials, number(new URLSearchParams(location.search), "variant", 3, 0, HOUSE_VARIANTS - 1, true))],
+    ["interior-plan", () => interiorPlanItem(materials, planVariant())],
     ...corn,
     ["corn-row", (load) => cornRowItem(materials, load)],
     ["corn-field", (load) => cornFieldItem(materials, load)],

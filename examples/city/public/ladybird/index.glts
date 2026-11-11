@@ -6,10 +6,12 @@ import { leafSeat } from "../corn/seat.ts";
 import { dispose } from "../shared/dispose.ts";
 import { ladybird } from "./model.ts";
 import { Materials } from "../shared/materials.ts";
-import { number } from "../shared/parameters.ts";
 
 // A ladybird on the hero plant's leaf, placed where that leaf stands in the plant's space.
-const variant = number(new URL(import.meta.url).searchParams, "variant", HERO_VARIANT, 0, VARIANTS - 1, true);
+const query = new URL(import.meta.url).searchParams;
+const variantText = query.get("variant") ?? String(HERO_VARIANT);
+const variant = Number(variantText);
+if (!(/^\d+$/.test(variantText) && variant < VARIANTS)) throw new Error(`ladybird: variant must be a whole number below ${VARIANTS}, not ${variantText}`);
 const materials = await Materials.load(loadingManager);
 const hero = plant(materials, variant, true);
 const seat = leafSeat(hero);
