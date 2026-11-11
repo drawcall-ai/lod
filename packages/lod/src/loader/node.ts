@@ -167,6 +167,11 @@ class ScriptLoader extends Loader<Object3D> {
 let users = 0;
 /** What sessions install while any runs: the canvas, and what restores the globals. */
 let installed: Promise<{ canvas: Canvas; restore: () => Promise<void> }> | undefined;
+/**
+ * The restore of the last sessions to finish, which the next install waits for: @drawcall/webgpu saves and restores
+ * the globals it installs per canvas, so two canvases' lives must not overlap.
+ */
+let restored: Promise<void> = Promise.resolve();
 let current: Canvas | undefined;
 
 /** The canvas of the sessions running. */
@@ -178,7 +183,8 @@ function canvas(): Canvas {
 async function session<T>(state: Session, run: () => Promise<T>): Promise<T> {
   users++;
   try {
-    installed ??= install();
+    // A failed restore failed the session that ran it.
+    installed ??= restored.catch(() => {}).then(install);
     current = (await installed).canvas;
     return await sessions.run(state, run);
   } finally {
@@ -186,10 +192,13 @@ async function session<T>(state: Session, run: () => Promise<T>): Promise<T> {
       const restoring = installed;
       installed = current = undefined;
       // A failed install failed the run above.
-      await restoring?.then(
-        ({ restore }) => restore(),
-        () => {},
-      );
+      restored = restoring
+        ? restoring.then(
+            ({ restore }) => restore(),
+            () => {},
+          )
+        : restored;
+      await restored;
     }
   }
 }
