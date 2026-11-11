@@ -9,7 +9,7 @@ import { roof } from "./roof.ts";
 import { wallSlab } from "./wall.ts";
 
 /** The full-detail house: walls with openings, joinery, glass, roof, gutters, chimney. */
-export function detail(materials: M.Materials, p: HouseParams): THREE.Group {
+export function exterior(materials: M.Materials, p: HouseParams): THREE.Group {
   const r = seedrandom(String(p.seed));
   const parts = new Parts();
   for (const f of facades(p)) facade(materials, parts.at(f.frame), f, p, r);

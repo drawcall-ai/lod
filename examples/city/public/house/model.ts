@@ -1,28 +1,28 @@
 import * as THREE from "three/webgpu";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import type { Materials } from "./materials.ts";
-import { detail } from "./detail.ts";
-import { houseInterior } from "./interior.ts";
+import { exterior } from "./exterior.ts";
+import { interior } from "./interior.ts";
 import { low } from "./low.ts";
 import { houseParams, type HouseParams } from "./params.ts";
 
 // A building's three assets: the detailed building with its rooms, the low shell its windows bake onto, and the rooms
 // alone, which the bake projects into those windows.
 
-/** A building's parameters and how its exterior is shaped; its rooms are always `houseInterior`. */
+/** A building's parameters and how its exterior is shaped; its rooms are always `interior`'s. */
 export interface Building {
   params: HouseParams;
   low(params: HouseParams): THREE.Mesh;
-  detail(materials: Materials, params: HouseParams): THREE.Group;
+  exterior(materials: Materials, params: HouseParams): THREE.Group;
 }
 
 /** House variant `variant`, 0-based and below `HOUSE_VARIANTS`. */
-export const house = (variant: number): Building => ({ params: houseParams(variant), low, detail });
+export const house = (variant: number): Building => ({ params: houseParams(variant), low, exterior });
 
 /** The building as drawn up close: its exterior with the rooms behind its windows. */
-export function detailed(materials: Materials, { params, detail }: Building): THREE.Group {
-  const rooms = houseInterior(materials, params);
-  const group = new THREE.Group().add(detail(materials, params), ...merged(rooms));
+export function detailed(materials: Materials, { params, exterior }: Building): THREE.Group {
+  const rooms = interior(materials, params);
+  const group = new THREE.Group().add(exterior(materials, params), ...merged(rooms));
   rooms.traverse((node) => {
     if (node instanceof THREE.Mesh) node.geometry.dispose();
   });

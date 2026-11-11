@@ -1,11 +1,11 @@
 // The church's rooms, which its baked level shows through the windows.
 import { disposeRecursive, loadingManager, onDispose, scene } from "@drawcall/glts";
-import { church } from "./church.ts";
-import { houseInterior } from "./interior.ts";
-import { Materials } from "./materials.ts";
+import { church } from "./model.ts";
+import { interior } from "../interior.ts";
+import { Materials } from "../materials.ts";
 
 const materials = new Materials(loadingManager);
-const rooms = houseInterior(materials, church().params);
+const rooms = interior(materials, church().params);
 onDispose(() => disposeRecursive(scene));
 // Each room stands on its own under the scene, as the bake reads them.
 scene.add(...rooms.children);

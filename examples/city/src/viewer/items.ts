@@ -3,10 +3,10 @@ import * as THREE from "three/webgpu";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
 import { BLOCK, HERO_VARIANT, layout, type Plant, plantTurn, ROWS, VARIANTS } from "../../public/corn/layout.ts";
-import { houseInterior } from "../../public/house/interior.ts";
+import { interior } from "../../public/house/interior.ts";
 import { heights, houseParams, HOUSE_VARIANTS } from "../../public/house/params.ts";
 import { facades } from "../../public/house/facades.ts";
-import { ceiling } from "../../public/house/furnishings.ts";
+import { ceiling } from "../../public/house/finishes.ts";
 import { Materials } from "../../public/house/materials.ts";
 import { seatMatrix } from "../world/corn/seat.ts";
 import { foliageModel } from "@drawcall/lod";
@@ -99,7 +99,7 @@ async function interiorPlanItem(textures: Textures, variant: number): Promise<Co
   const cut = [new THREE.Plane(new THREE.Vector3(0, -1, 0), 1.6), new THREE.Plane(new THREE.Vector3(0, 1, 0), 0.3)];
   for (let k = 0; k <= p.floors; k++) {
     const y0 = p.plinth + k * p.floorHeight;
-    const storey = houseInterior(materials, p);
+    const storey = interior(materials, p);
     storey.traverse((o) => {
       if (!(o instanceof THREE.Mesh) || Array.isArray(o.material)) return;
       if (o.material === ceiling(materials)) o.visible = false;

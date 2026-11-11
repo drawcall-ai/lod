@@ -1,7 +1,7 @@
 import { disposeRecursive, loadingManager, onDispose, scene } from "@drawcall/glts";
-import { detailed } from "./model.ts";
-import { church } from "./church.ts";
-import { Materials } from "./materials.ts";
+import { detailed } from "../model.ts";
+import { church } from "./model.ts";
+import { Materials } from "../materials.ts";
 
 const materials = new Materials(loadingManager);
 const building = detailed(materials, church());

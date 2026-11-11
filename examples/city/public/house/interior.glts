@@ -1,14 +1,14 @@
 // The house's rooms, which its baked level shows through the windows.
 import { disposeRecursive, loadingManager, onDispose, scene } from "@drawcall/glts";
 import { house } from "./model.ts";
-import { houseInterior } from "./interior.ts";
+import { interior } from "./interior.ts";
 import { variantOf } from "./params.ts";
 import { Materials } from "./materials.ts";
 
 const variant = variantOf(import.meta.url);
 const { params } = house(variant);
 const materials = new Materials(loadingManager);
-const rooms = houseInterior(materials, params);
+const rooms = interior(materials, params);
 onDispose(() => disposeRecursive(scene));
 // Each room stands on its own under the scene, as the bake reads them.
 scene.add(...rooms.children);

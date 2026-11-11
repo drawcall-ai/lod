@@ -4,7 +4,7 @@ import { box, Parts, tint } from "./geometry.ts";
 import seedrandom from "seedrandom";
 import { type Box, floorPlan, type Hole, type Room, type Side } from "./floorplan.ts";
 import { furnish, wallFrame } from "./furniture.ts";
-import * as M from "./furnishings.ts";
+import * as M from "./finishes.ts";
 import { type HouseParams, pick } from "./params.ts";
 
 const SIDES: readonly Side[] = ["front", "back", "east", "west"];
@@ -16,7 +16,7 @@ const SIDES: readonly Side[] = ["front", "back", "east", "west"];
  * between rooms cut out — plus door casings, door leaves standing open or ajar, skirting,
  * a lamp, curtains and the furniture or stairs of its kind.
  */
-export function houseInterior(materials: Materials, p: HouseParams): THREE.Group {
+export function interior(materials: Materials, p: HouseParams): THREE.Group {
   const plan = floorPlan(p);
   const r = seedrandom(String(p.seed * 31 + 7));
   const group = new THREE.Group();

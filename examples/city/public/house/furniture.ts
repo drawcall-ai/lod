@@ -4,7 +4,7 @@ import { box, type Parts, tint } from "./geometry.ts";
 import type seedrandom from "seedrandom";
 import { pick } from "./params.ts";
 import { type Box, type FloorPlan, type Flight, type Room, SLAB, type Side } from "./floorplan.ts";
-import * as M from "./furnishings.ts";
+import * as M from "./finishes.ts";
 
 /**
  * Skirting, a ceiling lamp, curtains at every window and the furniture of the room's

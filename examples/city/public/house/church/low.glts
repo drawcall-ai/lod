@@ -1,6 +1,6 @@
 // The church's closed low shell, which its baked level's windows and walls are baked onto.
 import { disposeRecursive, onDispose, scene } from "@drawcall/glts";
-import { church } from "./church.ts";
+import { church } from "./model.ts";
 
 const { params, low } = church();
 const shell = low(params);

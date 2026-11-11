@@ -9,24 +9,24 @@ const INDOORS = 0.12;
 
 /** Painted plaster for walls. */
 export const plaster = (materials: Materials) =>
-  materials.material("house/furnishings.ts:plaster", () =>
+  materials.material("house/finishes.ts:plaster", () =>
     surface(materials, "white_stucco", { vertexColors: true, normalScale: 0.25, roughness: 1.2, envMapIntensity: INDOORS }),
   );
 
 /** Plain white ceilings (a material of their own, so a cutaway can leave them out). */
 export const ceiling = (materials: Materials) =>
-  materials.material("house/furnishings.ts:ceiling", () =>
+  materials.material("house/finishes.ts:ceiling", () =>
     surface(materials, "white_stucco", { color: "#f4f2ee", normalScale: 0.2, roughness: 1.2, envMapIntensity: INDOORS }),
   );
 
 export const floorboards = (materials: Materials) =>
-  materials.material("house/furnishings.ts:floorboards", () =>
+  materials.material("house/finishes.ts:floorboards", () =>
     surface(materials, "wood_table_001", { color: "#f2dcb8", normalScale: 0.6, envMapIntensity: INDOORS }),
   );
 
 /** Square ceramic tiles with grout, 30 cm, for kitchens and bathrooms. */
 export const tiles = (materials: Materials) =>
-  materials.material("house/furnishings.ts:tiles", () => {
+  materials.material("house/finishes.ts:tiles", () => {
     const map = new THREE.DataTexture(tilePixels(), TILE_TEXELS, TILE_TEXELS);
     map.colorSpace = THREE.SRGBColorSpace;
     map.wrapS = map.wrapT = THREE.RepeatWrapping;
@@ -57,27 +57,25 @@ function tilePixels(): Uint8Array {
 /** Upholstery, rugs, curtains and bedding. */
 export const fabric = (materials: Materials) =>
   materials.material(
-    "house/furnishings.ts:fabric",
+    "house/finishes.ts:fabric",
     () => new THREE.MeshStandardMaterial({ name: "fabric", vertexColors: true, roughness: 0.95, envMapIntensity: INDOORS, side: THREE.DoubleSide }),
   );
 
 /** Furniture wood: the grain of the table texture under a stain colour. */
 export const wood = (materials: Materials) =>
-  materials.material("house/furnishings.ts:wood", () =>
-    surface(materials, "wood_table_001", { vertexColors: true, normalScale: 0.4, envMapIntensity: INDOORS }),
-  );
+  materials.material("house/finishes.ts:wood", () => surface(materials, "wood_table_001", { vertexColors: true, normalScale: 0.4, envMapIntensity: INDOORS }));
 
 /** Lacquered and ceramic surfaces: kitchen fronts, bath, lamp shades, book covers. */
 export const gloss = (materials: Materials) =>
   materials.material(
-    "house/furnishings.ts:gloss",
+    "house/finishes.ts:gloss",
     () => new THREE.MeshStandardMaterial({ name: "gloss", vertexColors: true, roughness: 0.35, envMapIntensity: INDOORS }),
   );
 
 /** A lit lamp shade: the rooms' own light when they are baked into a building's windows. */
 export const shade = (materials: Materials) =>
   materials.material(
-    "house/furnishings.ts:shade",
+    "house/finishes.ts:shade",
     () =>
       new THREE.MeshStandardMaterial({
         name: "lamp shade",

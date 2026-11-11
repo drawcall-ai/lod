@@ -1,15 +1,15 @@
 import * as THREE from "three/webgpu";
-import { box, Parts } from "./geometry.ts";
-import type { Building } from "./model.ts";
-import type { HouseParams } from "./params.ts";
-import { detail as houseDetail } from "./detail.ts";
-import { low as houseLow } from "./low.ts";
-import * as M from "./materials.ts";
+import { box, Parts } from "../geometry.ts";
+import type { Building } from "../model.ts";
+import type { HouseParams } from "../params.ts";
+import { exterior as houseExterior } from "../exterior.ts";
+import { low as houseLow } from "../low.ts";
+import * as M from "../materials.ts";
 
 /** The church: a house's hall and rooms, with a bell tower and slate spire. */
-export const church = (): Building => ({ params: churchParams(), low: churchLow, detail: churchDetail });
+export const church = (): Building => ({ params: params(), low, exterior });
 
-function churchParams(): HouseParams {
+function params(): HouseParams {
   return {
     width: 19,
     depth: 10,
@@ -42,7 +42,7 @@ function tower(params: HouseParams) {
 }
 
 /** Brick hall with a bell tower and slate spire. */
-function churchDetail(materials: M.Materials, params: HouseParams): THREE.Group {
+function exterior(materials: M.Materials, params: HouseParams): THREE.Group {
   const parts = new Parts();
   const stone = M.churchStone(materials);
   const { size, height, x, shaft, spire } = tower(params);
@@ -63,17 +63,17 @@ function churchDetail(materials: M.Materials, params: HouseParams): THREE.Group 
   parts.add(stone, box(size + 0.3, 0.4, size + 0.3).translate(x, height + 0.2, 0));
   parts.add(M.churchSlate(materials), spire);
   parts.add(M.zinc(materials), new THREE.CylinderGeometry(0.03, 0.03, 1.6, 6).translate(x, height + 0.4 + 11.8, 0));
-  const detail = houseDetail(materials, params);
-  detail.add(parts.build("tower"));
-  return detail;
+  const building = houseExterior(materials, params);
+  building.add(parts.build("tower"));
+  return building;
 }
 
 /** The house's low shell with the tower's shaft and spire added. */
-function churchLow(params: HouseParams): THREE.Mesh {
+function low(params: HouseParams): THREE.Mesh {
   const { shaft, spire } = tower(params);
-  const low = houseLow(params);
-  low.geometry = mergeShell(low.geometry, [shaft, spire]);
-  return low;
+  const shell = houseLow(params);
+  shell.geometry = mergeShell(shell.geometry, [shaft, spire]);
+  return shell;
 }
 
 /** The low shell with more closed parts added (positions and normals only: the bake unwraps it again). */
