@@ -1,4 +1,4 @@
-import type { Library } from "../../../public/content/materials.ts";
+import type { Materials } from "../../../public/shared/materials.ts";
 import * as THREE from "three/webgpu";
 import {
   Fn,
@@ -28,10 +28,10 @@ import {
   vec2,
   vec3,
 } from "three/tsl";
-import { fbm, noise2 } from "../../../public/content/noise.ts";
+import { fbm, noise2 } from "../../../public/shared/noise.ts";
 import type { Zones } from "../../world/zones.ts";
 import { Crop, Use } from "../../world/land.ts";
-import { BLOCK, ROWS } from "../../../public/content/corn/layout.ts";
+import { BLOCK, ROWS } from "../../../public/corn/layout.ts";
 
 /** Distance between corn rows (m); with an even number of rows a block's rows stand half of it off every multiple of it from the centre. */
 const ROW = BLOCK / ROWS;
@@ -89,11 +89,11 @@ const grey = (c: Node<"vec3">, weights: [number, number, number]) => dot(c, vec3
  * farmland parcels show their crops, and town lawns are mown in stripes.
  * An explicit `footprint` replaces pixel derivatives for a vertex evaluation.
  */
-export function groundShading(library: Library, zones: Zones, footprint?: Node<"float">): Ground {
+export function groundShading(materials: Materials, zones: Zones, footprint?: Node<"float">): Ground {
   // the maps once each: every read of one is a sample of the same binding
-  const lawnMap = texture(library.texture("Grass001", "diff"));
-  const aerialMap = texture(library.texture("aerial_grass_rock", "diff"));
-  const soilMap = texture(library.texture("farm_soil", "diff"));
+  const lawnMap = texture(materials.texture("Grass001", "diff"));
+  const aerialMap = texture(materials.texture("aerial_grass_rock", "diff"));
+  const soilMap = texture(materials.texture("farm_soil", "diff"));
   const top = float(12);
   // arrays cannot be empty: pad with zones far outside the world
   const fields = zones.fields.length > 0 ? zones.fields : [{ x: 1e7, z: 1e7, halfX: 1, halfZ: 1, angle: 0 }];

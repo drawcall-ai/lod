@@ -1,17 +1,16 @@
 import type { Object3D } from "three/webgpu";
 import { disposeRejected, disposeTree, type DisposeOptions } from "../dispose.js";
-import type { AssetDependencies } from "./dependencies.js";
 
 /**
  * What one ladder's loads share: the source loaded to measure or build the ladder with, handed to the first level load
- * (the source level draws it, a build uses it, a cached level disposes it; onLevel has not changed it), the levels built
+ * (the source level draws it, a build uses it, a stored level disposes it; onLevel has not changed it), the levels built
  * with the ladder, each handed to its first load, and every level object loaded. Those are freed if describing the
  * ladder fails, else when the last Lod holding the levels is disposed (see `hold`), which spends them.
  */
 export class LodLoadContext {
-  /** Level bytes built while describing the ladder, by index: a cached level is read again when it loads. */
+  /** Level bytes built while describing the ladder, by index: a stored level is read again when it loads. */
   private readonly built = new Map<number, Uint8Array>();
-  private spare: Loaded | undefined;
+  private spare: Object3D | undefined;
   /** Every level object loaded, and what freeing it frees: a simplified level draws with its source's materials. */
   private readonly loaded = new Map<Object3D, DisposeOptions>();
   /** How many Lods hold the levels, and whether the last has let go, which freed them. */
@@ -19,18 +18,18 @@ export class LodLoadContext {
   private spent = false;
 
   constructor(
-    private readonly load: () => Promise<Loaded>,
+    private readonly load: () => Promise<Object3D>,
     private readonly onLevel: ((object: Object3D, index: number) => void | Promise<void>) | undefined,
   ) {}
 
   /** The spare source, loaded once. */
-  async source(): Promise<Loaded> {
+  async source(): Promise<Object3D> {
     this.spare ??= await this.load();
     return this.spare;
   }
 
   /** The spare source, for the first level load to take. */
-  take(): Loaded | undefined {
+  take(): Object3D | undefined {
     const taken = this.spare;
     this.spare = undefined;
     return taken;
@@ -71,7 +70,7 @@ export class LodLoadContext {
    * no Lod ever held are never freed. Freed levels are spent: a Lod made from them later throws.
    */
   readonly hold = (): (() => void) => {
-    if (this.spent) throw new Error("LodLoader: these levels were freed with the last Lod that held them; call loadAsync again");
+    if (this.spent) throw new Error("CachedLodLoader: these levels were freed with the last Lod that held them; call loadAsync again");
     this.holders++;
     let held = true;
     return () => {
@@ -86,15 +85,9 @@ export class LodLoadContext {
   /** Free the spare source and every level object loaded with `dispose`. */
   private free(dispose: (object: Object3D, options: DisposeOptions) => void): void {
     const taken = this.take();
-    if (taken) dispose(taken.source, { materials: true });
+    if (taken) dispose(taken, { materials: true });
     for (const [object, options] of this.loaded) dispose(object, options);
     this.loaded.clear();
     this.built.clear();
   }
-}
-
-/** A loaded source and what loading it read. */
-export interface Loaded {
-  source: Object3D;
-  dependencies: AssetDependencies;
 }

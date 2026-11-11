@@ -1,10 +1,15 @@
 import * as THREE from "three/webgpu";
-import type { HouseParams } from "../../public/content/house/params.ts";
-import { HEDGE, type GardenItem } from "../../public/content/ladders.ts";
-import type { Random } from "../../public/content/random.ts";
+import type { HouseParams } from "../../public/house/params.ts";
+import type { Random } from "../../public/shared/random.ts";
 import { spot, type Spot } from "./plan.ts";
 import type { Terrain } from "./terrain.ts";
 import { STREET_WIDTH, type Town } from "./town.ts";
+
+/** Length of one clipped hedge section (m). */
+export const HEDGE = 2;
+
+/** The things a garden holds, each a garden.glts asset (see garden-objects.ts). */
+type GardenItem = "letterbox" | "patio set" | "shed" | "greenhouse" | "washing line" | "swing";
 
 /** A lot's position along its street: `at(t, offset)` maps along-street and out-from-the-centre-line metres to x/z. */
 interface Lot {
@@ -128,7 +133,7 @@ export function garden(town: Town, add: (id: string, at: Spot) => void, terrain:
   }
 }
 
-/** Adds a garden thing (see `public/content/garden.ts`) by name. */
+/** Adds a garden thing (see `public/garden/model.ts`) by name. */
 function item(town: Town, name: GardenItem, at: Spot): void {
   town.garden.set(name, [...(town.garden.get(name) ?? []), at]);
 }

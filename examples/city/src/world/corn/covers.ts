@@ -1,9 +1,10 @@
 import * as THREE from "three/webgpu";
 import { Fn, cameraPosition, distance, mix, modelWorldMatrix, positionLocal, smoothstep, uniform, vec3, vec4 } from "three/tsl";
-import { InstancedLod, type LodGpu } from "@drawcall/lod";
+import { CachedLodLoader, InstancedLod, type LodGpu, type LodLevel } from "@drawcall/lod";
+import { manager } from "../../loading.ts";
 import { type Tile, vigour } from "./field.ts";
-import { BLOCK } from "../../../public/content/corn/layout.ts";
-import { canopy, SINK, TOP } from "../../../public/content/corn/cover/shapes.ts";
+import { BLOCK, DESIGNS } from "../../../public/corn/layout.ts";
+import { canopy, SINK, TOP } from "../../../public/corn/cover/shapes.ts";
 
 const YELLOWER = new THREE.Color(1.05, 1, 0.85);
 
@@ -21,22 +22,63 @@ export interface Cover {
   diameter: number;
 }
 
-/** The raw bakeMesh results the covers are built from, freshly baked or decoded. */
-export interface CoverBakes {
-  /** Indexed by block design. */
-  canopies: THREE.Mesh[];
-  walls: Record<Axis, THREE.Mesh>;
-}
+/** Each block design's canopy, baked from its plants onto the canopy shell. */
+const CANOPIES: (() => Promise<LodLevel[]>)[] = [
+  () =>
+    new CachedLodLoader(manager).loadAsync({
+      url: "/corn/cover/index.glts?design=0",
+      levels: [{ type: "baked", low: "/corn/cover/low.glts", textureSize: 256 }],
+    }),
+  () =>
+    new CachedLodLoader(manager).loadAsync({
+      url: "/corn/cover/index.glts?design=1",
+      levels: [{ type: "baked", low: "/corn/cover/low.glts", textureSize: 256 }],
+    }),
+  () =>
+    new CachedLodLoader(manager).loadAsync({
+      url: "/corn/cover/index.glts?design=2",
+      levels: [{ type: "baked", low: "/corn/cover/low.glts", textureSize: 256 }],
+    }),
+  () =>
+    new CachedLodLoader(manager).loadAsync({
+      url: "/corn/cover/index.glts?design=3",
+      levels: [{ type: "baked", low: "/corn/cover/low.glts", textureSize: 256 }],
+    }),
+];
+
+/** The field's outer walls along x and z, baked from the plants of design 0 near them. */
+const WALLS: Record<Axis, () => Promise<LodLevel[]>> = {
+  x: () =>
+    new CachedLodLoader(manager).loadAsync({
+      url: "/corn/cover/index.glts?design=0&axis=x",
+      levels: [{ type: "baked", low: "/corn/cover/low.glts?axis=x", textureSize: 256 }],
+    }),
+  z: () =>
+    new CachedLodLoader(manager).loadAsync({
+      url: "/corn/cover/index.glts?design=0&axis=z",
+      levels: [{ type: "baked", low: "/corn/cover/low.glts?axis=z", textureSize: 256 }],
+    }),
+};
 
 type Axis = "x" | "z";
 
 /** Every block design's canopy, then the walls along x and z. */
-export function covers({ canopies, walls }: CoverBakes, tiles: Tile[], skirt: Skirt, gpu: LodGpu): Cover[] {
+export async function covers(tiles: Tile[], skirt: Skirt, gpu: LodGpu): Promise<Cover[]> {
+  if (CANOPIES.length !== DESIGNS) throw new Error(`covers.ts loads ${CANOPIES.length} canopies of ${DESIGNS} designs`);
+  const [canopies, x, z] = await Promise.all([Promise.all(CANOPIES.map(bake)), bake(WALLS.x), bake(WALLS.z)]);
   return [
-    ...canopies.map((bake, design) => canopyCover(bake, design, tiles, skirt, gpu)),
-    wallCover(walls.x, "x", tiles, skirt, gpu),
-    wallCover(walls.z, "z", tiles, skirt, gpu),
+    ...canopies.map((mesh, design) => canopyCover(mesh, design, tiles, skirt, gpu)),
+    wallCover(x, "x", tiles, skirt, gpu),
+    wallCover(z, "z", tiles, skirt, gpu),
   ];
+}
+
+/** The baked level of a cover's ladder, which the cover's own levels are made from. */
+async function bake(load: () => Promise<LodLevel[]>): Promise<THREE.Mesh> {
+  const baked = (await load())[1];
+  const mesh = baked?.object ?? (await baked?.load?.());
+  if (!(mesh instanceof THREE.Mesh)) throw new Error("A corn cover's baked level is not a mesh");
+  return mesh;
 }
 
 function canopyCover(bake: THREE.Mesh, design: number, tiles: Tile[], skirt: Skirt, gpu: LodGpu): Cover {
@@ -59,7 +101,11 @@ function canopyCover(bake: THREE.Mesh, design: number, tiles: Tile[], skirt: Ski
 }
 
 function wallCover(bake: THREE.Mesh, axis: Axis, tiles: Tile[], skirt: Skirt, gpu: LodGpu): Cover {
-  const wall = new THREE.Mesh(bake.geometry, rising(coverMaterial(bake), skirt));
+  // The bake's shell ends at the ground, inside the plants' bounds; up close the wall reaches into the soil.
+  const geometry = bake.geometry.clone();
+  const position = geometry.getAttribute("position");
+  for (let i = 0; i < position.count; i++) if (position.getY(i) === 0) position.setY(i, -SINK);
+  const wall = new THREE.Mesh(geometry, rising(coverMaterial(bake), skirt));
   wall.castShadow = wall.receiveShadow = true;
   const turn = new THREE.Matrix4().makeRotationY(Math.PI);
   const places = tiles.flatMap((tile) =>

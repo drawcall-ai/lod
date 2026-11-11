@@ -19,20 +19,14 @@ import {
 import { Lod } from "../../src/lod.js";
 import { InteriorMappingMaterial } from "../../src/baked/interior/material.js";
 import { ImpostorMesh } from "../../src/impostor/mesh/index.js";
-import { LodLoader } from "../../src/loader/index.js";
+import { CachedLodLoader } from "../../src/loader/index.js";
 import { GPU_TIMEOUT, eventually, nextLevel, render, gpu } from "../renderer.js";
 import type { LodRequest } from "../../src/loader/request.js";
 
-vi.mock("vitecache", async () => {
-  const { CacheEntry, MissingDependencyError } = await import("./fixture.js");
-  return { CacheEntry, MissingDependencyError };
-});
+vi.mock("vitecache", async () => ({ CacheEntry: (await import("./fixture.js")).CacheEntry }));
 vi.mock("../../src/impostor/bake/index.js", async () => ({ bakeImpostor: (await import("./fixture.js")).bakeImpostor }));
 
-const helper = "/models/helper.bin?shape=oak";
-const extra = "/models/leaf.ts?size=small";
-
-describe("LodLoader", () => {
+describe("CachedLodLoader", () => {
   it("loads the baking auxiliaries only on a cache miss", async () => {
     const manager = new LoadingManager();
     manager.setURLModifier((url) => {
@@ -42,8 +36,7 @@ describe("LodLoader", () => {
     const handler = new Loader<Object3D>();
     const load = vi.fn(async (url: string) => {
       const scene = url === "/models/rooms.glts#bake" ? interior() : url === "/models/house.glts?part=low" ? box() : house().add(interior());
-      const source = { url: manager.resolveURL(url), dependencyUrls: [helper, extra, helper], packages: [], moduleHashes: {}, runtimeModules: [] };
-      return gltsScene(source, ...(scene instanceof Group ? [...scene.children] : [scene]));
+      return gltsScene(...(scene instanceof Group ? [...scene.children] : [scene]));
     });
     handler.loadAsync = load;
     manager.addHandler(/\.glts$/, handler);
@@ -51,19 +44,10 @@ describe("LodLoader", () => {
       url: "house.glts?variant=2",
       levels: [{ type: "baked", low: "?part=low", interior: "rooms.glts#bake", textureSize: 32, maxPixels: 100 }],
     };
-    const loader = new LodLoader(manager).setPath("/models/");
+    const loader = new CachedLodLoader(manager).setPath("/models/");
     const cold = (await loader.loadAsync(request))[1];
     if (!cold?.load) throw new Error("Expected a lazy baked level");
     await cold.load();
-    const level = cache.saved.find(({ options }) => options.dependencies?.low);
-    expect(level?.options.dependencies).toMatchObject({
-      source: { url: "/resolved/house.glts?variant=2" },
-      low: { url: "/resolved/house.glts?part=low" },
-      interior: { url: "/resolved/rooms.glts#bake" },
-    });
-    const dependencies = level?.dependencies ?? {};
-    expect(Object.values(dependencies).filter((value) => value.url === helper)).toHaveLength(1);
-    expect(dependencies["resource:1"]).toEqual({ url: extra });
     // The source measured for the shape, which the build reuses, then the low shell and rooms.
     expect(load).toHaveBeenCalledTimes(3);
     const warm = await loader.loadAsync(request);
@@ -87,19 +71,16 @@ describe("LodLoader", () => {
         scene: new Group().add(new Mesh(new SphereGeometry(1, 12, 8), material), new Mesh(new SphereGeometry(1, 12, 8), material.clone()).translateX(2)),
       };
     }, /\.glb$/);
-    const loader = new LodLoader(manager).setPath("/models/");
-    const request: LodRequest = {
-      url: "tree.glb?seed=2",
-      levels: [{ type: "simplify", ratio: 0.5, maxPixels: 100 }, { type: "impostor" }],
-      onLevel: (object, index) => {
-        if (index === 2) return;
-        const first = object.children[0];
-        if (!(first instanceof Mesh)) throw new Error("Expected mesh source");
-        object.traverse((node) => {
-          if (node instanceof Mesh) node.material = first.material;
-        });
-      },
+    const onLevel = (object: Object3D, index: number) => {
+      if (index === 2) return;
+      const first = object.children[0];
+      if (!(first instanceof Mesh)) throw new Error("Expected mesh source");
+      object.traverse((node) => {
+        if (node instanceof Mesh) node.material = first.material;
+      });
     };
+    const loader = new CachedLodLoader(manager, { onLevel }).setPath("/models/");
+    const request: LodRequest = { url: "tree.glb?seed=2", levels: [{ type: "simplify", ratio: 0.5, maxPixels: 100 }, { type: "impostor" }] };
     await loader.loadAsync(request);
     expect(load).toHaveBeenCalledExactlyOnceWith("/models/tree.glb?seed=2");
     // Only the shape: the impostor's default threshold needs no build.
@@ -138,7 +119,7 @@ describe("LodLoader", () => {
 
   it("frees what it loaded once the last Lod holding the levels, clones included, is disposed", { timeout: GPU_TIMEOUT }, async () => {
     const { manager } = sourceFixture(() => ({ scene: new Group().add(new Mesh(new SphereGeometry(1, 12, 8), new MeshStandardMaterial())) }), /\.glb$/);
-    const levels = await new LodLoader(manager).loadAsync({ url: "/models/shared.glb", levels: [{ type: "simplify", ratio: 0.5, maxPixels: 100 }] });
+    const levels = await new CachedLodLoader(manager).loadAsync({ url: "/models/shared.glb", levels: [{ type: "simplify", ratio: 0.5, maxPixels: 100 }] });
     const [first, second] = [new Lod(levels, gpu), new Lod(levels, gpu)];
     const clone = first.clone();
     // Only the simplified level draws, which reads the source's materials: the source loads for them alone.
@@ -169,7 +150,7 @@ describe("LodLoader", () => {
 
   it("builds a level without maxPixels eagerly, since its default threshold is measured from it", async () => {
     const { manager, load } = sourceFixture(() => new Mesh(new SphereGeometry(1, 24, 16), new MeshStandardMaterial()), /\.glb$/);
-    const loader = new LodLoader(manager);
+    const loader = new CachedLodLoader(manager);
     const request: LodRequest = {
       url: "/measured.glb",
       levels: [
@@ -194,16 +175,16 @@ describe("LodLoader", () => {
       /\.glb$/,
     );
     const request: LodRequest = { url: "/shell.glb", levels: [{ type: "baked", low: "?part=low", textureSize: 32, maxPixels: 100 }] };
-    const baked = (await new LodLoader(manager).loadAsync(request))[1];
+    const baked = (await new CachedLodLoader(manager).loadAsync(request))[1];
     await expect(baked?.load?.()).rejects.toThrow("extends beyond the source's bounds");
-    expect(cache.saved.map(({ options }) => options.dependencies?.["lod:level"]?.value)).toEqual([{ type: "shape" }]);
+    expect(cache.saved.map(({ options }) => options.dependencies?.level)).toEqual([{ value: { url: "/shell.glb", level: { type: "shape" } } }]);
   });
 
   it("disposes the source measured for the shape once no level is left to build from it", async () => {
     const sources: Mesh[] = [];
     const { manager, load } = sourceFixture(() => sources[sources.push(new Mesh(new BoxGeometry(), new MeshStandardMaterial())) - 1]);
     const request: LodRequest = { url: "/spare.glb", levels: [{ type: "impostor", maxPixels: 100 }] };
-    const loader = new LodLoader(manager);
+    const loader = new CachedLodLoader(manager);
     await (await loader.loadAsync(request))[1]?.load?.();
     // A cached level and a shape to measure again: the source measured is left over once the level has loaded.
     for (const [key] of cache.files) if (key.includes('"type":"shape"')) cache.files.delete(key);
@@ -219,7 +200,7 @@ describe("LodLoader", () => {
   it("disposes the source measured for the shape with a Lod disposed before any level loaded", async () => {
     const sources: Mesh[] = [];
     const { manager } = sourceFixture(() => sources[sources.push(new Mesh(new BoxGeometry(), new MeshStandardMaterial())) - 1]);
-    const levels = await new LodLoader(manager).loadAsync({ url: "/unused.glb", levels: [{ type: "impostor", maxPixels: 100 }] });
+    const levels = await new CachedLodLoader(manager).loadAsync({ url: "/unused.glb", levels: [{ type: "impostor", maxPixels: 100 }] });
     const disposed = vi.fn();
     sources[0]?.geometry.addEventListener("dispose", disposed);
     new Lod(levels, gpu).dispose();
@@ -228,7 +209,7 @@ describe("LodLoader", () => {
 
   it("loads the source level once when its load is called directly, the level reading its materials included", async () => {
     const { manager, load } = sourceFixture(() => new Mesh(new SphereGeometry(1, 12, 8), new MeshStandardMaterial()));
-    const loader = new LodLoader(manager);
+    const loader = new CachedLodLoader(manager);
     const request: LodRequest = { url: "/direct.glb", levels: [{ type: "simplify", ratio: 0.5, maxPixels: 100 }] };
     await (await loader.loadAsync(request))[1]?.load?.();
     load.mockClear();
@@ -243,7 +224,7 @@ describe("LodLoader", () => {
   it("preloads a placed source when it is the only drawable, on cold and warm loads", async () => {
     const { manager, load } = sourceFixture(() => new Mesh(new BoxGeometry(), new MeshStandardMaterial()).translateX(7), /\.glb$/);
     const request: LodRequest = { url: "/source.glb", levels: [{ type: "empty", maxPixels: 1 }] };
-    const loader = new LodLoader(manager);
+    const loader = new CachedLodLoader(manager);
     for (let run = 0; run < 2; run++) {
       const levels = await loader.loadAsync(request);
       expect(levels[0]?.object?.position.x).toBe(7);
@@ -254,7 +235,7 @@ describe("LodLoader", () => {
 
   it("bakes with a renderer of its own, which dispose frees", async () => {
     const { manager } = sourceFixture(() => new Mesh(new BoxGeometry(), new MeshStandardMaterial()), /\.glb$/);
-    const loader = new LodLoader(manager);
+    const loader = new CachedLodLoader(manager);
     const levels = await loader.loadAsync({ url: "/baker.glb", levels: [{ type: "impostor", maxPixels: 100 }] });
     await levels[1]?.load?.();
     const renderer = bakeImpostor.mock.calls[0]?.[1];
@@ -266,7 +247,7 @@ describe("LodLoader", () => {
 
   it("reuses cached levels when only a switch threshold or draw option changes", async () => {
     const { manager, load } = sourceFixture(() => new Mesh(new BoxGeometry(), new MeshStandardMaterial()), /\.glb$/);
-    const loader = new LodLoader(manager);
+    const loader = new CachedLodLoader(manager);
     const levels = (empty: number, parallax: number) =>
       loader.loadAsync({
         url: "/switch.glb",
@@ -293,7 +274,7 @@ describe("LodLoader", () => {
     const save = vi.spyOn(CacheEntry.prototype, "save").mockResolvedValue();
     try {
       const { manager, load } = sourceFixture(() => new Mesh(new SphereGeometry(1, 12, 8), new MeshStandardMaterial()), /\.glb$/);
-      const levels = await new LodLoader(manager).loadAsync({
+      const levels = await new CachedLodLoader(manager).loadAsync({
         url: "/unsaved.glb",
         levels: [{ type: "simplify", ratio: 0.5, maxPixels: 100 }, { type: "impostor" }],
       });
@@ -317,17 +298,17 @@ describe("LodLoader", () => {
         { type: "impostor", maxPixels: 100 },
         { type: "empty", maxPixels: 10 },
       ],
-      onLevel: async (object, index) => {
-        if (index !== 2) return;
-        await Promise.resolve();
-        object.position.set(2, 3, 4);
-        Object.assign(object, { dispose: released });
-      },
+    };
+    const onLevel = async (object: Object3D, index: number) => {
+      if (index !== 2) return;
+      await Promise.resolve();
+      object.position.set(2, 3, 4);
+      Object.assign(object, { dispose: released });
     };
     const camera = new PerspectiveCamera(60, 1, 0.1, 100_000);
     camera.position.z = 10_000;
     camera.updateMatrixWorld();
-    const loader = new LodLoader(manager);
+    const loader = new CachedLodLoader(manager, { onLevel });
     for (let run = 0; run < 2; run++) {
       const levels = await loader.loadAsync(request);
       const lod = new Lod(levels, gpu);
@@ -362,7 +343,7 @@ describe("LodLoader", () => {
       sources.push({ object, release });
       return object;
     });
-    const loader = new LodLoader(manager);
+    const loader = new CachedLodLoader(manager);
     const request: LodRequest = {
       url: "/source.glts",
       levels: [
@@ -378,28 +359,26 @@ describe("LodLoader", () => {
     }
     const released = new Map<number, ReturnType<typeof vi.fn>>();
     const failure = new Error("level hook failed");
-    await expect(
-      loader.loadAsync({
-        ...request,
-        onLevel: async (object, level) => {
-          if (level === 0) {
-            const source = sources.find((source) => source.object === object);
-            if (!source) throw new Error("Expected loaded source");
-            released.set(level, source.release);
-          } else {
-            const release = vi.fn();
-            released.set(level, release);
-            if (level === 2) Object.assign(object, { dispose: release });
-            else
-              object.traverse((node) => {
-                if (node instanceof Mesh) node.geometry.addEventListener("dispose", release);
-              });
-          }
-          await Promise.resolve();
-          if (level === 2) throw failure;
-        },
-      }),
-    ).rejects.toBe(failure);
+    const hooked = new CachedLodLoader(manager, {
+      onLevel: async (object, level) => {
+        if (level === 0) {
+          const source = sources.find((source) => source.object === object);
+          if (!source) throw new Error("Expected loaded source");
+          released.set(level, source.release);
+        } else {
+          const release = vi.fn();
+          released.set(level, release);
+          if (level === 2) Object.assign(object, { dispose: release });
+          else
+            object.traverse((node) => {
+              if (node instanceof Mesh) node.geometry.addEventListener("dispose", release);
+            });
+        }
+        await Promise.resolve();
+        if (level === 2) throw failure;
+      },
+    });
+    await expect(hooked.loadAsync(request)).rejects.toBe(failure);
     expect(sources).toHaveLength(warm ? 0 : 1);
     for (const source of sources) expect(source.release).toHaveBeenCalledOnce();
     expect([...released.keys()]).toEqual([2]);

@@ -269,7 +269,7 @@ export class Lod extends Object3D<LodEventMap> {
 
   /**
    * Release what the Lod made of its levels, once nothing it prepares or compiles still uses them. Objects you give or
-   * load are yours to dispose; LodLoader's are freed when the last Lod holding them is disposed (see `LodLevel.hold`).
+   * load are yours to dispose; CachedLodLoader's are freed when the last Lod holding them is disposed (see `LodLevel.hold`).
    */
   override dispose(): void {
     if (this.disposed) return;

@@ -1,6 +1,6 @@
 import * as THREE from "three/webgpu";
-import { HOUSE_VARIANTS, houseParams, type HouseParams } from "../../public/content/house/params.ts";
-import { Random } from "../../public/content/random.ts";
+import { HOUSE_VARIANTS, houseParams, type HouseParams } from "../../public/house/params.ts";
+import { Random } from "../../public/shared/random.ts";
 import { type Forest, forestClearings, forestEdge } from "./zones.ts";
 import { country, crossRoad } from "./country.ts";
 import { banks, CREEK, crossings } from "./creek.ts";
@@ -56,7 +56,7 @@ export interface Plan {
   houses: { variant: number; spot: Spot }[];
   /** Fence bays (2.4 m, running along the spot's +x). */
   fences: Spot[];
-  /** Garden things by name (see `public/content/garden.ts`). */
+  /** Garden things by name (see `public/garden/model.ts`). */
   garden: Map<string, Spot[]>;
   hedges: Spot[];
   church: Spot;

@@ -1,0 +1,15 @@
+// The house's rooms, which its baked level shows through the windows.
+import { loadingManager, onDispose, scene } from "@drawcall/glts";
+import { house } from "./model.ts";
+import { houseInterior } from "./interior.ts";
+import { HOUSE_VARIANTS } from "./params.ts";
+import { dispose } from "../shared/dispose.ts";
+import { Materials } from "../shared/materials.ts";
+import { number } from "../shared/parameters.ts";
+
+const { params } = house(number(new URL(import.meta.url).searchParams, "variant", 0, 0, HOUSE_VARIANTS - 1, true));
+const rooms = houseInterior(await Materials.load(loadingManager), params);
+// Each room stands on its own under the scene, as the bake reads them.
+const parts = [...rooms.children];
+onDispose(() => parts.forEach(dispose));
+scene.add(...parts);

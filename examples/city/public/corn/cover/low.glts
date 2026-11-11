@@ -1,0 +1,9 @@
+import { onDispose, scene } from "@drawcall/glts";
+import { coverLow } from "./model.ts";
+import { dispose } from "../../shared/dispose.ts";
+import { choice } from "../../shared/parameters.ts";
+
+// The shell a corn cover is baked onto, the same for every design: patch.glts's plants are baked onto it.
+const low = coverLow(choice(new URL(import.meta.url).searchParams, "axis", ["x", "z"], ""));
+onDispose(() => dispose(low));
+scene.add(low);

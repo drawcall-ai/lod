@@ -1,7 +1,7 @@
 import { mkdir, readFile, stat } from "node:fs/promises";
 import { unzipSync } from "fflate";
 import sharp from "sharp";
-import type { Manifest } from "../../public/content/manifest.ts";
+import type { Manifest } from "../../public/shared/manifest.ts";
 import { cache, download } from "./files.ts";
 import { credit, fileRef, polyHaven, res } from "./polyhaven.ts";
 

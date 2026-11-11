@@ -1,0 +1,9 @@
+import { loadingManager, onDispose, scene } from "@drawcall/glts";
+import { detailed } from "../house/model.ts";
+import { church } from "./model.ts";
+import { dispose } from "../shared/dispose.ts";
+import { Materials } from "../shared/materials.ts";
+
+const building = detailed(await Materials.load(loadingManager), church());
+onDispose(() => dispose(building));
+scene.add(building);

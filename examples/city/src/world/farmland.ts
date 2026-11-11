@@ -1,5 +1,5 @@
 import * as THREE from "three/webgpu";
-import { Random } from "../../public/content/random.ts";
+import { Random } from "../../public/shared/random.ts";
 import { Crop, type Land, Use } from "./land.ts";
 import { inForest, type Road, type Spot, spot } from "./plan.ts";
 import type { Forest } from "./zones.ts";

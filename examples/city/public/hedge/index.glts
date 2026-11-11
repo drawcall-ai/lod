@@ -1,0 +1,13 @@
+import { loadingManager, onDispose, scene } from "@drawcall/glts";
+import { dispose } from "../shared/dispose.ts";
+import { hedge } from "./model.ts";
+import { Materials } from "../shared/materials.ts";
+import { number } from "../shared/parameters.ts";
+
+const query = new URL(import.meta.url).searchParams;
+const length = number(query, "length", 2.4, 0.1, 100);
+const variant = number(query, "variant", 0, 0, 0xffffffff, true);
+// Seeds start at 1, which keeps the hedges the variants were first tuned with.
+const object = hedge(await Materials.load(loadingManager), length, variant + 1);
+onDispose(() => dispose(object));
+scene.add(object);

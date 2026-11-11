@@ -1,0 +1,11 @@
+import { loadingManager, onDispose, scene } from "@drawcall/glts";
+import { detailed, house } from "./model.ts";
+import { HOUSE_VARIANTS } from "./params.ts";
+import { dispose } from "../shared/dispose.ts";
+import { Materials } from "../shared/materials.ts";
+import { number } from "../shared/parameters.ts";
+
+const variant = number(new URL(import.meta.url).searchParams, "variant", 0, 0, HOUSE_VARIANTS - 1, true);
+const building = detailed(await Materials.load(loadingManager), house(variant));
+onDispose(() => dispose(building));
+scene.add(building);

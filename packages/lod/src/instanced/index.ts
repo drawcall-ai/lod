@@ -310,7 +310,7 @@ export class InstancedLod extends Object3D<LodEventMap> {
 
   /**
    * Release its buffers and what it made of its levels, once nothing it prepares or compiles still uses them. Objects
-   * you give or load, chunk attributes among them, are yours to dispose; LodLoader's are freed when the last Lod
+   * you give or load, chunk attributes among them, are yours to dispose; CachedLodLoader's are freed when the last Lod
    * holding them is disposed (see `LodLevel.hold`).
    */
   override dispose(): void {

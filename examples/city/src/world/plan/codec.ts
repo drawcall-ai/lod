@@ -1,10 +1,10 @@
-import { cachedNumber, cachedRecord } from "../../cache.ts";
+import { cachedNumber, cachedRecord } from "./values.ts";
 import { MeshBasicMaterial, Vector2 } from "three/webgpu";
 import { encode as encodeGeometry, decode as decodeGeometry } from "./geometry.ts";
 import { roadShapes, restoreRoadShapes } from "../roads.ts";
 import { Land } from "../land.ts";
 import { Terrain } from "../terrain.ts";
-import { HOUSE_VARIANTS } from "../../../public/content/house/params.ts";
+import { HOUSE_VARIANTS } from "../../../public/house/params.ts";
 import { type Plan, type Spot, type Rect, type Road } from "../plan.ts";
 
 type Files = Record<string, Uint8Array>;

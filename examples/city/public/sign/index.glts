@@ -1,0 +1,9 @@
+import { loadingManager, onDispose, scene } from "@drawcall/glts";
+import { dispose } from "../shared/dispose.ts";
+import { Materials } from "../shared/materials.ts";
+import { streetSign } from "./model.ts";
+
+const text = new URL(import.meta.url).searchParams.get("text") ?? "Maple St";
+const object = streetSign(await Materials.load(loadingManager), text);
+onDispose(() => dispose(object));
+scene.add(object);

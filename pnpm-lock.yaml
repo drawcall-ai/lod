@@ -15,8 +15,8 @@ importers:
   examples/city:
     dependencies:
       '@drawcall/glts':
-        specifier: ^4.1.0
-        version: 4.1.0(@types/node@24.19.1)(three@0.186.1)(typegpu@0.12.9)(typescript@5.9.3)(vite@8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15))
+        specifier: ^5.1.0
+        version: 5.1.0(@types/node@24.19.1)(three@0.186.1)(typegpu@0.12.9)(typescript@5.9.3)(vite@8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15))
       '@drawcall/lod':
         specifier: workspace:*
         version: link:../../packages/lod
@@ -33,8 +33,8 @@ importers:
         specifier: ^0.12.9
         version: 0.12.9
       vitecache:
-        specifier: ^0.2.1
-        version: 0.2.1(vite@8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15))
+        specifier: ^0.4.0
+        version: 0.4.0(vite@8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15))
     devDependencies:
       '@gltf-transform/core':
         specifier: ^4.2.1
@@ -78,9 +78,15 @@ importers:
 
   packages/lod:
     dependencies:
+      '@drawcall/webgpu':
+        specifier: ^0.2.1
+        version: 0.2.1(@types/node@24.19.1)
       fflate:
         specifier: ^0.8.2
         version: 0.8.3
+      import-meta-resolve:
+        specifier: ^4.2.0
+        version: 4.2.0
       ktx-parse:
         specifier: ^2.0.0
         version: 2.0.0
@@ -91,15 +97,15 @@ importers:
         specifier: ^0.9.15
         version: 0.9.15(three@0.186.1)
       vitecache:
-        specifier: ^0.2.1
-        version: 0.2.1(vite@8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15))
+        specifier: ^0.4.0
+        version: 0.4.0(vite@8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15))
     devDependencies:
       '@babel/core':
         specifier: ^7.29.13
         version: 7.29.13
       '@drawcall/glts':
-        specifier: ^4.1.0
-        version: 4.1.0(@types/node@24.19.1)(three@0.186.1)(typegpu@0.12.9)(typescript@5.9.3)(vite@8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15))
+        specifier: ^5.1.0
+        version: 5.1.0(@types/node@24.19.1)(three@0.186.1)(typegpu@0.12.9)(typescript@5.9.3)(vite@8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15))
       '@drawcall/lod':
         specifier: 'link:'
         version: 'link:'
@@ -285,12 +291,12 @@ packages:
   '@dimforge/rapier3d-compat@0.12.0':
     resolution: {integrity: sha512-uekIGetywIgopfD97oDL5PfeezkFpNhwlzlaEYNOA0N6ghdsOvh/HYjSMek5Q2O1PYvRSDFcqFVJl4r4ZBwOow==}
 
-  '@drawcall/glts@4.1.0':
-    resolution: {integrity: sha512-qh5+rgbK4+h3G08FBkP0tA0RsCxwwsQoHwqE23e+k23a2wf6nfeTPlHqovth4X93An5s9QQD4NgrWR94ByNCrA==}
+  '@drawcall/glts@5.1.0':
+    resolution: {integrity: sha512-pLKLLR3NxS4gcS8rqHIeYJcT6dfYybgSVbOyMdB+dF1rXbeJMDQRBfUsV+Gn6wPpetDlq/X3ZgI2nfXz4EcGMg==}
     engines: {node: ^22.18.0 || >=24.11.0}
     hasBin: true
     peerDependencies:
-      three: '>=0.185.0'
+      three: '>=0.186.0'
       typegpu: ^0.12.0
       typescript: ^5.0.0 || ^6.0.0
       vite: '>=6.0.0'
@@ -1068,6 +1074,10 @@ packages:
   import-meta-resolve@4.2.0:
     resolution: {integrity: sha512-Iqv2fzaTQN28s/FwZAoFq0ZSs/7hMAHJVX+w8PZl3cY19Pxk6jFFalxQoIfW2826i/fDLXv8IiEZRIT0lDuWcg==}
 
+  imurmurhash@0.1.4:
+    resolution: {integrity: sha512-JmXMZ6wuvDmLiHEml9ykzqO6lwFbof0GG4IkcGaENdCRDDmMVnny7s5HsIgHCbaq0w2MyPhDqkhTUgS2LU2PHA==}
+    engines: {node: '>=0.8.19'}
+
   iota-array@1.0.0:
     resolution: {integrity: sha512-pZ2xT+LOHckCatGQ3DcG/a+QuEqvoxqkiL7tvE8nn3uuu+f6i1TtpB5/FtWFbxUuVr5PZCx8KskuGatbJDXOWA==}
 
@@ -1223,6 +1233,10 @@ packages:
   picocolors@1.1.1:
     resolution: {integrity: sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==}
 
+  picomatch@4.0.3:
+    resolution: {integrity: sha512-5gTmgEY/sqK6gFXLIsQNH19lWb4ebPDLA4SdLP7dsWkIXHWlG66oPuVvXSGFPppYZz8ZDZq0dYYrbHfBCVUb1Q==}
+    engines: {node: '>=12'}
+
   picomatch@4.0.7:
     resolution: {integrity: sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==}
     engines: {node: '>=12'}
@@ -1258,6 +1272,10 @@ packages:
     engines: {node: ^20.19.0 || >=22.12.0}
     hasBin: true
 
+  safe-stable-stringify@2.5.0:
+    resolution: {integrity: sha512-b3rppTKm9T+PsVCBEOUR46GWI7fdOs00VKZ1+9c1EWDaDMvjQc6tUwuFyIprgGgTcWoVHSKrU8H31ZHA2e0RHA==}
+    engines: {node: '>=10'}
+
   semver@6.3.2:
     resolution: {integrity: sha512-GYrCADwpu6yV5OAvchkQ27Z5wwMxWAEMg5NNWjyHh/5DboFFqbdbvYNIvZouQpxXyeMPoTOh0vdPYKlf0ZswdQ==}
     hasBin: true
@@ -1278,6 +1296,10 @@ packages:
 
   siginfo@2.0.0:
     resolution: {integrity: sha512-ybx0WO1/8bSBLEWXZvEd7gMW3Sn3JFlW3TvX1nREbDLRNQNaeNN8WK0meBwPdAaOI7TtRRRJn/Es1zhrrCHu7g==}
+
+  signal-exit@4.1.0:
+    resolution: {integrity: sha512-bzyZ1e88w9O1iNJbKnOlvYTrWPDl46O1bG0D3XInv+9tkPrxrN8jUUTiFlDkkmKWgn1M6CfIA13SuGqOa9Korw==}
+    engines: {node: '>=14'}
 
   sirv@3.0.2:
     resolution: {integrity: sha512-2wcC/oGxHis/BoHkkPwldgiPSYcpZK3JU28WoMVv55yHJgcZ8rlXvuG9iZggz+sU1d4bRgIGASwyWqjxu3FM0g==}
@@ -1323,6 +1345,10 @@ packages:
   tinyexec@1.3.1:
     resolution: {integrity: sha512-GCvB3aoys96IuDFBMcTB46JOR6mdMtAToqwiW8JlWhsoh1mhHi/xn9ss/Dg7N555GiJyEt2qzoG/NHCwM6h1EA==}
     engines: {node: '>=18'}
+
+  tinyglobby@0.2.15:
+    resolution: {integrity: sha512-j2Zq4NyQYG5XMST4cbs02Ak8iJUdxRM0XI5QyxXuZOzKOINmWurp3smXu3y5wDcJrptwpSjgXHzIQxR0omXljQ==}
+    engines: {node: '>=12.0.0'}
 
   tinyglobby@0.2.17:
     resolution: {integrity: sha512-wXR/dYpcqKmfWpEdZjiKJOwCNFndD0DMnrW/cYjVGttEkBfVgcLFHoNrlj47mjOVic9yyNu65alsgF4NQyTa2g==}
@@ -1460,11 +1486,11 @@ packages:
       yaml:
         optional: true
 
-  vitecache@0.2.1:
-    resolution: {integrity: sha512-eIGq0VyfAXrGTmABcaImaGHKEcric6jTOq3132bD+ACZAdopFqZE7+hOwhtJAixMYhBC9M+Hhf43PsqTekxzSQ==}
+  vitecache@0.4.0:
+    resolution: {integrity: sha512-bTJLAcdunU22X/FKnxEeO9ZW6HNHvICOUToMa0dTCya3eSMBh3AEEuLRGLDXqEly0oDP2OeaodYtC0ZWkjYLAg==}
     engines: {node: '>=20.19.0'}
     peerDependencies:
-      vite: '>=6.0.0'
+      vite: '>=8.0.0'
     peerDependenciesMeta:
       vite:
         optional: true
@@ -1517,6 +1543,10 @@ packages:
     resolution: {integrity: sha512-hUrmaWBdVDcxvYqnyh09zunKzROWjbZTiNy8dBEjkS7ehEDQibXJ7XvlmtbwuTclUiIyN+CyXQD4Vmko8fNm8w==}
     engines: {node: '>=8'}
     hasBin: true
+
+  write-file-atomic@6.0.0:
+    resolution: {integrity: sha512-GmqrO8WJ1NuzJ2DrziEI2o57jKAVIQNf8a18W3nCYU3H7PNWqCCVTeH6/NQE93CIllIgQS98rrmVkYgTX9fFJQ==}
+    engines: {node: ^18.17.0 || >=20.5.0}
 
   ws@8.22.0:
     resolution: {integrity: sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg==}
@@ -1730,7 +1760,7 @@ snapshots:
 
   '@dimforge/rapier3d-compat@0.12.0': {}
 
-  '@drawcall/glts@4.1.0(@types/node@24.19.1)(three@0.186.1)(typegpu@0.12.9)(typescript@5.9.3)(vite@8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15))':
+  '@drawcall/glts@5.1.0(@types/node@24.19.1)(three@0.186.1)(typegpu@0.12.9)(typescript@5.9.3)(vite@8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15))':
     dependencies:
       '@babel/standalone': 8.0.10
       '@babel/types': 8.0.10
@@ -2362,6 +2392,8 @@ snapshots:
 
   import-meta-resolve@4.2.0: {}
 
+  imurmurhash@0.1.4: {}
+
   iota-array@1.0.0: {}
 
   is-buffer@1.1.6: {}
@@ -2482,6 +2514,8 @@ snapshots:
 
   picocolors@1.1.1: {}
 
+  picomatch@4.0.3: {}
+
   picomatch@4.0.7: {}
 
   playwright-core@1.63.0: {}
@@ -2523,6 +2557,8 @@ snapshots:
       '@rolldown/binding-win32-arm64-msvc': 1.2.15
       '@rolldown/binding-win32-x64-msvc': 1.2.15
 
+  safe-stable-stringify@2.5.0: {}
+
   semver@6.3.2: {}
 
   semver@7.8.5: {}
@@ -2562,6 +2598,8 @@ snapshots:
 
   siginfo@2.0.0: {}
 
+  signal-exit@4.1.0: {}
+
   sirv@3.0.2:
     dependencies:
       '@polka/url': 1.0.0-next.29
@@ -2591,6 +2629,11 @@ snapshots:
   tinyest@0.3.4: {}
 
   tinyexec@1.3.1: {}
+
+  tinyglobby@0.2.15:
+    dependencies:
+      fdir: 6.5.0(picomatch@4.0.7)
+      picomatch: 4.0.7
 
   tinyglobby@0.2.17:
     dependencies:
@@ -2687,9 +2730,15 @@ snapshots:
       fsevents: 2.3.3
       tsx: 4.23.15
 
-  vitecache@0.2.1(vite@8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15)):
+  vitecache@0.4.0(vite@8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15)):
     dependencies:
       '@noble/hashes': 2.4.0
+      json5: 2.2.3
+      picocolors: 1.1.1
+      picomatch: 4.0.3
+      safe-stable-stringify: 2.5.0
+      tinyglobby: 0.2.15
+      write-file-atomic: 6.0.0
     optionalDependencies:
       vite: 8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15)
 
@@ -2727,6 +2776,11 @@ snapshots:
     dependencies:
       siginfo: 2.0.0
       stackback: 0.0.2
+
+  write-file-atomic@6.0.0:
+    dependencies:
+      imurmurhash: 0.1.4
+      signal-exit: 4.1.0
 
   ws@8.22.0: {}
 

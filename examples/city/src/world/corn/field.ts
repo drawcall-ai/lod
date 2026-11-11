@@ -1,6 +1,6 @@
-import { HERO_VARIANT, BLOCK, plantTurn, type Plant } from "../../../public/content/corn/layout.ts";
+import { HERO_VARIANT, BLOCK, plantTurn, type Plant } from "../../../public/corn/layout.ts";
 import * as THREE from "three/webgpu";
-import { Random } from "../../../public/content/random.ts";
+import { Random } from "../../../public/shared/random.ts";
 import type { InstancedLod } from "@drawcall/lod";
 import type { NearTile, TileChunk } from "../near-tiles.ts";
 import { axes, type Field, type Plan } from "../plan.ts";

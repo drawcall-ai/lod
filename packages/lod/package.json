@@ -16,6 +16,7 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
+      "node": "./dist/node.js",
       "default": "./dist/index.js"
     }
   },
@@ -36,20 +37,22 @@
     "basis": "node --experimental-strip-types --no-warnings scripts/basis.ts"
   },
   "dependencies": {
+    "@drawcall/webgpu": "^0.2.1",
     "fflate": "^0.8.2",
+    "import-meta-resolve": "^4.2.0",
     "ktx-parse": "^2.0.0",
     "meshoptimizer": "^1.3.0",
     "three-mesh-bvh": "^0.9.15",
-    "vitecache": "^0.2.1"
+    "vitecache": "^0.4.0"
   },
   "peerDependencies": {
-    "@drawcall/glts": "^4.1.0",
+    "@drawcall/glts": "^4.1.0 || ^5.0.0",
     "three": ">=0.186.0",
     "typegpu": "^0.12.9"
   },
   "devDependencies": {
     "@babel/core": "^7.29.13",
-    "@drawcall/glts": "^4.1.0",
+    "@drawcall/glts": "^5.1.0",
     "@drawcall/lod": "link:",
     "@typegpu/gl": "^0.12.9",
     "@typegpu/three": "^0.12.2",

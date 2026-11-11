@@ -31,7 +31,7 @@ export interface BakeImpostorOptions {
    * sharp as they are at this height, not with the look of their small mips. Alpha-tested
    * materials are read at full detail at every size, which holds their cut-out's coverage.
    * Default: the height where it is sharp (see `texelPixels`, and `framePixels` for a
-   * LodLoader level).
+   * CachedLodLoader level).
    */
   maxPixels?: number;
   /**
@@ -52,7 +52,7 @@ export interface BakeImpostorOptions {
  * an InstancedLod with every instance at its level 0. ImpostorMeshes are refused: bake
  * from their source instead.
  *
- * `renderer` must be one made for bakes: make one with `createBakeRenderer`, as LodLoader
+ * `renderer` must be one made for bakes: make one with `createBakeRenderer`, as CachedLodLoader
  * does for itself and a .glts script that bakes does too. Such a renderer is initialised,
  * clears to transparent black and only when told to (`autoClear = false`), and has no MRT
  * and no XR session; the bake throws otherwise. Nor may its canvas be a square of a frame's size (resolution ×

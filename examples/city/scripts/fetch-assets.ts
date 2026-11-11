@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { NodeIO } from "@gltf-transform/core";
 import { ALL_EXTENSIONS } from "@gltf-transform/extensions";
 import { MeshoptDecoder, MeshoptEncoder } from "meshoptimizer";
-import { isManifest, type Manifest } from "../public/content/manifest.ts";
+import { isManifest, type Manifest } from "../public/shared/manifest.ts";
 import { exists } from "./assets/files.ts";
 import { model } from "./assets/models.ts";
 import { ambientSet, environment, textureSet } from "./assets/textures.ts";

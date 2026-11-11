@@ -15,7 +15,7 @@ import { LevelHeights } from "./load.js";
  * InstancedLod, `object` is the template its level meshes are made from, never in the scene.
  *
  * Objects you give or load are yours to dispose, as a three Mesh never disposes its geometry or material; a Lod frees
- * only what it made of them. LodLoader's are freed when the last Lod holding them is disposed (see `hold`).
+ * only what it made of them. CachedLodLoader's are freed when the last Lod holding them is disposed (see `hold`).
  */
 export interface LodLevel {
   /** The level's object: yours to dispose. */
@@ -37,9 +37,9 @@ export interface LodLevel {
   maxPixels?: number;
   /**
    * Holds what the level's object comes from while a Lod draws it: every Lod made from the level, a copy or clone
-   * included, calls each distinct `hold` once as it is made, and the release it answers once it is disposed. LodLoader's
+   * included, calls each distinct `hold` once as it is made, and the release it answers once it is disposed. CachedLodLoader's
    * levels free what they loaded when the last release is called, which spends them: a Lod made from them later throws.
-   * LodLoader's levels no Lod ever holds are never freed: they are yours until a Lod holds them.
+   * CachedLodLoader's levels no Lod ever holds are never freed: they are yours until a Lod holds them.
    */
   hold?: () => () => void;
 }

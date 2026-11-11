@@ -1,6 +1,5 @@
 import * as THREE from "three/webgpu";
 import { InstancedLod, Lod, type LodGpu, type Wind } from "@drawcall/lod";
-import { loader, scripts } from "../../loading.ts";
 import { heroPlant } from "./hero.ts";
 import { sourceBox } from "../bounds.ts";
 import { NearTiles } from "../near-tiles.ts";
@@ -8,10 +7,9 @@ import { screenScale } from "../screen.ts";
 import type { Plan } from "../plan.ts";
 import { covers, type Cover, type Skirt, skirt as skirtUniform } from "./covers.ts";
 import { cut, FieldTiles, heroSpot } from "./field.ts";
-import { cutoff, plantRequest, setCutoff } from "./levels.ts";
-import { cornLadder } from "../../../public/content/ladders.ts";
-import { BLOCK, DESIGNS, layout, VARIANTS } from "../../../public/content/corn/layout.ts";
-import { TOP } from "../../../public/content/corn/cover/shapes.ts";
+import { cutoff, PLANTS, setCutoff } from "./levels.ts";
+import { BLOCK, DESIGNS, layout } from "../../../public/corn/layout.ts";
+import { TOP } from "../../../public/corn/cover/shapes.ts";
 
 /** Field blocks whose plants are drawn at once. */
 const ROOM = 128;
@@ -45,16 +43,11 @@ export class Corn extends THREE.Object3D {
     const designs = Array.from({ length: DESIGNS }, (_, d) => layout(d));
     const tiles = cut(plan, DESIGNS, TOP);
     const spot = heroSpot(tiles, designs);
-    // Covers have no drawable source as their finest level: plants show through the empty level.
-    const [canopies, x, z] = await Promise.all([
-      Promise.all(Array.from({ length: DESIGNS }, (_, design) => coverBake(`design=${design}`))),
-      coverBake("axis=x"),
-      coverBake("axis=z"),
-    ]);
     const skirt = skirtUniform();
+    const covered = covers(tiles, skirt, gpu);
     const plants = await Promise.all(
-      Array.from({ length: VARIANTS }, async (_, variant) => {
-        const levels = await loader.loadAsync(plantRequest(cornLadder(variant)));
+      PLANTS.map(async (load, variant) => {
+        const levels = await load();
         // Room for a chunk per tile held, each with as many of this variant's plants as a block design has most.
         const perTile = Math.max(...designs.map((plants) => plants.filter((plant) => plant.variant === variant).length));
         const lod = new InstancedLod(levels, gpu, { maxInstanceCount: ROOM * perTile });
@@ -77,15 +70,7 @@ export class Corn extends THREE.Object3D {
       perFrame: 1,
       room: ROOM,
     });
-    corn = new Corn(
-      covers({ canopies, walls: { x, z } }, tiles, skirt, gpu),
-      skirt,
-      near,
-      details.hero,
-      details.ladybird,
-      details.anchors,
-      Math.max(...plants.map(({ size }) => size)),
-    );
+    corn = new Corn(await covered, skirt, near, details.hero, details.ladybird, details.anchors, Math.max(...plants.map(({ size }) => size)));
     return corn;
   }
 
@@ -122,19 +107,5 @@ export class Corn extends THREE.Object3D {
       ridged.maxPixels = Math.min((diameter * scale) / (risen + diameter / 2), rising.maxPixels * (1 - Lod.fade));
       flat.maxPixels = Math.min(FLAT_PIXELS, ridged.maxPixels * (1 - Lod.fade));
     }
-  }
-}
-
-/** A cover's raw bake, `query` selecting it; the scene's resources pass to the returned mesh. */
-async function coverBake(query: string): Promise<THREE.Mesh> {
-  const scene = await scripts.loadAsync(`/corn/cover.glts?${query}`);
-  try {
-    const mesh = scene.children[0];
-    if (!(mesh instanceof THREE.Mesh)) throw new Error(`Corn cover ${query} is not a mesh`);
-    // Transfer the bake's resources to the cover levels before releasing its script execution.
-    scene.remove(mesh);
-    return mesh;
-  } finally {
-    scene.dispose();
   }
 }

@@ -1,6 +1,5 @@
-export { LodLoader } from "./loader/index.js";
+export { CachedLodLoader, type CachedLodLoaderOptions } from "./loader/index.js";
 export { type LodLevelRequest, type LodRequest } from "./loader/request.js";
-export { type LodCacheOptions } from "./loader/cache.js";
 export { encodeMeshAsync, decodeMeshAsync } from "./codec/mesh.js";
 export { LodGpu, type LodGpuOptions } from "./gpu.js";
 export { Lod, type LodOptions } from "./lod.js";

@@ -9,13 +9,12 @@ export function loaderPathURL(url: string, base: string): string {
   return absolute.test(url) || url.startsWith("/") ? url : LoaderUtils.resolveURL(url, base);
 }
 
-export const urlPath = (url: string): string => url.replace(/[?#].*$/s, "");
-export const urlQuery = (url: string): string => new URL(url, placeholderOrigin).search;
+const urlPath = (url: string): string => url.replace(/[?#].*$/s, "");
 
 export function assetPath(url: string): { path: string; extension: string } {
   const path = urlPath(url);
   const extension = /\.(glb|gltf|glts)$/i.exec(path)?.[1]?.toLowerCase();
-  if (!extension) throw new Error(`LodLoader: cannot load "${url}": expected a .glb, .gltf or .glts file`);
+  if (!extension) throw new Error(`CachedLodLoader: cannot load "${url}": expected a .glb, .gltf or .glts file`);
   return { path, extension };
 }
 
@@ -23,17 +22,4 @@ export function sourceRelativeURL(value: string, source: string): string {
   const base = new URL(source, typeof document === "undefined" ? placeholderOrigin : document.baseURI);
   const url = new URL(value, base);
   return url.origin === base.origin && !absolute.test(source) ? url.pathname + url.search + url.hash : url.href;
-}
-
-/**
- * A same-origin path, as localURL leaves it, or a `file:` URL, as a `vite build` warmup sees public files: vitecache
- * can resolve only these to project files.
- */
-export const isLocal = (url: string): boolean => (url.startsWith("/") && !url.startsWith("//")) || url.startsWith("file:");
-
-/** Same-origin dependencies as paths, portable between development and deployment. */
-export function localURL(url: string): string {
-  if (typeof location === "undefined" || !/^https?:/i.test(url)) return url;
-  const parsed = new URL(url);
-  return parsed.origin === location.origin ? parsed.pathname + parsed.search + parsed.hash : url;
 }

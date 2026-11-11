@@ -1,0 +1,13 @@
+import { loadingManager, onDispose, scene } from "@drawcall/glts";
+import { VARIANTS } from "./layout.ts";
+import { plant } from "./model.ts";
+import { dispose } from "../shared/dispose.ts";
+import { Materials } from "../shared/materials.ts";
+import { choice, number } from "../shared/parameters.ts";
+
+const query = new URL(import.meta.url).searchParams;
+const variant = number(query, "variant", 0, 0, VARIANTS - 1, true);
+const hero = choice(query, "hero", ["0", "1"], "0") === "1";
+const corn = plant(await Materials.load(loadingManager), variant, hero);
+onDispose(() => dispose(corn));
+scene.add(corn);

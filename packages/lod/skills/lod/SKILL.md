@@ -7,30 +7,29 @@ description: Use @drawcall/lod for cached, progressively loaded levels of detail
 
 ## Start with the loader
 
-Give the host's `LodLoader` an asset URL and the representations to derive from it. Use `.glb` or `.gltf` for stored models and `.glts` for procedural assets. Put generation parameters in the asset URL's query: each distinct query is a distinct cache identity. Build a `Lod` from the returned levels for an independently placed object, or an `InstancedLod` for repeated objects, whose instances arrive and leave in chunks of matrices and colours, from the CPU or from a compute pass of yours.
+Give a `CachedLodLoader` an asset URL and the representations to derive from it. Use `.glb` or `.gltf` for stored models and `.glts` for procedural assets. Put generation parameters in the asset URL's query: each distinct query is a distinct cache identity. Build a `Lod` from the returned levels for an independently placed object, or an `InstancedLod` for repeated objects, whose instances arrive and leave in chunks of matrices and colours, from the CPU or from a compute pass of yours.
 
-Make a `LodGpu` once the renderer is initialised and give it to every `Lod` and `InstancedLod` drawing with that renderer. Every InstancedLod of one LodGpu sorts for a camera in one compute call. A camera that draws only a few InstancedLods, such as a minimap's, can give those a LodGpu of their own, which bounds the per-camera list memory. `LodLoader` needs no renderer.
+Make a `LodGpu` once the renderer is initialised and give it to every `Lod` and `InstancedLod` drawing with that renderer. Every InstancedLod of one LodGpu sorts for a camera in one compute call. A camera that draws only a few InstancedLods, such as a minimap's, can give those a LodGpu of their own, which bounds the per-camera list memory. `CachedLodLoader` needs no renderer.
 
-`loadAsync` resolves with the ladder before its levels load; each level loads when a camera first needs it. On a cold cache a derived level is built when it first loads, so a cold far camera builds only the coarse levels it needs. Give simplified and baked levels an explicit `maxPixels`: without one, a level is built with the ladder to measure its default. A simplified level also loads the source for its original materials; a source-only ladder loads its source eagerly. Prefer baked or impostor middle levels for an expensive `.glts`: a simplified level brings the script run forward to that viewing range.
+`loadAsync` resolves with the ladder before its levels load; each level loads when a camera first needs it. A level the cache lacks is built when it first loads, so a far camera builds only the coarse levels it needs. Give simplified and baked levels an explicit `maxPixels`: without one, a level is built with the ladder to measure its default. A simplified level also loads the source for its original materials; a source-only ladder loads its source eagerly. Prefer baked or impostor middle levels for an expensive `.glts`: a simplified level brings the script run forward to that viewing range.
 
 Choose levels from the asset's silhouette, materials and expected viewing range. Alpha-tested leaf cards often work best as source → impostor; a simplified level has fewer of them, whole and enlarged to the same coverage, so at a low ratio its foliage reads coarser than the source up close. Hard-surface props often suit source → simplified → impostor. Detailed structures can use source → baked shell → impostor, with interiors supplied separately for windows. A very heavy source, such as a two-million-triangle scan, needs a simplified level between source and impostor, or every copy in mid range draws the full mesh. Add an empty final level when the object should disappear at distance.
 
-Register the source loaders on the loading manager before loading: a `GLTSLoader` for `.glts` URLs, and a `GLTFLoader` with the decoders for models compressed with Draco or KTX2. Follow the [GLTS skill](https://github.com/drawcall-ai/glts/blob/main/packages/glts/skills/glts/SKILL.md) for the Vite plugin, script authoring and resource lifetimes. The package carries its own workers and WebAssembly; it needs no Vite configuration beyond the vitecache plugin.
+Register the source loaders on the page's loading manager before loading: a `GLTSLoader` for `.glts` URLs, and a `GLTFLoader` with the decoders for models compressed with Draco or KTX2. Follow the [GLTS skill](https://github.com/drawcall-ai/glts/blob/main/packages/glts/skills/glts/SKILL.md) for script authoring and resource lifetimes. The package carries its own workers and WebAssembly; it needs no Vite configuration beyond the vitecache plugin.
 
 This example draws many copies of one procedural asset. `positions` contains their placements in the InstancedLod's space, `renderer` is the application's WebGPURenderer and `scene` its scene.
 
 ```ts
 import { InstancedBufferAttribute, LoadingManager, Matrix4 } from "three/webgpu";
 import { GLTSLoader } from "@drawcall/glts";
-import { InstancedLod, LodGpu, LodLoader } from "@drawcall/lod";
+import { CachedLodLoader, InstancedLod, LodGpu } from "@drawcall/lod";
 
 await renderer.init();
 const gpu = new LodGpu(renderer);
 
 const manager = new LoadingManager();
 manager.addHandler(/\.glts$/, new GLTSLoader(manager));
-const loader = new LodLoader(manager);
-const levels = await loader.loadAsync({
+const levels = await new CachedLodLoader(manager).loadAsync({
   url: "/trees/oak.glts?seed=2",
   levels: [
     { type: "impostor", layout: "hemi", maxPixels: 120, draw: { parallax: 2 } },
@@ -47,34 +46,19 @@ scene.add(trees);
 
 Supply authored low shells and baking interiors as asset URLs on a baked level; both resolve relative to the source asset as ordinary URLs, so a query-only value replaces the source's whole query. For a variant of the same script, repeat the source's generation parameters, for example the source URL plus `&part=low`. The source asset should be complete at full detail; a baking interior supplies room structure for the distant windows. Author all three in the same coordinate system.
 
-## Put each cache with its computation
+## Cache every level
 
-Follow the [vitecache skill](https://github.com/drawcall-ai/vitecache/blob/main/packages/vitecache/skills/vitecache/SKILL.md) to configure the host. `LodLoader` writes each derived level to the cache directory when the app first loads that level under the Vite dev server with the vitecache plugin. A deployed miss builds the missing level in the browser each time it loads, without persisting it. When the app is deployed under a sub-path, pass that location as `new LodLoader(manager, { basePath })`.
+Follow the [vitecache skill](https://github.com/drawcall-ai/vitecache/blob/main/packages/vitecache/skills/vitecache/SKILL.md) to add its plugin and to write loads it finds: call `loadAsync` on `new CachedLodLoader(...)`, or on a variable initialized with one, with a literal request, one load per ladder the app uses. Constructor options, such as the loading manager and `onLevel`, change nothing stored. When the app is deployed under a sub-path, pass that location as `new CachedLodLoader(manager, { basePath })`.
 
-To deploy every level prebuilt, load the ladders in a public `.glts` script, which `vite build` runs in Node as the [GLTS skill](https://github.com/drawcall-ai/glts/blob/main/packages/glts/skills/glts/SKILL.md#precomputing-into-the-build) describes. There `LodLoader` builds and saves every level of each ladder it loads, deferred ones included. Request the same URLs and levels as the app, from a helper beside the script that the app imports too; `onLevel` changes nothing cached, so the app adds its effects to the shared requests. Register the contextual `gltsLoader` for `.glts` sources, as the app registers its `GLTSLoader`, and add every level to `scene`: a level can hold a `.glts` source the script loaded, which GLTS requires beneath `scene`.
+The plugin repeats each load in Node, where the loader builds every level of the ladder and saves each with the public files its loads read and the version of three; editing any of them rebuilds the levels, and pages read them. There, URLs such as `/trees/oak.glts` load from the app's `public` directory, `.glts` sources run with the packages the app installs, and bakes draw on a GPU through [@drawcall/webgpu](https://github.com/drawcall-ai/webgpu/blob/main/skills/webgpu/SKILL.md). Write asset URLs from the site root, and keep sources free of the DOM: they get WebGPU, `fetch`, image decoding and workers, but no `document` or 2D canvas. Upgrading another package a source imports keeps its levels; delete the cache directory to rebuild them.
 
-```ts
-// public/precompute.glts
-import { gltsLoader, loadingManager, scene } from "@drawcall/glts";
-import { LodLoader } from "@drawcall/lod";
-import { ladders } from "./ladders.ts";
-
-loadingManager.addHandler(/\.glts$/i, gltsLoader);
-const loader = new LodLoader(loadingManager);
-for (const ladder of ladders) {
-  for (const level of await loader.loadAsync(ladder)) scene.add(level.object ?? (await level.load()));
-}
-```
-
-Edits to the script, its helpers, packages and loaded files invalidate the derived levels; no dependency list is needed. A level rebuilds on every load when its source or anything the script loads cannot be tied to a project file: packages imported from a CDN at runtime or not installed by the app, resources from another origin, and same-origin URLs without a file, such as URLs a server answers dynamically. Precomputing such a level fails the build, so install every package the precomputed sources import.
-
-Cache expensive generation inside a `.glts` asset, such as geometry, rooms or generated texture data that would otherwise stall the first approach, as the GLTS skill describes; leave cheap generation uncached. Use the `encodeMeshAsync` / `decodeMeshAsync` codec for geometry an asset caches itself.
+A page that misses, for a load the plugin could not see, builds the level each time it loads, without saving it.
 
 ## Place, share and dispose levels
 
-Load an asset once and build an `InstancedLod` per spatial region from its levels, each with its own chunks of placements and colours; clone a `Lod` for further independently placed copies. Reuse the loaded levels across Lods; adjust each Lod's resolved thresholds through its `levels`. Clones and InstancedLods share geometry, materials, textures and deferred loads. Disposing a `Lod` or `InstancedLod` frees only what it made of its levels: objects you give or load are yours to dispose once every Lod drawing them is disposed, while `LodLoader` frees what it loaded when the last Lod holding its levels is disposed.
+Load an asset once and build an `InstancedLod` per spatial region from its levels, each with its own chunks of placements and colours; clone a `Lod` for further independently placed copies. Reuse the loaded levels across Lods; adjust each Lod's resolved thresholds through its `levels`. Clones and InstancedLods share geometry, materials, textures and deferred loads. Disposing a `Lod` or `InstancedLod` frees only what it made of its levels: objects you give or load are yours to dispose once every Lod drawing them is disposed, while `CachedLodLoader` frees what it loaded when the last Lod holding its levels is disposed.
 
-Use `onLevel` for application effects and shadow settings, `castShadow` and `shadowSide` included. Put source generation and its materials in the asset so that the same URL also loads correctly outside the LOD host.
+Use the loader's `onLevel` option for application effects and shadow settings, `castShadow` and `shadowSide` included. Put source generation and its materials in the asset so that the same URL also loads correctly outside the LOD host.
 
 Levels draw with copies of the source's materials, made once through three's `clone`. A custom material class must carry its own state in `copy`, and changes meant to reach drawn levels belong in shared TSL uniforms rather than in properties set on the original afterwards.
 
@@ -114,7 +98,7 @@ scene.add(object);
 
 A level fades in over the coarser one drawn in its place once it arrives. A `Lod` loads the levels its on-screen height needs; an `InstancedLod` loads every level the heights of its chunks' instances can need for a camera, judged from each chunk's bounds, so give chunks tight bounds: a chunk reaching from the camera to the horizon loads every level. The resources a deferred load uses must stay alive until it finishes.
 
-For direct preparation and storage outside `LodLoader`, combine `simplify`, `bakeMesh`, or `bakeImpostor` with the corresponding codecs and drawing objects. Bakes that draw take a renderer made with `createBakeRenderer`, never the application's, whose canvas a bake would draw over. Use `ImpostorMesh` directly when copies stay distant throughout their lifetime. For external detail systems, combine an empty near level with a coarse representation and ask `lod.getLevel(camera)` or `chunk.getLevelAt(index, camera)` where to supply detail.
+For direct preparation and storage outside `CachedLodLoader`, combine `simplify`, `bakeMesh`, or `bakeImpostor` with the corresponding codecs and drawing objects. Bakes that draw take a renderer made with `createBakeRenderer`, never the application's, whose canvas a bake would draw over. Use `ImpostorMesh` directly when copies stay distant throughout their lifetime. For external detail systems, combine an empty near level with a coarse representation and ask `lod.getLevel(camera)` or `chunk.getLevelAt(index, camera)` where to supply detail.
 
 ## Prepare assets that survive transitions
 
@@ -126,7 +110,7 @@ Author foliage with alpha-tested cut-outs and colour beyond the visible texture 
 
 Custom shading on an impostor has little room: an impostor uses close to WebGPU's 16 varyings, so a colour node of your own may find none left; read per pixel what a mesh would carry. An impostor's `normalView` is one unit normal per texel, however many leaves that texel averages. For a lighting term of your own, read `cosine(impostor.material.spread, lightDirection)`, the mean of the clamped cosine over those leaves. Here `impostor` is the level's `ImpostorMesh` and `lightDirection` the view-space direction towards the light.
 
-Match a low shell to the source's occupied shape and fit it within the source's bounds: `LodLoader` rejects a level that reaches beyond them. Preserve important silhouette features and remove faces that will never be seen. Generate shell and source from the same parameters when possible. Author rooms separately, with their boundaries just behind windows and furnishings near visible walls; include rooms in the detailed source when they should appear up close too.
+Match a low shell to the source's occupied shape and fit it within the source's bounds: `CachedLodLoader` rejects a level that reaches beyond them. Preserve important silhouette features and remove faces that will never be seen. Generate shell and source from the same parameters when possible. Author rooms separately, with their boundaries just behind windows and furnishings near visible walls; include rooms in the detailed source when they should appear up close too.
 
 For dense cover, combine near individuals with a baked distant patch. Jitter position and rotation to avoid aligned gaps, preserve continuity across tile borders, and use side walls only on exposed boundaries. An empty far level can stop drawing individuals once the patch carries their appearance.
 
@@ -134,7 +118,7 @@ For dense cover, combine near individuals with a baked distant patch. Jitter pos
 
 Levels load as the camera comes to need them, so a frame drawn soon after loading can lack them. Give the Lods and InstancedLods a `manager` of their own, so that it tracks only them: each holds an item there while the levels its cameras need load, compile or fade in, and ends it once they are complete. Render the `Scene` that holds them each frame, since a Lod loads nothing before such a render.
 
-To capture one frame, even with nothing cached, place the camera and render, then wait a frame; while the manager is loading, compile with `renderer.compileAsync(scene, camera)`, render again and wait a frame; capture after a quiet frame, one in which no item started or ended. After moving the camera, wait again. In this example `levels` and `treeLevels` are ladders from `LodLoader`, `gpu` the renderer's LodGpu, `instanceMatrix` an attribute of tree matrices, and `viewpoint` the camera position to capture.
+To capture one frame, even with nothing cached, place the camera and render, then wait a frame; while the manager is loading, compile with `renderer.compileAsync(scene, camera)`, render again and wait a frame; capture after a quiet frame, one in which no item started or ended. After moving the camera, wait again. In this example `levels` and `treeLevels` are ladders from `CachedLodLoader`, `gpu` the renderer's LodGpu, `instanceMatrix` an attribute of tree matrices, and `viewpoint` the camera position to capture.
 
 ```ts
 import { LoadingManager } from "three/webgpu";

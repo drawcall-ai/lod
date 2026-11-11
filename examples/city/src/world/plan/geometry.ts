@@ -1,5 +1,5 @@
 import { Box3, BufferAttribute, BufferGeometry, Sphere, Vector3 } from "three/webgpu";
-import { cachedNumber, cachedNumbers, cachedRecord } from "../../cache.ts";
+import { cachedNumber, cachedNumbers, cachedRecord } from "./values.ts";
 
 type Files = Record<string, Uint8Array>;
 

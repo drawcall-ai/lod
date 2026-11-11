@@ -1,10 +1,12 @@
 import * as THREE from "three/webgpu";
-import type { HouseParams } from "../../public/content/house/params.ts";
-import { SIGN_NAMES } from "../../public/content/ladders.ts";
-import type { Random } from "../../public/content/random.ts";
+import type { HouseParams } from "../../public/house/params.ts";
+import type { Random } from "../../public/shared/random.ts";
 import { footing, inRect, PAVEMENT, spot, type Rect, type Road, type Spot } from "./plan.ts";
 import { fence, frontHedge, garden } from "./gardens.ts";
 import type { Terrain } from "./terrain.ts";
+
+/** The street names on the signs at the crossings, each a sign of its own (see props.ts). */
+export const SIGN_NAMES = ["Maple St", "Church Rd", "Mill Lane", "Oak Ave", "High St", "Elm St"] as const;
 
 const BLOCK = { u: 84, v: 64 };
 export const STREET_WIDTH = 7;
@@ -18,7 +20,7 @@ export interface Town {
   paths: Road[];
   /** Where the church stands (its front facing the plaza). */
   church: Spot;
-  /** Garden things by name (see `public/content/garden.ts`): sheds, letterboxes, greenhouses… */
+  /** Garden things by name (see `public/garden/model.ts`): sheds, letterboxes, greenhouses… */
   garden: Map<string, Spot[]>;
   /** Clipped hedge sections (2 m, running along the spot's +x). */
   hedges: Spot[];
@@ -142,7 +144,7 @@ export function town(centre: { x: number; z: number; angle: number; radius: numb
     const p = node(i, j)
       .addScaledVector(u, STREET_WIDTH / 2 + 1)
       .addScaledVector(v, STREET_WIDTH / 2 + 1);
-    const name = SIGN_NAMES[names++ % SIGN_NAMES.length] ?? "Main St";
+    const name = SIGN_NAMES[names++ % SIGN_NAMES.length] ?? SIGN_NAMES[0];
     town.signs.set(name, [...(town.signs.get(name) ?? []), spot(terrain, p.x, p.y, centre.angle + r.range(-0.1, 0.1))]);
   }
   plazaFurniture(plaza, terrain, add);

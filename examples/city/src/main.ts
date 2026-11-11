@@ -6,11 +6,10 @@
 // ?wind=0 builds vegetation without wind, for a static performance baseline.
 // Forests and ground cover are planted on the GPU in the tiles near the camera (world/near-tiles.ts, world/planting.ts).
 // window.city exposes the tour and frame measurements to scripts/tour.ts.
-import { textures } from "./loading.ts";
 import * as THREE from "three/webgpu";
 import { InstancedLod, Lod, LodGpu, Wind } from "@drawcall/lod";
-import { Library } from "../public/content/materials.ts";
-import { number } from "../public/content/parameters.ts";
+import { Materials } from "../public/shared/materials.ts";
+import { number } from "../public/shared/parameters.ts";
 import { terrainMaterial } from "./render/ground/material.ts";
 import { Fly } from "./flight/fly.ts";
 import { route } from "./flight/route.ts";
@@ -26,12 +25,16 @@ import { groundCover } from "./world/ground-cover.ts";
 import { water } from "./world/creek.ts";
 import { houses } from "./world/houses.ts";
 import { NearTiles } from "./world/near-tiles.ts";
-import { TOWN } from "./world/plan.ts";
-import { loadPlan } from "./world/plan/cache.ts";
+import { CachedPlanLoader } from "./world/plan/loader.ts";
+import { plan, TOWN } from "./world/plan.ts";
+import { manager } from "./loading.ts";
 import { EXTENT } from "./world/terrain.ts";
 import { props } from "./world/props.ts";
 import { roads } from "./world/roads.ts";
 import { trees } from "./world/trees.ts";
+
+/** The default seed's plan is cached: planning takes seconds. */
+const loadPlan = async (seed: number) => (seed === 7 ? new CachedPlanLoader().loadAsync({ seed: 7 }) : plan(seed));
 
 const params = new URLSearchParams(location.search);
 const shot = params.has("shot");
@@ -53,12 +56,11 @@ const lodManager = new THREE.LoadingManager();
 let loading = false;
 lodManager.onStart = () => (loading = true);
 lodManager.onLoad = () => (loading = false);
-THREE.DefaultLoadingManager.onProgress = (url, loaded, total) => {
+manager.onProgress = (url, loaded, total) => {
   ui.progress(`Loading ${url.split("/").pop()} (${loaded}/${total})`, (0.85 * loaded) / total);
 };
 
-const library = new Library(THREE.DefaultLoadingManager, new URL("/assets/", location.href).href, textures);
-await library.load();
+const materials = await Materials.load(manager, new URL("/assets/", location.href));
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.5, 60000);
 const scene = new THREE.Scene();
 const pipeline = await Pipeline.create(scene, camera, Math.min(devicePixelRatio, 2));
@@ -71,7 +73,7 @@ pipeline.canvas.style.visibility = "hidden";
 document.body.prepend(pipeline.canvas);
 
 // late afternoon: the sun low in the south-west, raking across the town
-const [world, sky] = await Promise.all([loadPlan(number(params, "seed", 7, 0, 2 ** 32 - 1, true)), loadSky(library, pipeline.renderer, 2.4)]);
+const [world, sky] = await Promise.all([loadPlan(number(params, "seed", 7, 0, 2 ** 32 - 1, true)), loadSky(materials, pipeline.renderer, 2.4)]);
 loaded("plan and sky");
 scene.background = sky.background;
 scene.environment = sky.environment;
@@ -97,18 +99,18 @@ const content = Promise.all([
   trees(world, gpu, wind),
   props(world, gpu),
   Corn.build(world, gpu),
-  groundCover(library, world, zones, camera, gpu, wind),
+  groundCover(materials, world, zones, camera, gpu, wind),
 ]);
 // Let cache discovery start before constructing the ground on this thread.
 await new Promise<void>((resolve) => setTimeout(resolve, 0));
 if (terrain) {
-  const ground = world.terrain.mesh(terrainMaterial(library, zones));
+  const ground = world.terrain.mesh(terrainMaterial(materials, zones));
   // the ground's shader is the costliest per pixel and much of it ends up under corn, grass
   // and houses: drawn last of the opaque objects, depth testing skips what they cover
   ground.renderOrder = 1;
   scene.add(ground);
 }
-scene.add(roads(library, world), water(world.terrain));
+scene.add(roads(materials, world), water(world.terrain));
 
 const [buildings, forest, objects, corn, herbage] = await content;
 loaded("content");
@@ -203,7 +205,7 @@ function frame(dt: number): void {
 fitCamera(focus);
 sun.update(camera, focus, clearance());
 ui.progress("Preparing the first view…", 0.85);
-await library.ready(scene);
+await materials.ready();
 loaded("textures");
 await pipeline.compile();
 loaded("compiled");

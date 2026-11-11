@@ -1,0 +1,10 @@
+import { loadingManager, onDispose, scene } from "@drawcall/glts";
+import { dispose } from "../shared/dispose.ts";
+import { picketFence } from "./model.ts";
+import { Materials } from "../shared/materials.ts";
+import { number } from "../shared/parameters.ts";
+
+const length = number(new URL(import.meta.url).searchParams, "length", 2.4, 0.1, 100);
+const fence = picketFence(await Materials.load(loadingManager), length);
+onDispose(() => dispose(fence));
+scene.add(fence);

@@ -5,9 +5,9 @@ import * as THREE from "three/webgpu";
 import { mrt, normalView, output, packNormalToRGB, pass, pow, sample, unpackRGBToNormal, vec3, vec4 } from "three/tsl";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { ao } from "three/addons/tsl/display/GTAONode.js";
-import { scripts, textures } from "../loading.ts";
-import { triangles } from "../../public/content/geometry.ts";
-import { Library } from "../../public/content/materials.ts";
+import { GLTSLoader } from "@drawcall/glts";
+import { triangles } from "../../public/shared/geometry.ts";
+import { Materials } from "../../public/shared/materials.ts";
 import { buildItem, type Item, itemNames } from "./items.ts";
 import { Stage } from "./stage.ts";
 
@@ -38,9 +38,9 @@ const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.01, 2
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 
-const library = new Library(THREE.DefaultLoadingManager, new URL("/assets/", location.href).href, textures);
-await library.load();
-const stage = new Stage(library);
+const scripts = new GLTSLoader(THREE.DefaultLoadingManager);
+const materials = await Materials.load(THREE.DefaultLoadingManager, new URL("/assets/", location.href));
+const stage = new Stage(materials);
 await stage.loadSky(renderer);
 
 // ambient occlusion (GTAO) supplies the contact darkening that image-based light lacks
@@ -62,12 +62,12 @@ function element<T extends Element>(selector: string, type: new () => T): T {
 }
 const select = element("#item", HTMLSelectElement);
 const stats = element("#stats", HTMLDivElement);
-for (const name of itemNames(library)) select.add(new Option(name, name));
+for (const name of itemNames(materials)) select.add(new Option(name, name));
 
 let current: { name: string; item: Item } | undefined;
 
 async function show(name: string): Promise<{ triangles: number }> {
-  const item = await buildItem(scripts, library.base, name, textures);
+  const item = await buildItem(scripts, name);
   if (current) {
     stage.scene.remove(current.item.object);
     current.item.dispose();
@@ -132,13 +132,13 @@ async function settle(): Promise<void> {
   for (let i = 0; i < 4; i++) await new Promise((r) => requestAnimationFrame(r));
 }
 
-const api = { names: itemNames(library), show, view, settle };
+const api = { names: itemNames(materials), show, view, settle };
 export type Viewer = typeof api;
 declare global {
   interface Window {
     viewer: typeof api;
   }
 }
-await show(params.get("item") ?? itemNames(library)[0] ?? "house-0");
+await show(params.get("item") ?? itemNames(materials)[0] ?? "house-0");
 view(params.get("view") === "close" ? "close" : "medium");
 window.viewer = api;

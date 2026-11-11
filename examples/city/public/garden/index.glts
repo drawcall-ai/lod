@@ -1,0 +1,20 @@
+import { loadingManager, onDispose, scene } from "@drawcall/glts";
+import type { Object3D } from "three/webgpu";
+import { dispose } from "../shared/dispose.ts";
+import { greenhouse, letterbox, patioSet, shed, swing, washingLine } from "./model.ts";
+import { Materials } from "../shared/materials.ts";
+import { choice } from "../shared/parameters.ts";
+
+const names = ["shed", "letterbox", "greenhouse", "swing", "washing line", "patio set"] as const;
+const models: Record<(typeof names)[number], (materials: Materials) => Object3D> = {
+  shed: (materials) => shed(materials, "#d9d4c8"),
+  letterbox,
+  greenhouse,
+  swing,
+  "washing line": washingLine,
+  "patio set": patioSet,
+};
+const name = choice(new URL(import.meta.url).searchParams, "name", names, "shed");
+const object = models[name](await Materials.load(loadingManager));
+onDispose(() => dispose(object));
+scene.add(object);

@@ -1,0 +1,11 @@
+// The house's closed low shell, which its baked level's windows and walls are baked onto.
+import { onDispose, scene } from "@drawcall/glts";
+import { house } from "./model.ts";
+import { HOUSE_VARIANTS } from "./params.ts";
+import { dispose } from "../shared/dispose.ts";
+import { number } from "../shared/parameters.ts";
+
+const { params, low } = house(number(new URL(import.meta.url).searchParams, "variant", 0, 0, HOUSE_VARIANTS - 1, true));
+const shell = low(params);
+onDispose(() => dispose(shell));
+scene.add(shell);

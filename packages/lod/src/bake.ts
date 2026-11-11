@@ -5,11 +5,15 @@ import { Color, DataUtils, WebGPURenderer, type RenderTarget, type Renderer } fr
 
 /**
  * A renderer for bakes, initialised: it clears to transparent black, only when a bake clears, and its canvas is never
- * shown or sized. Pass it to `bakeImpostor`, or to `bakeMesh` with an interior, and dispose it when done. LodLoader
+ * shown or sized. Pass it to `bakeImpostor`, or to `bakeMesh` with an interior, and dispose it when done. CachedLodLoader
  * makes one for itself; so does a .glts script that bakes.
  */
-export async function createBakeRenderer(): Promise<WebGPURenderer> {
-  const renderer = new WebGPURenderer({ antialias: false });
+export function createBakeRenderer(): Promise<WebGPURenderer> {
+  return setUpBakeRenderer(new WebGPURenderer({ antialias: false }));
+}
+
+/** `renderer`, made without antialiasing, set up and initialised as `createBakeRenderer` sets one up. */
+export async function setUpBakeRenderer(renderer: WebGPURenderer): Promise<WebGPURenderer> {
   renderer.setClearColor(0x000000, 0);
   renderer.autoClear = false;
   await renderer.init();

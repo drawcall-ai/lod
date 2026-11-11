@@ -1,0 +1,12 @@
+// The church's rooms, which its baked level shows through the windows.
+import { loadingManager, onDispose, scene } from "@drawcall/glts";
+import { church } from "./model.ts";
+import { houseInterior } from "../house/interior.ts";
+import { dispose } from "../shared/dispose.ts";
+import { Materials } from "../shared/materials.ts";
+
+const rooms = houseInterior(await Materials.load(loadingManager), church().params);
+// Each room stands on its own under the scene, as the bake reads them.
+const parts = [...rooms.children];
+onDispose(() => parts.forEach(dispose));
+scene.add(...parts);

@@ -52,6 +52,6 @@ export function disposeRejected(node: Object3D, options?: DisposeOptions): void 
   try {
     disposeTree(node, options);
   } catch (error) {
-    console.error("LodLoader: failed to dispose a rejected load", error);
+    console.error("CachedLodLoader: failed to dispose a rejected load", error);
   }
 }

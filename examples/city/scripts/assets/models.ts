@@ -4,7 +4,7 @@ import { EXTMeshoptCompression } from "@gltf-transform/extensions";
 import { dedup, getBounds, prune, reorder, textureCompress, weld } from "@gltf-transform/functions";
 import { MeshoptEncoder } from "meshoptimizer";
 import sharp from "sharp";
-import type { Manifest } from "../../public/content/manifest.ts";
+import type { Manifest } from "../../public/shared/manifest.ts";
 import { cache, download, exists } from "./files.ts";
 import { credit, downloadModel, fileRef, polyHaven, type Files, type Info } from "./polyhaven.ts";
 import { variant, writeVariant } from "./variants.ts";

@@ -15,7 +15,7 @@ await renderer.init();
 /** What every Lod and InstancedLod of the tests shares. */
 export const gpu = new LodGpu(renderer);
 
-/** A renderer for bakes, as LodLoader makes one: its canvas, unlike `renderer`'s, is no square a bake frame may match. */
+/** A renderer for bakes, as CachedLodLoader makes one: its canvas, unlike `renderer`'s, is no square a bake frame may match. */
 export const bakeRenderer = await createBakeRenderer();
 
 /** Time for tests that bake or render: slow on a software adapter or a busy machine. */
