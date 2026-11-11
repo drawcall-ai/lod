@@ -1,6 +1,6 @@
 import * as THREE from "three/webgpu";
 import { plant } from "../model.ts";
-import { canopy, plantGroup, side } from "./shapes.ts";
+import { canopy, plantGroup, wall } from "./shapes.ts";
 import { BLOCK, layout, VARIANTS } from "../layout.ts";
 import type { Materials } from "../materials.ts";
 
@@ -23,5 +23,5 @@ export function wallOf(query: URLSearchParams): Wall | undefined {
   throw new Error(`corn block: wall must be x or z, not ${wall}`);
 }
 
-/** The shell a block's plants are baked onto: the ridged canopy, or `wall`. */
-export const shell = (wall: Wall | undefined): THREE.Mesh => new THREE.Mesh(wall ? side(wall) : canopy(1));
+/** The shell a block's plants are baked onto: the ridged canopy, or the wall `which`. */
+export const shell = (which: Wall | undefined): THREE.Mesh => new THREE.Mesh(which ? wall(which) : canopy(1));

@@ -139,7 +139,7 @@ const kinds = [
   { name: "houses", roots: [buildings] },
   { name: "trees", roots: [forest] },
   { name: "props", roots: [objects] },
-  { name: "corn covers", roots: corn.covers.map((cover) => cover.lod) },
+  { name: "corn blocks", roots: corn.blocks.map((block) => block.lod) },
   { name: "corn plants", roots: [corn.plants, corn.hero] },
   { name: "ladybird", roots: [corn.ladybird] },
   { name: "ground cover", roots: [herbage] },

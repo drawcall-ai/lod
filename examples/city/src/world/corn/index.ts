@@ -5,7 +5,7 @@ import { sourceBox } from "../bounds.ts";
 import { NearTiles } from "../near-tiles.ts";
 import { screenScale } from "../screen.ts";
 import type { Plan } from "../plan.ts";
-import { covers, type Cover, type Skirt, skirt as skirtUniform } from "./covers.ts";
+import { blocks, type Block, type Skirt, skirt as skirtUniform } from "./blocks.ts";
 import { cut, FieldTiles, heroSpot } from "./field.ts";
 import { cutoff, PLANTS, setCutoff } from "./levels.ts";
 import { BLOCK, DESIGNS, layout } from "../../../public/corn/layout.ts";
@@ -26,7 +26,7 @@ export class Corn extends THREE.Object3D {
   private fadeFrom = 0;
   private readonly active: readonly (InstancedLod | Lod)[];
   private constructor(
-    readonly covers: Cover[],
+    readonly blocks: Block[],
     private readonly skirt: Skirt,
     readonly plants: NearTiles,
     readonly hero: Lod,
@@ -36,7 +36,7 @@ export class Corn extends THREE.Object3D {
   ) {
     super();
     this.active = [...plants.lods, hero];
-    this.add(plants, ...covers.map((cover) => cover.lod), hero, ladybird);
+    this.add(plants, ...blocks.map((block) => block.lod), hero, ladybird);
   }
 
   static async build(plan: Plan, gpu: LodGpu): Promise<Corn> {
@@ -44,7 +44,7 @@ export class Corn extends THREE.Object3D {
     const tiles = cut(plan, DESIGNS, TOP);
     const spot = heroSpot(tiles, designs);
     const skirt = skirtUniform();
-    const covered = covers(tiles, skirt, gpu);
+    const baked = blocks(tiles, skirt, gpu);
     const plants = await Promise.all(
       PLANTS.map(async (load, variant) => {
         const levels = await load();
@@ -70,7 +70,7 @@ export class Corn extends THREE.Object3D {
       perFrame: 1,
       room: ROOM,
     });
-    corn = new Corn(await covered, skirt, near, details.hero, details.ladybird, details.anchors, Math.max(...plants.map(({ size }) => size)));
+    corn = new Corn(await baked, skirt, near, details.hero, details.ladybird, details.anchors, Math.max(...plants.map(({ size }) => size)));
     return corn;
   }
 
@@ -82,7 +82,7 @@ export class Corn extends THREE.Object3D {
   }
 
   /**
-   * Before rendering, on a screen `height` CSS pixels tall: plants dither out at one height on screen; covers rise out of the soil in
+   * Before rendering, on a screen `height` CSS pixels tall: plants dither out at one height on screen; blocks rise out of the soil in
    * front of that, are drawn wherever a part of them may have risen, and swap to their
    * ridged level once no part of them is rising. When more blocks are in reach than there
    * are plant slots, the plants dither out nearer, and back out as slots free up.
@@ -97,10 +97,10 @@ export class Corn extends THREE.Object3D {
     for (const lod of this.active) setCutoff(lod.levels, gone);
     const risen = Math.max(this.fadeFrom - LEAD, RAMP);
     this.skirt.value.set(risen - RAMP, risen);
-    for (const { kind, lod, diameter } of this.covers) {
+    for (const { kind, lod, diameter } of this.blocks) {
       const [, rising, ridged, flat] = lod.levels;
       if (!rising) throw new Error(`${lod.name} has no baked level`);
-      // the measure is the distance to the cover's centre; a part of it is up to its radius nearer or farther
+      // the measure is the distance to the block's centre; a part of it is up to its radius nearer or farther
       rising.maxPixels = (diameter * scale) / ((1 - Lod.fade) * Math.max(risen - RAMP - diameter / 2, 0.5));
       if (kind === "wall") continue;
       if (!ridged || !flat) throw new Error(`${lod.name} needs ridged and flat levels`);

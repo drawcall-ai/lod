@@ -61,7 +61,7 @@ export function canopy(across: number): THREE.BufferGeometry {
  * within the plants' bounds, as the shell they bake onto must be. The app sinks its
  * bottom `SINK` into the soil.
  */
-export function side(axis: "x" | "z"): THREE.BufferGeometry {
+export function wall(axis: "x" | "z"): THREE.BufferGeometry {
   const g = new THREE.PlaneGeometry(BLOCK, 1, ROWS * 4, 1).translate(0, 0.5, BLOCK / 2);
   if (axis === "x") g.rotateY(Math.PI / 2);
   shape(g, (y, z) => (y > 0 ? (axis === "x" ? ridge(z) : TOP + RIDGE) : 0));
