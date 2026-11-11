@@ -13,7 +13,7 @@ const version = "lod-level@25";
 /** The entry of derived level `of` of `ladder`, or of its source's shape, keyed by the request alone. */
 export function entryOf(ladder: Ladder, of: number | "shape", { basePath, root }: Pick<CacheEntryOptions, "basePath" | "root">): CacheEntry {
   const level = of === "shape" ? { type: of } : parameters(derived(ladder.levels, of));
-  return new CacheEntry({ basePath, root, version, dependencies: { level: { value: { url: ladder.url, level } } } });
+  return new CacheEntry({ basePath, root, version, dependencies: { level: { value: { url: ladder.key, level } } } });
 }
 
 /**

@@ -1,24 +1,19 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { readFile } from "node:fs/promises";
-import { dirname, join, relative, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { createCanvas, type Canvas } from "@drawcall/webgpu";
 import type { GLTSLoader } from "@drawcall/glts";
 import { resolve as resolveImport } from "import-meta-resolve";
 import { Loader, LoadingManager, WebGPURenderer, type Object3D } from "three/webgpu";
-import type { Input } from "vitecache";
+import { publicURL, type Input } from "vitecache";
 import { setUpBakeRenderer } from "../bake.js";
 import type { LodLevel } from "../levels/index.js";
 import { CachedLodLoader as BrowserCachedLodLoader, type CachedLodLoaderOptions } from "./index.js";
 import type { LodRequest } from "./request.js";
-import { placeholderOrigin } from "./url.js";
+import { loaderPathURL, placeholderOrigin } from "./url.js";
 
 interface Session {
-  /** The project root, which recorded inputs are relative to. */
-  root: string;
-  /** The directory served paths load from. */
-  publicDir: string;
-  /** The public files the session's loads read, relative to `root`. */
+  /** The `file:` URLs of the public files the session's loads read. */
   read: Set<string>;
   /** The installed packages the session's .glts sources import. */
   packages: Set<string>;
@@ -28,37 +23,30 @@ interface Session {
 const sessions = new AsyncLocalStorage<Session>();
 
 /**
- * CachedLodLoader in Node, as the vitecache plugin runs it: `loadAsync` builds and saves every level of the ladder, each
- * with the public files the ladder's loads read and the installed versions of three and of the packages its .glts
- * sources import. A load that reads anything else, such as a URL off the public directory or a module a .glts source
- * imports from a CDN, fails, since no stored level could be checked against it. Served paths such as
- * `/trees/oak.glts` load from the public directory, and `.glts` sources through a GLTSLoader of the load's own; bakes
- * draw on a WebGPU device of @drawcall/webgpu. The project root and public directory are vitecache's: those of the
- * Vite project while the vitecache plugin runs, else `options.root` (or the working directory) and its `public`.
+ * CachedLodLoader in Node, as the vitecache plugin and the glts CLI run it: `loadAsync` builds and saves every level of
+ * the ladder, each with the public files the ladder's loads read and the installed versions of three and of the
+ * packages its .glts sources import. A load that reads anything else, such as a URL off the public directory or a module
+ * a .glts source imports from a CDN, fails, since no stored level could be checked against it. Served paths such as
+ * `/trees/oak.glts`, and `file:` URLs in the public directory, as a headless .glts script's manager resolves them to,
+ * load from vitecache's public directory (see `publicURL`), and `.glts` sources through a GLTSLoader of the load's own;
+ * bakes draw on a WebGPU device of @drawcall/webgpu. The manager only resolves the request's URL.
  *
  * Each `loadAsync` loads and bakes with what it makes for itself, which it frees before resolving, so loads may run
  * concurrently. The levels it returns load their stored bytes as in browsers, but none holds the source: loading the
  * source level, or a simplified level, which draws with the source's materials, fails once `loadAsync` has resolved.
  */
 export class CachedLodLoader extends BrowserCachedLodLoader {
-  private readonly site: { root: string; publicDir: string };
-
   constructor(manager?: LoadingManager, options: CachedLodLoaderOptions = {}) {
-    if (manager)
-      throw new Error(
-        "CachedLodLoader: in Node, construct it without a manager: it serves the app's public files and loads .glts sources itself, which is how it records what each level was built from",
-      );
-    super(undefined, options);
-    this.site = site(options.root);
+    super(manager, options);
   }
 
   override loadAsync(request: LodRequest): Promise<LodLevel[]> {
-    const { root, publicDir } = this.site;
-    return session({ root, publicDir, read: new Set(), packages: new Set() }, async () => {
-      const loader = new SessionLoader(root, this.options);
-      loader.setPath(this.path).setResourcePath(this.resourcePath).setCrossOrigin(this.crossOrigin);
+    const input = typeof request === "string" ? { url: request } : request;
+    const url = this.publicPath(this.manager.resolveURL(loaderPathURL(input.url, this.path)));
+    return session({ read: new Set(), packages: new Set() }, async () => {
+      const loader = new SessionLoader(this.options);
       try {
-        return await loader.loadAsync(request);
+        return await loader.loadAsync({ ...input, url });
       } finally {
         await loader.dispose();
       }
@@ -67,20 +55,14 @@ export class CachedLodLoader extends BrowserCachedLodLoader {
 
   /** Nothing to free: each load frees what it made. */
   override async dispose(): Promise<void> {}
-}
 
-/** The vitecache plugin's project root and public directory while it runs in this process, else `root`'s. */
-function site(root: string | undefined): { root: string; publicDir: string } {
-  // vitecache's plugin publishes its project on globalThis.vitecache (see vitecache's shared.d.ts).
-  const shared: unknown = Reflect.get(globalThis, "vitecache");
-  const field = (name: string) => {
-    const value: unknown = typeof shared === "object" && shared !== null ? Reflect.get(shared, name) : undefined;
-    return typeof value === "string" ? value : undefined;
-  };
-  // As vitecache resolves an entry's root and cache directory: an explicit root is not the plugin's.
-  const plugin = root === undefined ? field("directory") : undefined;
-  const resolved = resolve(root ?? field("root") ?? process.cwd());
-  return { root: resolved, publicDir: plugin ? dirname(plugin) : join(resolved, "public") };
+  /** A `file:` URL in the public directory as its served path; others as in browsers. */
+  protected override publicPath(url: string): string {
+    if (!url.startsWith("file:")) return super.publicPath(url);
+    const base = publicURL("/");
+    if (!url.startsWith(base)) throw new Error(`CachedLodLoader: cannot precompute "${url}", which lies outside the public directory ${base}`);
+    return `/${url.slice(base.length)}`;
+  }
 }
 
 /** One `loadAsync` of the Node loader: builds every level, with a GLTSLoader and bake renderer of its own. */
@@ -88,9 +70,10 @@ class SessionLoader extends BrowserCachedLodLoader {
   protected override readonly buildsAll = true;
   private readonly scripts: ScriptLoader;
 
-  constructor(root: string, options: CachedLodLoaderOptions) {
+  constructor(options: CachedLodLoaderOptions) {
     super(servingManager(), options);
-    this.scripts = new ScriptLoader(this.manager, pathToFileURL(`${root}/`).href);
+    // Packages resolve as the app's do.
+    this.scripts = new ScriptLoader(this.manager, publicURL("/"));
     this.manager.addHandler(/\.glts$/i, this.scripts);
   }
 
@@ -221,10 +204,10 @@ async function serve(fetch: typeof globalThis.fetch, input: RequestInfo | URL, i
   if (!state || url.protocol === "data:" || url.protocol === "blob:") return fetch(input, init);
   if (url.origin !== placeholderOrigin)
     throw new Error(`CachedLodLoader: cannot precompute a load that fetches ${url.href}, which a stored level cannot be checked against`);
-  const file = join(state.publicDir, decodeURIComponent(url.pathname));
+  const file = publicURL(url.pathname);
   try {
-    const bytes = await readFile(file);
-    state.read.add(relative(state.root, file));
+    const bytes = await readFile(fileURLToPath(file));
+    state.read.add(file);
     return new Response(bytes);
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") return new Response(null, { status: 404 });

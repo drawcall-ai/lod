@@ -42,13 +42,13 @@
     "import-meta-resolve": "^4.2.0",
     "ktx-parse": "^2.0.0",
     "meshoptimizer": "^1.3.0",
-    "three-mesh-bvh": "^0.9.15",
-    "vitecache": "^0.5.0"
+    "three-mesh-bvh": "^0.9.15"
   },
   "peerDependencies": {
     "@drawcall/glts": "^6.0.0",
     "three": ">=0.186.0",
-    "typegpu": "^0.12.9"
+    "typegpu": "^0.12.9",
+    "vitecache": "^0.5.0"
   },
   "devDependencies": {
     "@babel/core": "^7.29.13",
@@ -67,6 +67,7 @@
     "typegpu": "0.12.9",
     "typescript": "^5.9.3",
     "unplugin-typegpu": "^0.12.8",
+    "vitecache": "^0.5.0",
     "vitest": "^4.0.17",
     "xatlas-wasm": "0.1.3"
   },

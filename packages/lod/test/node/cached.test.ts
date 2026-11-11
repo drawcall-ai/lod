@@ -1,13 +1,15 @@
 import { readdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { afterAll, expect, it } from "vitest";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { CachedLodLoader } from "../../src/loader/node.js";
 import type { LodRequest } from "../../src/loader/request.js";
 import { LoadingManager } from "three/webgpu";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 const directory = join(root, "public/_vitecache");
+// vitecache's project without its plugin: the working directory, its public directory and cache.
+beforeAll(() => void vi.spyOn(process, "cwd").mockReturnValue(root));
 afterAll(() => rm(directory, { recursive: true, force: true }));
 
 const saved = async () => {
@@ -24,7 +26,7 @@ it("builds and saves every level with the public files and packages the ladder r
     ],
   };
   const { fetch } = globalThis;
-  await new CachedLodLoader(undefined, { root }).loadAsync(request);
+  await new CachedLodLoader().loadAsync(request);
   expect(globalThis.fetch).toBe(fetch);
   const entries = await saved();
   // The shape and both levels.
@@ -39,12 +41,12 @@ it("builds and saves every level with the public files and packages the ladder r
       { package: "three" },
     ]);
   }
-  await new CachedLodLoader(undefined, { root }).loadAsync(request);
+  await new CachedLodLoader().loadAsync(request);
   expect(await saved()).toEqual(entries);
 });
 
 it("runs loads on one loader concurrently, each with its own GLTSLoader and bake renderer", { timeout: 120_000 }, async () => {
-  const loader = new CachedLodLoader(undefined, { root });
+  const loader = new CachedLodLoader();
   const ladders = await Promise.all([
     loader.loadAsync({ url: "/box.glts?size=3", levels: [{ type: "simplify", ratio: 0.5, maxPixels: 100 }] }),
     loader.loadAsync({ url: "/box.glts?size=4", levels: [{ type: "impostor", resolution: 32 }] }),
@@ -57,11 +59,17 @@ it("runs loads on one loader concurrently, each with its own GLTSLoader and bake
 
 it("fails a load that fetches what it cannot record", { timeout: 120_000 }, async () => {
   // GLTS reports the script's failure, caused by the refused fetch.
-  await expect(new CachedLodLoader(undefined, { root }).loadAsync("/fetch.glts")).rejects.toMatchObject({
+  await expect(new CachedLodLoader().loadAsync("/fetch.glts")).rejects.toMatchObject({
     cause: { message: expect.stringMatching(/cannot precompute/) },
   });
 });
 
-it("refuses a manager, which would load what it cannot record", () => {
-  expect(() => new CachedLodLoader(new LoadingManager())).toThrow(/without a manager/);
+it("stores a load at a public file's file: URL, as a headless .glts script's manager resolves it, under its served path", { timeout: 120_000 }, async () => {
+  const request = (url: string): LodRequest => ({ url, levels: [{ type: "simplify", ratio: 0.5, maxPixels: 100 }] });
+  await new CachedLodLoader().loadAsync(request("/box.glts?size=5"));
+  const entries = await saved();
+  const manager = new LoadingManager();
+  manager.setURLModifier((url) => new URL(url, pathToFileURL(join(root, "public/"))).href);
+  await new CachedLodLoader(manager).loadAsync(request("./box.glts?size=5"));
+  expect(await saved()).toEqual(entries);
 });

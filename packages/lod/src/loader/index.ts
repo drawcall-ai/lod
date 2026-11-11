@@ -12,7 +12,7 @@ import { LodLoadContext } from "./context.js";
 import { entryOf } from "./entry.js";
 import { decodeLevel, encodeLevel, encodeShape, placedBox, readLevel, readShape, shapeOf, type Entry } from "./level.js";
 import { derived, normalize, type Ladder, type LodRequest } from "./request.js";
-import { assetPath } from "./url.js";
+import { assetPath, publicPath, sourceRelativeURL } from "./url.js";
 
 // The loader: it describes a ladder of levels from a source, builds each level when first loaded and stores it.
 
@@ -74,7 +74,7 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
    * yours until a Lod holds them.
    */
   override async loadAsync(request: LodRequest): Promise<LodLevel[]> {
-    const ladder = normalize(request, this.path);
+    const ladder = normalize(request, this.path, (url) => this.publicPath(this.manager.resolveURL(url)));
     const { url, levels: requests } = ladder;
     const context = new LodLoadContext(() => this.loadAsset(url), this.options.onLevel);
     this.manager.itemStart(url);
@@ -163,6 +163,15 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
     return bytes;
   }
 
+  /**
+   * The path below the app's base that `url`, as the manager resolved it, loads, such as `/tree/model.glts`: what its
+   * levels are stored under, alike wherever the app is served. The manager of a .glts script resolves URLs against the
+   * script.
+   */
+  protected publicPath(url: string): string {
+    return publicPath(url, this.options.basePath ?? "/_vitecache/");
+  }
+
   /** The files and packages what this loader built so far was built from: none in browsers, which do not save. */
   protected inputs(): Input[] {
     return [];
@@ -189,7 +198,7 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
     const request = derived(ladder.levels, index);
     const load = (name: "low" | "interior") => {
       const asset = request.type === "baked" ? request[name] : undefined;
-      return asset === undefined ? undefined : this.loadAsset(asset);
+      return asset === undefined ? undefined : this.loadAsset(sourceRelativeURL(asset, ladder.url));
     };
     let low: Object3D | undefined, interior: Object3D | undefined, built: Object3D | undefined;
     try {

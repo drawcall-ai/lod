@@ -2,7 +2,7 @@ import type { ImpostorMeshOptions } from "../impostor/mesh/index.js";
 import type { BakeImpostorOptions } from "../impostor/bake/index.js";
 import type { SimplifyOptions } from "../simplify/index.js";
 import type { Derived } from "./level.js";
-import { loaderPathURL, sourceRelativeURL } from "./url.js";
+import { loaderPathURL } from "./url.js";
 
 // What a CachedLodLoader is asked for, normalised.
 
@@ -41,20 +41,14 @@ const DEFAULT_LEVELS: readonly LodLevelRequest[] = [{ type: "impostor" }];
 /** A normalized request. */
 export type Ladder = ReturnType<typeof normalize>;
 
-/** `request` with its source URL resolved against `path`, and a baked level's low and interior URLs against the source. */
-export function normalize(request: LodRequest, path: string) {
+/**
+ * `request` with its source URL resolved against `path`, which loads it, and `key` of that, which its levels are stored
+ * under. A baked level's low and interior URLs stay relative to the source.
+ */
+export function normalize(request: LodRequest, path: string, key: (url: string) => string) {
   const input = typeof request === "string" ? { url: request } : request;
   const url = loaderPathURL(input.url, path);
-  const levels = structuredClone(input.levels ?? DEFAULT_LEVELS).map((level) =>
-    level.type === "baked" ? { ...level, ...resolved(level, "low", url), ...resolved(level, "interior", url) } : level,
-  );
-  return { url, levels };
-}
-
-/** `level`'s `name` URL resolved against `source`, as the fields to spread over it. */
-function resolved(level: LodLevelRequest & { type: "baked" }, name: "low" | "interior", source: string) {
-  const value = level[name];
-  return value === undefined ? {} : { [name]: sourceRelativeURL(value, source) };
+  return { url, key: key(url), levels: structuredClone(input.levels ?? DEFAULT_LEVELS) };
 }
 
 /** The request of ladder level `index`, which must be a derived level. */
