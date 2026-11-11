@@ -1,6 +1,6 @@
 import { CachedLodLoader, foliageLevels, Lod, type LodLevel } from "@drawcall/lod";
 import { LEAF_FOLIAGE } from "../../../public/corn/leaf.ts";
-import { VARIANTS } from "../../../public/corn/layout.ts";
+import { HERO_VARIANT, VARIANTS } from "../../../public/corn/layout.ts";
 import { arriving, manager } from "../../loading.ts";
 
 /**
@@ -58,6 +58,9 @@ export const PLANTS: (() => Promise<LodLevel[]>)[] = [
 ];
 
 if (PLANTS.length !== VARIANTS) throw new Error(`levels.ts loads ${PLANTS.length} corn plant variants of ${VARIANTS}`);
+
+// The hero's load names its variant literally, as vitecache needs.
+if (HERO_VARIANT !== 2) throw new Error(`levels.ts loads the hero as corn variant 2, not HERO_VARIANT ${HERO_VARIANT}`);
 
 /** The plant the tour ends at, with every leaf in detail. */
 export const loadHero = () =>
