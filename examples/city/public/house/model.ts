@@ -6,7 +6,7 @@ import { interior } from "./interior.ts";
 import { low } from "./low.ts";
 import { houseParams, type HouseParams } from "./params.ts";
 
-// A building's three assets: the detailed building with its rooms, the low shell its windows bake onto, and the rooms
+// A building's three scripts: the detailed building with its rooms, the low shell its windows bake onto, and the rooms
 // alone, which the bake projects into those windows.
 
 /** A building's parameters and how its exterior is shaped; its rooms are always `interior`'s. */
