@@ -1,9 +1,10 @@
-import { Color, DataUtils, WebGPURenderer, type Object3D, type RenderTarget, type Renderer } from "three/webgpu";
+import { Color, DataUtils, Object3D, WebGPURenderer, type RenderTarget, type Renderer } from "three/webgpu";
+import { at } from "./at.js";
 import { disposeCopies } from "./dispose.js";
-import { InstancedLod } from "./instanced/index.js";
+import { FREED, InstancedLod } from "./instanced/index.js";
 import { renderers } from "./levels/renderer.js";
 import { LodPool } from "./pool.js";
-import { isInstancedLod } from "./three.js";
+import { isInstancedLod, isLOD } from "./three.js";
 
 // What the GPU bakes (impostor frames, interior rooms) share: the renderer they draw with, one bake at a time on it,
 // and reading back what they drew.
@@ -46,39 +47,99 @@ export interface BakeCopy {
 }
 
 /**
- * `copy`, a fresh copy of what a bake draws, with each InstancedLod in it made again over a LodPool of its own, sized to
- * its chunks: a LodPool draws with one renderer, which for the original is the app's.
+ * A copy of `object`, made by `clone`, for a bake to draw. Each InstancedLod in it is copied into a LodPool of its own,
+ * sized to its chunks, never through its own pool: a LodPool draws with one renderer, which for the original is the
+ * app's, and its room is the app's.
  */
-export function bakeCopy(copy: Object3D): BakeCopy {
-  const found: InstancedLod[] = [];
-  copy.traverse((node) => {
-    if (isInstancedLod(node)) found.push(node);
-  });
+export function bakeCopy(object: Object3D, clone: (object: Object3D) => Object3D): BakeCopy {
+  // A Lod's copy makes its levels anew from what it was given, so the InstancedLods in them are copied once cloned.
+  const originals: InstancedLod[] = [];
+  const collect = (node: Object3D): void => {
+    if (isInstancedLod(node)) originals.push(node);
+    else if (!isLOD(node)) node.children.forEach(collect);
+  };
+  collect(object);
   const pools: LodPool[] = [];
-  let root = copy;
-  for (const lod of found) {
+  const made = new Set<InstancedLod>();
+  const copyOf = (lod: InstancedLod) => {
     const chunks = [...lod.chunks];
-    const pool = new LodPool({
-      maxInstanceCount: Math.max(
-        1,
-        chunks.reduce((sum, { count }) => sum + count, 0),
-      ),
-      maxChunkCount: Math.max(1, chunks.length),
-    });
+    const instances = chunks.reduce((sum, { count }) => sum + count, 0);
+    const pool = new LodPool({ maxInstanceCount: Math.max(1, instances), maxChunkCount: Math.max(1, chunks.length) });
     pools.push(pool);
-    const own = new InstancedLod([], pool).copy(lod);
-    if (lod === root) root = own;
-    else lod.parent?.add(own);
-    lod.removeFromParent();
+    const copy = new InstancedLod([], pool).copy(lod);
+    made.add(copy);
+    return copy;
+  };
+  const root = isInstancedLod(object) ? copyOf(object) : cloneAround(object, originals, clone, copyOf);
+  const copies: InstancedLod[] = [];
+  root.traverse((node) => {
+    if (isInstancedLod(node)) copies.push(node);
+  });
+  copies.forEach((lod, i) => {
+    if (made.has(lod)) return;
+    copies[i] = copyOf(lod);
+    swap(lod, at(copies, i));
     lod.dispose();
-  }
+  });
   return {
     root,
     dispose: () => {
       disposeCopies(root);
-      for (const pool of pools) pool.dispose();
+      // A disposed InstancedLod frees its row and lists in its pool once its compiles and arrivals settle.
+      void Promise.allSettled(copies.map((lod) => lod[FREED]())).then(() => {
+        for (const pool of pools) pool.dispose();
+      });
     },
   };
+}
+
+/**
+ * `clone(object)` with each of `originals`, InstancedLods under it, in place of copies of its own as `copyOf` makes:
+ * the clone sees an empty stand-in at each one's place in its parent's children, which go back as they were after.
+ */
+function cloneAround(
+  object: Object3D,
+  originals: readonly InstancedLod[],
+  clone: (object: Object3D) => Object3D,
+  copyOf: (lod: InstancedLod) => Object3D,
+): Object3D {
+  const stands = originals.map((lod) => {
+    const stand = new Object3D();
+    swap(lod, stand);
+    return stand;
+  });
+  const found = new Map<Object3D, Object3D>();
+  let copied: Object3D;
+  try {
+    copied = clone(object);
+    parallel(object, copied, (from, to) => found.set(from, to));
+  } finally {
+    stands.forEach((stand, i) => swap(stand, at(originals, i)));
+  }
+  stands.forEach((stand, i) => {
+    const copy = found.get(stand);
+    if (!copy) throw new Error("bake: the copy lacks an InstancedLod's place");
+    swap(copy, copyOf(at(originals, i)));
+  });
+  return copied;
+}
+
+/** Put `by` in `node`'s place among its parent's children, without the events add and remove fire. */
+function swap(node: Object3D, by: Object3D): void {
+  const { parent } = node;
+  if (!parent) throw new Error("bake: an InstancedLod to copy has no parent");
+  parent.children[parent.children.indexOf(node)] = by;
+  by.parent = parent;
+  node.parent = null;
+}
+
+/** Call `visit` with each node under `a` and the one at its place under `b`, a clone of it. */
+function parallel(a: Object3D, b: Object3D, visit: (a: Object3D, b: Object3D) => void): void {
+  visit(a, b);
+  a.children.forEach((child, i) => {
+    const other = b.children[i];
+    if (other) parallel(child, other, visit);
+  });
 }
 
 /**

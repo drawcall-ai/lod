@@ -1,4 +1,4 @@
-import { Box3, Object3D, Sphere, type Camera, type Intersection, type LoadingManager, type Raycaster, type Renderer } from "three/webgpu";
+import { Box3, Object3D, Sphere, type Camera, type Intersection, type LoadingManager, type Mesh, type Raycaster, type Renderer } from "three/webgpu";
 import { at } from "../at.js";
 import { disposeCopies } from "../dispose.js";
 import { EncodedLevels, emptyLevels, levelsFrom, type LodLevel, type ThresholdedLevel } from "../levels/index.js";
@@ -21,6 +21,11 @@ import { drawMatrices } from "./meshes.js";
 import { raycastInstances } from "./raycast.js";
 import { InstanceShape } from "./shape.js";
 import { MAX_SURVIVOR_SCALE, instanceLevel } from "./measure.js";
+
+/** The meshes drawing an InstancedLod's level, which its sorts show: what a bake draws of it is level 0's. */
+export const LEVEL_MESHES = Symbol("levelMeshes");
+/** What settles once a disposed InstancedLod has freed what it made, its row and lists in its LodPool among it. */
+export const FREED = Symbol("freed");
 
 /** How an InstancedLod is made. */
 export interface InstancedLodOptions extends LodOptions {
@@ -78,6 +83,8 @@ export class InstancedLod extends Object3D<LodEventMap> {
   /** What it is made of for its levels and sizes, which a copy makes anew. */
   private built: Built;
   private disposed = false;
+  /** What settles once it freed what it made, after `dispose`. */
+  private freed: Promise<void> | null = null;
   /** Around every instance, survivors grown: what every level mesh is culled and boxed by. */
   private readonly bounds = { sphere: new Sphere(), box: new Box3() };
   /** What `cullIn` writes cullDistance into, in this InstancedLod's space. */
@@ -193,6 +200,15 @@ export class InstancedLod extends Object3D<LodEventMap> {
   /** Bound every chunk's instances, survivors grown. */
   private measureBounds(): void {
     this.built.chunks.bound(this.cullDistance?.scaleSurvivors ? MAX_SURVIVOR_SCALE : 1);
+  }
+
+  [LEVEL_MESHES](level: number): readonly Mesh[] {
+    return this.built.meshes.of(level);
+  }
+
+  [FREED](): Promise<void> {
+    if (!this.freed) throw new Error("InstancedLod: it is not disposed");
+    return this.freed;
   }
 
   [WIND](padding: number, slope: number, baseY: number): void {
@@ -328,7 +344,7 @@ export class InstancedLod extends Object3D<LodEventMap> {
     this.disposed = true;
     super.dispose();
     this.built.chunks.dispose();
-    this.built.loads.dispose(() => {
+    this.freed = this.built.loads.dispose(() => {
       this.built.meshes.dispose();
       this.built.lists.dispose();
       for (const { object } of this.levels) if (object) disposeCopies(object);

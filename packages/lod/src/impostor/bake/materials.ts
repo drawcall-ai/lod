@@ -45,6 +45,7 @@ import {
 import { isInstancedLod, isMesh, isNodeMaterial, isPhysical, isStandard, isStandardNode, toNodeMaterial } from "../../three.js";
 import { affine, isNodeOf } from "../../tsl.js";
 import { placeInstances } from "../../levels/fade.js";
+import { LEVEL_MESHES } from "../../instanced/index.js";
 import { originalOf } from "../../levels/material.js";
 
 /** What every bake material reads, shared by all of them and set per bake. */
@@ -97,11 +98,13 @@ export function swapMaterials(root: Object3D, settings: BakeSettings): { materia
   return { materials: entries.map((e) => e.material), emits: entries.some((e) => e.emits), specular: entries.some((e) => e.specular) };
 }
 
-/** Call `visit` with every node under `root` that may draw: visible, or a level mesh an InstancedLod's sorts show. */
-function traverseDrawn(node: Object3D, visit: (node: Object3D) => void, shown = node.visible): void {
-  if (!shown) return;
+/** Call `visit` with every visible node under `node` that a bake draws: of an InstancedLod, its level 0's meshes. */
+function traverseDrawn(node: Object3D, visit: (node: Object3D) => void): void {
+  if (!node.visible) return;
   visit(node);
-  for (const child of node.children) traverseDrawn(child, visit, child.visible || isInstancedLod(node));
+  // Its sorts show its level meshes, hidden until then.
+  if (isInstancedLod(node)) for (const mesh of node[LEVEL_MESHES](0)) visit(mesh);
+  else for (const child of node.children) traverseDrawn(child, visit);
 }
 
 const STANDARD_KEYS = [

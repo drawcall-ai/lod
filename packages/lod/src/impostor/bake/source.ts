@@ -9,5 +9,5 @@ export function sourceForBake(object: Object3D): BakeCopy {
   forEachMesh(object, (mesh) => {
     if (isImpostorMesh(mesh)) throw new Error(`bakeImpostor: cannot bake an ImpostorMesh ("${mesh.name}"); bake from its source instead`);
   });
-  return bakeCopy(clone(object));
+  return bakeCopy(object, clone);
 }

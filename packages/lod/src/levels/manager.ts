@@ -365,7 +365,7 @@ export class LodLevelLoadManager {
    * `LodLevel.hold`), once nothing preparing, compiling or loading still uses them. What the levels gave or loaded is
    * not freed: it is whoever made it's.
    */
-  dispose(release: () => void): void {
+  dispose(release: () => void): Promise<void> {
     this.disposed = true;
     this.item.sync(this.renderer, false);
     this.seen.dispose();
@@ -375,14 +375,13 @@ export class LodLevelLoadManager {
       release();
       for (const letGo of this.releases) letGo();
     };
-    const finish = () => {
+    const finish = async () => {
       const unsettled = [...this.loads.values()].flatMap((entry) => (!entry.object && !entry.error ? [entry.promise] : []));
       // A mesh decode can begin its source-material dependency after disposal starts.
-      if (unsettled.length) void Promise.allSettled(unsettled).then(free);
-      else free();
+      if (unsettled.length) await Promise.allSettled(unsettled);
+      free();
     };
     const tasks = [...this.arriving.values(), ...this.compiles.tasks()];
-    if (tasks.length > 0) void Promise.all(tasks).then(finish);
-    else finish();
+    return tasks.length > 0 ? Promise.all(tasks).then(finish) : finish();
   }
 }

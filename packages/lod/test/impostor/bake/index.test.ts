@@ -30,7 +30,7 @@ import { bakeImpostor } from "../../../src/impostor/bake/index.js";
 import { texelPixels, type Impostor } from "../../../src/impostor/impostor.js";
 import { frameDirection } from "../../../src/impostor/octahedral.js";
 import { ImpostorMesh } from "../../../src/impostor/mesh/index.js";
-import { GPU_TIMEOUT, bakeRenderer, render, renderer } from "../../renderer.js";
+import { GPU_TIMEOUT, bakeRenderer, eventually, pool, render, renderer } from "../../renderer.js";
 import { oneChunk } from "../../instances.js";
 
 const bake = (object: Object3D, layout: Impostor["layout"] = "full") => bakeImpostor(object, bakeRenderer, { layout, resolution: 32 });
@@ -303,7 +303,7 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
     expect(differing / left.length).toBeLessThan(0.01);
   });
 
-  it("frees its copies of the Lods and InstancedLods it baked, and their LodPools", async () => {
+  it("bakes copies of Lods and InstancedLods outside the app's LodPool, and frees them and their LodPools", async () => {
     let held = 0;
     const hold = () => {
       held++;
@@ -313,12 +313,18 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
     const lod = new Lod([{ object: new Mesh(new BoxGeometry(), material), hold }]);
     const field = oneChunk([{ object: new Mesh(new BoxGeometry(), material) }], [new Matrix4().makeTranslation(2, 0, 0)]);
     const pools = vi.spyOn(LodPool.prototype, "dispose");
+    const slots = vi.spyOn(pool.pages, "add");
+    const rows = vi.spyOn(pool.sorter, "register");
     try {
       await bake(new Group().add(lod, field));
+      expect(slots).not.toHaveBeenCalled();
+      expect(rows).not.toHaveBeenCalled();
       expect(held).toBe(1);
-      expect(pools).toHaveBeenCalledTimes(1);
+      await eventually(() => expect(pools).toHaveBeenCalledTimes(1));
     } finally {
       pools.mockRestore();
+      slots.mockRestore();
+      rows.mockRestore();
       lod.dispose();
       field.dispose();
     }
