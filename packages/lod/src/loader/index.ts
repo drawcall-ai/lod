@@ -263,14 +263,14 @@ function materialsOf(object: Object3D): Material[] {
 type DeferredLevel = LodLevel & { load: () => Promise<Object3D>; box: Box3; maxPixels: number };
 
 /**
- * Loads what every camera draws before it picks a level: the empty levels, and, given `alone`, the source if it is the
- * only drawable.
+ * Loads what every camera draws before it picks a level: the empty levels, and, given `preloadSource`, the source if it
+ * is the only drawable.
  */
-async function preload(levels: DeferredLevel[], alone: boolean): Promise<LodLevel[]> {
+async function preload(levels: DeferredLevel[], preloadSource: boolean): Promise<LodLevel[]> {
   const drawable = levels.filter((level) => !level.box.isEmpty());
   return Promise.all(
     levels.map(async (level) =>
-      level.box.isEmpty() || (alone && drawable.length === 1) ? { object: await level.load(), maxPixels: level.maxPixels, hold: level.hold } : level,
+      level.box.isEmpty() || (preloadSource && drawable.length === 1) ? { object: await level.load(), maxPixels: level.maxPixels, hold: level.hold } : level,
     ),
   );
 }
