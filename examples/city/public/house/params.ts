@@ -34,6 +34,14 @@ export interface HouseParams {
 
 export const HOUSE_VARIANTS = 10;
 
+/** The house variant a script's URL asks for with `?variant=` (0 if it does not), checked. */
+export function variantOf(url: string): number {
+  const text = new URL(url).searchParams.get("variant") ?? "0";
+  const variant = Number(text);
+  if (!(/^\d+$/.test(text) && variant < HOUSE_VARIANTS)) throw new Error(`house: variant must be a whole number below ${HOUSE_VARIANTS}, not ${text}`);
+  return variant;
+}
+
 export const wallThickness = 0.3;
 /** Wall height above the top floor's ceiling before the roof starts (knee wall). */
 const kneeWall = 0.35;
