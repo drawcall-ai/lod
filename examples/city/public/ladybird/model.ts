@@ -138,25 +138,17 @@ function dome(s: DomeShape): THREE.BufferGeometry {
   const rings = 48;
   const around = 96;
   const p = new THREE.Vector3();
-  const grid: number[][] = [];
   for (let i = 0; i <= rings; i++) {
     const rho = i / rings;
-    const row: number[] = [];
     for (let j = 0; j <= around; j++) {
       const a = (j / around) * Math.PI * 2;
       const fz = Math.sin(a);
       const x = rho * Math.cos(a) * s.hw * (1 - s.taper * Math.max(0, fz));
       const z = rho * fz * s.hl;
       p.set(x, s.y + profile(rho, x, s), s.z + z);
-      row.push(b.vertex(p, 0.5 + x / (2 * s.hw), 0.5 + z / (2 * s.hl), ink));
+      b.vertex(p, 0.5 + x / (2 * s.hw), 0.5 + z / (2 * s.hl), ink);
     }
-    grid.push(row);
   }
-  for (let i = 0; i < rings; i++) {
-    const a = grid[i];
-    const c = grid[i + 1];
-    if (!a || !c) break;
-    for (let j = 0; j < around; j++) b.quad(a[j] ?? 0, a[j + 1] ?? 0, c[j + 1] ?? 0, c[j] ?? 0);
-  }
+  b.grid(0, rings, around);
   return b.geometry();
 }

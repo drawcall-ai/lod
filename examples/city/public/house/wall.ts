@@ -39,7 +39,7 @@ function keepTriangles(g: THREE.BufferGeometry, test: (normal: THREE.Vector3) =>
     const kept: number[] = [];
     for (let tri = 0; tri < normal.count / 3; tri++) {
       if (!test(n.fromBufferAttribute(normal, tri * 3))) continue;
-      for (let i = tri * 3 * a.itemSize; i < (tri + 1) * 3 * a.itemSize; i++) kept.push(a.array[i] ?? 0);
+      kept.push(...a.array.subarray(tri * 3 * a.itemSize, (tri + 1) * 3 * a.itemSize));
     }
     out.setAttribute(name, new THREE.Float32BufferAttribute(kept, a.itemSize));
   }

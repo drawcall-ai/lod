@@ -49,13 +49,13 @@ function facade(materials: M.Materials, parts: Parts, f: Facade, p: HouseParams,
   // plinth band, interrupted by the door and its steps
   // long facades stop at the gable walls' inner faces, so their bands reach over the corners
   const reach = half + (f.gable ? 0.025 : t + 0.025);
-  const spans = door
+  const spans: [number, number][] = door
     ? [
         [-reach, door.x - door.w / 2 - 0.05],
         [door.x + door.w / 2 + 0.05, reach],
       ]
     : [[-reach, reach]];
-  for (const [a = 0, b = 0] of spans) parts.add(M.plinth(materials), box(b - a, p.plinth, 0.05).translate((a + b) / 2, p.plinth / 2, 0));
+  for (const [a, b] of spans) parts.add(M.plinth(materials), box(b - a, p.plinth, 0.05).translate((a + b) / 2, p.plinth / 2, 0));
 
   if (p.wall.kind === "stucco") {
     for (let floor = 1; floor < p.floors; floor++) {

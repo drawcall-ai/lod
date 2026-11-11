@@ -45,9 +45,10 @@ function seeded(materials: Materials, seed: number, options: { leafSegments?: [n
   const ears: THREE.Vector3[] = [];
   let azimuth = Math.PI * 2 * r();
   const earNodes = new Set([Math.round(nodes.length * 0.42), ...(r() < 0.4 ? [Math.round(nodes.length * 0.42) - 1] : [])]);
-  for (let i = 1; i < nodes.length; i++) {
+  for (const [i, t] of nodes.entries()) {
+    if (i === 0) continue;
     azimuth += Math.PI + (-0.25 + 0.5 * r());
-    const t = nodes[i] ?? 0;
+    // the top node's sheath reaches toward the stalk's tip
     const next = nodes[i + 1] ?? 1;
     // the sheath wraps the stalk from this node most of the way up to the next
     const sheathColor = new THREE.Color("#4c6c36").offsetHSL(0, 0, -0.03 + 0.06 * r());

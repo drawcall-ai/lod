@@ -184,7 +184,6 @@ export function leaf(base: THREE.Vector3, azimuth: number, s: LeafShape): THREE.
   const side = new THREE.Vector3().crossVectors(up, out).normalize();
   const [segments, across] = s.segments ?? [48, 8];
   const p = base.clone();
-  const rows: number[][] = [];
   const ripple = 50 + 40 * r();
   const phase = 6 * r();
   const step = s.length / segments;
@@ -199,7 +198,6 @@ export function leaf(base: THREE.Vector3, azimuth: number, s: LeafShape): THREE.
     // the blade's upper side: the V of the midrib fold opens this way
     const normal = new THREE.Vector3().crossVectors(tangent, lateral).normalize();
     const fold = (s.fold ?? 0.45) * (1 - t) ** 1.5;
-    const row: number[] = [];
     for (let k = 0; k <= across; k++) {
       const a = (k / across) * 2 - 1;
       const edge = Math.abs(a) ** 4;
@@ -207,18 +205,12 @@ export function leaf(base: THREE.Vector3, azimuth: number, s: LeafShape): THREE.
       v.copy(p)
         .addScaledVector(lateral, (a * width) / 2)
         .addScaledVector(normal, Math.abs(a) * fold * width * 0.5 + wave);
-      row.push(b.vertex(v, k / across, t, s.color));
+      b.vertex(v, k / across, t, s.color);
     }
-    rows.push(row);
     p.addScaledVector(tangent, step);
   }
-  for (let i = 0; i < segments; i++) {
-    const a = rows[i];
-    const c = rows[i + 1];
-    if (!a || !c) break;
-    // wound so the front face is the blade's upper side: shadow normal bias (applied in the
-    // vertex shader, before double-sided flipping) then pushes away from the surface
-    for (let k = 0; k < across; k++) b.quad(a[k] ?? 0, c[k] ?? 0, c[k + 1] ?? 0, a[k + 1] ?? 0);
-  }
+  // wound so the front face is the blade's upper side: shadow normal bias (applied in the
+  // vertex shader, before double-sided flipping) then pushes away from the surface
+  b.grid(0, segments, across, true);
   return b.geometry();
 }

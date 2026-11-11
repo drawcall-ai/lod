@@ -40,7 +40,6 @@ export function ear(
     const extra = 1.0 + 0.28 * r();
     // the husk texture carries the colour; vertex colour only varies it, outer leaves paler
     const c = new THREE.Color("#ffffff").lerp(new THREE.Color("#fff2c0"), 0.2 + 0.08 * l).multiplyScalar(0.92 + 0.13 * r());
-    const rows: number[][] = [];
     for (let i = 0; i <= 16; i++) {
       const t = i / 16;
       const along = t * length * extra;
@@ -49,7 +48,6 @@ export function ear(
         (core(tc) + 0.0012 * (layers - l)) * (t * extra > 1 ? Math.max(0.15, 1 - (t * extra - 1) * 2.5) : 1) +
         (t * extra > 0.95 ? (t * extra - 0.95) * 0.06 : 0);
       const width = span * (1 - Math.max(0, t - 0.55) / 0.45) ** 0.8;
-      const row: number[] = [];
       for (let k = 0; k <= 6; k++) {
         const a = center + (k / 6 - 0.5) * width;
         const p = shankEnd
@@ -57,16 +55,10 @@ export function ear(
           .addScaledVector(axis, along)
           .addScaledVector(sideA, Math.cos(a) * rad)
           .addScaledVector(sideB, Math.sin(a) * rad);
-        row.push(b.vertex(p, k / 6, t, c));
+        b.vertex(p, k / 6, t, c);
       }
-      rows.push(row);
     }
-    for (let i = 0; i < 16; i++) {
-      const a = rows[i];
-      const d = rows[i + 1];
-      if (!a || !d) break;
-      for (let k = 0; k < 6; k++) b.quad(a[k] ?? 0, a[k + 1] ?? 0, d[k + 1] ?? 0, d[k] ?? 0);
-    }
+    b.grid(0, 16, 6);
     parts.add(materials.husk, b.geometry());
   }
   const tip = shankEnd.clone().addScaledVector(axis, length * 1.02);

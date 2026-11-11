@@ -6,7 +6,7 @@ export function box(w: number, h: number, d: number): THREE.BufferGeometry {
   const g = new THREE.BoxGeometry(w, h, d);
   const uv = g.getAttribute("uv");
   // BoxGeometry faces in order ±x, ±y, ±z, four vertices each; [u span, v span] per face
-  const spans = [
+  const spans: [number, number][] = [
     [d, h],
     [d, h],
     [w, d],
@@ -14,10 +14,9 @@ export function box(w: number, h: number, d: number): THREE.BufferGeometry {
     [w, h],
     [w, h],
   ];
-  for (let i = 0; i < uv.count; i++) {
-    const [su = 1, sv = 1] = spans[Math.floor(i / 4)] ?? [];
-    uv.setXY(i, uv.getX(i) * su, uv.getY(i) * sv);
-  }
+  spans.forEach(([su, sv], face) => {
+    for (let i = face * 4; i < face * 4 + 4; i++) uv.setXY(i, uv.getX(i) * su, uv.getY(i) * sv);
+  });
   return g;
 }
 

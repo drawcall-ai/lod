@@ -86,6 +86,20 @@ export class MeshBuilder {
     this.index.push(a, b, c);
   }
 
+  /**
+   * Quads over a grid of vertices added row by row from index `first`: `rows` + 1 rows of `columns` + 1 vertices, each
+   * quad wound counter-clockwise seen from the front, or the other way if `reversed`.
+   */
+  grid(first: number, rows: number, columns: number, reversed = false): void {
+    const at = (row: number, column: number) => first + row * (columns + 1) + column;
+    for (let i = 0; i < rows; i++)
+      for (let j = 0; j < columns; j++) {
+        const [a, b, c, d] = [at(i, j), at(i, j + 1), at(i + 1, j + 1), at(i + 1, j)];
+        if (reversed) this.quad(a, d, c, b);
+        else this.quad(a, b, c, d);
+      }
+  }
+
   /** Vertex normals are averaged only over shared vertices, so separate pieces stay separate. */
   geometry(): THREE.BufferGeometry {
     const g = new THREE.BufferGeometry();
@@ -115,7 +129,6 @@ export function tube(
   const frames = curve.computeFrenetFrames(segments, false);
   const length = curve.getLength();
   const p = new THREE.Vector3();
-  const rings: number[][] = [];
   for (let i = 0; i <= segments; i++) {
     const t = i / segments;
     const center = curve.getPointAt(t);
@@ -124,29 +137,20 @@ export function tube(
     if (!n || !bn) throw new Error("missing Frenet frame");
     const r = radius(t);
     const c = color(t);
-    const ring: number[] = [];
     for (let j = 0; j <= radial; j++) {
       const a = (j / radial) * Math.PI * 2;
       p.copy(center)
         .addScaledVector(n, Math.cos(a) * r)
         .addScaledVector(bn, Math.sin(a) * r * aspect);
-      ring.push(b.vertex(p, j / radial, t * length, c));
+      b.vertex(p, j / radial, t * length, c);
     }
-    rings.push(ring);
   }
-  for (let i = 0; i < segments; i++) {
-    const a = rings[i];
-    const c = rings[i + 1];
-    if (!a || !c) break;
-    for (let j = 0; j < radial; j++) b.quad(a[j] ?? 0, a[j + 1] ?? 0, c[j + 1] ?? 0, c[j] ?? 0);
-  }
+  b.grid(0, segments, radial);
   // cap the far end so thin tubes do not show their hollow inside
   const end = curve.getPointAt(1);
-  const last = rings[segments];
-  if (last) {
-    const tip = b.vertex(end, 0.5, length, color(1));
-    for (let j = 0; j < radial; j++) b.triangle(last[j] ?? 0, last[j + 1] ?? 0, tip);
-  }
+  const last = segments * (radial + 1);
+  const tip = b.vertex(end, 0.5, length, color(1));
+  for (let j = 0; j < radial; j++) b.triangle(last + j, last + j + 1, tip);
   return b.geometry();
 }
 
