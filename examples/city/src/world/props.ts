@@ -102,7 +102,7 @@ const fence = () =>
 const SIGNS: Record<SignName, () => Promise<LodLevel[]>> = {
   "Maple St": () =>
     new CachedLodLoader(manager, arriving()).loadAsync({
-      url: "/sign/index.glts?text=Maple+St",
+      url: "/street-sign/index.glts?text=Maple+St",
       levels: [
         { type: "simplify", ratio: 0.5 },
         { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 64 },
@@ -111,7 +111,7 @@ const SIGNS: Record<SignName, () => Promise<LodLevel[]>> = {
     }),
   "Church Rd": () =>
     new CachedLodLoader(manager, arriving()).loadAsync({
-      url: "/sign/index.glts?text=Church+Rd",
+      url: "/street-sign/index.glts?text=Church+Rd",
       levels: [
         { type: "simplify", ratio: 0.5 },
         { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 64 },
@@ -120,7 +120,7 @@ const SIGNS: Record<SignName, () => Promise<LodLevel[]>> = {
     }),
   "Mill Lane": () =>
     new CachedLodLoader(manager, arriving()).loadAsync({
-      url: "/sign/index.glts?text=Mill+Lane",
+      url: "/street-sign/index.glts?text=Mill+Lane",
       levels: [
         { type: "simplify", ratio: 0.5 },
         { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 64 },
@@ -129,7 +129,7 @@ const SIGNS: Record<SignName, () => Promise<LodLevel[]>> = {
     }),
   "Oak Ave": () =>
     new CachedLodLoader(manager, arriving()).loadAsync({
-      url: "/sign/index.glts?text=Oak+Ave",
+      url: "/street-sign/index.glts?text=Oak+Ave",
       levels: [
         { type: "simplify", ratio: 0.5 },
         { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 64 },
@@ -138,7 +138,7 @@ const SIGNS: Record<SignName, () => Promise<LodLevel[]>> = {
     }),
   "High St": () =>
     new CachedLodLoader(manager, arriving()).loadAsync({
-      url: "/sign/index.glts?text=High+St",
+      url: "/street-sign/index.glts?text=High+St",
       levels: [
         { type: "simplify", ratio: 0.5 },
         { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 64 },
@@ -147,7 +147,7 @@ const SIGNS: Record<SignName, () => Promise<LodLevel[]>> = {
     }),
   "Elm St": () =>
     new CachedLodLoader(manager, arriving()).loadAsync({
-      url: "/sign/index.glts?text=Elm+St",
+      url: "/street-sign/index.glts?text=Elm+St",
       levels: [
         { type: "simplify", ratio: 0.5 },
         { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 64 },
