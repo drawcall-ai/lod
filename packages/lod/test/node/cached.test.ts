@@ -52,9 +52,9 @@ it("runs loads on one loader concurrently, each with its own GLTSLoader and bake
     loader.loadAsync({ url: "/box.glts?size=4", levels: [{ type: "impostor", resolution: 32 }] }),
   ]);
   expect(ladders.map((levels) => levels.length)).toEqual([2, 2]);
-  // Nothing holds the source once loadAsync has resolved.
-  const source = ladders[0]?.[0]?.load;
-  await expect(source?.()).rejects.toThrow(/after loadAsync resolved/);
+  // A level a camera needs once loadAsync has resolved loads in a session of its own.
+  const source = await ladders[0]?.[0]?.load?.();
+  expect(source?.getObjectByProperty("isMesh", true)).toBeDefined();
 });
 
 it("fails a load that fetches what it cannot record", { timeout: 120_000 }, async () => {

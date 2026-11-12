@@ -599,6 +599,16 @@ describe("a Lod's bounds", { timeout: GPU_TIMEOUT }, () => {
     lod.dispose();
   });
 
+  it("is bounded around every instance before any level loads, for Box3.setFromObject's precise mode too", () => {
+    const box = new Box3(new Vector3(-1, 0, -1), new Vector3(1, 10, 1));
+    const spots = [new Matrix4().makeTranslation(-30, 0, 0), new Matrix4().makeTranslation(30, 0, 5)];
+    const lod = lodOf([{ load: () => new Promise<Object3D>(() => {}), box }], spots);
+    lod.updateMatrixWorld(true);
+    const bounds = new Box3().setFromObject(lod, true);
+    for (const spot of spots) expect(bounds.containsBox(box.clone().applyMatrix4(spot))).toBe(true);
+    lod.dispose();
+  });
+
   it("bounds every placed level and a sheared template, still choosing levels by the source's sphere", () => {
     const material = new MeshBasicMaterial();
     const source = new Mesh(new BoxGeometry(2, 2, 2), material);

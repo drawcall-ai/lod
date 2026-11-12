@@ -128,8 +128,11 @@ export class Lod extends Object3D<LodEventMap> {
   private readonly checked: number[] = [];
   /** What `cullIn` writes cullDistance into, in this Lod's space. */
   private readonly cull = emptyCull();
-  /** Drawn until a renderer has drawn the Lod, to learn which: three tells a mesh its renderer, but not a LOD. */
-  private readonly sentinel: Mesh;
+  /**
+   * Drawn until a renderer has drawn the Lod, to learn which: three tells a mesh its renderer, but not a LOD. It bounds
+   * the instances for Box3.setFromObject, as the level meshes do once there are some.
+   */
+  private readonly sentinel: Mesh<InstancedBufferGeometry>;
   private warned = false;
 
   /** `levels[0]` is the source; empty only as the target of `copy`. `count` instances, at the Lod's origin to start with. */
@@ -189,7 +192,8 @@ export class Lod extends Object3D<LodEventMap> {
    * is now; the CPU cannot read a storage one.
    */
   computeBoundingBox(): void {
-    if (isStorageInstanced(this.instanceMatrix)) throw new Error("Lod.computeBoundingBox: the CPU cannot read a storage instanceMatrix: set boundingBox or clusters");
+    if (isStorageInstanced(this.instanceMatrix))
+      throw new Error("Lod.computeBoundingBox: the CPU cannot read a storage instanceMatrix: set boundingBox or clusters");
     this.boundingBox = measuredBox(measure(this.instanceMatrix, this.count, null), this.built.shape, this.boundingBox ?? new Box3());
   }
 
@@ -219,9 +223,17 @@ export class Lod extends Object3D<LodEventMap> {
     return { ...drawing, meshes, loads, encoded };
   }
 
-  /** The sentinel, drawn until a renderer has drawn the Lod (see `see`): one vertex, no instances, on every layer, casting. */
-  private makeSentinel(): Mesh {
-    const sentinel = new Mesh(SENTINEL, SENTINEL_MATERIAL);
+  /**
+   * The sentinel, drawn until a renderer has drawn the Lod (see `see`): no instances, on every layer, casting. Its box
+   * is the instances' bounds, and its vertices that box's corners (see `placeSentinel`), which precise
+   * Box3.setFromObject reads.
+   */
+  private makeSentinel(): Mesh<InstancedBufferGeometry> {
+    const geometry = new InstancedBufferGeometry().setAttribute("position", new Float32BufferAttribute(new Float32Array(24), 3));
+    geometry.instanceCount = 0;
+    geometry.boundingBox = this.bounds.box;
+    geometry.boundingSphere = this.bounds.sphere;
+    const sentinel = new Mesh(geometry, SENTINEL_MATERIAL);
     sentinel.frustumCulled = false;
     sentinel.layers.enableAll();
     // Shadow passes draw it too: a Lod that only casts learns its renderer there.
@@ -281,6 +293,24 @@ export class Lod extends Object3D<LodEventMap> {
       drawInstances(meshes.all(), this.drawn);
     }
     boundClusters(this, this.instances.measured, shape, survivors ? MAX_SURVIVOR_SCALE : 1, this.bounds);
+    this.placeSentinel();
+  }
+
+  /** Put the sentinel's vertices at the corners of the instances' bounds; at the origin while nothing bounds them. */
+  private placeSentinel(): void {
+    const { box } = this.bounds;
+    const position = this.sentinel.geometry.getAttribute("position");
+    const empty = box.isEmpty();
+    let moved = false;
+    for (let i = 0; i < 8; i++) {
+      const x = empty ? 0 : i & 1 ? box.max.x : box.min.x;
+      const y = empty ? 0 : i & 2 ? box.max.y : box.min.y;
+      const z = empty ? 0 : i & 4 ? box.max.z : box.min.z;
+      if (position.getX(i) === x && position.getY(i) === y && position.getZ(i) === z) continue;
+      position.setXYZ(i, x, y, z);
+      moved = true;
+    }
+    if (moved) position.needsUpdate = true;
   }
 
   /** Sort for `camera`, a shadow map's when `shadow`, drawn by `renderer`. */
@@ -348,7 +378,8 @@ export class Lod extends Object3D<LodEventMap> {
     const { renderer } = this.built.loads;
     if (!renderer) throw new Error("Lod.getLevelAt: render the Lod first: it measures with the renderer drawing it");
     if (isStorageInstanced(this.instanceMatrix)) throw new Error("Lod.getLevelAt: the CPU cannot read a storage instanceMatrix");
-    if (!Number.isInteger(index) || index < 0 || index >= this.count) throw new RangeError(`Lod.getLevelAt: ${index} is not one of its ${this.count} instances`);
+    if (!Number.isInteger(index) || index < 0 || index >= this.count)
+      throw new RangeError(`Lod.getLevelAt: ${index} is not one of its ${this.count} instances`);
     const cull = cullIn(this.cullDistance, this.matrixWorld, this.cull);
     const local = this.localCamera(camera, renderer, inShadowMap(this));
     return instanceLevel(this.instanceMatrix.array, index * 16, cull, local, this.built.shape.source, this.built.loads.loaded);
@@ -411,6 +442,7 @@ export class Lod extends Object3D<LodEventMap> {
     this.disposed = true;
     super.dispose();
     this.sentinel.removeFromParent();
+    this.sentinel.geometry.dispose();
     this.built.loads.dispose(() => {
       this.built.meshes.dispose();
       this.built.lists.dispose();
@@ -428,11 +460,6 @@ interface Built extends Drawing {
   readonly encoded: EncodedLevels;
 }
 
-/** The sentinel's geometry: one vertex, no instances, so three draws nothing of it; bounding nothing (see Box3.setFromObject). */
-const SENTINEL = new InstancedBufferGeometry().setAttribute("position", new Float32BufferAttribute([0, 0, 0], 3));
-SENTINEL.instanceCount = 0;
-SENTINEL.boundingBox = new Box3();
-SENTINEL.boundingSphere = new Sphere();
 const SENTINEL_MATERIAL = new MeshBasicNodeMaterial();
 
 /** A CPU instanceMatrix of `count` identities. */

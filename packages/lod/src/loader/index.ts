@@ -239,7 +239,7 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
     made?.dispose();
   }
 
-  private async loadAsset(url: string): Promise<Object3D> {
+  protected async loadAsset(url: string): Promise<Object3D> {
     const { path, extension } = assetPath(url);
     const handler = this.manager.getHandler(path);
     if (!handler && extension === "glts") throw new Error(`CachedLodLoader: cannot load "${url}": register a GLTSLoader for .glts on the loading manager`);

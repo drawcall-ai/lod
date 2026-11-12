@@ -32,8 +32,9 @@ const sessions = new AsyncLocalStorage<Session>();
  * bakes draw on a WebGPU device of @drawcall/webgpu. The manager only resolves the request's URL.
  *
  * Each `loadAsync` loads and bakes with what it makes for itself, which it frees before resolving, so loads may run
- * concurrently. The levels it returns load their stored bytes as in browsers, but none holds the source: loading the
- * source level, or a simplified level, which draws with the source's materials, fails once `loadAsync` has resolved.
+ * concurrently. The levels it returns load their stored bytes as in browsers, and none holds the source: the source
+ * level, and a simplified level, which draws with the source's materials, load the source again when a camera needs
+ * them, as the glts CLI's renders of a .glts script that draws a Lod do.
  */
 export class CachedLodLoader extends BrowserCachedLodLoader {
   constructor(manager?: LoadingManager, options: CachedLodLoaderOptions = {}) {
@@ -82,6 +83,12 @@ class SessionLoader extends BrowserCachedLodLoader {
     await this.scripts.dispose();
   }
 
+  /** Load `url` in the load's session, or, once `loadAsync` has resolved, in a session of its own. */
+  protected override loadAsset(url: string): Promise<Object3D> {
+    if (sessions.getStore()) return super.loadAsset(url);
+    return session({ read: new Set(), packages: new Set() }, () => super.loadAsset(url));
+  }
+
   protected override newBakeRenderer(): Promise<WebGPURenderer> {
     // Three's DOM canvas types exclude native canvases; its constructor checks the actual API.
     const renderer: unknown = Reflect.construct(WebGPURenderer, [{ canvas: canvas(), antialias: false }]);
@@ -103,8 +110,7 @@ function servingManager(): LoadingManager {
   const manager = new LoadingManager();
   manager.setURLModifier((url) => {
     if (!url.startsWith("/") || url.startsWith("//")) return url;
-    if (!sessions.getStore())
-      throw new Error(`CachedLodLoader: cannot load "${url}" after loadAsync resolved: in Node, a ladder loads its assets only while loadAsync runs`);
+    if (!sessions.getStore()) throw new Error(`CachedLodLoader: cannot load "${url}" once the load that asked for it has ended`);
     return placeholderOrigin + url;
   });
   return manager;

@@ -45,17 +45,23 @@ Supply authored low shells and baking interiors as asset URLs on a baked level; 
 
 ## Give a .glts asset its own levels
 
-A `.glts` script can draw its asset at levels of detail, so that every glts host gets them without knowing of lod. Keep the detailed asset in a script of its own, here `./model.glts` beside the wrapping script; load its ladder with the wrapping script's `loadingManager`, which resolves URLs relative to the script, and add a `Lod` of it to the script's scene:
+A `.glts` script can draw its asset at levels of detail, so that every glts host gets them without knowing of lod. Keep the detailed asset in a script of its own, here `./model.glts` beside the wrapping script; load its ladder with the wrapping script's `loadingManager`, which resolves URLs relative to the script, after giving that manager the script's `gltsLoader` for `.glts` sources. Add a `Lod` of it to the script's scene, tracked by the same manager, so that a host waiting on its loads, such as the glts CLI rendering the script, waits for the levels its cameras need:
 
 ```ts
-import { loadingManager, scene } from "@drawcall/glts";
+import { gltsLoader, loadingManager, onDispose, scene } from "@drawcall/glts";
 import { CachedLodLoader, Lod } from "@drawcall/lod";
 
+loadingManager.addHandler(/\.glts$/i, gltsLoader);
 const levels = await new CachedLodLoader(loadingManager).loadAsync({
   url: "./model.glts",
-  levels: [{ type: "impostor", maxPixels: 120 }, { type: "empty", maxPixels: 4 }],
+  levels: [
+    { type: "impostor", maxPixels: 120 },
+    { type: "empty", maxPixels: 4 },
+  ],
 });
-scene.add(new Lod(levels));
+const lod = new Lod(levels, 1, { manager: loadingManager });
+scene.add(lod);
+onDispose(() => lod.dispose());
 ```
 
 A host that draws the asset many times calls `gltsLoader.loadInstancesAsync(url, count)`; glts hands that asset's `instanceMatrix`, `instanceColor`, `count`, `boundingBox` and `clusters` to the Lod, which then draws every copy, sorted on the GPU. The Lod must be the topmost instanced object in the script's scene: a Lod inside another Lod's levels is not supported.
