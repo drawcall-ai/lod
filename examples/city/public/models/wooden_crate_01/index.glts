@@ -14,7 +14,7 @@ const loader = new CachedLodLoader(loadingManager, {
   },
 });
 const levels = await loader.loadAsync({
-  url: "../../assets/models/wooden_crate_01/wooden_crate_01.glb",
+  url: "./wooden_crate_01.glb",
   levels: [
     { type: "simplify", ratio: 0.5 },
     { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 60 },

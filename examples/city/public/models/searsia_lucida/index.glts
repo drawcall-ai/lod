@@ -20,7 +20,7 @@ const loader = new CachedLodLoader(loadingManager, {
 const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
   a: () =>
     loader.loadAsync({
-      url: "../../assets/models/searsia_lucida/searsia_lucida_a_LOD0.glb",
+      url: "./searsia_lucida_a_LOD0.glb",
       levels: [
         { type: "impostor", layout: "hemi", maxPixels: 300 },
         { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
@@ -28,7 +28,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
     }),
   e: () =>
     loader.loadAsync({
-      url: "../../assets/models/searsia_lucida/searsia_lucida_e_LOD0.glb",
+      url: "./searsia_lucida_e_LOD0.glb",
       levels: [
         { type: "impostor", layout: "hemi", maxPixels: 300 },
         { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },

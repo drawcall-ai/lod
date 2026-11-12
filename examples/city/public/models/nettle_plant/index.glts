@@ -20,7 +20,7 @@ const loader = new CachedLodLoader(loadingManager, {
 const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
   medium: () =>
     loader.loadAsync({
-      url: "../../assets/models/nettle_plant/nettle_plant_medium_a_LOD0.glb",
+      url: "./nettle_plant_medium_a_LOD0.glb",
       levels: [
         { type: "impostor", layout: "hemi", maxPixels: 200 },
         { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
@@ -29,7 +29,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
     }),
   tall: () =>
     loader.loadAsync({
-      url: "../../assets/models/nettle_plant/nettle_plant_tall_a_LOD0.glb",
+      url: "./nettle_plant_tall_a_LOD0.glb",
       levels: [
         { type: "impostor", layout: "hemi", maxPixels: 200 },
         { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },

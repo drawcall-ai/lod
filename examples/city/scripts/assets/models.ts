@@ -135,7 +135,8 @@ const props: Record<string, string[]> = {
   planter_box_01: ["planter_box_01"],
 };
 
-export async function model(id: string, io: NodeIO, out: string): Promise<Manifest["models"][string]> {
+/** Writes `variants` of model `id` into `folder` as <variant>.glb, the images they share in images/. */
+export async function model(id: string, variants: string[], io: NodeIO, folder: string): Promise<Manifest["models"][string]> {
   const { files, info } = await polyHaven(id);
   const source = `${cache}${id}/model.glb`;
   let doc: Document;
@@ -157,30 +158,21 @@ export async function model(id: string, io: NodeIO, out: string): Promise<Manife
   await fillCutOuts(doc);
   const bounds = checkFrame(id, doc, info);
   const parts = props[id];
-  const selections = parts
-    ? [[id, parts] as const]
-    : doc
-        .getRoot()
-        .listScenes()[0]
-        ?.listChildren()
-        .map((node) => [node.getName(), [node.getName()]] as const);
-  if (!selections?.length) throw new Error(`${id}: no model variants`);
-  await mkdir(`${out}models/${id}`, { recursive: true });
+  if (parts && variants.join() !== id) throw new Error(`${id}: a street prop has one variant, named ${id}, not ${variants.join(", ")}`);
+  await mkdir(`${folder}images`, { recursive: true });
   let bytes = 0;
   const images = new Map<string, Uint8Array>();
-  for (const [name, names] of selections) {
-    const file = `${out}models/${id}/${name}.glb`;
-    const output = await writeVariant(io, await variant(doc, name, names, parts !== undefined));
-    await writeFile(file, output.binary);
+  for (const name of variants) {
+    const output = await writeVariant(io, await variant(doc, name, parts ?? [name], parts !== undefined));
+    await writeFile(`${folder}${name}.glb`, output.binary);
     bytes += output.binary.byteLength;
     for (const [uri, image] of output.images) images.set(uri, image);
   }
-  await mkdir(`${out}models/${id}/images`, { recursive: true });
   for (const [uri, image] of images) {
-    await writeFile(`${out}models/${id}/${uri}`, image);
+    await writeFile(`${folder}${uri}`, image);
     bytes += image.byteLength;
   }
-  const entry = { bytes, triangles: triangles(doc), bounds, variants: selections.map(([name]) => name), credit: credit(id, info) };
-  console.log(`${id.padEnd(22)} ${String(entry.triangles).padStart(9)} tris ${(bytes / 1e6).toFixed(1).padStart(6)} MB (${entry.variants.length} variants)`);
+  const entry = { bytes, triangles: triangles(doc), bounds, variants, credit: credit(id, info) };
+  console.log(`${id.padEnd(22)} ${String(entry.triangles).padStart(9)} tris ${(bytes / 1e6).toFixed(1).padStart(6)} MB (${variants.length} variants)`);
   return entry;
 }

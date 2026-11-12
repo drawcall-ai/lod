@@ -14,7 +14,7 @@ const loader = new CachedLodLoader(loadingManager, {
   },
 });
 const levels = await loader.loadAsync({
-  url: "../../assets/models/covered_car/covered_car.glb",
+  url: "./covered_car.glb",
   levels: [
     { type: "simplify", ratio: 0.12 },
     { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 60 },

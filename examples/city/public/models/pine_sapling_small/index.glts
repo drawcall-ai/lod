@@ -20,7 +20,7 @@ const loader = new CachedLodLoader(loadingManager, {
 const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
   a: () =>
     loader.loadAsync({
-      url: "../../assets/models/pine_sapling_small/pine_sapling_small_a.glb",
+      url: "./pine_sapling_small_a.glb",
       levels: [
         { type: "impostor", layout: "hemi", maxPixels: 300 },
         { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
@@ -28,7 +28,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
     }),
   b: () =>
     loader.loadAsync({
-      url: "../../assets/models/pine_sapling_small/pine_sapling_small_b.glb",
+      url: "./pine_sapling_small_b.glb",
       levels: [
         { type: "impostor", layout: "hemi", maxPixels: 300 },
         { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },

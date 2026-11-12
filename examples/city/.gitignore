@@ -1,4 +1,8 @@
+# scripts/fetch-assets.ts downloads these into the folders that load them
 public/assets/
+public/*/textures/
+public/models/*/*.glb
+public/models/*/images/
 .artifacts/
 dist/
 public/_vitecache/*

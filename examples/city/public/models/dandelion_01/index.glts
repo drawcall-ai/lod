@@ -19,7 +19,7 @@ const loader = new CachedLodLoader(loadingManager, {
 const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
   a: () =>
     loader.loadAsync({
-      url: "../../assets/models/dandelion_01/dandelion_01_a_LOD0.glb",
+      url: "./dandelion_01_a_LOD0.glb",
       levels: [
         { type: "impostor", layout: "hemi", resolution: 64, maxPixels: 64 },
         { type: "empty", maxPixels: 1 },
@@ -27,7 +27,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
     }),
   c: () =>
     loader.loadAsync({
-      url: "../../assets/models/dandelion_01/dandelion_01_c_LOD0.glb",
+      url: "./dandelion_01_c_LOD0.glb",
       levels: [
         { type: "impostor", layout: "hemi", resolution: 64, maxPixels: 64 },
         { type: "empty", maxPixels: 1 },

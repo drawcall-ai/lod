@@ -17,12 +17,12 @@ export class Materials {
   readonly #loading: Promise<void>[] = [];
 
   /**
-   * `assets` is public/assets, which scripts/fetch-assets.ts fills: beside this module, as scripts load it, unless a
-   * page that bundles this module says where it serves it.
+   * `folder` is the house's, which holds the textures/ scripts/fetch-assets.ts fetches: this module's, as scripts load
+   * it, unless a page that bundles this module says where it serves it.
    */
   constructor(
     private readonly manager: THREE.LoadingManager,
-    private readonly assets = new URL("../assets/", import.meta.url),
+    private readonly folder = new URL("./", import.meta.url),
   ) {}
 
   /** The material made under `key`, made by `make` the first time. */
@@ -36,7 +36,7 @@ export class Materials {
 
   /** One map of a texture set, tiled to its real-world size. */
   texture(id: TextureSet, map: "diff" | "nor" | "arm"): THREE.Texture {
-    const url = new URL(`textures/${id}/${map}.webp`, this.assets).href;
+    const url = new URL(`textures/${id}/${map}.webp`, this.folder).href;
     const loaded = this.#textures.get(url);
     if (loaded) return loaded;
     const texture = new THREE.Texture();

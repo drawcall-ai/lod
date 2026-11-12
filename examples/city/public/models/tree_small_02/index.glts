@@ -18,7 +18,7 @@ const loader = new CachedLodLoader(loadingManager, {
   },
 });
 const levels = await loader.loadAsync({
-  url: "../../assets/models/tree_small_02/tree_small_02_LOD0.glb",
+  url: "./tree_small_02_LOD0.glb",
   levels: [
     { type: "impostor", layout: "hemi", maxPixels: 900, resolution: 256, frames: 10 },
     { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },

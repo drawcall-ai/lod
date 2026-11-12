@@ -14,7 +14,7 @@ const loader = new CachedLodLoader(loadingManager, {
   },
 });
 const levels = await loader.loadAsync({
-  url: "../../assets/models/metal_trash_can/metal_trash_can.glb",
+  url: "./metal_trash_can.glb",
   levels: [
     { type: "simplify", ratio: 0.25 },
     { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 60 },

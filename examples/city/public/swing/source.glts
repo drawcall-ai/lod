@@ -41,8 +41,8 @@ interface SurfaceOptions {
 }
 
 /**
- * A weathered standard material from a Poly Haven texture set in public/assets/textures (see scripts/fetch-assets.ts),
- * its maps loading through `manager`, so the script's load waits for them.
+ * A weathered standard material from a Poly Haven texture set in textures/ beside this script (scripts/fetch-assets.ts fetches it),
+ * its maps loading through `manager`, which resolves them against the script and makes its load wait for them.
  */
 function surface(manager: THREE.LoadingManager, id: keyof typeof TILE, { color = 0xffffff, normalScale = 1, roughness = 1, weather }: SurfaceOptions) {
   const map = (name: "diff" | "nor" | "arm") => {
@@ -52,7 +52,7 @@ function surface(manager: THREE.LoadingManager, id: keyof typeof TILE, { color =
     texture.repeat.setScalar(1 / TILE[id]);
     texture.anisotropy = 8;
     texture.colorSpace = name === "diff" ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-    const url = new URL(`../assets/textures/${id}/${name}.webp`, import.meta.url).href;
+    const url = `./textures/${id}/${name}.webp`;
     new THREE.ImageBitmapLoader(manager).setOptions({ imageOrientation: "flipY", premultiplyAlpha: "none" }).load(url, (image) => {
       texture.image = image;
       texture.needsUpdate = true;

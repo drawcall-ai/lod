@@ -20,7 +20,7 @@ const loader = new CachedLodLoader(loadingManager, {
 const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
   a: () =>
     loader.loadAsync({
-      url: "../../assets/models/fern_02/fern_02_a.glb",
+      url: "./fern_02_a.glb",
       levels: [
         { type: "impostor", layout: "hemi", maxPixels: 200 },
         { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
@@ -29,7 +29,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
     }),
   b: () =>
     loader.loadAsync({
-      url: "../../assets/models/fern_02/fern_02_b.glb",
+      url: "./fern_02_b.glb",
       levels: [
         { type: "impostor", layout: "hemi", maxPixels: 200 },
         { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
