@@ -353,6 +353,7 @@ export class Lod extends Object3D<LodEventMap> {
         reach: shape.reach,
         ranges: view.ranges,
         instances: view.instances,
+        liveCounts: view.liveCounts,
         inside: view.inside,
         onlyLevel: cull === null ? only : 0,
         version: this.instances.version,

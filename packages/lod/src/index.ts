@@ -3,7 +3,7 @@ export { type LodLevelRequest, type LodRequest } from "./loader/request.js";
 export { encodeMeshAsync, decodeMeshAsync } from "./codec/mesh.js";
 export { Lod, type LodOptions } from "./lod.js";
 export { Wind, type WindOptions, type SwayOptions } from "./wind/index.js";
-export { type LodCluster } from "./instanced/clusters.js";
+export { type LodCluster, type LodLiveCount } from "./instanced/clusters.js";
 export { type CullDistance } from "./instanced/cull.js";
 export { type LodLevel } from "./levels/index.js";
 export { type SimplifyOptions, simplify } from "./simplify/index.js";

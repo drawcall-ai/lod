@@ -1,4 +1,5 @@
 import { BoxGeometry, Group, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, SphereGeometry, type Box3 } from "three";
+import { StorageBufferAttribute } from "three/webgpu";
 import { describe, expect, it } from "vitest";
 import { boundingBox } from "../../src/source/detail.js";
 import { lodOf } from "../instances.js";
@@ -32,6 +33,9 @@ describe("boundingBox", () => {
     const only = new Mesh(new BoxGeometry(1, 2, 1), material);
     only.applyMatrix4(must(spots[1]));
     expect(same(boundingBox(new Group().add(lod)), boundingBox(new Group().add(only)))).toBe(true);
+    // The CPU cannot read a live count the GPU writes.
+    lod.clusters = [{ start: 1, count: 2, boundingBox: boundingBox(lod), liveCount: { attribute: new StorageBufferAttribute(new Uint32Array(1), 1), index: 0 } }];
+    expect(() => boundingBox(lod)).toThrow(/liveCount lives on the GPU/);
   });
 
   it("measures every instance of an InstancedMesh", () => {

@@ -1,10 +1,11 @@
-import { Box3, Sphere, Vector3, type Frustum } from "three/webgpu";
+import { Box3, Sphere, Vector3, type Frustum, type StorageBufferAttribute, type StorageInstancedBufferAttribute } from "three/webgpu";
 import { at } from "../at.js";
-import { isBox3 } from "../three.js";
+import { isBox3, isStorageBuffer, isStorageInstanced } from "../three.js";
 import type { LocalCamera } from "./camera.js";
 import type { Cull } from "./cull.js";
 import type { Measured } from "./instances.js";
 import { MAX_SURVIVOR_SCALE } from "./measure.js";
+import { NO_LIVE_COUNT } from "./rows.js";
 import type { InstanceShape } from "./shape.js";
 
 // Which of a Lod's instances a camera sees, cluster by cluster, and the heights they can have on its screen: what
@@ -21,18 +22,34 @@ export interface LodCluster {
   boundingBox: Box3;
   minScale?: number;
   maxScale?: number;
+  /**
+   * How many of the range's instances are live, from its start, as a GPU pass writes it: the u32 at `index` of
+   * `attribute`, a storage attribute of one u32 per item, read at every sort. `count` stays the most the range
+   * holds, which its lists and box are made for. Every cluster of a Lod with a liveCount shares one `attribute`.
+   */
+  liveCount?: LodLiveCount;
 }
 
-/** A cluster as the CPU tests it: its range clipped to `count`, its box grown for survivors (none if unbounded), its scales. */
+/** Where a cluster's live count lies (see `LodCluster.liveCount`). */
+export interface LodLiveCount {
+  attribute: StorageBufferAttribute | StorageInstancedBufferAttribute;
+  index: number;
+}
+
+/**
+ * A cluster as the CPU tests it: its range clipped to `count`, its box grown for survivors (none if unbounded), its
+ * scales and its liveCount.
+ */
 interface Area {
   start: number;
   size: number;
   box: Box3 | null;
   low: number;
   high: number;
+  liveCount: LodLiveCount | undefined;
 }
 
-const area: Area = { start: 0, size: 0, box: null, low: 0, high: 0 };
+const area: Area = { start: 0, size: 0, box: null, low: 0, high: 0, liveCount: undefined };
 const grownBox = new Box3();
 const measuredScratch = new Box3();
 const size3 = new Vector3();
@@ -44,17 +61,19 @@ const size3 = new Vector3();
 function forEachArea(lod: ClusterSource, measured: Measured | null, shape: InstanceShape, grow: number, visit: (area: Area) => void): void {
   const { clusters, count } = lod;
   const fallback = lod.boundingBox ?? (measured && measuredBox(measured, shape, measuredScratch));
-  const clusterOf = (start: number, size: number, box: Box3 | null, minScale?: number, maxScale?: number) => {
+  const clusterOf = (start: number, size: number, box: Box3 | null, minScale?: number, maxScale?: number, liveCount?: LodLiveCount) => {
     if (size <= 0 || box?.isEmpty()) return;
     area.start = start;
     area.size = size;
+    area.liveCount = liveCount;
     area.low = minScale ?? measured?.minScale ?? 0;
     area.high = maxScale ?? measured?.maxScale ?? (box && shape.extent > 0 ? box.getSize(size3).length() / shape.extent : Infinity);
     area.box = box && grownBox.copy(box).expandByScalar(shape.originReach * area.high * (grow - 1));
     visit(area);
   };
   if (!clusters) return clusterOf(0, count, fallback);
-  for (const { start, count: size, boundingBox, minScale, maxScale } of clusters) clusterOf(start, Math.min(size, count - start), boundingBox, minScale, maxScale);
+  for (const { start, count: size, boundingBox, minScale, maxScale, liveCount } of clusters)
+    clusterOf(start, Math.min(size, count - start), boundingBox, minScale, maxScale, liveCount);
 }
 
 /**
@@ -75,8 +94,10 @@ export function boundClusters(lod: ClusterSource, measured: Measured | null, sha
 
 /** What a camera sees of a Lod's instances (see `ClusterView.see`). */
 export class ClusterView {
-  /** The ranges the camera sees, start and count, flat, clipped to `count`. */
+  /** The ranges the camera sees, start, count and item of `liveCounts` (NO_LIVE_COUNT for none), flat, clipped to `count`. */
   readonly ranges: number[] = [];
+  /** The live counts of the ranges seen; null while none has one. */
+  liveCounts: LodLiveCount["attribute"] | null = null;
   /** How many instances the ranges hold. */
   instances = 0;
   /** Whether every range seen lies wholly inside the camera's frustum. */
@@ -92,17 +113,19 @@ export class ClusterView {
   see(lod: ClusterSource, measured: Measured | null, shape: InstanceShape, frustum: Frustum, camera: LocalCamera, cull: Cull | null): void {
     this.ranges.length = this.heights.length = this.seen.length = 0;
     this.instances = 0;
+    this.liveCounts = null;
     this.inside = true;
     this.unbounded = false;
     const grow = cull?.survivors ? MAX_SURVIVOR_SCALE : 1;
-    forEachArea(lod, measured, shape, grow, ({ start, size, box, low, high }) => {
+    forEachArea(lod, measured, shape, grow, ({ start, size, box, low, high, liveCount }) => {
       if (!box) this.unbounded = true;
       if (cull && box && box.distanceToPoint(cull.eye) >= cull.far) return;
       const heights = heightsIn(box, low, high * grow, shape, camera);
       this.heights.push(heights);
       if (box && !frustum.intersectsBox(box)) return;
       this.seen.push(heights);
-      this.ranges.push(start, size);
+      this.ranges.push(start, size, liveCount?.index ?? NO_LIVE_COUNT);
+      if (liveCount) this.liveCounts = liveCount.attribute;
       this.instances += size;
       this.inside &&= box !== null && inside(frustum, box);
     });
@@ -155,18 +178,21 @@ function inside(frustum: Frustum, box: Box3): boolean {
 }
 
 /**
- * Throws unless `clusters` are ranges of a Lod's `capacity` instances, disjoint, each with a box and its scales as
- * `LodCluster` says. Disjointness is checked again only once a range changed: `last` holds the ranges last checked.
+ * Throws unless `clusters` are ranges of a Lod's `capacity` instances, disjoint, each with a box, its scales and its
+ * liveCount as `LodCluster` says. Disjointness is checked again only once a range changed: `last` holds the ranges last
+ * checked.
  */
 export function checkClusters(clusters: readonly LodCluster[], capacity: number, last: number[]): void {
   let changed = last.length !== clusters.length * 2;
-  clusters.forEach(({ start, count, boundingBox, minScale, maxScale }, i) => {
+  let shared: LodLiveCount["attribute"] | null = null;
+  clusters.forEach(({ start, count, boundingBox, minScale, maxScale, liveCount }, i) => {
     if (!Number.isInteger(start) || !Number.isInteger(count) || start < 0 || count < 0 || start + count > capacity)
       throw new RangeError(`Lod: cluster ${i}, ${count} instances from ${start}, passes the ${capacity} of its instanceMatrix`);
     if (!isBox3(boundingBox)) throw new TypeError(`Lod: cluster ${i} has no boundingBox`);
     if (minScale !== undefined && !(minScale >= 0 && Number.isFinite(minScale))) throw new RangeError(`Lod: cluster ${i}'s minScale must be finite and >= 0, not ${minScale}`);
     if (maxScale !== undefined && !(maxScale >= (minScale ?? 0) && Number.isFinite(maxScale)))
       throw new RangeError(`Lod: cluster ${i}'s maxScale must be finite and >= its minScale, not ${maxScale}`);
+    if (liveCount) shared = checkLiveCount(liveCount, i, shared);
     if (last[2 * i] !== start || last[2 * i + 1] !== count) changed = true;
   });
   if (!changed) return;
@@ -178,4 +204,14 @@ export function checkClusters(clusters: readonly LodCluster[], capacity: number,
     if (at(clusters, before).start + at(clusters, before).count > at(clusters, after).start)
       throw new RangeError(`Lod: clusters ${before} and ${after} overlap: clusters are disjoint`);
   }
+}
+
+/** Throws unless `liveCount`, cluster `i`'s, is a u32 of a storage attribute, `shared` if another cluster's was; its attribute. */
+function checkLiveCount({ attribute, index }: LodLiveCount, i: number, shared: LodLiveCount["attribute"] | null): LodLiveCount["attribute"] {
+  if (!(isStorageBuffer(attribute) || isStorageInstanced(attribute)) || !(attribute.array instanceof Uint32Array) || attribute.itemSize !== 1)
+    throw new TypeError(`Lod: cluster ${i}'s liveCount.attribute must be a storage attribute of one u32 per item`);
+  if (!Number.isInteger(index) || index < 0 || index >= attribute.count)
+    throw new RangeError(`Lod: cluster ${i}'s liveCount.index, ${index}, is not one of its attribute's ${attribute.count} items`);
+  if (shared && shared !== attribute) throw new TypeError(`Lod: cluster ${i}'s liveCount.attribute differs from another cluster's: a Lod's clusters share one`);
+  return attribute;
 }
