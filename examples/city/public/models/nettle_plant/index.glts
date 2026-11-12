@@ -1,0 +1,51 @@
+import { isPreview, loadingManager, onDispose, scene } from "@drawcall/glts";
+import { CachedLodLoader, foliageLevels, foliageModel, Lod, type LodLevel } from "@drawcall/lod";
+import * as THREE from "three/webgpu";
+
+// Poly Haven's nettle (scripts/fetch-assets.ts fetches it), ?variant=medium or tall, at levels of detail: the scan, a
+// detailed hemispherical impostor, a 64 px one from 60 px, gone below 2 px. Its leaves are foliage; every level casts
+// and receives shadows, both sides of its faces.
+/** How light passes through its leaves. */
+const FOLIAGE = { translucency: 0.6 };
+const loader = new CachedLodLoader(loadingManager, {
+  onLevel: (object) => {
+    foliageModel(object, FOLIAGE);
+    foliageLevels(object, FOLIAGE);
+    object.traverse((node) => {
+      node.castShadow = node.receiveShadow = true;
+      if (node instanceof THREE.Mesh) for (const material of [node.material].flat()) material.shadowSide = THREE.DoubleSide;
+    });
+  },
+});
+const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
+  medium: () =>
+    loader.loadAsync({
+      url: "../../assets/models/nettle_plant/nettle_plant_medium_a_LOD0.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", maxPixels: 200 },
+        { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
+        { type: "empty", maxPixels: 2 },
+      ],
+    }),
+  tall: () =>
+    loader.loadAsync({
+      url: "../../assets/models/nettle_plant/nettle_plant_tall_a_LOD0.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", maxPixels: 200 },
+        { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
+        { type: "empty", maxPixels: 2 },
+      ],
+    }),
+};
+const variant = new URL(import.meta.url).searchParams.get("variant") ?? "medium";
+const load = LADDERS[variant];
+if (!load) throw new Error(`nettle_plant: variant must be medium or tall, not ${variant}`);
+const lod = new Lod(await load(), 1, { manager: loadingManager });
+scene.add(lod);
+onDispose(() => lod.dispose());
+
+if (isPreview) {
+  const sun = new THREE.DirectionalLight("white", 3);
+  sun.position.set(4, 6, 3);
+  scene.add(sun, sun.target, new THREE.HemisphereLight("#dbe6f5", "#5b5140", 1.5));
+}

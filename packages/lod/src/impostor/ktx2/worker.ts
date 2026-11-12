@@ -7,8 +7,6 @@ export const url = import.meta.url;
 
 const scope: unknown = Reflect.get(globalThis, "WorkerGlobalScope");
 if (typeof scope === "function" && globalThis instanceof scope) {
-  // The encoder reports every image's progress on stdout, which Emscripten writes to console.log; nothing else here logs.
-  console.log = () => {};
   addEventListener("message", (event: MessageEvent<Job>) => {
     encode(event.data).then(
       (file) => reply({ file }, [file.buffer]),

@@ -18,8 +18,8 @@ function slot<T extends "bool" | "vec3" | "vec4">(node: Node, type: T, builder: 
 }
 
 /**
- * The copy of `material` (or of the material it copies) a level of a Lod or
- * InstancedLod draws with: it keeps only the pixels of its draw (see fade.ts), tints by
+ * The copy of `material` (or of the material it copies) a level of a Lod draws
+ * with: it keeps only the pixels of its draw (see fade.ts), tints by
  * its level, casts nothing into shadow maps too coarse for it and, `swaying`, sways in
  * the wind of whatever object draws it (see Wind). Made once per original and kind, and
  * shared by every level drawing it: what differs per object is read while it renders.

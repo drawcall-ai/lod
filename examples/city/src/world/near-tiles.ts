@@ -1,5 +1,5 @@
 import * as THREE from "three/webgpu";
-import type { InstancedLod, InstancedLodChunkParameters } from "@drawcall/lod";
+import type { LodCluster } from "@drawcall/lod";
 
 /** A tile near the camera, by id, and its distance from it. */
 export interface NearTile {
@@ -7,51 +7,44 @@ export interface NearTile {
   distance: number;
 }
 
-/** What tiles add chunks to: an InstancedLod, or anything holding chunks as one does. */
-export type ChunkHolder = THREE.Object3D & {
-  addChunk(parameters: InstancedLodChunkParameters): unknown;
-  removeChunk(chunk: unknown): void;
-};
-
-/** The chunk a tile adds to one InstancedLod. */
-export interface TileChunk<L extends ChunkHolder = InstancedLod> {
-  lod: L;
-  parameters: InstancedLodChunkParameters;
+/** A cluster a tile adds to `clusters`, those of the instances it is written into. */
+export interface TileCluster {
+  clusters: LodCluster[];
+  cluster: LodCluster;
 }
 
-export interface NearTilesOptions<L extends ChunkHolder = InstancedLod> {
+export interface NearTilesOptions {
   /** The tiles to hold for a camera at `eye`, nearest first. */
   near: (eye: THREE.Vector3) => NearTile[];
-  /** Fills `tile`, the `slot`th filled in this update (below `perFrame`), and gives its chunks. */
-  chunks: (tile: number, slot: number) => TileChunk<L>[];
+  /** Writes `tile`'s instances into slot `slot` (below `room`) and gives the clusters that draw them. */
+  fill: (tile: number, slot: number) => TileCluster[];
   /** The most tiles filled in one update. */
   perFrame: number;
-  /** The most tiles held at once, the nearest (default: every near tile). */
-  room?: number;
+  /** The most tiles held at once, the nearest, each in a slot of its own. */
+  room: number;
 }
 
 /**
- * Instances that exist only near the camera, in tiles: a field or a forest holds far too many for one instance list.
- * Each update lets go of the tiles out of reach and fills up to `perFrame` of the nearest `room` not yet held, the
- * nearest first; each tile filled adds a chunk to the InstancedLods it has instances for. A tile in reach but past the
- * nearest `room` stays until a nearer one fills in its place, the farthest first, so a field shows no holes while its
- * replacements fill a few per frame. The chunks come from the CPU (corn plants, see corn/field.ts) or from a compute pass
- * (forests and ground cover, see planting.ts).
+ * Instances that exist only near the camera, in tiles: a field or a forest holds far too many to draw everywhere. Each
+ * held tile has a slot of `room`, which its instances are written into and its clusters draw. Each update lets go of
+ * the tiles out of reach and fills up to `perFrame` of the nearest `room` not yet held, the nearest first. A tile in
+ * reach but past the nearest `room` stays until a nearer one takes its slot, the farthest first, so a field shows no
+ * holes while its replacements fill a few per frame. The instances are written on the CPU (corn plants, see
+ * corn/field.ts) or by a compute pass (forests and ground cover, see planting.ts).
  */
-export class NearTiles<L extends ChunkHolder = InstancedLod> extends THREE.Group {
+export class NearTiles extends THREE.Group {
   /** Tiles near in the last update, held or not, past `room` too. */
   wanted = 0;
-  /** Per tile held, its chunk in each InstancedLod it fills. */
-  private readonly held = new Map<number, { lod: L; chunk: unknown }[]>();
+  /** Per tile held, its slot and the clusters it added. */
+  private readonly held = new Map<number, { slot: number; clusters: TileCluster[] }>();
+  /** The slots no tile holds, the lowest last. */
+  private readonly free: number[];
   /** The tiles to hold, nearest first. */
   private nearest = new Set<number>();
 
-  constructor(
-    readonly lods: L[],
-    private readonly options: NearTilesOptions<L>,
-  ) {
+  constructor(private readonly options: NearTilesOptions) {
     super();
-    this.add(...lods);
+    this.free = Array.from({ length: options.room }, (_, i) => options.room - 1 - i);
   }
 
   /** Whether every tile to hold is held: diagnostics wait for it without passing the budget per frame. */
@@ -63,35 +56,42 @@ export class NearTiles<L extends ChunkHolder = InstancedLod> extends THREE.Group
 
   /** Call once before rendering a frame, with the camera's position. */
   update(eye: THREE.Vector3): void {
-    const { near, chunks, perFrame, room = Infinity } = this.options;
+    const { near, fill, perFrame, room } = this.options;
     const tiles = near(eye);
     this.wanted = tiles.length;
     this.nearest = new Set(tiles.slice(0, room).map(({ tile }) => tile));
     const reach = new Set(tiles.map(({ tile }) => tile));
     for (const tile of this.held.keys()) if (!reach.has(tile)) this.release(tile);
-    // held past the nearest `room`, nearest first: the last gives its room first
+    // held past the nearest `room`, nearest first: the last gives its slot first
     const spare = tiles.filter(({ tile }) => this.held.has(tile) && !this.nearest.has(tile));
-    let slot = 0;
+    let filled = 0;
     for (const tile of this.nearest) {
-      if (slot === perFrame) return;
+      if (filled === perFrame) return;
       if (this.held.has(tile)) continue;
-      if (this.held.size >= room) {
+      if (this.free.length === 0) {
         const farthest = spare.pop();
         if (!farthest) throw new Error(`NearTiles: ${this.held.size} tiles held, but none past the nearest ${room}`);
         this.release(farthest.tile);
       }
-      this.held.set(
-        tile,
-        chunks(tile, slot++).map(({ lod, parameters }) => ({ lod, chunk: lod.addChunk(parameters) })),
-      );
+      const slot = this.free.pop();
+      if (slot === undefined) throw new Error("NearTiles: a release freed no slot");
+      const clusters = fill(tile, slot);
+      for (const { clusters: into, cluster } of clusters) into.push(cluster);
+      this.held.set(tile, { slot, clusters });
+      filled++;
     }
   }
 
   private release(tile: number): void {
-    const chunks = this.held.get(tile);
-    if (!chunks) throw new Error(`NearTiles: tile ${tile} is not held`);
+    const held = this.held.get(tile);
+    if (!held) throw new Error(`NearTiles: tile ${tile} is not held`);
     this.held.delete(tile);
-    for (const { lod, chunk } of chunks) lod.removeChunk(chunk);
+    this.free.push(held.slot);
+    for (const { clusters, cluster } of held.clusters) {
+      const index = clusters.indexOf(cluster);
+      if (index < 0) throw new Error(`NearTiles: a cluster of tile ${tile} is gone`);
+      clusters.splice(index, 1);
+    }
   }
 }
 

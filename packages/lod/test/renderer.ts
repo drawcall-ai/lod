@@ -1,9 +1,8 @@
-import { RenderTarget, WebGPURenderer, type Camera, type Object3D, type Scene } from "three/webgpu";
+import { RenderTarget, Scene, WebGPURenderer, type Camera, type Object3D } from "three/webgpu";
 import { vi } from "vitest";
-import type { InstancedLod } from "../src/instanced/index.js";
 import type { Lod } from "../src/lod.js";
 import { createBakeRenderer, readBytes } from "../src/bake.js";
-import { LodGpu } from "../src/gpu.js";
+import { rootOf } from "../src/three.js";
 
 /** A WebGPU renderer in the test browser, initialised, its canvas 64 px on the page. */
 export const renderer = new WebGPURenderer({ antialias: false });
@@ -12,10 +11,18 @@ renderer.setClearColor(0x000000, 0);
 document.body.append(renderer.domElement);
 await renderer.init();
 
-/** What every Lod and InstancedLod of the tests shares. */
-export const gpu = new LodGpu(renderer);
+/**
+ * Render the scene holding `lod` (one of its own for the call, if it is in none) to the canvas from `camera`: three
+ * updates it there. Its first render binds it to the renderer and draws nothing of it.
+ */
+export function renderLod(lod: Lod, camera: Camera): void {
+  const root = rootOf(lod);
+  const scene = root === lod ? new Scene().add(lod) : root;
+  renderer.render(scene, camera);
+  if (root === lod) scene.remove(lod);
+}
 
-/** A renderer for bakes, as LodLoader makes one: its canvas, unlike `renderer`'s, is no square a bake frame may match. */
+/** A renderer for bakes, as CachedLodLoader makes one: its canvas, unlike `renderer`'s, is no square a bake frame may match. */
 export const bakeRenderer = await createBakeRenderer();
 
 /** Time for tests that bake or render: slow on a software adapter or a busy machine. */
@@ -39,7 +46,7 @@ export async function render(scene: Scene, camera: Camera, size = 64): Promise<U
 }
 
 /** Render the scene holding this lod each frame until the lod reports the actual installation. */
-export function nextLevel(lod: Lod | InstancedLod, camera: Camera): Promise<void> {
+export function nextLevel(lod: Lod, camera: Camera): Promise<void> {
   return new Promise((resolve, reject) => {
     let frame = 0;
     const clear = () => {
@@ -55,8 +62,7 @@ export function nextLevel(lod: Lod | InstancedLod, camera: Camera): Promise<void
       clear();
       reject(error);
     };
-    let scene: Object3D = lod;
-    while (scene.parent) scene = scene.parent;
+    const scene: Object3D = rootOf(lod);
     const update = () => {
       renderer.render(scene, camera);
       frame = requestAnimationFrame(update);

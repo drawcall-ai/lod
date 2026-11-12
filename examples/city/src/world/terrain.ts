@@ -1,5 +1,5 @@
 import * as THREE from "three/webgpu";
-import { Random } from "../../public/content/random.ts";
+import seedrandom from "seedrandom";
 
 /** Half the edge of the detailed square of ground; the world's content lies within it. */
 export const EXTENT = 2400;
@@ -40,14 +40,14 @@ export class Terrain {
     }
     const { seed, flats, creek } = input;
     this.heights = new Float32Array(n * n);
-    const waves = new Random(seed);
+    const waves = seedrandom(String(seed));
     const terms = Array.from({ length: 6 }, (_, i) => {
-      const angle = waves.range(0, Math.PI * 2);
+      const angle = Math.PI * 2 * waves();
       const wavelength = 2600 / 1.7 ** i;
       return {
         kx: (Math.cos(angle) * 2 * Math.PI) / wavelength,
         kz: (Math.sin(angle) * 2 * Math.PI) / wavelength,
-        phase: waves.range(0, 6.3),
+        phase: 6.3 * waves(),
         amplitude: 12 / 1.6 ** i,
       };
     });

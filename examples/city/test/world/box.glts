@@ -1,0 +1,13 @@
+import { onDispose, scene } from "@drawcall/glts";
+import { Lod } from "@drawcall/lod";
+import * as THREE from "three/webgpu";
+
+// A 1 m box at levels of detail: the asset Scatter's test scatters.
+const box = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial());
+const lod = new Lod([{ object: box }]);
+scene.add(lod);
+onDispose(() => {
+  lod.dispose();
+  box.geometry.dispose();
+  box.material.dispose();
+});

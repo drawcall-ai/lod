@@ -1,18 +1,12 @@
-import { Lod, type LodRequest } from "@drawcall/lod";
-import { foliageLevels } from "../../../public/content/foliage.ts";
-import { LEAF_FOLIAGE } from "../../../public/content/corn/leaf.ts";
-import { FAR_PIXELS, PLANT_GONE, PLANT_PIXELS, type Ladder } from "../../../public/content/ladders.ts";
+import { Lod } from "@drawcall/lod";
 
-/** A corn plant's ladder, in the shape setCutoff moves. Only the source casts shadows. */
-export function plantRequest(ladder: Ladder): LodRequest {
-  return {
-    ...ladder,
-    onLevel: (object, index) => {
-      foliageLevels(object, LEAF_FOLIAGE);
-      if (index > 0) object.castShadow = false;
-    },
-  };
-}
+/**
+ * The thresholds the corn plant's ladder (public/corn/index.glts) is loaded with: where the detailed impostor takes
+ * over from the source, the coarse one from it, and the plant is gone, unless setCutoff moves the last two.
+ */
+const PLANT_PIXELS = 1000;
+const FAR_PIXELS = 350;
+const PLANT_GONE = 215;
 
 /** Leave two complete fades between full geometry and an empty crowded field tile. */
 export function cutoff(squeeze: number): number {

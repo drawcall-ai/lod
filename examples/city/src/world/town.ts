@@ -1,10 +1,13 @@
 import * as THREE from "three/webgpu";
-import type { HouseParams } from "../../public/content/house/params.ts";
-import { SIGN_NAMES } from "../../public/content/ladders.ts";
-import type { Random } from "../../public/content/random.ts";
+import type { HouseParams } from "../../public/house/params.ts";
+import type seedrandom from "seedrandom";
 import { footing, inRect, PAVEMENT, spot, type Rect, type Road, type Spot } from "./plan.ts";
-import { fence, frontHedge, garden } from "./gardens.ts";
+import { fence, frontHedge, garden, type Fixture } from "./gardens.ts";
 import type { Terrain } from "./terrain.ts";
+
+/** The street names on the street signs at the junctions, each a street sign of its own (see props.ts). */
+export const STREET_NAMES = ["Maple St", "Church Rd", "Mill Lane", "Oak Ave", "High St", "Elm St"] as const;
+export type StreetName = (typeof STREET_NAMES)[number];
 
 const BLOCK = { u: 84, v: 64 };
 export const STREET_WIDTH = 7;
@@ -18,8 +21,8 @@ export interface Town {
   paths: Road[];
   /** Where the church stands (its front facing the plaza). */
   church: Spot;
-  /** Garden things by name (see `public/content/garden.ts`): sheds, letterboxes, greenhouses… */
-  garden: Map<string, Spot[]>;
+  /** Garden fixtures by name: sheds, letterboxes, greenhouses… */
+  fixtures: Map<Fixture, Spot[]>;
   /** Clipped hedge sections (2 m, running along the spot's +x). */
   hedges: Spot[];
   /** The east–west axis through the centre: the main road continues it on both sides. */
@@ -27,7 +30,7 @@ export interface Town {
   plaza: Rect;
   houses: { variant: number; spot: Spot }[];
   fences: Spot[];
-  signs: Map<string, Spot[]>;
+  streetSigns: Map<StreetName, Spot[]>;
   models: Map<string, Spot[]>;
 }
 
@@ -37,7 +40,7 @@ export interface Town {
  * behind a front garden with a picket fence; lamps, hydrants, benches, bins, signs and
  * parked cars line the streets.
  */
-export function town(centre: { x: number; z: number; angle: number; radius: number }, variants: HouseParams[], terrain: Terrain, r: Random): Town {
+export function town(centre: { x: number; z: number; angle: number; radius: number }, variants: HouseParams[], terrain: Terrain, r: seedrandom.PRNG): Town {
   const u = new THREE.Vector2(Math.cos(centre.angle), Math.sin(centre.angle));
   const v = new THREE.Vector2(-u.y, u.x);
   const node = (i: number, j: number) => new THREE.Vector2(centre.x, centre.z).addScaledVector(u, i * BLOCK.u).addScaledVector(v, j * BLOCK.v);
@@ -45,16 +48,22 @@ export function town(centre: { x: number; z: number; angle: number; radius: numb
   const exists = (i: number, j: number) => reach(node(i, j)) < centre.radius * (0.85 + 0.3 * Math.sin(i * 1.7 + j * 2.3));
 
   const segments: { a: THREE.Vector2; b: THREE.Vector2; core: boolean }[] = [];
-  const degree = new Map<string, number>();
+  const junctions = new Map<string, { i: number; j: number; streets: number }>();
+  const meet = (i: number, j: number, streets: number) => {
+    const junction = junctions.get(`${i},${j}`) ?? { i, j, streets: 0 };
+    junction.streets += streets;
+    junctions.set(`${i},${j}`, junction);
+  };
   const link = (i: number, j: number, di: number, dj: number) => {
     if (!exists(i, j) || !exists(i + di, j + dj)) return;
     // the centre row is the main road; outer streets drop out now and then
     if (dj === 0 && j === 0) return;
     const a = node(i, j);
     const b = node(i + di, j + dj);
-    if (reach(a.clone().add(b).multiplyScalar(0.5)) > CORE && r.chance(0.18)) return;
+    if (reach(a.clone().add(b).multiplyScalar(0.5)) > CORE && r() < 0.18) return;
     segments.push({ a, b, core: reach(a) < CORE && reach(b) < CORE });
-    for (const key of [`${i},${j}`, `${i + di},${j + dj}`]) degree.set(key, (degree.get(key) ?? 0) + 1);
+    meet(i, j, 1);
+    meet(i + di, j + dj, 1);
   };
   const span = Math.ceil(centre.radius / Math.min(BLOCK.u, BLOCK.v)) + 1;
   for (let j = -span; j <= span; j++)
@@ -64,7 +73,7 @@ export function town(centre: { x: number; z: number; angle: number; radius: numb
     }
   const row = Array.from({ length: 2 * span + 1 }, (_, k) => k - span).filter((i) => exists(i, 0));
   const mainRoad = row.map((i) => node(i, 0));
-  for (const i of row) degree.set(`${i},0`, (degree.get(`${i},0`) ?? 0) + 2);
+  for (const i of row) meet(i, 0, 2);
 
   const roads: Road[] = segments.map((s) => ({ points: [s.a, s.b], width: STREET_WIDTH, kind: "street", pavement: s.core }));
   const plaza: Rect = { x: centre.x, z: centre.z, halfX: 26, halfZ: 22, angle: centre.angle };
@@ -74,19 +83,19 @@ export function town(centre: { x: number; z: number; angle: number; radius: numb
     roads,
     paths: [],
     church: { ...spot(terrain, churchAt.x, churchAt.y, -centre.angle), y: footing(terrain, churchAt.x, churchAt.y, 14) },
-    garden: new Map(),
+    fixtures: new Map(),
     hedges: [],
     mainRoad,
     plaza,
     houses: [],
     fences: [],
-    signs: new Map(),
+    streetSigns: new Map(),
     models: new Map(),
   };
   const add = (id: string, at: Spot) => town.models.set(id, [...(town.models.get(id) ?? []), at]);
 
   // every street, the main road through town included, gets lots on both sides
-  const sides = [...segments, ...mainRoad.slice(1).map((b, k) => ({ a: mainRoad[k] ?? b, b, core: reach(b) < CORE }))];
+  const sides = [...segments, ...[...pairs(mainRoad)].map(([a, b]) => ({ a, b, core: reach(b) < CORE }))];
   const taken: { x: number; z: number; radius: number }[] = [{ x: churchAt.x, z: churchAt.y, radius: 15 }];
   const free = (x: number, z: number, radius: number) =>
     !inRect(plaza, x, z, radius + 4) &&
@@ -105,21 +114,21 @@ export function town(centre: { x: number; z: number; angle: number; radius: numb
         const p = at(t, kerb + 0.4);
         add("street_lamp_01", spot(terrain, p.x, p.y, Math.atan2(out.x, out.y) + Math.PI / 2));
       }
-      if (r.chance(0.4)) place(add, "fire_hydrant", at(r.range(10, length - 10), kerb + 0.5), Math.atan2(-out.x, -out.y), terrain);
-      if (s.core && r.chance(0.5)) {
-        const t = r.range(12, length - 14);
+      if (r() < 0.4) place(add, "fire_hydrant", at(10 + (length - 10 - 10) * r(), kerb + 0.5), Math.atan2(-out.x, -out.y), terrain);
+      if (s.core && r() < 0.5) {
+        const t = 12 + (length - 14 - 12) * r();
         place(add, "painted_wooden_bench", at(t, kerb + (s.core ? 0.9 : 1.6)), Math.atan2(-out.x, -out.y), terrain);
-        place(add, "metal_trash_can", at(t + 1.6, kerb + 0.8), r.range(0, 6.3), terrain);
+        place(add, "metal_trash_can", at(t + 1.6, kerb + 0.8), 6.3 * r(), terrain);
       }
-      if (r.chance(0.15)) place(add, "utility_box_01", at(r.range(8, length - 8), kerb + 0.6), Math.atan2(-out.x, -out.y), terrain);
+      if (r() < 0.15) place(add, "utility_box_01", at(8 + (length - 8 - 8) * r(), kerb + 0.6), Math.atan2(-out.x, -out.y), terrain);
       // lots: a house behind a front garden, fenced along the pavement
       const frontage = s.core ? 12 : 18;
-      for (let t = STREET_WIDTH + 4 + frontage / 2; t < length - STREET_WIDTH - 4 - frontage / 2; t += frontage + r.range(0, 4)) {
-        if (!s.core && r.chance(Math.min(0.85, (reach(at(t, 0)) - CORE) / (centre.radius * 1.4)))) continue;
-        const variant = r.int(0, variants.length - 1);
+      for (let t = STREET_WIDTH + 4 + frontage / 2; t < length - STREET_WIDTH - 4 - frontage / 2; t += frontage + 4 * r()) {
+        if (!s.core && r() < Math.min(0.85, (reach(at(t, 0)) - CORE) / (centre.radius * 1.4))) continue;
+        const variant = Math.floor(variants.length * r());
         const p = variants[variant];
         if (!p) throw new Error(`no house variant ${variant}`);
-        const setback = s.core ? r.range(3, 4.5) : r.range(5, 8);
+        const setback = s.core ? 3 + 1.5 * r() : 5 + 3 * r();
         const c = at(t, kerb + setback + p.depth / 2);
         const radius = Math.hypot(p.width, p.depth) / 2 + 0.8;
         if (!free(c.x, c.y, radius)) continue;
@@ -127,23 +136,22 @@ export function town(centre: { x: number; z: number; angle: number; radius: numb
         const angle = Math.atan2(-out.x, -out.y);
         town.houses.push({ variant, spot: { ...spot(terrain, c.x, c.y, angle), y: footing(terrain, c.x, c.y, radius) } });
         // along the pavement: a picket fence, a clipped hedge, or open lawn
-        const boundary = r.next();
+        const boundary = r();
         if (boundary < 0.45) fence(town.fences, terrain, at, along, t, frontage, kerb + 0.5, side);
         else if (boundary < 0.85) frontHedge(town.hedges, terrain, at, along, t, frontage, kerb + 0.6);
         garden(town, add, terrain, r, { at, along, side, t, frontage, kerb, setback, house: p, angle, core: s.core });
       }
     }
   }
-  // a name sign at the corner of each crossing
-  let names = 0;
-  for (const [key, count] of degree) {
-    if (count < 3) continue;
-    const [i = 0, j = 0] = key.split(",").map(Number);
+  // a street sign at the corner of each junction of three or more streets, the street names taking turns
+  const names = cycle(STREET_NAMES);
+  for (const { i, j, streets } of junctions.values()) {
+    if (streets < 3) continue;
     const p = node(i, j)
       .addScaledVector(u, STREET_WIDTH / 2 + 1)
       .addScaledVector(v, STREET_WIDTH / 2 + 1);
-    const name = SIGN_NAMES[names++ % SIGN_NAMES.length] ?? "Main St";
-    town.signs.set(name, [...(town.signs.get(name) ?? []), spot(terrain, p.x, p.y, centre.angle + r.range(-0.1, 0.1))]);
+    const name = names.next().value;
+    town.streetSigns.set(name, [...(town.streetSigns.get(name) ?? []), spot(terrain, p.x, p.y, centre.angle + (-0.1 + 0.2 * r()))]);
   }
   plazaFurniture(plaza, terrain, add);
   return town;
@@ -181,4 +189,19 @@ function distanceToSegment(x: number, z: number, a: THREE.Vector2, b: THREE.Vect
   const dz = b.y - a.y;
   const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (z - a.y) * dz) / (dx * dx + dz * dz)));
   return Math.hypot(x - a.x - t * dx, z - a.y - t * dz);
+}
+
+/** Each item of `items` with the one after it. */
+function* pairs<T>(items: readonly T[]): Generator<[T, T]> {
+  let previous: T | undefined;
+  for (const item of items) {
+    if (previous !== undefined) yield [previous, item];
+    previous = item;
+  }
+}
+
+/** `items` over and over. */
+function* cycle<T>(items: readonly T[]): Generator<T, never> {
+  if (items.length === 0) throw new Error("cycle: no items");
+  for (;;) yield* items;
 }

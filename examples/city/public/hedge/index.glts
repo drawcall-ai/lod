@@ -1,0 +1,54 @@
+import { gltsLoader, isPreview, loadingManager, onDispose, scene } from "@drawcall/glts";
+import { CachedLodLoader, Lod, type LodLevel } from "@drawcall/lod";
+import * as THREE from "three/webgpu";
+
+// A 2 m section of clipped hedge, ?variant=0 to 2, at levels of detail that keep its outline: source.glts, simplified
+// geometry, then a distant impostor, gone below 3 px. Every level casts with both sides of its faces.
+loadingManager.addHandler(/\.glts$/i, gltsLoader);
+const loader = new CachedLodLoader(loadingManager, {
+  onLevel: (object) =>
+    object.traverse((node) => {
+      if (node instanceof THREE.Mesh) for (const material of [node.material].flat()) material.shadowSide = THREE.DoubleSide;
+    }),
+});
+const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
+  "0": () =>
+    loader.loadAsync({
+      url: "./source.glts?length=2&variant=0",
+      levels: [
+        { type: "simplify", ratio: 0.1, maxPixels: 120 },
+        { type: "impostor", layout: "hemi", maxPixels: 30, resolution: 64 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+  "1": () =>
+    loader.loadAsync({
+      url: "./source.glts?length=2&variant=1",
+      levels: [
+        { type: "simplify", ratio: 0.1, maxPixels: 120 },
+        { type: "impostor", layout: "hemi", maxPixels: 30, resolution: 64 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+  "2": () =>
+    loader.loadAsync({
+      url: "./source.glts?length=2&variant=2",
+      levels: [
+        { type: "simplify", ratio: 0.1, maxPixels: 120 },
+        { type: "impostor", layout: "hemi", maxPixels: 30, resolution: 64 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+};
+const variant = new URL(import.meta.url).searchParams.get("variant") ?? "0";
+const load = LADDERS[variant];
+if (!load) throw new Error(`hedge: variant must be 0, 1 or 2, not ${variant}`);
+const lod = new Lod(await load(), 1, { manager: loadingManager });
+scene.add(lod);
+onDispose(() => lod.dispose());
+
+if (isPreview) {
+  const sun = new THREE.DirectionalLight("white", 3);
+  sun.position.set(4, 6, 3);
+  scene.add(sun, sun.target, new THREE.HemisphereLight("#dbe6f5", "#5b5140", 1.5));
+}

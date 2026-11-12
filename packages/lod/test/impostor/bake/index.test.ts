@@ -1,5 +1,6 @@
 import {
   AdditiveBlending,
+  Box3,
   BoxGeometry,
   BufferGeometry,
   DataTexture,
@@ -20,17 +21,20 @@ import {
   SRGBColorSpace,
   IcosahedronGeometry,
   SphereGeometry,
+  StorageInstancedBufferAttribute,
   TorusKnotGeometry,
+  Vector3,
   type Object3D,
 } from "three/webgpu";
 import { describe, expect, it, vi } from "vitest";
-import { LodGpu } from "../../../src/gpu.js";
+import { Lod } from "../../../src/lod.js";
 import { bakeImpostor } from "../../../src/impostor/bake/index.js";
 import { texelPixels, type Impostor } from "../../../src/impostor/impostor.js";
 import { frameDirection } from "../../../src/impostor/octahedral.js";
 import { ImpostorMesh } from "../../../src/impostor/mesh/index.js";
-import { GPU_TIMEOUT, bakeRenderer, renderer } from "../../renderer.js";
-import { oneChunk } from "../../instances.js";
+import { GPU_TIMEOUT, bakeRenderer, render, renderer } from "../../renderer.js";
+import { disposeCopies } from "../../../src/dispose.js";
+import { lodOf } from "../../instances.js";
 
 const bake = (object: Object3D, layout: Impostor["layout"] = "full") => bakeImpostor(object, bakeRenderer, { layout, resolution: 32 });
 
@@ -272,7 +276,7 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
     await expect(bakeImpostor(new Mesh(new TorusKnotGeometry(), new MeshStandardMaterial()), renderer)).rejects.toThrow(/autoClear.*createBakeRenderer/);
   });
 
-  it("bakes an InstancedLod with every instance at full detail, as the same meshes placed by hand", async () => {
+  it("bakes a Lod the app draws with every instance at full detail, as the same meshes placed by hand", async () => {
     const material = new MeshStandardMaterial({ color: 0x40a060 });
     const spots = [new Matrix4().makeTranslation(-1.5, 0, 0), new Matrix4().makeTranslation(1.5, 0.5, 0), new Matrix4().makeTranslation(0, 0, 1.5)];
     const plain = new Group();
@@ -282,18 +286,59 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
       plain.add(box);
     }
     // Its level 1 would draw a sphere, at any height.
-    // Drawn by the bake's renderer.
-    const on = new LodGpu(bakeRenderer);
-    const field = oneChunk([{ object: new Mesh(new BoxGeometry(), material) }, { object: new Mesh(new SphereGeometry(), material) }], spots, { on });
+    const field = lodOf([{ object: new Mesh(new BoxGeometry(), material) }, { object: new Mesh(new SphereGeometry(), material) }], spots);
     field.forceLevel = 1;
-    const [a, b] = [await bake(plain), await bake(new Group().add(field))];
+    const group = new Group().add(field);
+    const scene = new Scene().add(group);
+    const camera = new PerspectiveCamera(50, 1, 0.1, 100);
+    camera.position.z = 8;
+    // The app's renderer draws it, then the bake's renderer draws a copy; the app's draws on after.
+    await render(scene, camera);
+    const [a, b] = [await bake(plain), await bake(group)];
+    await render(scene, camera);
+    expect(field.error).toBeUndefined();
     field.dispose();
-    on.dispose();
     expect(b.box).toEqual(a.box);
     const [left, right] = [base(a), base(b)];
     let differing = 0;
     for (let i = 0; i < left.length; i++) if (Math.abs((left[i] ?? 0) - (right[i] ?? 0)) > 8) differing++;
     expect(differing / left.length).toBeLessThan(0.01);
+  });
+
+  it("bakes a copy of the Lods in it, at level 0, holding their levels only while it bakes", { timeout: GPU_TIMEOUT }, async () => {
+    let held = 0;
+    const hold = () => {
+      held++;
+      return () => void held--;
+    };
+    const material = new MeshStandardMaterial();
+    const lod = new Lod([{ object: new Mesh(new BoxGeometry(), material), hold }]);
+    const field = lodOf([{ object: new Mesh(new BoxGeometry(), material) }], [new Matrix4().makeTranslation(2, 0, 0)]);
+    const subject = new Group().add(lod, new Group().add(field));
+    // The copy draws plain meshes: nothing sorts.
+    const sorts = vi.spyOn(bakeRenderer, "compute");
+    try {
+      await bake(subject);
+      expect(sorts).not.toHaveBeenCalled();
+      expect(held).toBe(1);
+    } finally {
+      sorts.mockRestore();
+      disposeCopies(subject);
+    }
+    expect(held).toBe(0);
+  });
+
+  it("loads the deferred level 0 of a Lod in it, and refuses a Lod whose instances are in storage", async () => {
+    const material = new MeshStandardMaterial();
+    const box = new Box3(new Vector3(-0.5, -0.5, -0.5), new Vector3(0.5, 0.5, 0.5));
+    const lod = new Lod([{ load: async () => new Mesh(new BoxGeometry(), material), maxPixels: Infinity, box }]);
+    try {
+      expect(coverage(await bake(new Group().add(lod)))).toBeGreaterThan(0.1);
+      lod.instanceMatrix = new StorageInstancedBufferAttribute(new Float32Array(16), 16);
+      await expect(bake(lod)).rejects.toThrow(/storage instanceMatrix/);
+    } finally {
+      lod.dispose();
+    }
   });
 
   it("refuses ImpostorMeshes, which have no surface to bake", async () => {

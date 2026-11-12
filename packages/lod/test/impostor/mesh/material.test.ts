@@ -19,13 +19,13 @@ import {
 import { CSMShadowNode } from "three/addons/csm/CSMShadowNode.js";
 import { expect, it, vi } from "vitest";
 import { fadeSourceOf, setFadeSource, type InstanceSlots } from "../../../src/levels/fade.js";
-import type { InstancedLod } from "../../../src/instanced/index.js";
+import type { Lod } from "../../../src/lod.js";
 import { bakeImpostor } from "../../../src/impostor/bake/index.js";
 import { ImpostorMesh, impostorInstances } from "../../../src/impostor/mesh/index.js";
-import { Lod } from "../../../src/lod.js";
-import { GPU_TIMEOUT, bakeRenderer, render, renderer, eventually, gpu } from "../../renderer.js";
-import { chunkOf, oneChunk } from "../../instances.js";
+import { GPU_TIMEOUT, bakeRenderer, render, renderer, eventually } from "../../renderer.js";
+import { lodOf } from "../../instances.js";
 import { must } from "../../must.js";
+import { drawnMeshes } from "../../instanced/fixture.js";
 
 const at = (x: number, y: number, z = 0) => new Matrix4().makeTranslation(x, y, z);
 const camera = () => {
@@ -35,26 +35,30 @@ const camera = () => {
   return camera;
 };
 /**
- * Slots for `lod`'s card in which every slot of every camera's lists draws instance `only` of its chunk, unfaded, the
+ * Slots for `lod`'s card in which every slot of every camera's lists draws instance `only`, unfaded, the
  * card's own draws read from `drawn`: what a draw reads as bindings it has not drawn with.
  */
 async function drawingOnly(
-  lod: InstancedLod,
+  lod: Lod,
   camera: Camera,
   only: number,
-  drawn: (camera: Camera) => InstanceSlots,
-): Promise<(camera: Camera) => InstanceSlots> {
-  const card = must(lod.children[0]);
+  drawn: (camera: Camera) => InstanceSlots | null,
+): Promise<(camera: Camera) => InstanceSlots | null> {
+  const card = must(drawnMeshes(lod)[0]);
   if (!(card instanceof ImpostorMesh)) throw new Error("not a card");
   const real = drawn(camera);
+  if (!real) throw new Error("the card has not sorted yet");
   const listed = new Uint32Array(await renderer.getArrayBufferAsync(real.indices));
   const matrices = new Float32Array(await renderer.getArrayBufferAsync(card.instanceMatrix));
-  const { elements } = chunkOf(lod).getMatrixAt(only, new Matrix4());
+  const { elements } = lod.getMatrixAt(only, new Matrix4());
   const index = listed.find((i) => [12, 13, 14].every((e) => matrices[i * 16 + e] === elements[e]));
   if (index === undefined) throw new Error(`instance ${only} is not listed`);
   const indices = new StorageBufferAttribute(new Uint32Array(listed.length).fill(index), 1);
   const fades = new StorageBufferAttribute(new Float32Array(listed.length), 1);
-  return (other) => ({ indices, fades, args: drawn(other).args });
+  return (other) => {
+    const slots = drawn(other);
+    return slots && { indices, fades, args: slots.args };
+  };
 }
 
 const pixel = (pixels: Uint8Array, x: number, y: number) => {
@@ -75,77 +79,59 @@ const color = (pixels: Uint8Array, x: number, y: number, expected: "white" | "re
 };
 
 it.each([false, true])(
-  "shares one impostor shader across InstancedLod and single bindings (first draw colored: %s)",
+  "shares one impostor shader across Lods (first draw colored: %s)",
   { timeout: GPU_TIMEOUT },
   async (colored) => {
     const source = new Mesh(new BoxGeometry(1.5, 1.5, 1.5), new MeshStandardMaterial());
     const template = new ImpostorMesh(await bakeImpostor(source, bakeRenderer, { frames: 4, resolution: 16 }));
     const disposed = vi.fn();
     template.material.addEventListener("dispose", disposed);
-    const left = oneChunk([{ object: template }], [at(-2, 1), at(-2, -1)], {
+    const left = lodOf([{ object: template }], [at(-2, 1), at(-2, -1)], {
       colors: colored ? [new Color("red"), new Color("green")] : [new Color("white"), new Color("white")],
     });
-    const right = oneChunk(
+    const right = lodOf(
       [{ object: template }],
       [0, 1, 2].map((index) => at(2, 2 - index * 2)),
       { colors: colored ? undefined : [0, 1, 2].map(() => new Color("blue")) },
     );
-    const lod = new Lod([{ object: template }], gpu);
-    const single = lod.levels[0]?.object;
-    if (!(single instanceof ImpostorMesh)) throw new Error("Missing single card");
-    const scene = new Scene().add(left, right, lod, new AmbientLight(0xffffff, 3));
+    const scene = new Scene().add(left, right, new AmbientLight(0xffffff, 3));
     const eye = camera();
     const setup = vi.spyOn(template.material, "setup");
     try {
+      // The first render tells the Lods their renderer, and draws nothing of them.
+      await render(scene, eye);
       let pixels = await render(scene, eye);
-      const first = left.children[0];
-      if (!(first instanceof ImpostorMesh)) throw new Error("missing InstancedLod card");
+      const first = drawnMeshes(left)[0];
+      if (!(first instanceof ImpostorMesh)) throw new Error("missing card");
       expect(first.count).toBe(1);
       expect(template.count).toBe(1);
       expect(setup).toHaveBeenCalledOnce();
       expect(setup.mock.calls[0]?.[0].object).toBe(first);
       color(pixels, -2, 1, colored ? "red" : "white");
       color(pixels, 2, 0, colored ? "white" : "blue");
-      color(pixels, 0, 0, "white");
 
       const version = template.material.version;
-      const chunk = chunkOf(left);
-      chunk.setColorAt(0, new Color("red"));
-      chunk.setColorAt(1, new Color(0, 1, 0));
-      if (chunk.instanceColor) chunk.instanceColor.needsUpdate = true;
+      left.setColorAt(0, new Color("red"));
+      left.setColorAt(1, new Color(0, 1, 0));
+      if (left.instanceColor) left.instanceColor.needsUpdate = true;
       pixels = await render(scene, eye);
       color(pixels, -2, 1, "red");
       color(pixels, -2, -1, "green");
       color(pixels, 2, 0, colored ? "white" : "blue");
 
-      // copy replaces a previously bound matrix buffer; adding color replaces its
-      // a white default. Both changes must reach already-compiled bindings.
-      const oldMatrix = single.instanceMatrix;
-      template.setMatrixAt(0, at(0, -2));
-      template.setColorAt(0, new Color(0, 1, 0));
-      single.copy(template);
-      expect(single.instanceMatrix).not.toBe(oldMatrix);
-      pixels = await render(scene, eye);
-      color(pixels, 0, 0, "empty");
-      color(pixels, 0, -2, "green");
-      color(pixels, 2, 0, colored ? "white" : "blue");
-
       const draw = fadeSourceOf(first);
-      if (draw?.kind !== "instances") throw new Error("missing InstancedLod fade");
-      if (!draw.slots) throw new Error("missing InstancedLod slots");
+      if (!draw?.slots) throw new Error("missing slots");
       // Instance 1 hidden: every slot draws instance 0.
       setFadeSource(first, { ...draw, slots: await drawingOnly(left, eye, 0, draw.slots) });
       pixels = await render(scene, eye);
       color(pixels, -2, 1, "red");
       color(pixels, -2, -1, "empty");
-      color(pixels, 0, -2, "green");
       expect(template.material.version).toBe(version);
       expect(setup).toHaveBeenCalledOnce();
     } finally {
       setup.mockRestore();
       left.dispose();
       right.dispose();
-      lod.dispose();
       // The template is the caller's: the Lods free only their copies.
       expect(disposed).not.toHaveBeenCalled();
       template.dispose();
@@ -156,17 +142,16 @@ it.each([false, true])(
   },
 );
 
-it("shares shadow shader builds while each InstancedLod and single card holds its own matrix and fade buffers", { timeout: GPU_TIMEOUT }, async () => {
+it("shares shadow shader builds while each Lod holds its own matrix and fade buffers", { timeout: GPU_TIMEOUT }, async () => {
   const source = new Mesh(new BoxGeometry(1.5, 1.5, 1.5), new MeshStandardMaterial());
   const template = new ImpostorMesh(await bakeImpostor(source, bakeRenderer, { frames: 4, resolution: 16 }));
   template.castShadow = true;
-  const left = oneChunk([{ object: template }], [at(-3, 0), at(-3, 0, 2)]);
-  const right = oneChunk(
+  const left = lodOf([{ object: template }], [at(-3, 0), at(-3, 0, 2)]);
+  const right = lodOf(
     [{ object: template }],
     [0, 1, 2].map((index) => at(3, 0, 2 - index * 2)),
   );
-  const lod = new Lod([{ object: template.clone() }], gpu);
-  for (const root of [left, right, lod])
+  for (const root of [left, right])
     root.traverse((object) => {
       if (object instanceof Mesh) object.layers.set(1);
     });
@@ -184,7 +169,7 @@ it("shares shadow shader builds while each InstancedLod and single card holds it
   eye.position.set(0, 20, 0);
   eye.up.set(0, 0, -1);
   eye.lookAt(0, 0, 0);
-  const scene = new Scene().add(left, right, lod, ground, sun, sun.target, new AmbientLight(0xffffff, 0.2));
+  const scene = new Scene().add(left, right, ground, sun, sun.target, new AmbientLight(0xffffff, 0.2));
   const shadow = vi.spyOn(NodeMaterial.prototype, "setup");
   // The shadow maps' own builds: compileAsync prepares a level's draws with copies of the shadow material (see compile/).
   const copy = (material: Material) => Object.getOwnPropertyDescriptor(material, "side")?.get !== undefined;
@@ -193,15 +178,16 @@ it("shares shadow shader builds while each InstancedLod and single card holds it
   const enabled = renderer.shadowMap.enabled;
   renderer.shadowMap.enabled = true;
   try {
+    // The first render learns the renderer; shadow maps redraw in the next frame.
+    await render(scene, eye);
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     let pixels = await render(scene, eye);
     const lit = pixel(pixels, 0, 4)[0] ?? 0;
-    for (const x of [-3, 0, 3]) expect(pixel(pixels, x, 0)[0]).toBeLessThan(lit * 0.7);
+    for (const x of [-3, 3]) expect(pixel(pixels, x, 0)[0]).toBeLessThan(lit * 0.7);
     expect(builds()).toHaveLength(1);
-    const first = left.children[0];
-    if (!first) throw new Error("missing InstancedLod card");
+    const first = must(drawnMeshes(left)[0]);
     const draw = fadeSourceOf(first);
-    if (draw?.kind !== "instances") throw new Error("missing InstancedLod fade");
-    if (!draw.slots) throw new Error("missing InstancedLod slots");
+    if (!draw?.slots) throw new Error("missing slots");
     // Instance 0 hidden: every slot draws instance 1.
     setFadeSource(first, { ...draw, slots: await drawingOnly(left, sun.shadow.camera, 1, draw.slots) });
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
@@ -209,14 +195,12 @@ it("shares shadow shader builds while each InstancedLod and single card holds it
     expect(pixel(pixels, -3, 0)[0]).toBeGreaterThan(lit * 0.9);
     expect(pixel(pixels, -3, -2)[0]).toBeLessThan(lit * 0.7);
     expect(pixel(pixels, 3, 0)[0]).toBeLessThan(lit * 0.7);
-    expect(pixel(pixels, 0, 0)[0]).toBeLessThan(lit * 0.7);
     expect(builds()).toHaveLength(1);
   } finally {
     shadow.mockRestore();
     renderer.shadowMap.enabled = enabled;
     left.dispose();
     right.dispose();
-    lod.dispose();
     ground.geometry.dispose();
     ground.material.dispose();
     source.geometry.dispose();
@@ -259,7 +243,7 @@ it("holds shared shading's placements and colours separate in direct light", { t
   source.material.dispose();
 });
 
-it("holds shared InstancedLods' compiled main and shadow bindings valid when a deferred level installs", { timeout: GPU_TIMEOUT }, async () => {
+it("holds Lods' shared compiled main and shadow bindings valid when a deferred level installs", { timeout: GPU_TIMEOUT }, async () => {
   const template = new Mesh(new BoxGeometry(2, 2, 2), new MeshStandardMaterial());
   template.castShadow = true;
   const data = await bakeImpostor(template, bakeRenderer, { frames: 4, resolution: 16 });
@@ -281,8 +265,8 @@ it("holds shared InstancedLods' compiled main and shadow bindings valid when a d
   };
   // A given coarsest level draws from the start, so the source draws before the deferred level installs.
   const coarsest = { object: new Mesh(new BoxGeometry(2, 2, 2), template.material), maxPixels: 10 };
-  const a = oneChunk([{ object: template }, deferred, coarsest], [new Matrix4().makeScale(3, 3, 3).setPosition(-6, 0, 2)]),
-    b = oneChunk([{ object: template }, deferred, coarsest], [new Matrix4().makeScale(3, 3, 3).setPosition(6, 0, 2)]);
+  const a = lodOf([{ object: template }, deferred, coarsest], [new Matrix4().makeScale(3, 3, 3).setPosition(-6, 0, 2)]),
+    b = lodOf([{ object: template }, deferred, coarsest], [new Matrix4().makeScale(3, 3, 3).setPosition(6, 0, 2)]);
   a.forceLevel = b.forceLevel = 0;
   const ground = new Mesh(new PlaneGeometry(32, 32).rotateX(-Math.PI / 2), new MeshStandardMaterial({ color: 0xffffff, roughness: 1 }));
   ground.position.y = -4;
@@ -301,21 +285,22 @@ it("holds shared InstancedLods' compiled main and shadow bindings valid when a d
   camera.updateMatrixWorld();
   renderer.shadowMap.enabled = true;
   try {
+    await render(scene, camera);
     const before = await render(scene, camera);
     expect(a.levels[1]?.object).toBeUndefined();
     a.forceLevel = b.forceLevel = 1;
     await eventually(() => {
       renderer.render(scene, camera);
-      expect(a.children).toHaveLength(3);
-      expect(b.children).toHaveLength(3);
+      expect(drawnMeshes(a)).toHaveLength(3);
+      expect(drawnMeshes(b)).toHaveLength(3);
     });
     a.forceLevel = b.forceLevel = 0;
     // Shadow nodes update once per animation frame; discard the last forced
     // coarse shadow before comparing the source's picture.
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     const after = await render(scene, camera);
-    expect(a.children).toHaveLength(3);
-    expect(b.children).toHaveLength(3);
+    expect(drawnMeshes(a)).toHaveLength(3);
+    expect(drawnMeshes(b)).toHaveLength(3);
     expect(after).toEqual(before);
     a.forceLevel = b.forceLevel = 1;
     const cards = await render(scene, camera);

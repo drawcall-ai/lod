@@ -1,0 +1,8 @@
+// The building's closed low shell, which its baked level's windows and walls are baked onto.
+import { disposeRecursive, onDispose, scene } from "@drawcall/glts";
+import { variantOf } from "./model.ts";
+
+const { params, low } = variantOf(import.meta.url);
+const shell = low(params);
+onDispose(() => disposeRecursive(scene));
+scene.add(shell);

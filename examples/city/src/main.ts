@@ -6,11 +6,9 @@
 // ?wind=0 builds vegetation without wind, for a static performance baseline.
 // Forests and ground cover are planted on the GPU in the tiles near the camera (world/near-tiles.ts, world/planting.ts).
 // window.city exposes the tour and frame measurements to scripts/tour.ts.
-import { textures } from "./loading.ts";
 import * as THREE from "three/webgpu";
-import { InstancedLod, Lod, LodGpu, Wind } from "@drawcall/lod";
-import { Library } from "../public/content/materials.ts";
-import { number } from "../public/content/parameters.ts";
+import { Lod, Wind } from "@drawcall/lod";
+import { Textures } from "./render/materials.ts";
 import { terrainMaterial } from "./render/ground/material.ts";
 import { Fly } from "./flight/fly.ts";
 import { route } from "./flight/route.ts";
@@ -26,18 +24,26 @@ import { groundCover } from "./world/ground-cover.ts";
 import { water } from "./world/creek.ts";
 import { houses } from "./world/houses.ts";
 import { NearTiles } from "./world/near-tiles.ts";
-import { TOWN } from "./world/plan.ts";
-import { loadPlan } from "./world/plan/cache.ts";
+import { CachedPlanLoader } from "./world/plan/loader.ts";
+import { plan, TOWN } from "./world/plan.ts";
+import { manager } from "./loading.ts";
 import { EXTENT } from "./world/terrain.ts";
 import { props } from "./world/props.ts";
 import { roads } from "./world/roads.ts";
 import { trees } from "./world/trees.ts";
 
+/** The default seed's plan is cached: planning takes seconds. */
+const loadPlan = async (seed: number) => (seed === 7 ? new CachedPlanLoader().loadAsync({ seed: 7 }) : plan(seed));
+
 const params = new URLSearchParams(location.search);
 const shot = params.has("shot");
 const terrain = params.get("terrain") !== "0";
 Lod.debug = params.has("debug");
-Lod.quality = number(params, "quality", 1, 0.01, 100);
+const quality = params.get("quality") ?? "1";
+if (!(/^\d+(\.\d+)?$/.test(quality) && Number(quality) >= 0.01 && Number(quality) <= 100)) throw new Error(`quality must be in [0.01, 100], not ${quality}`);
+Lod.quality = Number(quality);
+const seed = params.get("seed") ?? "7";
+if (!(/^\d+$/.test(seed) && Number(seed) < 2 ** 32)) throw new Error(`seed must be a whole number below 2^32, not ${seed}`);
 if (shot) document.body.classList.add("shot");
 const started = performance.now();
 const loadStages: Record<string, number> = {};
@@ -53,25 +59,21 @@ const lodManager = new THREE.LoadingManager();
 let loading = false;
 lodManager.onStart = () => (loading = true);
 lodManager.onLoad = () => (loading = false);
-THREE.DefaultLoadingManager.onProgress = (url, loaded, total) => {
+manager.onProgress = (url, loaded, total) => {
   ui.progress(`Loading ${url.split("/").pop()} (${loaded}/${total})`, (0.85 * loaded) / total);
 };
 
-const library = new Library(THREE.DefaultLoadingManager, new URL("/assets/", location.href).href, textures);
-await library.load();
+const textures = new Textures(manager);
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.5, 60000);
 const scene = new THREE.Scene();
 const pipeline = await Pipeline.create(scene, camera, Math.min(devicePixelRatio, 2));
-// What every Lod and InstancedLod of the city shares. Its pool has room for what the InstancedLods' lists hold at most
-// together (about 342k instances in 5.8k chunks), within one storage binding of 128 MiB of matrices.
-const gpu = new LodGpu(pipeline.renderer, { maxInstanceCount: 350_000, maxChunkCount: 6000 });
 loaded("renderer");
 // hidden until the world is built: an empty canvas would sit over the page meanwhile
 pipeline.canvas.style.visibility = "hidden";
 document.body.prepend(pipeline.canvas);
 
 // late afternoon: the sun low in the south-west, raking across the town
-const [world, sky] = await Promise.all([loadPlan(number(params, "seed", 7, 0, 2 ** 32 - 1, true)), loadSky(library, pipeline.renderer, 2.4)]);
+const [world, sky] = await Promise.all([loadPlan(Number(seed)), loadSky(manager, pipeline.renderer, 2.4)]);
 loaded("plan and sky");
 scene.background = sky.background;
 scene.environment = sky.environment;
@@ -93,22 +95,22 @@ scene.fogNode = haze(
 const zones = { fields: world.fields, forests: world.forests, parcels: { texture: world.land.texture(), extent: EXTENT }, town: TOWN };
 const wind = params.get("wind") === "0" ? undefined : new Wind({ direction: [1, 0.35], speed: 0.22 });
 const content = Promise.all([
-  houses(world, gpu),
-  trees(world, gpu, wind),
-  props(world, gpu),
-  Corn.build(world, gpu),
-  groundCover(library, world, zones, camera, gpu, wind),
+  houses(world),
+  trees(world, pipeline.renderer, wind),
+  props(world),
+  Corn.build(world),
+  groundCover(textures, world, zones, camera, pipeline.renderer, wind),
 ]);
 // Let cache discovery start before constructing the ground on this thread.
 await new Promise<void>((resolve) => setTimeout(resolve, 0));
 if (terrain) {
-  const ground = world.terrain.mesh(terrainMaterial(library, zones));
+  const ground = world.terrain.mesh(terrainMaterial(textures, zones));
   // the ground's shader is the costliest per pixel and much of it ends up under corn, grass
   // and houses: drawn last of the opaque objects, depth testing skips what they cover
   ground.renderOrder = 1;
   scene.add(ground);
 }
-scene.add(roads(library, world), water(world.terrain));
+scene.add(roads(textures, world), water(world.terrain));
 
 const [buildings, forest, objects, corn, herbage] = await content;
 loaded("content");
@@ -117,11 +119,11 @@ if (wind) corn.applyWind(wind);
 scene.updateMatrixWorld(true);
 scene.matrixWorldAutoUpdate = false;
 sun.castBy(scene);
-const lods: (Lod | InstancedLod)[] = [];
+const lods: Lod[] = [];
 const nearTiles: NearTiles[] = [];
 scene.traverse((object) => {
   if (object instanceof NearTiles) nearTiles.push(object);
-  if (!(object instanceof Lod || object instanceof InstancedLod)) return;
+  if (!(object instanceof Lod)) return;
   lods.push(object);
   object.manager = lodManager;
   object.addEventListener("levelschange", () => {
@@ -134,8 +136,8 @@ const kinds = [
   { name: "houses", roots: [buildings] },
   { name: "trees", roots: [forest] },
   { name: "props", roots: [objects] },
-  { name: "corn covers", roots: corn.covers.map((cover) => cover.lod) },
-  { name: "corn plants", roots: [corn.plants, corn.hero] },
+  { name: "corn blocks", roots: corn.blocks.map((block) => block.lod) },
+  { name: "corn plants", roots: [...corn.plantLods, corn.hero] },
   { name: "ladybird", roots: [corn.ladybird] },
   { name: "ground cover", roots: [herbage] },
 ];
@@ -203,7 +205,7 @@ function frame(dt: number): void {
 fitCamera(focus);
 sun.update(camera, focus, clearance());
 ui.progress("Preparing the first view…", 0.85);
-await library.ready(scene);
+await textures.ready();
 loaded("textures");
 await pipeline.compile();
 loaded("compiled");

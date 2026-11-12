@@ -74,7 +74,7 @@ export class ImpostorMesh extends Mesh<PlaneGeometry, ImpostorMaterial> {
   /** RGB (and a pad) per instance, once `setColorAt` was called. */
   instanceColor: StorageInstancedBufferAttribute | null = null;
   boundingSphere: Sphere | null = null;
-  /** Where the card sits within an instance's space (InstancedLod places it). */
+  /** Where the card sits within an instance's space (a Lod places it). */
   readonly placement = new Matrix4();
   private disposed = false;
 
@@ -92,7 +92,7 @@ export class ImpostorMesh extends Mesh<PlaneGeometry, ImpostorMaterial> {
     this.count = count;
     this.instanceMatrix = new StorageInstancedBufferAttribute(count, 16);
     for (let i = 0; i < count; i++) scratch.identity().toArray(this.instanceMatrix.array, i * 16);
-    setFadeSource(this, { kind: "instances", slots: null, radius: boundingRadius(impostor.box), tint: new Color(1, 1, 1) });
+    setFadeSource(this, { slots: null, radius: boundingRadius(impostor.box), tint: new Color(1, 1, 1) });
   }
 
   setMatrixAt(index: number, matrix: Matrix4): void {
@@ -190,7 +190,7 @@ const point = new Vector3();
 
 /**
  * An ImpostorMesh like `template` for `count` instances, its card placed by `placement`
- * within each instance's space (instance matrix × placement), as InstancedLod draws it.
+ * within each instance's space (instance matrix × placement), as a Lod draws it.
  * It draws with the template's material, its tint and mip bias included; placement is
  * per draw.
  */

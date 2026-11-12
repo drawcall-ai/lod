@@ -11,13 +11,11 @@ import {
   Scene,
 } from "three/webgpu";
 import { expect, it, vi } from "vitest";
-import { ARRIVAL_MS } from "../../src/levels/manager.js";
 import { Lod } from "../../src/lod.js";
-import { InstancedLod } from "../../src/instanced/index.js";
-import { GPU_TIMEOUT, render, renderer, eventually, gpu } from "../renderer.js";
+import { GPU_TIMEOUT, render, renderer, eventually } from "../renderer.js";
 import { box } from "../box.js";
-import { chunkOf, oneChunk } from "../instances.js";
-import { gatedBox, visibleLevels, waitUntilIdle } from "./fixture.js";
+import { lodOf } from "../instances.js";
+import { gatedBox, waitUntilIdle } from "./fixture.js";
 
 /** Waits as the skill does with one camera of `scene`, compiling it while loading unless `compile` is false. */
 const compileUntilIdle = (scene: Scene, camera: PerspectiveCamera, manager: LoadingManager, compile = true) =>
@@ -29,23 +27,23 @@ const compileUntilIdle = (scene: Scene, camera: PerspectiveCamera, manager: Load
  */
 const placements = ["in sight", "facing away", "directional shadow", "point shadow"] as const;
 
-it.each(["Lod", "InstancedLod"].flatMap((kind) => placements.map((placement) => ({ kind, placement }))))(
-  "holds an item on $kind's manager until the level the camera needs, $placement, has arrived and faded in",
+it.each(placements.map((placement) => ({ placement })))(
+  "holds an item on Lod's manager until the level the camera needs, $placement, has arrived and faded in",
   { timeout: GPU_TIMEOUT },
-  async ({ kind, placement }) => {
+  async ({ placement }) => {
     const shadow = placement.endsWith("shadow");
     renderer.shadowMap.enabled = shadow;
     const { level, load, release } = gatedBox();
     // The box is about 40 px tall: the camera needs the deferred source.
     const levels = [level, { object: box(), maxPixels: 1 }];
     const manager = new LoadingManager();
-    const lod = kind === "Lod" ? new Lod(levels, gpu, { manager }) : oneChunk(levels, 1, { manager });
+    const lod = new Lod(levels, 1, { manager });
     lod.position.z = shadow ? 5 : -5;
     const camera = new PerspectiveCamera(60, 1, 0.1, 100);
     // What a camera requests follows its position, not its frustum.
     if (placement === "facing away") camera.rotation.y = Math.PI;
     const scene = new Scene().add(lod);
-    const seen = new Lod([{ object: box() }], gpu, { manager });
+    const seen = new Lod([{ object: box() }], 1, { manager });
     if (shadow) {
       const lamp = placement === "point shadow" ? new PointLight(0xffffff, 100) : new DirectionalLight();
       lamp.castShadow = true;
@@ -67,8 +65,7 @@ it.each(["Lod", "InstancedLod"].flatMap((kind) => placements.map((placement) => 
       await idle;
       expect(lod.levels[0]?.object).toBeDefined();
       if (placement !== "in sight") return;
-      if (lod instanceof InstancedLod) expect(chunkOf(lod).getLevelAt(0, camera)).toBe(0);
-      else expect(visibleLevels(lod)).toEqual([0]);
+      expect(lod.getLevelAt(0, camera)).toBe(0);
     } finally {
       renderer.shadowMap.enabled = false;
       lod.dispose();
@@ -81,7 +78,7 @@ it("holds a Lod's item while a camera of the current or last round misses a leve
   const { level } = gatedBox();
   const manager = new LoadingManager();
   // The installed coarse box draws from afar; only near does the deferred source draw.
-  const lod = new Lod([level, { object: box(), maxPixels: 10 }], gpu, { manager });
+  const lod = new Lod([level, { object: box(), maxPixels: 10 }], 1, { manager });
   lod.position.z = -50;
   const [main, thumbnail] = [new PerspectiveCamera(60, 1, 0.1, 100), new PerspectiveCamera(60, 1, 0.1, 100)];
   thumbnail.position.z = -45;
@@ -126,7 +123,7 @@ it.each(cases)(
   async ({ leave, back }) => {
     const { level } = gatedBox();
     const manager = new LoadingManager();
-    const lod = new Lod([level, { object: box(), maxPixels: 1 }], gpu, { manager });
+    const lod = new Lod([level, { object: box(), maxPixels: 1 }], 1, { manager });
     lod.position.z = -5;
     const group = new Group().add(lod);
     const camera = new PerspectiveCamera(60, 1, 0.1, 100);
@@ -157,47 +154,11 @@ it.each(cases)(
   },
 );
 
-it("holds a nested Lod's items on its lod's manager until its deferred levels arrive", { timeout: GPU_TIMEOUT }, async () => {
-  const { level, release } = gatedBox();
-  const manager = new LoadingManager();
-  const inner = new Lod([level, { object: box(), maxPixels: 1 }], gpu);
-  const outer = new Lod(
-    [
-      { load: async () => inner, maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) },
-      { object: box(), maxPixels: 1 },
-    ],
-    gpu,
-    { manager },
-  );
-  outer.position.z = -5;
-  const camera = new PerspectiveCamera(60, 1, 0.1, 100);
-  const scene = new Scene().add(outer);
-  try {
-    let settled = false;
-    const idle = compileUntilIdle(scene, camera, manager).then(() => (settled = true));
-    await eventually(() => expect(outer.levels[0]?.object).toBeDefined());
-    await new Promise((resolve) => setTimeout(resolve, 2 * ARRIVAL_MS));
-    expect(settled).toBe(false);
-    release();
-    await idle;
-    const nested = outer.levels[0]?.object;
-    if (!(nested instanceof Lod)) throw new Error("the nested level is not a Lod");
-    expect(visibleLevels(outer)).toEqual([0]);
-    expect(visibleLevels(nested)).toEqual([0]);
-  } finally {
-    outer.dispose();
-  }
-});
-
 it("reports a failed level the camera needs as an item error", { timeout: GPU_TIMEOUT }, async () => {
   const manager = new LoadingManager();
-  const lod = new Lod(
-    [{ load: () => Promise.reject(new Error("load failed")), maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) }],
-    gpu,
-    {
-      manager,
-    },
-  );
+  const lod = new Lod([{ load: () => Promise.reject(new Error("load failed")), maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) }], 1, {
+    manager,
+  });
   lod.position.z = -5;
   const camera = new PerspectiveCamera(60, 1, 0.1, 100);
   const scene = new Scene().add(lod);
@@ -210,13 +171,13 @@ it("reports a failed level the camera needs as an item error", { timeout: GPU_TI
   }
 });
 
-it.each(["Lod", "InstancedLod"])(
-  "fails a %s that a render of a non-Scene root reaches, and loads it in a nested Scene rendered on its own",
+it(
+  "fails a Lod that a render of a non-Scene root reaches, and loads it in a nested Scene rendered on its own",
   { timeout: GPU_TIMEOUT },
-  async (kind) => {
+  async () => {
     const make = (manager: LoadingManager) => {
       const levels = [gatedBox().level, { object: box(), maxPixels: 1 }];
-      const lod = kind === "Lod" ? new Lod(levels, gpu, { manager }) : oneChunk(levels, 1, { manager });
+      const lod = new Lod(levels, 1, { manager });
       lod.position.z = -5;
       return lod;
     };
@@ -227,18 +188,18 @@ it.each(["Lod", "InstancedLod"])(
     const manager = new LoadingManager();
     const { level, release } = gatedBox();
     const levels = [level, { object: box(), maxPixels: 1 }];
-    const nested = kind === "Lod" ? new Lod(levels, gpu, { manager }) : oneChunk(levels, 1, { manager });
+    const nested = new Lod(levels, 1, { manager });
     nested.position.z = -5;
     const inner = new Scene().add(nested);
     new Scene().add(inner);
     try {
-      expect(() => renderer.render(group, camera)).not.toThrow();
+      // The first render learns the renderer; the second asks for the levels.
+      for (let i = 0; i < 2; i++) expect(() => renderer.render(group, camera)).not.toThrow();
       expect(lone.error?.message).toMatch(/render a Scene/);
       expect(report).toHaveBeenCalledOnce();
       release();
       await waitUntilIdle(manager, () => renderer.render(inner, camera));
-      if (nested instanceof InstancedLod) expect(chunkOf(nested).getLevelAt(0, camera)).toBe(0);
-      else expect(visibleLevels(nested)).toEqual([0]);
+      expect(nested.getLevelAt(0, camera)).toBe(0);
     } finally {
       report.mockRestore();
       lone.dispose();
@@ -247,10 +208,10 @@ it.each(["Lod", "InstancedLod"])(
   },
 );
 
-it("ends an InstancedLod's item whose camera also renders another scene into a target each frame", { timeout: GPU_TIMEOUT }, async () => {
+it("ends a Lod's item whose camera also renders another scene into a target each frame", { timeout: GPU_TIMEOUT }, async () => {
   const { level, release } = gatedBox();
   const manager = new LoadingManager();
-  const lod = oneChunk([level, { object: box(), maxPixels: 1 }], 1, { manager });
+  const lod = lodOf([level, { object: box(), maxPixels: 1 }], 1, { manager });
   lod.position.z = -5;
   const camera = new PerspectiveCamera(60, 1, 0.1, 100);
   const scene = new Scene().add(lod);
@@ -261,7 +222,7 @@ it("ends an InstancedLod's item whose camera also renders another scene into a t
       renderer.render(scene, camera);
       void render(other, camera, 16);
     });
-    expect(chunkOf(lod).getLevelAt(0, camera)).toBe(0);
+    expect(lod.getLevelAt(0, camera)).toBe(0);
   } finally {
     lod.dispose();
   }

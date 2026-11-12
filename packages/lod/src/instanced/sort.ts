@@ -1,36 +1,17 @@
-import { StorageInstancedBufferAttribute, type Camera, type Frustum, type Renderer, type Sphere, type Vector3 } from "three/webgpu";
+import { StorageBufferAttribute, StorageInstancedBufferAttribute, type Camera, type Frustum, type IndirectStorageBufferAttribute, type Renderer, type Sphere, type Vector3 } from "three/webgpu";
 import type { d } from "typegpu";
-import type { DrawLevels } from "../levels/draw.js";
+import { MAX_LEVELS, type DrawLevels } from "../levels/draw.js";
 import type { InstanceSlots } from "../levels/fade.js";
 import type { Cull } from "./cull.js";
-import { releaseArrays, type InstancePagePool } from "./pages/index.js";
-import {
-  FLOATS_AT,
-  FLOAT_ROW,
-  INTS_AT,
-  INT_ROW,
-  RowLayout,
-  disposeBuffers,
-  floatsOf,
-  forcedWord,
-  markWords,
-  setSorting,
-  wordsOf,
-  type CameraBuffers,
-  type IndirectDraw,
-} from "./rows.js";
-import { sortPasses, type SortBuffers, type SortPasses } from "./update.js";
+import { FLOATS_AT, INTS_AT, UNLISTED, argsBuffer, countsBuffer, drawWords, floatsBuffer, forcedWord, wordsBuffer, type IndirectDraw } from "./rows.js";
+import { BLOCK, MAX_BLOCKS, sortPasses, type SortPasses } from "./update.js";
 
-// Every InstancedLod of a LodGpu sorts with the same two passes (see update.ts), each its own row of a camera's rows:
-// one renderer.compute call per camera sorts every InstancedLod whose row is due, at the camera's first level mesh
-// draw. A camera's buffers, its rows, lists and indirect draws, are its own, so a camera's sort reads only what its
-// InstancedLods wrote for it; the counts, which the indirect pass clears, and the draws are shared.
-//
-// Where each row's lists and draws lie follows from the rows (see rows.ts): after a row was registered, freed or given
-// draws, every camera sorts every row it holds again with the values it last sorted with, at their new positions, before it
-// next draws.
+// A Lod sorts its instances for each camera with two passes of its own (see update.ts), one renderer.compute call at
+// the camera's first level mesh draw. A camera's buffers, its row, blocks, lists and indirect draws, are its own, so a
+// camera's sort reads only what the Lod wrote for it; the counts, which the indirect pass clears, and the draws are
+// shared. After the draws change, every camera sorts again with the values it last sorted with before it next draws.
 
-/** What one InstancedLod sorts by for a camera, everything in its space. */
+/** What a Lod sorts by for a camera, everything in its space. */
 export interface RowValues {
   levels: d.Infer<typeof DrawLevels>;
   /** The level loading state levelsToDraw reads (see LodLevelLoadManager). */
@@ -48,164 +29,209 @@ export interface RowValues {
   frustum: Frustum;
 }
 
-/** The rows of every InstancedLod of a LodGpu, every camera's buffers, and the passes sorting into them. */
+/** One camera's buffers. */
+interface CameraBuffers {
+  /** Its row's u32s and f32s. */
+  readonly words: StorageBufferAttribute;
+  readonly floats: StorageBufferAttribute;
+  /** The blocks of instances it sorts (see update.ts), and how many. */
+  blocks: StorageBufferAttribute;
+  blockCount: number;
+  /** Its lists: per slot, the instance it draws and its signed fade; `listSize` slots per listed level. */
+  indices: StorageBufferAttribute;
+  fades: StorageBufferAttribute;
+  listSize: number;
+  /** Its indirect draws, five words each, in the order of the draws. */
+  args: IndirectStorageBufferAttribute;
+  /** Whether it sorts at its next draw. */
+  due: boolean;
+}
+
+/** One Lod's sorts: every camera's buffers, and the passes sorting into them. */
 export class Sorter {
-  private readonly layout = new RowLayout();
   private readonly cameras = new Map<Camera, CameraBuffers>();
-  /** Survivors' scaled matrices, made once a row scales them; their CPU array is dropped once a pass wrote them. */
-  private scaled: StorageInstancedBufferAttribute | null = null;
+  private readonly draws: IndirectDraw[] = [];
+  private drawBuffer = drawWords([]);
+  private readonly counts = countsBuffer();
+  /** Survivors' scaled matrices, made once survivors scale; their CPU array is dropped once a pass wrote them. */
+  private scaled: { attribute: StorageInstancedBufferAttribute; capacity: number } | null = null;
   /** Where survivors' scaled matrices go while none scale: never written, as no survivor scales. */
   private readonly unscaled = new StorageInstancedBufferAttribute(new Float32Array(16), 16);
   private passes: SortPasses | null = null;
-  private isDisposed = false;
 
-  constructor(
-    private readonly renderer: Renderer,
-    private readonly pool: InstancePagePool,
-  ) {}
+  /** `listed` tells, as a mask, which levels have an instance list: those that draw something. */
+  constructor(private readonly listed: number) {}
 
-  /** A row for an InstancedLod whose levels of `listed`, a mask, list up to `listSize` instances each. */
-  register(listed: number, listSize: number): number {
-    this.check();
-    return this.layout.register(listed, listSize);
+  /** The meshes draw `draws` too, after those they have; where they start among the draws. */
+  appendDraws(draws: readonly IndirectDraw[]): number {
+    const first = this.draws.length;
+    this.draws.push(...draws);
+    this.drawBuffer.dispose();
+    this.drawBuffer = drawWords(this.draws);
+    for (const buffers of this.cameras.values()) {
+      buffers.args.dispose();
+      buffers.args = argsBuffer(this.draws.length);
+      this.place(buffers);
+      buffers.due = true;
+    }
+    return first;
   }
 
-  /** Free `row`: its InstancedLod is disposed. */
-  unregister(row: number): void {
-    for (const buffers of this.cameras.values()) idle(buffers, row);
-    this.layout.unregister(row);
+  /** Survivors' scaled matrices for `capacity` instances. */
+  scaledMatrices(capacity: number): StorageInstancedBufferAttribute {
+    if (this.scaled?.capacity !== capacity) {
+      this.scaled?.attribute.dispose();
+      this.scaled = { attribute: new StorageInstancedBufferAttribute(new Float32Array(capacity * 16), 16), capacity };
+    }
+    return this.scaled.attribute;
   }
 
-  /** `row` draws `draws` too, after those it has; where they start among its draws. */
-  appendDraws(row: number, draws: readonly IndirectDraw[]): number {
-    return this.layout.appendDraws(row, draws);
+  /** Where `camera`'s lists and indirect draws lie; null before a sort was written for it. */
+  slotsOf(camera: Camera): InstanceSlots | null {
+    const buffers = this.cameras.get(camera);
+    return buffers ? { indices: buffers.indices, fades: buffers.fades, args: { attribute: buffers.args, offset: 0 } } : null;
   }
 
-  /** Survivors' scaled matrices, every pool index's: one buffer, as pool indices are unique to their InstancedLod. */
-  get scaledMatrices(): StorageInstancedBufferAttribute {
-    return (this.scaled ??= new StorageInstancedBufferAttribute(new Float32Array(this.pool.capacity * 16), 16));
-  }
-
-  /** An InstancedLod draws for `camera`: its buffers are made with the first. */
-  hold(camera: Camera): void {
-    this.check();
-    this.layOut();
-    const buffers = this.cameras.get(camera) ?? this.layout.makeBuffers();
-    buffers.users++;
+  /**
+   * Write `values` as what `camera` sorts by, over the instances of `ranges` (start and count, flat), `instances` in
+   * all, sorted at the camera's next draw. Its lists grow to hold them, within `limit` bytes per buffer.
+   */
+  write(camera: Camera, values: RowValues, ranges: readonly number[], instances: number, limit: number): void {
+    const buffers = this.cameras.get(camera) ?? this.makeBuffers();
     this.cameras.set(camera, buffers);
+    if (instances > buffers.listSize) this.grow(buffers, instances, limit);
+    this.writeBlocks(buffers, ranges);
+    const { levels, loaded, before, progress, eye, scale, ortho, cull, source, reach, frustum } = values;
+    const words = buffers.words.array;
+    words.set([levels.count, levels.coarsest, forcedWord(levels.forced)], INTS_AT.levels * 4);
+    words.set([levels.empty, levels.fades, loaded, before], INTS_AT.masks * 4);
+    words.set([Number(ortho), Number(cull !== null), Number(cull?.survivors ?? false)], INTS_AT.flags * 4);
+    this.place(buffers);
+    const floats = buffers.floats.array;
+    floats.set(levels.maxPixels, FLOATS_AT.low * 4);
+    floats.set([eye.x, eye.y, eye.z, scale], FLOATS_AT.eye * 4);
+    floats.set([source.center.x, source.center.y, source.center.z, source.radius], FLOATS_AT.source * 4);
+    floats.set([progress, reach, cull?.near ?? 0, cull?.far ?? 1], FLOATS_AT.values * 4);
+    if (cull) floats.set([cull.eye.x, cull.eye.y, cull.eye.z, 0], FLOATS_AT.cullEye * 4);
+    frustum.planes.forEach(({ normal, constant }, i) => floats.set([normal.x, normal.y, normal.z, constant], (FLOATS_AT.planes + i) * 4));
+    buffers.floats.needsUpdate = true;
+    buffers.due = true;
   }
 
-  /** An InstancedLod stops drawing for `camera`, its row `row` dropped from it; the last frees its buffers. */
-  release(camera: Camera, row: number): void {
+  /** Sort for `camera` on `renderer`, in one compute call, if due: before a level mesh draws for it. */
+  run(renderer: Renderer, camera: Camera, matrices: StorageInstancedBufferAttribute): void {
+    const buffers = this.cameras.get(camera);
+    if (!buffers?.due) return;
+    const sort = {
+      ...buffers,
+      matrices,
+      scaled: this.scaled?.attribute ?? this.unscaled,
+      counts: this.counts,
+      draws: this.drawBuffer,
+    };
+    const passes = (this.passes ??= sortPasses(sort));
+    passes.point(sort, buffers.blockCount);
+    renderer.compute([passes.update, passes.indirect]);
+    buffers.due = false;
+    // The pass made the scaled matrices' buffer: only the GPU writes them.
+    if (this.scaled && this.scaled.attribute.array.length > 0) this.scaled.attribute.array = new Float32Array(0);
+  }
+
+  /** `camera` no longer draws the Lod: its buffers are freed. */
+  release(camera: Camera): void {
     const buffers = this.cameras.get(camera);
     if (!buffers) return;
-    idle(buffers, row);
-    if (--buffers.users > 0) return;
     this.cameras.delete(camera);
     disposeBuffers(buffers);
   }
 
-  /** Where `row`'s lists and draws lie for `camera`. */
-  slotsOf(camera: Camera, row: number): InstanceSlots {
-    this.layOut();
-    const { indices, fades, args } = this.buffersOf(camera);
-    return { indices, fades, args: { attribute: args, offset: this.layout.argsOffset(row) } };
-  }
-
-  /** Write `values` as what `row` sorts by for `camera`, sorted at the camera's next draw. */
-  write(camera: Camera, row: number, values: RowValues): void {
-    this.layOut();
-    const buffers = this.buffersOf(camera);
-    const { levels, loaded, before, progress, eye, scale, ortho, cull, source, reach, frustum } = values;
-    const words = wordsOf(buffers);
-    const base = row * INT_ROW * 4;
-    words.set([levels.count, levels.coarsest, forcedWord(levels.forced)], base + INTS_AT.levels * 4);
-    words.set([levels.empty, levels.fades, loaded, before], base + INTS_AT.masks * 4);
-    words.set([Number(ortho), Number(cull !== null), Number(cull?.survivors ?? false)], base + INTS_AT.flags * 4);
-    this.layout.place(buffers, row);
-    setSorting(buffers, row, 1);
-    markWords(buffers, base, INT_ROW * 4);
-    const floats = floatsOf(buffers);
-    const at = row * FLOAT_ROW * 4;
-    floats.set(levels.maxPixels, at + FLOATS_AT.low * 4);
-    floats.set([eye.x, eye.y, eye.z, scale], at + FLOATS_AT.eye * 4);
-    floats.set([source.center.x, source.center.y, source.center.z, source.radius], at + FLOATS_AT.source * 4);
-    floats.set([progress, reach, cull?.near ?? 0, cull?.far ?? 1], at + FLOATS_AT.values * 4);
-    if (cull) floats.set([cull.eye.x, cull.eye.y, cull.eye.z, 0], at + FLOATS_AT.cullEye * 4);
-    frustum.planes.forEach(({ normal, constant }, i) => floats.set([normal.x, normal.y, normal.z, constant], at + (FLOATS_AT.planes + i) * 4));
-    buffers.floats.addUpdateRange(at, FLOAT_ROW * 4);
-    buffers.floats.needsUpdate = true;
-    buffers.held.add(row);
-    buffers.due.add(row);
-  }
-
-  /** Sort every row due for `camera`, in one compute call: before a level mesh draws for it. */
-  run(camera: Camera): void {
-    this.layOut();
-    const buffers = this.cameras.get(camera);
-    if (!buffers || buffers.due.size === 0) return;
-    const sort = this.sortBuffers(buffers);
-    const { scaled } = this;
-    const passes = (this.passes ??= sortPasses(sort, this.pool.pages));
-    passes.point(sort, this.layout.length);
-    this.renderer.compute([passes.update, passes.indirect]);
-    buffers.whole = false;
-    // Sorted: the rows wait as they are until written again, their sorting bits cleared with the next upload.
-    for (const row of buffers.due) setSorting(buffers, row, 0);
-    buffers.due.clear();
-    // The pass made the scaled matrices' buffer: only the GPU writes them.
-    if (scaled && scaled.array.length > 0) releaseArrays([scaled]);
-  }
-
-  /** Whether it was disposed: then it takes no InstancedLod and no camera. */
-  get disposed(): boolean {
-    return this.isDisposed;
-  }
-
   dispose(): void {
-    this.isDisposed = true;
     for (const buffers of this.cameras.values()) disposeBuffers(buffers);
     this.cameras.clear();
-    this.layout.dispose();
-    this.scaled?.dispose();
+    this.drawBuffer.dispose();
+    this.counts.dispose();
+    this.scaled?.attribute.dispose();
     this.unscaled.dispose();
     this.passes?.dispose();
     this.passes = null;
   }
 
-  private check(): void {
-    if (this.isDisposed) throw new Error("LodGpu: disposed");
-  }
-
-  private layOut(): void {
-    this.layout.layOut(this.cameras.values());
-  }
-
-  private buffersOf(camera: Camera): CameraBuffers {
-    const buffers = this.cameras.get(camera);
-    if (!buffers) throw new Error("LodGpu: no buffers for the camera");
-    return buffers;
-  }
-
-  private sortBuffers({ words, floats, indices, fades, args }: CameraBuffers): SortBuffers {
+  private makeBuffers(): CameraBuffers {
     return {
-      words,
-      floats,
-      indices,
-      fades,
-      args,
-      matrices: this.pool.matrices,
-      scaled: this.scaled ?? this.unscaled,
-      counts: this.layout.counts,
-      occupied: this.pool.occupied,
-      draws: this.layout.draws,
+      words: wordsBuffer(),
+      floats: floatsBuffer(),
+      blocks: blocksBuffer(1),
+      blockCount: 1,
+      indices: new StorageBufferAttribute(new Uint32Array(1), 1),
+      fades: new StorageBufferAttribute(new Float32Array(1), 1),
+      listSize: 0,
+      args: argsBuffer(this.draws.length),
+      due: false,
     };
+  }
+
+  /** Grow `buffers`' lists to hold `instances` per level, by doubling, each buffer within `limit` bytes. */
+  private grow(buffers: CameraBuffers, instances: number, limit: number): void {
+    let size = Math.max(buffers.listSize, 1);
+    while (size < instances) size *= 2;
+    const slots = countBits(this.listed) * size;
+    if (slots * 4 > limit)
+      throw new RangeError(
+        `Lod: lists of ${size} instances for each of its ${countBits(this.listed)} levels take ${slots * 4} bytes, more than the device's storage binding of ${limit} bytes: draw fewer instances in view of one camera per Lod, or raise maxStorageBufferBindingSize in the renderer's requiredLimits`,
+      );
+    buffers.indices.dispose();
+    buffers.fades.dispose();
+    buffers.indices = new StorageBufferAttribute(new Uint32Array(slots), 1);
+    buffers.fades = new StorageBufferAttribute(new Float32Array(slots), 1);
+    buffers.listSize = size;
+  }
+
+  /** Write the blocks of `ranges` into `buffers`: one empty block for none, as a dispatch visits one at least. */
+  private writeBlocks(buffers: CameraBuffers, ranges: readonly number[]): void {
+    let count = 0;
+    for (let i = 0; i < ranges.length; i += 2) count += Math.ceil((ranges[i + 1] ?? 0) / BLOCK);
+    if (count > MAX_BLOCKS)
+      throw new RangeError(`Lod: a camera sees ${count} blocks of ${BLOCK} instances, more than one dispatch's ${MAX_BLOCKS}: split the instances across Lods`);
+    if (buffers.blocks.count < Math.max(count, 1)) {
+      buffers.blocks.dispose();
+      buffers.blocks = blocksBuffer(count);
+    }
+    const words = buffers.blocks.array;
+    let at = 0;
+    for (let i = 0; i < ranges.length; i += 2) {
+      const start = ranges[i] ?? 0;
+      const end = start + (ranges[i + 1] ?? 0);
+      for (let first = start; first < end; first += BLOCK) words.set([first, end], 2 * at++);
+    }
+    if (count === 0) words.set([0, 0], 0);
+    buffers.blockCount = Math.max(count, 1);
+    buffers.blocks.needsUpdate = true;
+  }
+
+  /** Write the layout of `buffers`' lists and the draw count into its row. */
+  private place(buffers: CameraBuffers): void {
+    const words = buffers.words.array;
+    words[INTS_AT.flags * 4 + 3] = this.draws.length;
+    words[INTS_AT.layout * 4] = buffers.listSize;
+    let next = 0;
+    for (let level = 0; level < MAX_LEVELS; level++) {
+      const on = (this.listed & (1 << level)) !== 0;
+      words[INTS_AT.starts * 4 + level] = on ? next : UNLISTED;
+      if (on) next += buffers.listSize;
+    }
+    buffers.words.needsUpdate = true;
   }
 }
 
-/** `buffers` no longer sort `row`: its InstancedLod lets go of the camera, or is disposed. */
-function idle(buffers: CameraBuffers, row: number): void {
-  if (!buffers.held.delete(row)) return;
-  buffers.due.delete(row);
-  setSorting(buffers, row, 0);
+function disposeBuffers({ words, floats, blocks, indices, fades, args }: CameraBuffers): void {
+  for (const attribute of [words, floats, blocks, indices, fades, args]) attribute.dispose();
+}
+
+const blocksBuffer = (blocks: number) => new StorageBufferAttribute(new Uint32Array(Math.max(blocks, 1) * 2), 2);
+
+/** Set bits of `mask`. */
+function countBits(mask: number): number {
+  let count = 0;
+  for (let bits = mask; bits !== 0; bits &= bits - 1) count++;
+  return count;
 }

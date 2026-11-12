@@ -1,0 +1,60 @@
+import * as THREE from "three/webgpu";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
+import type { Materials } from "./materials.ts";
+import { exterior } from "./exterior.ts";
+import { interior } from "./interior.ts";
+import { low } from "./low.ts";
+import { church } from "./church/model.ts";
+import { HOUSE_VARIANTS, houseParams, type HouseParams } from "./params.ts";
+
+// A building's three scripts: the detailed building with its rooms, the low shell its windows bake onto, and the rooms
+// alone, which the bake projects into those windows.
+
+/** A building's parameters and how its exterior is shaped; its rooms are always `interior`'s. */
+export interface Building {
+  params: HouseParams;
+  low(params: HouseParams): THREE.Mesh;
+  exterior(materials: Materials, params: HouseParams): THREE.Group;
+}
+
+/** House variant `variant`, 0-based and below `HOUSE_VARIANTS`. */
+export const house = (variant: number): Building => ({ params: houseParams(variant), low, exterior });
+
+/** The building a script's URL asks for with `?variant=`: a house variant (0 if it does not), or `church`, checked. */
+export function variantOf(url: string): Building {
+  const text = new URL(url).searchParams.get("variant") ?? "0";
+  if (text === "church") return church();
+  const variant = Number(text);
+  if (!(/^\d+$/.test(text) && variant < HOUSE_VARIANTS)) throw new Error(`house: variant must be a whole number below ${HOUSE_VARIANTS} or church, not ${text}`);
+  return house(variant);
+}
+
+/** The building as drawn up close: its exterior with the rooms behind its windows. */
+export function detailed(materials: Materials, { params, exterior }: Building): THREE.Group {
+  const rooms = interior(materials, params);
+  const group = new THREE.Group().add(exterior(materials, params), ...merged(rooms));
+  rooms.traverse((node) => {
+    if (node instanceof THREE.Mesh) node.geometry.dispose();
+  });
+  return group;
+}
+
+/** The rooms' meshes merged by material, since up close they draw with the building rather than room by room. */
+function merged(rooms: THREE.Group): THREE.Mesh[] {
+  const byMaterial = new Map<THREE.Material, THREE.BufferGeometry[]>();
+  rooms.updateMatrixWorld(true);
+  rooms.traverse((object) => {
+    if (!(object instanceof THREE.Mesh) || Array.isArray(object.material)) return;
+    const parts = byMaterial.get(object.material) ?? [];
+    if (!byMaterial.has(object.material)) byMaterial.set(object.material, parts);
+    parts.push(object.geometry.clone().applyMatrix4(object.matrixWorld));
+  });
+  return [...byMaterial].map(([material, parts]) => {
+    const geometry = mergeGeometries(parts);
+    if (!geometry) throw new Error("Room geometries do not merge");
+    for (const part of parts) part.dispose();
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.receiveShadow = true;
+    return mesh;
+  });
+}

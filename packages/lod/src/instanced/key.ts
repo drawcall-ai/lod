@@ -36,7 +36,7 @@ export class Key {
     return this.changed;
   }
 
-  /** A camera's inputs, everything in the InstancedLod's space: what loading and sorting for it both read. */
+  /** A camera's inputs, everything in the Lod's space: what sorting for it reads. */
   camera(eye: Vector3, scale: number, ortho: boolean, levels: d.Infer<typeof DrawLevels>, cull: Cull | null, source: Sphere): this {
     return this.put(eye.x).put(eye.y).put(eye.z).screen(scale, ortho, levels, cull, source);
   }

@@ -24,7 +24,7 @@ import { pack, unpack } from "../../src/codec/container.js";
 import { bakeMesh } from "../../src/baked/index.js";
 import { InteriorMappingMaterial } from "../../src/baked/interior/material.js";
 import { deviationOf, recordDeviation } from "../../src/levels/index.js";
-import { disposeTree } from "../../src/dispose.js";
+import { disposeRecursive } from "../../src/dispose.js";
 import { box } from "../box.js";
 import { house, interior } from "../house.js";
 
@@ -106,8 +106,8 @@ describe("baked mesh codec", () => {
         expect(decoded.material.rooms?.response.image.data).not.toBe(source.material.rooms?.response.image.data);
         expect(decoded.material.rooms?.boxes).toEqual(source.material.rooms?.boxes);
       }
-      disposeTree(source);
-      disposeTree(decoded);
+      disposeRecursive(source);
+      disposeRecursive(decoded);
     }
   });
 
@@ -133,7 +133,7 @@ describe("baked mesh codec", () => {
     const flipped = bytes.slice();
     flipped[bytes.length >> 1] = (flipped[bytes.length >> 1] ?? 0) ^ 0x10;
     await expect(decodeBakedMeshAsync(flipped)).rejects.toThrow(/Invalid baked mesh: corrupt/);
-    disposeTree(source);
+    disposeRecursive(source);
   });
 
   it.skipIf(typeof document === "undefined")(
@@ -160,8 +160,8 @@ describe("baked mesh codec", () => {
         const after = await render(scene, camera);
         scene.remove(restored);
         expect(after).toEqual(before);
-        disposeTree(original);
-        disposeTree(restored);
+        disposeRecursive(original);
+        disposeRecursive(restored);
       }
     },
     120_000,

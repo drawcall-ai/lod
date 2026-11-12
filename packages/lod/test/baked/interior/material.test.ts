@@ -20,15 +20,15 @@ import {
 import { CSMShadowNode } from "three/addons/csm/CSMShadowNode.js";
 import { describe, expect, it } from "vitest";
 import { bakeMesh } from "../../../src/baked/index.js";
-import { disposeTree } from "../../../src/dispose.js";
+import { disposeRecursive } from "../../../src/dispose.js";
 import { Lod } from "../../../src/lod.js";
 import { box } from "../../box.js";
 import { house, interior } from "../../house.js";
 import { InteriorMappingMaterial } from "../../../src/baked/interior/material.js";
 import { isStandardNode } from "../../../src/three.js";
-import { GPU_TIMEOUT, bakeRenderer, render as draw, renderer, gpu } from "../../renderer.js";
+import { GPU_TIMEOUT, bakeRenderer, render as draw, renderer } from "../../renderer.js";
 import { must } from "../../must.js";
-import { oneChunk } from "../../instances.js";
+import { lodOf } from "../../instances.js";
 
 const SIZE = 96;
 
@@ -115,17 +115,19 @@ describe("interiors", { timeout: GPU_TIMEOUT }, () => {
     expect(distance(windowColor(fake), windowColor(fakeAside))).toBeGreaterThan(40);
   });
 
-  it("looks into the rooms of a moved source from a rotated Lod and a rotated InstancedLod copy", async () => {
+  it("looks into the rooms of a moved source from a Lod turned whole and one turned by its instance", async () => {
     const rooms = interior();
     const source = house().add(rooms);
     source.position.set(0.3, 0, 0);
     const baked = await bakeMesh(source, { low: box(), textureSize: 128, interior: rooms, renderer: bakeRenderer });
     const turn = new Matrix4().makeRotationY(0.4);
-    const lod = new Lod([{ object: source.clone() }, { object: baked.clone() }], gpu);
+    const lod = new Lod([{ object: source.clone() }, { object: baked.clone() }]);
     lod.quaternion.setFromRotationMatrix(turn);
-    const instanced = oneChunk([{ object: source.clone() }, { object: baked.clone() }], [turn]);
+    const instanced = lodOf([{ object: source.clone() }, { object: baked.clone() }], [turn]);
     instanced.forceLevel = 1;
     const window = new Vector3(0.3, 0, 1).applyMatrix4(turn);
+    // A Lod's first render learns its renderer and draws nothing of it.
+    for (const object of [lod, instanced]) await render(object, window.clone().add(new Vector3(0, 0, 4)), window);
     for (const offset of [new Vector3(0, 0, 4), new Vector3(2.5, 0.5, 3)]) {
       const eye = window.clone().add(offset);
       lod.forceLevel = 0;
@@ -238,8 +240,8 @@ describe("interiors", { timeout: GPU_TIMEOUT }, () => {
       const [ownA, ownB] = [windowColor(await render(a, new Vector3(0, 0, 5))), windowColor(await render(b, new Vector3(2, 0, 5), new Vector3(2, 0, 1)))];
       expect(distance(ownA, ownB)).toBeGreaterThan(10);
     } finally {
-      disposeTree(a);
-      disposeTree(b);
+      disposeRecursive(a);
+      disposeRecursive(b);
     }
   });
 

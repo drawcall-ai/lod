@@ -16,7 +16,7 @@ export function windBounds(mesh: Mesh, placement: Matrix4, amplitude: number, ba
   rest.radius += amplitude * reach * horizontalScale(placement.clone().invert());
   // An ImpostorMesh of its own measures its shadow casters by this radius too.
   const draw = fadeSourceOf(mesh);
-  if (draw?.kind === "instances") draw.radius = rest.radius;
+  if (draw) draw.radius = rest.radius;
   const instances = isInstancedMesh(mesh) || isImpostorMesh(mesh) ? mesh : null;
   if (!instances) {
     // Frustum.intersectsObject prefers an object's sphere over its geometry's.

@@ -71,7 +71,7 @@ export interface Rooms extends Faces {
 }
 
 const identity = new Matrix4();
-/** Where the drawn mesh's geometry space sits in the source's: moved where an InstancedLod draws it (see `spaceOf`). */
+/** Where the drawn mesh's geometry space sits in the source's: moved where a Lod draws it (see `spaceOf`). */
 const space = uniform(new Matrix4()).onObjectUpdate(({ object }) => spaceOf(object) ?? identity);
 
 function flat<T>(node: Node<T>): Node<T> {

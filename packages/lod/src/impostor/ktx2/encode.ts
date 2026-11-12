@@ -1,4 +1,5 @@
 import { read, write } from "ktx-parse";
+import { inNode } from "../../node-process.js";
 
 /** One map's RGBA8 mip levels, `size >> level` square. */
 export interface Layer {
@@ -25,7 +26,7 @@ interface Task {
   reject(error: unknown): void;
 }
 
-// Read when the module loads, which also happens in Node, as for a .glts warmup; Node before 21 has no navigator.
+// Read when the module loads, which also happens in Node, as the vitecache plugin builds levels; Node before 21 has no navigator.
 const cores = globalThis.navigator?.hardwareConcurrency ?? 4;
 /**
  * A worker per core but one, since a cold ladder's encodes take far longer than its bakes; at most 8, since each holds
@@ -79,7 +80,8 @@ function strips(data: Uint8Array, size: number, srgb: boolean, parts: number): J
   return jobs;
 }
 
-function encodeJob(job: Job): Promise<Uint8Array> {
+async function encodeJob(job: Job): Promise<Uint8Array> {
+  if (inNode) return (await import("./uastc.js")).encode(job);
   return new Promise((resolve, reject) => {
     queue.push({ job, resolve, reject });
     queue.sort((a, b) => b.job.width * b.job.height - a.job.width * a.job.height);

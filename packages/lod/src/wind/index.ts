@@ -1,8 +1,9 @@
 import { Box3, Matrix4, ObjectSpaceNormalMap, Vector2, type Mesh, type Object3D } from "three/webgpu";
 import { levelBox } from "../levels/bounds.js";
 import { boundingBox } from "../source/detail.js";
+import { fadeSourceOf } from "../levels/fade.js";
 import { levelMaterial } from "../levels/material.js";
-import { isBatchedMesh, isImpostorMesh, isInstancedLod, isInstancedMesh, isLOD, isMesh, isSkinnedMesh, isStorageInstanced } from "../three.js";
+import { isBatchedMesh, isImpostorMesh, isLod, isInstancedMesh, isLOD, isMesh, isSkinnedMesh, isStorageInstanced } from "../three.js";
 import { WIND, type WindTarget } from "./hooks.js";
 import { windBounds } from "./bounds.js";
 import { setSway, swayMatrix, swaying, type Breeze } from "./sway.js";
@@ -32,7 +33,7 @@ const impostorSway = swayMatrix();
 
 /**
  * A shared GPU breeze: an affine sway, fixed at the base and linear with height.
- * Bake/build levels first, apply once to the completed Lod, InstancedLod, mesh or
+ * Bake/build levels first, apply once to the completed Lod, mesh or
  * mesh group, then set time once before rendering each frame. All levels and shadow
  * passes share the motion. Simplified and baked meshes need no special preparation.
  *
@@ -45,7 +46,7 @@ const impostorSway = swayMatrix();
  * must stay fixed after applying; move/rotate/scale the root or its instances instead.
  * Nested LODs and nested instance batches must be applied individually; an
  * InstancedMesh sways only with its matrices in a storage buffer (an ImpostorMesh's are).
- * Lod, InstancedLod and ImpostorMesh clones retain the shared breeze. For ordinary
+ * Lod and ImpostorMesh clones retain the shared breeze. For ordinary
  * Mesh/Group clones, apply to each clone too: the material is shared but the sway is
  * the mesh's. Tangent-space normal maps are supported (tangents do not sway);
  * object-space normal maps are not.
@@ -97,7 +98,7 @@ export class Wind {
     this.breeze.direction.set(x, z).normalize();
   }
 
-  /** Attach once, after constructing all levels and before a Lod or InstancedLod first renders. Objects without this call draw with their original shaders. */
+  /** Attach once, after constructing all levels and before a Lod first renders. Objects without this call draw with their original shaders. */
   apply(root: Object3D, { amplitude, baseY, height }: SwayOptions): void {
     if (bindings.has(root)) throw new Error("Wind: already applied to this object");
     this.attach(root, { amplitude, baseY, height }, false);
@@ -109,11 +110,12 @@ export class Wind {
     const meshes: Mesh[] = [];
     added.traverse((node) => {
       if (node !== root && isLOD(node)) throw new Error("Wind: apply to nested LODs individually");
-      if (!isMesh(node)) return;
+      // A Lod's meshes beside its level meshes draw nothing.
+      if (!isMesh(node) || (isLod(root) && !fadeSourceOf(node))) return;
       if (refreshing && swaying(node)) return;
       if (swaying(node)) throw new Error("Wind: a mesh already belongs to a wind root");
       if (isSkinnedMesh(node) || isBatchedMesh(node)) throw new Error("Wind: skinned and batched meshes are not supported");
-      if (node !== root && !isInstancedLod(root) && (isInstancedMesh(node) || (isImpostorMesh(node) && node.count > 1)))
+      if (node !== root && !isLod(root) && (isInstancedMesh(node) || (isImpostorMesh(node) && node.count > 1)))
         throw new Error("Wind: apply to nested instance batches individually");
       if (isInstancedMesh(node) && !isStorageInstanced(node.instanceMatrix))
         throw new Error(`Wind: InstancedMesh "${node.name}" needs its instance matrices in a StorageInstancedBufferAttribute`);
@@ -133,9 +135,9 @@ export class Wind {
     invertible(root.matrixWorld);
     const inverse = root.matrixWorld.clone().invert();
     const placed = meshes.map((mesh) => {
-      // InstancedLod has already placed ordinary geometry in instance space; its
+      // A Lod has already placed ordinary geometry in instance space; its
       // impostors carry placement separately. Avoid roundoff defeating the fast path.
-      const placement = mesh === root || isInstancedLod(root) ? identity.clone() : inverse.clone().multiply(mesh.matrixWorld);
+      const placement = mesh === root || isLod(root) ? identity.clone() : inverse.clone().multiply(mesh.matrixWorld);
       invertible(placement);
       return { mesh, placement };
     });
@@ -150,7 +152,7 @@ export class Wind {
     const padding = (amplitude * Math.max(Math.abs(box.min.y - base), Math.abs(box.max.y - base))) / size;
     if (isWindTarget(root) && !refreshing) root[WIND](padding, amplitude / size, base);
     for (const { mesh, placement } of placed) {
-      if (!isInstancedLod(root)) windBounds(mesh, placement, amplitude, base, size);
+      if (!isLod(root)) windBounds(mesh, placement, amplitude, base, size);
       setSway(mesh, { breeze: this.breeze, shape, placement, fromRoot: placement.clone().invert() });
       if (isImpostorMesh(mesh)) {
         if (mesh.material.deformNode !== impostorSway) {

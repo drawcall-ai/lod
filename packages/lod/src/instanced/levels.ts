@@ -11,17 +11,17 @@ import type { InstanceLists } from "./lists.js";
 import { freeMesh, levelMeshes, partsOf, type LevelMeshes, type Part } from "./meshes.js";
 import type { InstanceShape } from "./shape.js";
 
-/** What an InstancedLod's level meshes draw with: its shape, lists and the instances they draw. */
+/** What a Lod's level meshes draw with: its shape, lists and the instances they draw. */
 export interface Drawing {
   readonly shape: InstanceShape;
   readonly lists: InstanceLists;
-  /** What the level meshes draw: the pool's instances, or while survivors scale, their scaled matrices. */
+  /** What the level meshes draw: the Lod's instances, or while survivors scale, their scaled matrices. */
   readonly drawn: DrawnInstances;
 }
 
 /**
- * An InstancedLod's level meshes: per level, the meshes drawing it with its debug tint, made from the level's object
- * once there is one and added to the InstancedLod, and the source level's parts, which a raycast hits.
+ * A Lod's level meshes: per level, the meshes drawing it with its debug tint, made from the level's object once there
+ * is one and added to the Lod, and the source level's parts, which a raycast hits.
  */
 export class MeshesByLevel {
   private readonly tints: Color[];
@@ -29,14 +29,14 @@ export class MeshesByLevel {
   private sourceParts: readonly Part[] = [];
 
   constructor(
-    /** The InstancedLod, which holds the meshes. */
+    /** The Lod, which holds the meshes. */
     private readonly parent: Object3D,
     /** Its levels: a level that joins gets its object. */
     private readonly levels: readonly ThresholdedLevel[],
     private readonly drawing: Drawing,
     /** Around every instance, survivors grown: what every level mesh is culled and boxed by. */
     private readonly bounds: { readonly sphere: Sphere; readonly box: Box3 },
-    /** Sorts `camera`'s lists as a mesh draws for it with `renderer`. */
+    /** Sorts `camera`'s lists as `renderer` draws a mesh for it. */
     private readonly drawFor: (renderer: unknown, camera: Camera) => void,
   ) {
     this.tints = levels.map(() => new Color(1, 1, 1));
@@ -86,9 +86,10 @@ export class MeshesByLevel {
       box: this.bounds.box,
       slots: (camera) => lists.slots(camera),
       radius: shape.fadeRadius,
+      layers: this.parent.layers,
       drawFor: (renderer, camera) => {
         this.drawFor(renderer, camera);
-        return lists.slots(camera).args;
+        return lists.slots(camera)?.args ?? null;
       },
     });
   }
@@ -119,7 +120,7 @@ export class MeshesByLevel {
     };
   }
 
-  /** Take every mesh out of the InstancedLod and free it. */
+  /** Take every mesh out of the Lod and free it. */
   dispose(): void {
     for (const mesh of this.byLevel.flat()) {
       mesh.removeFromParent();

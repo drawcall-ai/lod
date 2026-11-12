@@ -1,7 +1,7 @@
 import { Box3, Matrix4, Vector3, type Mesh, type Object3D } from "three/webgpu";
-import type { InstancedLod } from "../instanced/index.js";
-import type { InstancedLodChunk } from "../instanced/chunk.js";
-import { isBatchedMesh, isImpostorMesh, isInstancedLod, isInstancedMesh, isLOD, isMesh, isStorageInstanced } from "../three.js";
+import { checkClusters } from "../instanced/clusters.js";
+import type { Lod } from "../lod.js";
+import { isBatchedMesh, isImpostorMesh, isInstancedMesh, isLOD, isLod, isMesh, isStorageInstanced } from "../three.js";
 
 // What an object is at full detail: its meshes, where they sit and the vertices they draw.
 
@@ -9,8 +9,7 @@ import { isBatchedMesh, isImpostorMesh, isInstancedLod, isInstancedMesh, isLOD, 
  * Call `visit` with every mesh of `root` drawn at full detail, and the matrix that places
  * it in `root`'s own space (`root`'s own transform not applied): `root` itself and its
  * visible descendants; of a nested LOD only its level 0, whatever it shows; and once per
- * instance, the meshes of an InstancedMesh or ImpostorMesh and of an InstancedLod's
- * level 0. `placement` is only valid during the call. Local matrices are
+ * instance, the meshes of an InstancedMesh or ImpostorMesh and of a Lod's level 0. `placement` is only valid during the call. Local matrices are
  * brought up to date on the way.
  */
 export function forEachMesh(root: Object3D, visit: (mesh: Mesh, placement: Matrix4) => void): void {
@@ -19,12 +18,12 @@ export function forEachMesh(root: Object3D, visit: (mesh: Mesh, placement: Matri
 
 /** `forEachMesh` from `node`, which `placement` places in the root's space. */
 function walk(node: Object3D, placement: Matrix4, visit: (mesh: Mesh, placement: Matrix4) => void): void {
-  if (isInstancedLod(node)) {
+  if (isLod(node)) {
     // Its level 0 is a template, not in the scene: it stands once per instance.
     const source = node.levels[0]?.object;
     if (!source) return;
     const instance = new Matrix4();
-    for (const { chunk, index } of instancesOf(node)) walk(source, local(source).premultiply(chunk.getMatrixAt(index, instance)).premultiply(placement), visit);
+    for (const index of instancesOf(node)) walk(source, local(source).premultiply(node.getMatrixAt(index, instance)).premultiply(placement), visit);
     return;
   }
   if (isInstancedMesh(node) || isImpostorMesh(node)) {
@@ -49,10 +48,7 @@ export function local(node: Object3D): Matrix4 {
 
 /** Show level 0 of every LOD under `root` and stop them switching: a bake sees full detail. */
 export function showDetail(root: Object3D): void {
-  if (isInstancedLod(root)) {
-    root.forceLevel = 0;
-    return;
-  }
+  if (isLod(root)) throw new Error("@drawcall/lod: a bake draws a Lod as InstancedMeshes of its level 0 (see bakeCopy)");
   if (isLOD(root)) {
     root.autoUpdate = false;
     root.levels.forEach((level, i) => {
@@ -99,14 +95,14 @@ export function boundingBox(root: Object3D): Box3 {
 }
 
 function boxes(node: Object3D, placement: Matrix4, box: Box3): void {
-  if (isInstancedLod(node)) {
+  if (isLod(node)) {
     const source = node.levels[0];
     if (!source) return;
-    // Its level 0 at every instance, as forEachMesh visits them: tighter than its level meshes' box (see InstancedLod).
+    // Its level 0 at every instance, as forEachMesh visits them: tighter than its level meshes' box (see Lod).
     // The box it declares, else the one it draws.
     const own = source.box?.clone() ?? (source.object ? boundingBox(source.object).applyMatrix4(local(source.object)) : new Box3());
     const instance = new Matrix4();
-    for (const { chunk, index } of instancesOf(node)) box.union(own.clone().applyMatrix4(chunk.getMatrixAt(index, instance).premultiply(placement)));
+    for (const index of instancesOf(node)) box.union(own.clone().applyMatrix4(node.getMatrixAt(index, instance).premultiply(placement)));
     return;
   }
   if (isLOD(node) && !node.levels[0]?.object) {
@@ -130,10 +126,13 @@ function boxes(node: Object3D, placement: Matrix4, box: Box3): void {
   for (const child of detailed(node)) boxes(child, local(child).premultiply(placement), box);
 }
 
-/** Every instance of `lod`'s chunks; a GPU chunk's live on the GPU, where the CPU cannot visit them. */
-function* instancesOf(lod: InstancedLod): Generator<{ chunk: InstancedLodChunk; index: number }> {
-  for (const chunk of lod.chunks) {
-    if (isStorageInstanced(chunk.instanceMatrix)) throw new Error("@drawcall/lod: a GPU chunk's instances live on the GPU: the CPU cannot visit its meshes");
-    for (let index = 0; index < chunk.count; index++) yield { chunk, index };
-  }
+/**
+ * The indices of the instances `lod` draws: of its first `count`, those in its clusters, if it has any. A storage
+ * instanceMatrix's live on the GPU, where the CPU cannot visit them.
+ */
+export function* instancesOf(lod: Lod): Generator<number> {
+  if (isStorageInstanced(lod.instanceMatrix)) throw new Error("@drawcall/lod: a Lod's storage instanceMatrix lives on the GPU: the CPU cannot visit its meshes");
+  if (lod.clusters) checkClusters(lod.clusters, lod.instanceMatrix.count, []);
+  for (const { start, count } of lod.clusters ?? [{ start: 0, count: lod.count }])
+    for (let index = start; index < Math.min(start + count, lod.count); index++) yield index;
 }

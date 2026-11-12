@@ -12,6 +12,7 @@ import {
 import {
   Fn,
   NodeUpdateType,
+  bool,
   cameraProjectionMatrix,
   dot,
   float,
@@ -43,56 +44,43 @@ import { column, isOrthographic, maxScale } from "../tsl.js";
 // so every pixel is drawn by exactly one of them. Shadow maps fade the same way, in
 // their own pixels: a fading object casts one shadow, a dithered mix of both levels'.
 //
-// Where the fade comes from depends on how the level is drawn (see `FadeSource`): one value
-// per mesh for a Lod, set by the CPU; one per slot for an InstancedLod, written by the
-// instance pass for each camera with the index of the instance the slot draws. Materials
-// read it per object while it renders, so the copies of one material every level draws
-// with share one compiled shader (see material.ts).
+// Each level mesh of a Lod draws a list of slots, which the instance pass fills for each camera with the index of the
+// instance a slot draws and its fade (see `FadeSource`). Materials read them per object while it renders, so the copies
+// of one material every level draws with share one compiled shader (see material.ts).
 
 /**
- * For one camera, the instances an InstancedLod's level meshes draw: per slot, the instance and its signed fade, and
- * where the camera's indirect draws of them lie, `DRAW_BYTES` apart in the order of the InstancedLod's meshes.
+ * For one camera, the instances a Lod's level meshes draw: per slot, the instance and its signed fade, and where the
+ * camera's indirect draws of them lie, `DRAW_BYTES` apart in the order of the Lod's meshes.
  */
 export interface InstanceSlots {
   /** the index of the instance each slot draws */
   readonly indices: StorageBufferAttribute;
   /** its signed fade */
   readonly fades: StorageBufferAttribute;
-  /** Where the camera's indirect draws of the InstancedLod's meshes start (see rows.ts). */
+  /** Where the camera's indirect draws of the Lod's meshes start (see rows.ts). */
   readonly args: { readonly offset: number; readonly attribute: IndirectStorageBufferAttribute };
 }
 
-/** What an InstancedLod's level meshes draw their instances from: every pool index's matrix, and its colour (RGB and a pad). */
+/** What a Lod's level meshes draw their instances from: every instance's matrix, and its colour (RGB and a pad). */
 export interface DrawnInstances {
   matrices: StorageInstancedBufferAttribute;
-  readonly colors: StorageInstancedBufferAttribute;
+  colors: StorageInstancedBufferAttribute;
 }
 
-/** How a mesh of a level is drawn, which says where its fade and shadow size come from. */
-export type FadeSource =
-  | {
-      kind: "object";
-      /** the signed fade */
-      fade: number;
-      /** the whole object's bounding diameter, world units */
-      diameter: number;
-      /** debug tint, white when off */
-      tint: Color;
-    }
-  | {
-      kind: "instances";
-      /** per camera, the instance and signed fade of each slot; null for none (an ImpostorMesh of its own, drawing every instance) */
-      slots: ((camera: Camera) => InstanceSlots) | null;
-      /** one instance's bounding radius in its own space */
-      radius: number;
-      tint: Color;
-      /**
-       * For a plain mesh of an InstancedLod's level: the instances it draws, and `space`, where its geometry's space
-       * sits in the source's (InstancedLod draws template geometry moved into the instance's space). An ImpostorMesh
-       * carries its own instances.
-       */
-      level?: { readonly instances: DrawnInstances; readonly space: Matrix4 };
-    };
+/** How a mesh drawing instances is drawn: where its fade and shadow size come from. */
+export interface FadeSource {
+  /** per camera, the instance and signed fade of each slot; null for none (an ImpostorMesh of its own, drawing every instance) */
+  slots: ((camera: Camera) => InstanceSlots | null) | null;
+  /** one instance's bounding radius in its own space */
+  radius: number;
+  /** debug tint, white when off */
+  tint: Color;
+  /**
+   * For a plain mesh of a Lod's level: the instances it draws, and `space`, where its geometry's space sits in the
+   * source's (a Lod draws template geometry moved into the instance's space). An ImpostorMesh carries its own instances.
+   */
+  level?: { readonly instances: DrawnInstances; readonly space: Matrix4 };
+}
 
 /**
  * Per level mesh, where its fade comes from: a side table, as three's Object3D has no typed place for a package's state
@@ -108,19 +96,7 @@ const WHITE = new Color(1, 1, 1);
 const of = (object: Object3D | null) => (object ? sources.get(object) : undefined);
 
 // Per-object values, shared by every material: each draw reads its own.
-const objectFade = uniform(0).onObjectUpdate(({ object }) => {
-  const draw = of(object);
-  return draw?.kind === "object" ? draw.fade : 0;
-});
-// A mesh no level draws is never too small to cast.
-const objectDiameter = uniform(0).onObjectUpdate(({ object }) => {
-  const draw = of(object);
-  return draw?.kind === "object" ? draw.diameter : 3.4e38;
-});
-const instanceRadius = uniform(0).onObjectUpdate(({ object }) => {
-  const draw = of(object);
-  return draw?.kind === "instances" ? draw.radius : 0;
-});
+const instanceRadius = uniform(0).onObjectUpdate(({ object }) => of(object)?.radius ?? 0);
 
 /** This draw's debug tint (see `Lod.debug`). */
 export const tint = uniform(new Color(1, 1, 1)).onObjectUpdate(({ object }) => of(object)?.tint ?? WHITE);
@@ -128,13 +104,10 @@ export const tint = uniform(new Color(1, 1, 1)).onObjectUpdate(({ object }) => o
 /** Interleaved gradient noise over the pixels of the target being drawn. */
 export const dither = (pixel: Node<"vec2">): Node<"float"> => fract(float(52.9829189).mul(fract(dot(pixel, vec2(0.06711056, 0.00583715)))));
 
-/** The level mesh `object` is, when it is an InstancedLod's plain one. */
-function levelOf(object: Object3D | null) {
-  const draw = of(object);
-  return draw?.kind === "instances" ? (draw.level ?? null) : null;
-}
+/** The level mesh `object` is, when it is a Lod's plain one. */
+const levelOf = (object: Object3D | null) => of(object)?.level ?? null;
 
-/** The instances where `object` reads its matrices and colours from storage: its own, or its InstancedLod's; else null. */
+/** The instances where `object` reads its matrices and colours from storage: its own, or its Lod's; else null. */
 function instancesOf(object: Object3D): { matrices: StorageInstancedBufferAttribute; colors: StorageInstancedBufferAttribute | null } | null {
   if (isImpostorMesh(object)) return { matrices: object.instanceMatrix, colors: object.instanceColor };
   const level = levelOf(object);
@@ -142,7 +115,7 @@ function instancesOf(object: Object3D): { matrices: StorageInstancedBufferAttrib
   return isInstancedMesh(object) && isStorageInstanced(object.instanceMatrix) ? { matrices: object.instanceMatrix, colors: null } : null;
 }
 
-/** Where `object`'s geometry space sits in its source's: moved for an InstancedLod's plain level mesh (see `FadeSource`). */
+/** Where `object`'s geometry space sits in its source's: moved for a Lod's plain level mesh (see `FadeSource`). */
 export const spaceOf = (object: Object3D | null): Matrix4 | null => levelOf(object)?.space ?? null;
 
 // The draw buffers below are replaced per object, so they stay out of three's texture-keyed
@@ -163,7 +136,7 @@ const matrices = storage(identity, "mat4", 0)
 /** `object`'s slots as `camera` draws it, when it draws slots. */
 function slotsOf(object: Object3D | null, camera: Camera | null) {
   const draw = of(object);
-  return draw?.kind === "instances" && draw.slots && camera ? draw.slots(camera) : null;
+  return draw?.slots && camera ? draw.slots(camera) : null;
 }
 const zero = new StorageBufferAttribute(new Float32Array(1), 1);
 const fades = storage(zero, "float", 0)
@@ -178,11 +151,7 @@ const indices = storage(none, "uint", 0)
   .toReadOnly()
   .onObjectUpdate(({ object, camera }) => slotsOf(object, camera)?.indices ?? none);
 /** 1 when the draw's instances are slots the instance pass for each camera fills, else 0. */
-const slotted = uniform(0, "uint").onObjectUpdate(({ object }) => {
-  const draw = of(object);
-  return Number(draw?.kind === "instances" && draw.slots !== null);
-});
-const instanceCaster = uniform(false).onObjectUpdate(({ object }) => of(object)?.kind === "instances");
+const slotted = uniform(0, "uint").onObjectUpdate(({ object }) => Number(!!of(object)?.slots));
 
 /** The instance this draw's instance index stands for: the one in its slot, or itself. */
 const instance = Fn(() => slotted.equal(1).select(indices.element(instanceIndex), instanceIndex));
@@ -217,12 +186,8 @@ export function placeInstances(builder: NodeBuilder): void {
 
 /** This draw's signed fade. */
 export const fade = Fn((builder): Node<"float"> => {
-  if (isImpostorMesh(builder.object))
-    return varying(fades.element(instanceIndex.mul(slotted)))
-      .setInterpolation("flat")
-      .add(objectFade);
-  const draw = sources.get(builder.object);
-  if (draw?.kind !== "instances" || !draw.slots) return objectFade;
+  if (isImpostorMesh(builder.object)) return varying(fades.element(instanceIndex.mul(slotted))).setInterpolation("flat");
+  if (!sources.get(builder.object)?.slots) return float(0);
   // Constant across the primitive: keep compute-written slots out of fragment bindings.
   return varying(fades.element(instanceIndex)).setInterpolation("flat");
 });
@@ -240,11 +205,11 @@ export const keepsPixel = Fn((): Node<"bool"> => {
  * chance, flickering as it or the map moves. Only valid in a shadow map render.
  */
 const tooSmallToCast = Fn((builder): Node<"bool"> => {
-  const object = builder.object;
-  const card = isImpostorMesh(object);
-  const instance = card || sources.get(object)?.kind === "instances" ? instanceMatrixOf(object) : null;
-  const instanced = instance ? maxScale(modelWorldMatrix.mul(instance)).mul(instanceRadius).mul(2) : objectDiameter;
-  const diameter = card ? select(instanceCaster, instanced, objectDiameter) : instanced;
+  const { object } = builder;
+  const instance = sources.has(object) ? instanceMatrixOf(object) : null;
+  // A mesh drawing no instances of a Lod's or an ImpostorMesh's is never too small to cast.
+  if (!instance) return bool(false);
+  const diameter = maxScale(modelWorldMatrix.mul(instance)).mul(instanceRadius).mul(2);
   // projection[1][1] is 2 × zoom / (top - bottom)
   const texel = float(2).div(column(cameraProjectionMatrix, 1).y.mul(screenSize.y));
   return isOrthographic(cameraProjectionMatrix).and(diameter.lessThan(texel));

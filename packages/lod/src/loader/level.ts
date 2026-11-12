@@ -65,7 +65,7 @@ const MAGIC = 0x33444f4c;
 export async function encodeLevel(object: Object3D, kind: Kind, shape: Shape, materials: readonly Material[]): Promise<Uint8Array> {
   if (object.matrixAutoUpdate) object.updateMatrix();
   const box = boundingBox(object).applyMatrix4(object.matrix);
-  if (box.isEmpty()) throw new Error(`LodLoader: the ${kind} level draws nothing`);
+  if (box.isEmpty()) throw new Error(`CachedLodLoader: the ${kind} level draws nothing`);
   const bounds = placedBox(shape);
   // Rounding in welds and bakes may move a vertex by a hair.
   if (
@@ -74,7 +74,7 @@ export async function encodeLevel(object: Object3D, kind: Kind, shape: Shape, ma
       .expandByScalar(bounds.getSize(box.min.clone()).length() * 1e-4)
       .containsBox(box)
   )
-    throw new Error(`LodLoader: the ${kind} level extends beyond the source's bounds; derived shapes, such as a low shell, must stay inside the source`);
+    throw new Error(`CachedLodLoader: the ${kind} level extends beyond the source's bounds; derived shapes, such as a low shell, must stay inside the source`);
   const payload = await encodePayload(object, kind, materials);
   const header = new TextEncoder().encode(
     JSON.stringify({
@@ -101,10 +101,10 @@ async function encodePayload(object: Object3D, kind: Kind, materials: readonly M
     case "simplify":
       return encodeMeshAsync(object, materials);
     case "baked":
-      if (!isMesh(object)) throw new Error("LodLoader: baked level is not a mesh");
+      if (!isMesh(object)) throw new Error("CachedLodLoader: baked level is not a mesh");
       return encodeBakedMeshAsync(object);
     case "impostor":
-      if (!isImpostorMesh(object)) throw new Error("LodLoader: impostor level is not an ImpostorMesh");
+      if (!isImpostorMesh(object)) throw new Error("CachedLodLoader: impostor level is not an ImpostorMesh");
       return encodeImpostorAsync(object.impostor);
   }
 }
@@ -177,5 +177,5 @@ function numbers(value: unknown, count: number): number[] {
   return value.map(finite);
 }
 function fail(reason: string): never {
-  throw new Error(`LodLoader: invalid cache (${reason})`);
+  throw new Error(`CachedLodLoader: invalid cache (${reason})`);
 }

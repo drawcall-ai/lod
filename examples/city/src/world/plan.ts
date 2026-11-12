@@ -1,13 +1,14 @@
 import * as THREE from "three/webgpu";
-import { HOUSE_VARIANTS, houseParams, type HouseParams } from "../../public/content/house/params.ts";
-import { Random } from "../../public/content/random.ts";
+import { HOUSE_VARIANTS, houseParams, type HouseParams } from "../../public/house/params.ts";
+import seedrandom from "seedrandom";
 import { type Forest, forestClearings, forestEdge } from "./zones.ts";
 import { country, crossRoad } from "./country.ts";
 import { banks, CREEK, crossings } from "./creek.ts";
 import { farmland } from "./farmland.ts";
 import { Land, Use } from "./land.ts";
 import { Terrain } from "./terrain.ts";
-import { town } from "./town.ts";
+import { town, type StreetName } from "./town.ts";
+import type { Fixture } from "./gardens.ts";
 
 /** Where one copy of something stands: on the ground at x, z, turned by `angle` about y. */
 export interface Spot {
@@ -56,12 +57,12 @@ export interface Plan {
   houses: { variant: number; spot: Spot }[];
   /** Fence bays (2.4 m, running along the spot's +x). */
   fences: Spot[];
-  /** Garden things by name (see `public/content/garden.ts`). */
-  garden: Map<string, Spot[]>;
+  /** Garden fixtures by name. */
+  fixtures: Map<Fixture, Spot[]>;
   hedges: Spot[];
   church: Spot;
   /** Street-name signs, by name. */
-  signs: Map<string, Spot[]>;
+  streetSigns: Map<StreetName, Spot[]>;
   /** Fetched models (props, trees, shrubs) by manifest id. */
   models: Map<string, Spot[]>;
 }
@@ -109,7 +110,7 @@ const FORESTS: Forest[] = [
 ];
 
 export function plan(seed: number): Plan {
-  const r = new Random(seed);
+  const r = seedrandom(String(seed));
   const flats = [{ x: TOWN.x, z: TOWN.z, radius: TOWN.radius * 0.8 }, ...FIELDS.map((f) => ({ x: f.x, z: f.z, radius: Math.hypot(f.halfX, f.halfZ) }))];
   const terrain = new Terrain({ seed, flats, creek: { course: CREEK.course, depth: CREEK.depth, crossings: crossings(CREEK.course, crossRoad(TOWN)) } });
   const land = new Land();
@@ -155,10 +156,10 @@ export function plan(seed: number): Plan {
     forests: FORESTS,
     houses,
     fences: built.fences,
-    garden: built.garden,
+    fixtures: built.fixtures,
     hedges: built.hedges,
     church: built.church,
-    signs: built.signs,
+    streetSigns: built.streetSigns,
     models,
   };
 }
@@ -172,16 +173,16 @@ export function spot(terrain: Terrain, x: number, z: number, angle: number, scal
  * Farmhouses along the main road outside town, each with a car, crates and a few trees.
  * Returns the houses; the rest goes through `add`.
  */
-function farms(roads: Road[], variants: HouseParams[], terrain: Terrain, land: Land, r: Random, add: (id: string, spot: Spot) => void) {
+function farms(roads: Road[], variants: HouseParams[], terrain: Terrain, land: Land, r: seedrandom.PRNG, add: (id: string, spot: Spot) => void) {
   const houses: Plan["houses"] = [];
   for (const road of roads.filter((x) => x.kind === "main")) {
     road.points.forEach((p, i) => {
       const q = road.points[i + 1];
-      if (!q || i % 9 !== 0 || Math.hypot(p.x - TOWN.x, p.y - TOWN.z) < TOWN.radius + 80 || !r.chance(0.55)) return;
+      if (!q || i % 9 !== 0 || Math.hypot(p.x - TOWN.x, p.y - TOWN.z) < TOWN.radius + 80 || r() >= 0.55) return;
       const along = q.clone().sub(p).normalize();
-      const side = r.chance(0.5) ? 1 : -1;
+      const side = r() < 0.5 ? 1 : -1;
       const out = new THREE.Vector2(-along.y, along.x).multiplyScalar(side);
-      const variant = r.int(0, variants.length - 1);
+      const variant = Math.floor(variants.length * r());
       const params = variants[variant];
       if (!params) return;
       const centre = p.clone().addScaledVector(out, road.width / 2 + 9 + params.depth / 2);
@@ -191,12 +192,15 @@ function farms(roads: Road[], variants: HouseParams[], terrain: Terrain, land: L
       // the front (+z of the house) faces the road
       const angle = Math.atan2(-out.x, -out.y);
       houses.push({ variant, spot: { ...spot(terrain, centre.x, centre.y, angle), y: footing(terrain, centre.x, centre.y, reach) } });
-      const yard = centre.clone().addScaledVector(along, (params.width / 2 + 4) * (r.chance(0.5) ? 1 : -1));
-      add("covered_car", spot(terrain, yard.x, yard.y, angle + r.range(-0.3, 0.3)));
-      for (let k = 0; k < 3; k++) add("wooden_crate_01", spot(terrain, yard.x + r.range(-3, 3), yard.y + r.range(-3, 3), r.range(0, 6.3)));
-      for (let k = 0; k < r.int(2, 5); k++) {
-        const behind = centre.clone().addScaledVector(out, r.range(10, 22)).addScaledVector(along, r.range(-14, 14));
-        if (clear(behind.x, behind.y)) add("tree_small_02", spot(terrain, behind.x, behind.y, r.range(0, 6.3), r.range(1.4, 2.2)));
+      const yard = centre.clone().addScaledVector(along, (params.width / 2 + 4) * (r() < 0.5 ? 1 : -1));
+      add("covered_car", spot(terrain, yard.x, yard.y, angle + (-0.3 + 0.6 * r())));
+      for (let k = 0; k < 3; k++) add("wooden_crate_01", spot(terrain, yard.x + (-3 + 6 * r()), yard.y + (-3 + 6 * r()), 6.3 * r()));
+      for (let k = 0; k < 2 + Math.floor(4 * r()); k++) {
+        const behind = centre
+          .clone()
+          .addScaledVector(out, 10 + 12 * r())
+          .addScaledVector(along, -14 + 28 * r());
+        if (clear(behind.x, behind.y)) add("tree_small_02", spot(terrain, behind.x, behind.y, 6.3 * r(), 1.4 + 0.8 * r()));
       }
     });
   }
@@ -211,20 +215,20 @@ export function footing(terrain: Terrain, x: number, z: number, reach: number): 
 }
 
 /** Small groups of trees and shrubs scattered over open lawn. */
-function groves(terrain: Terrain, land: Land, r: Random, add: (id: string, spot: Spot) => void) {
+function groves(terrain: Terrain, land: Land, r: seedrandom.PRNG, add: (id: string, spot: Spot) => void) {
   for (let g = 0; g < 70; g++) {
-    const cx = r.range(-2100, 2100);
-    const cz = r.range(-2100, 2100);
+    const cx = -2100 + 4200 * r();
+    const cz = -2100 + 4200 * r();
     if (land.at(cx, cz) !== Use.Lawn) continue;
-    for (let k = 0; k < r.int(3, 9); k++) {
-      const x = cx + r.range(-18, 18);
-      const z = cz + r.range(-18, 18);
+    for (let k = 0; k < 3 + Math.floor(7 * r()); k++) {
+      const x = cx + (-18 + 36 * r());
+      const z = cz + (-18 + 36 * r());
       if (land.at(x, z) !== Use.Lawn) continue;
-      const pick = r.next();
-      const angle = r.range(0, Math.PI * 2);
-      if (pick < 0.5) add("tree_small_02", spot(terrain, x, z, angle, r.range(1.5, 2.5)));
-      else if (pick < 0.75) add("searsia_lucida", spot(terrain, x, z, angle, r.range(1.2, 2)));
-      else add("shrub_02", spot(terrain, x, z, angle, r.range(0.8, 1.3)));
+      const pick = r();
+      const angle = Math.PI * 2 * r();
+      if (pick < 0.5) add("tree_small_02", spot(terrain, x, z, angle, 1.5 + 1 * r()));
+      else if (pick < 0.75) add("searsia_lucida", spot(terrain, x, z, angle, 1.2 + 0.8 * r()));
+      else add("shrub_02", spot(terrain, x, z, angle, 0.8 + 0.5 * r()));
     }
   }
 }

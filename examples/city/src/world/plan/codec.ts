@@ -1,16 +1,18 @@
-import { cachedNumber, cachedRecord } from "../../cache.ts";
+import { cachedNumber, cachedRecord } from "./values.ts";
 import { MeshBasicMaterial, Vector2 } from "three/webgpu";
 import { encode as encodeGeometry, decode as decodeGeometry } from "./geometry.ts";
 import { roadShapes, restoreRoadShapes } from "../roads.ts";
 import { Land } from "../land.ts";
 import { Terrain } from "../terrain.ts";
-import { HOUSE_VARIANTS } from "../../../public/content/house/params.ts";
+import { HOUSE_VARIANTS } from "../../../public/house/params.ts";
 import { type Plan, type Spot, type Rect, type Road } from "../plan.ts";
+import { STREET_NAMES, type StreetName } from "../town.ts";
+import { FIXTURE_NAMES, type Fixture } from "../gardens.ts";
 
 type Files = Record<string, Uint8Array>;
 
 export async function encode(world: Plan): Promise<Files> {
-  const { terrain, land, models, garden, signs, ...layout } = world;
+  const { terrain, land, models, fixtures, streetSigns, ...layout } = world;
   const material = new MeshBasicMaterial();
   const files: Files = {};
   const geometries = { terrain: terrain.mesh(material).geometry, ...roadShapes(world) };
@@ -19,7 +21,7 @@ export async function encode(world: Plan): Promise<Files> {
   return transform(
     {
       ...files,
-      layout: new TextEncoder().encode(JSON.stringify({ ...layout, models: [...models], garden: [...garden], signs: [...signs] })),
+      layout: new TextEncoder().encode(JSON.stringify({ ...layout, models: [...models], fixtures: [...fixtures], streetSigns: [...streetSigns] })),
       heights: new Uint8Array(terrain.heights.buffer, terrain.heights.byteOffset, terrain.heights.byteLength),
       cells: land.cells,
       parcels: land.parcels,
@@ -52,10 +54,10 @@ export async function decode(files: Files): Promise<Plan> {
       return { variant, spot: spot(r.spot) };
     }),
     fences: list(data.fences, spot),
-    garden: spots(data.garden),
+    fixtures: new Map([...spots(data.fixtures)].map(([name, at]) => [fixture(name), at])),
     hedges: list(data.hedges, spot),
     church: spot(data.church),
-    signs: spots(data.signs),
+    streetSigns: new Map([...spots(data.streetSigns)].map(([name, at]) => [streetName(name), at])),
     models: spots(data.models),
   };
   restoreRoadShapes(world, {
@@ -112,6 +114,18 @@ function road(value: unknown): Road {
     }),
   };
 }
+function fixture(name: string): Fixture {
+  const known = FIXTURE_NAMES.find((fixture) => fixture === name);
+  if (!known) throw new Error(`Invalid plan garden fixture ${name}`);
+  return known;
+}
+
+function streetName(name: string): StreetName {
+  const known = STREET_NAMES.find((street) => street === name);
+  if (!known) throw new Error(`Invalid plan street name ${name}`);
+  return known;
+}
+
 function spots(value: unknown): Map<string, Spot[]> {
   return new Map(
     list(value, (entry): [string, Spot[]] => {

@@ -1,0 +1,189 @@
+import { gltsLoader, isPreview, loadingManager, onDispose, scene } from "@drawcall/glts";
+import { CachedLodLoader, foliageLevels, Lod, type LodLevel } from "@drawcall/lod";
+import * as THREE from "three/webgpu";
+import { Fn, cameraPosition, distance, mix, modelWorldMatrix, positionLocal, reference, smoothstep, vec3, vec4 } from "three/tsl";
+import { BLOCK, HERO_VARIANT, VARIANTS } from "./layout.ts";
+import { LEAF_FOLIAGE } from "./leaf.ts";
+import { canopy, SINK, TOP } from "./block/shapes.ts";
+
+// A corn plant, ?variant=0 to 3, or with ?variant=2&hero=1 the plant the city's tour ends at, with every leaf in detail,
+// at levels of detail: source.glts, a detailed impostor from 1000 px, a coarse one from 350 px, gone below 215 px, as a
+// field of them, whose blocks take over at a distance, wants. Only the source casts shadows; every level casts with
+// both sides of its faces.
+//
+// With ?block=0 to 3, a block of corn field of that design as a field draws it beyond its plants, baked from
+// block/source.glts's plants onto block/low.glts's shell: after an empty level 0, where the field draws its plants, the
+// canopy rising out of the soil, then ridged, then flat. With ?block=x or ?block=z, the field's outer wall along that
+// side of a block of design 0, which only rises. A block rises over the distances (m) from the camera in its Lod's
+// `userData.rises`: sunk nearer than x, whole from y on; here it stands whole. Its thresholds keep it whole at any
+// size; a field moves them with its plants'.
+loadingManager.addHandler(/\.glts$/i, gltsLoader);
+const query = new URL(import.meta.url).searchParams;
+const block = query.get("block");
+scene.add(block === null ? await plant() : await fieldBlock(block));
+
+if (isPreview) {
+  const sun = new THREE.DirectionalLight("white", 3);
+  sun.position.set(4, 6, 3);
+  scene.add(sun, sun.target, new THREE.HemisphereLight("#dbe6f5", "#5b5140", 1.5));
+}
+
+/** The plant the query asks for. */
+async function plant(): Promise<Lod> {
+  const plants = new CachedLodLoader(loadingManager, {
+    onLevel: (object, index) => {
+      foliageLevels(object, LEAF_FOLIAGE);
+      if (index > 0) object.castShadow = false;
+      object.traverse((node) => {
+        if (node instanceof THREE.Mesh) for (const material of [node.material].flat()) material.shadowSide = THREE.DoubleSide;
+      });
+    },
+  });
+  const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
+    "0": () =>
+      plants.loadAsync({
+        url: "./source.glts?variant=0",
+        levels: [
+          { type: "impostor", layout: "hemi", maxPixels: 1000, resolution: 256, frames: 8, draw: { parallax: 0 } },
+          { type: "impostor", layout: "hemi", maxPixels: 350, resolution: 64, frames: 8, draw: { parallax: 0 } },
+          { type: "empty", maxPixels: 215 },
+        ],
+      }),
+    "1": () =>
+      plants.loadAsync({
+        url: "./source.glts?variant=1",
+        levels: [
+          { type: "impostor", layout: "hemi", maxPixels: 1000, resolution: 256, frames: 8, draw: { parallax: 0 } },
+          { type: "impostor", layout: "hemi", maxPixels: 350, resolution: 64, frames: 8, draw: { parallax: 0 } },
+          { type: "empty", maxPixels: 215 },
+        ],
+      }),
+    "2": () =>
+      plants.loadAsync({
+        url: "./source.glts?variant=2",
+        levels: [
+          { type: "impostor", layout: "hemi", maxPixels: 1000, resolution: 256, frames: 8, draw: { parallax: 0 } },
+          { type: "impostor", layout: "hemi", maxPixels: 350, resolution: 64, frames: 8, draw: { parallax: 0 } },
+          { type: "empty", maxPixels: 215 },
+        ],
+      }),
+    "3": () =>
+      plants.loadAsync({
+        url: "./source.glts?variant=3",
+        levels: [
+          { type: "impostor", layout: "hemi", maxPixels: 1000, resolution: 256, frames: 8, draw: { parallax: 0 } },
+          { type: "impostor", layout: "hemi", maxPixels: 350, resolution: 64, frames: 8, draw: { parallax: 0 } },
+          { type: "empty", maxPixels: 215 },
+        ],
+      }),
+    "2 hero": () =>
+      plants.loadAsync({
+        url: "./source.glts?variant=2&hero=1",
+        levels: [
+          { type: "impostor", layout: "hemi", maxPixels: 1000, resolution: 256, frames: 8, draw: { parallax: 0 } },
+          { type: "impostor", layout: "hemi", maxPixels: 350, resolution: 64, frames: 8, draw: { parallax: 0 } },
+          { type: "empty", maxPixels: 215 },
+        ],
+      }),
+  };
+  if (Object.keys(LADDERS).length !== VARIANTS + 1) throw new Error(`corn: ${Object.keys(LADDERS).length - 1} plant ladders for ${VARIANTS} variants`);
+  if (!(`${HERO_VARIANT} hero` in LADDERS)) throw new Error(`corn: no hero ladder for variant ${HERO_VARIANT}`);
+  const variant = query.get("variant") ?? "0";
+  const hero = query.get("hero") ?? "0";
+  if (hero !== "0" && hero !== "1") throw new Error(`corn: hero must be 0 or 1, not ${hero}`);
+  const load = LADDERS[hero === "1" ? `${variant} hero` : variant];
+  if (!load) throw new Error(`corn: variant must be a whole number below ${VARIANTS}, or ${HERO_VARIANT} with hero=1, not ${variant}`);
+  const lod = new Lod(await load(), 1, { manager: loadingManager });
+  onDispose(() => lod.dispose());
+  return lod;
+}
+
+/** The block of field `block` names: a design's canopy, or a wall. */
+async function fieldBlock(block: string): Promise<Lod> {
+  if (query.has("variant") || query.has("hero")) throw new Error(`corn: a block takes no variant or hero, not ${query}`);
+  const blocks = new CachedLodLoader(loadingManager);
+  const BAKES: Record<string, () => Promise<LodLevel[]>> = {
+    "0": () => blocks.loadAsync({ url: "./block/source.glts?design=0", levels: [{ type: "baked", low: "./low.glts", textureSize: 256 }] }),
+    "1": () => blocks.loadAsync({ url: "./block/source.glts?design=1", levels: [{ type: "baked", low: "./low.glts", textureSize: 256 }] }),
+    "2": () => blocks.loadAsync({ url: "./block/source.glts?design=2", levels: [{ type: "baked", low: "./low.glts", textureSize: 256 }] }),
+    "3": () => blocks.loadAsync({ url: "./block/source.glts?design=3", levels: [{ type: "baked", low: "./low.glts", textureSize: 256 }] }),
+    x: () => blocks.loadAsync({ url: "./block/source.glts?design=0&wall=x", levels: [{ type: "baked", low: "./low.glts?wall=x", textureSize: 256 }] }),
+    z: () => blocks.loadAsync({ url: "./block/source.glts?design=0&wall=z", levels: [{ type: "baked", low: "./low.glts?wall=z", textureSize: 256 }] }),
+  };
+  const load = BAKES[block];
+  if (!load) throw new Error(`corn: block must be a design from 0 to 3, or x or z for a wall, not ${block}`);
+  const [, baked] = await load();
+  if (!baked?.load || !baked.hold) throw new Error("corn: a block's ladder has no deferred baked level");
+  // Its levels are made from the bake, which it holds until it is disposed.
+  const release = baked.hold();
+  const bake = await baked.load();
+  if (!(bake instanceof THREE.Mesh) || !(bake.material instanceof THREE.MeshStandardNodeMaterial))
+    throw new Error("corn: a block's baked level is not a mesh of a standard material");
+  const material = bake.material;
+  for (const map of [material.map, material.normalMap]) if (map) map.anisotropy = 8;
+  material.normalScale.set(0.6, 0.6);
+  material.roughnessMap = null;
+  material.roughness = 0.9;
+  const data = { rises: new THREE.Vector2(-2, -1) };
+  const rising = risingFrom(material, data);
+  const levels = block === "x" || block === "z" ? [wallLevel(bake.geometry, rising)] : canopyLevels(bake.geometry, material, rising);
+  const lod = new Lod([{ object: new THREE.Object3D() }, ...levels], 1, { manager: loadingManager });
+  lod.userData = data;
+  // drawn before the plants, which then skip the pixels it hides
+  lod.traverse((node) => (node.renderOrder = -1));
+  onDispose(() => {
+    lod.dispose();
+    release();
+    rising.dispose();
+    for (const { object } of levels) if (object.geometry !== bake.geometry) object.geometry.dispose();
+  });
+  return lod;
+}
+
+/** The canopy rising out of the soil near the camera, then the bake on its ridges, then flat far away, where the ridges are subpixel. */
+function canopyLevels(
+  geometry: THREE.BufferGeometry,
+  material: THREE.MeshStandardNodeMaterial,
+  rising: THREE.MeshStandardNodeMaterial,
+): { object: THREE.Mesh; maxPixels: number }[] {
+  const near = new THREE.Mesh(canopy(BLOCK * 2), rising);
+  const ridged = new THREE.Mesh(geometry, material);
+  const flat = new THREE.Mesh(new THREE.PlaneGeometry(BLOCK, BLOCK).rotateX(-Math.PI / 2).translate(0, TOP, 0), material);
+  const levels = [
+    { object: near, maxPixels: Infinity },
+    { object: ridged, maxPixels: 1000 },
+    { object: flat, maxPixels: 60 },
+  ];
+  for (const { object } of levels) {
+    object.castShadow = false;
+    object.receiveShadow = true;
+  }
+  return levels;
+}
+
+/** The wall, which reaches into the soil up close: its bake's shell ends at the ground, inside the plants' bounds. */
+function wallLevel(geometry: THREE.BufferGeometry, rising: THREE.MeshStandardNodeMaterial): { object: THREE.Mesh; maxPixels: number } {
+  const sunk = geometry.clone();
+  const position = sunk.getAttribute("position");
+  for (let i = 0; i < position.count; i++) if (position.getY(i) === 0) position.setY(i, -SINK);
+  const object = new THREE.Mesh(sunk, rising);
+  object.castShadow = object.receiveShadow = true;
+  return { object, maxPixels: Infinity };
+}
+
+/**
+ * A copy of `material` that rises out of the soil with distance from the camera over `data.rises`: sunk below the
+ * ground nearer than its x, whole from its y on. Between, the plants hide it; the ramp it forms closes the canopy, so
+ * that past the plants no view reaches under it.
+ */
+function risingFrom(material: THREE.MeshStandardNodeMaterial, data: { rises: THREE.Vector2 }): THREE.MeshStandardNodeMaterial {
+  const rises = reference("rises", "vec2", data);
+  const copy = material.clone();
+  // after the instance matrix: the vertex in the block's space, placed in the field
+  copy.positionNode = Fn(() => {
+    const world = modelWorldMatrix.mul(vec4(positionLocal, 1)).xyz;
+    const up = smoothstep(rises.x, rises.y, distance(world, cameraPosition));
+    return vec3(positionLocal.x, mix(-SINK, positionLocal.y, up), positionLocal.z);
+  })();
+  return copy;
+}

@@ -1,0 +1,30 @@
+import { gltsLoader, isPreview, loadingManager, onDispose, scene } from "@drawcall/glts";
+import { CachedLodLoader, Lod } from "@drawcall/lod";
+import * as THREE from "three/webgpu";
+
+// A 2.4 m bay of picket fence at levels of detail: source.glts, simplified geometry, then an impostor, gone below 10 px.
+// Every level casts with both sides of its faces.
+loadingManager.addHandler(/\.glts$/i, gltsLoader);
+const loader = new CachedLodLoader(loadingManager, {
+  onLevel: (object) =>
+    object.traverse((node) => {
+      if (node instanceof THREE.Mesh) for (const material of [node.material].flat()) material.shadowSide = THREE.DoubleSide;
+    }),
+});
+const levels = await loader.loadAsync({
+  url: "./source.glts?length=2.4",
+  levels: [
+    { type: "simplify", ratio: 0.3 },
+    { type: "impostor", layout: "hemi", maxPixels: 40, resolution: 64 },
+    { type: "empty", maxPixels: 10 },
+  ],
+});
+const lod = new Lod(levels, 1, { manager: loadingManager });
+scene.add(lod);
+onDispose(() => lod.dispose());
+
+if (isPreview) {
+  const sun = new THREE.DirectionalLight("white", 3);
+  sun.position.set(4, 6, 3);
+  scene.add(sun, sun.target, new THREE.HemisphereLight("#dbe6f5", "#5b5140", 1.5));
+}

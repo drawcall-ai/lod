@@ -1,0 +1,7 @@
+import { disposeRecursive, onDispose, scene } from "@drawcall/glts";
+import { ladybird } from "./model.ts";
+
+// A seven-spot ladybird standing on y = 0, facing +z.
+const bug = ladybird();
+onDispose(() => disposeRecursive(scene));
+scene.add(bug);

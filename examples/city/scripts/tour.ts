@@ -10,7 +10,7 @@
 // at stationary keys and while moving. Passes can overlap, so this is not elapsed
 // frame time or FPS; `cpu` measures one frame's CPU work.
 // Draw calls and triangles are three's counts, which take every indirect draw
-// (an InstancedLod's levels) at its full instance count. --no-terrain leaves the ground mesh out, --query adds page URL parameters,
+// (a Lod's levels) at its full instance count. --no-terrain leaves the ground mesh out, --query adds page URL parameters,
 // --keys shoots only those keys; --cold and --browser-profile are in browser.ts.
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";

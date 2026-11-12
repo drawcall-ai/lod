@@ -1,14 +1,15 @@
-import { HERO_VARIANT, BLOCK, plantTurn, type Plant } from "../../../public/content/corn/layout.ts";
+import { HERO_VARIANT, BLOCK, plantTurn, type Plant } from "../../../public/corn/layout.ts";
 import * as THREE from "three/webgpu";
-import { Random } from "../../../public/content/random.ts";
-import type { InstancedLod } from "@drawcall/lod";
-import type { NearTile, TileChunk } from "../near-tiles.ts";
+import seedrandom from "seedrandom";
+import type { NearTile, TileCluster } from "../near-tiles.ts";
+import type { Range } from "../scatter.ts";
 import { axes, type Field, type Plan } from "../plan.ts";
 import type { Terrain } from "../terrain.ts";
+import type { Wall } from "../../../public/corn/block/model.ts";
 
 /** A side of a block on its field's boundary: rows end there (`x`) or run along it (`z`), on the block's +side or, turned, its -side. */
-export interface Wall {
-  axis: "x" | "z";
+export interface TileWall {
+  wall: Wall;
   turned: boolean;
 }
 
@@ -22,7 +23,7 @@ export interface Tile {
   field: Field;
   /** Turned half round. */
   flip: boolean;
-  walls: Wall[];
+  walls: TileWall[];
 }
 
 /** The fields cut into block tiles, each with one of `designs` designs, its frame and outer walls; `top` is the height of the tiles' centres. */
@@ -30,7 +31,7 @@ export function cut(plan: Plan, designs: number, top: number): Tile[] {
   const tiles: Tile[] = [];
   for (const [f, field] of plan.fields.entries()) {
     const { x: ax, z: az } = axes(field.angle);
-    const r = new Random(100 + f);
+    const r = seedrandom(String(100 + f));
     const across = (2 * field.halfX) / BLOCK;
     const along = (2 * field.halfZ) / BLOCK;
     for (let j = 0; j < along; j++)
@@ -39,7 +40,7 @@ export function cut(plan: Plan, designs: number, top: number): Tile[] {
         const lz = -field.halfZ + (j + 0.5) * BLOCK;
         const cx = field.x + ax.x * lx + az.x * lz;
         const cz = field.z + ax.y * lx + az.y * lz;
-        const flip = r.chance(0.5);
+        const flip = r() < 0.5;
         const s = flip ? -1 : 1;
         const slope = plan.terrain.slope(cx, cz);
         const x = new THREE.Vector3(s * ax.x, s * (slope.x * ax.x + slope.y * ax.y), s * ax.y);
@@ -47,14 +48,14 @@ export function cut(plan: Plan, designs: number, top: number): Tile[] {
         const matrix = new THREE.Matrix4().makeBasis(x, new THREE.Vector3(0, 1, 0), z).setPosition(cx, plan.terrain.height(cx, cz), cz);
         const centre = new THREE.Vector3(0, top, 0).applyMatrix4(matrix);
         // outer sides in the field's frame (sign), seen from the block turned or not
-        const walls: Wall[] = [];
-        const wall = (axis: "x" | "z", sign: number) => walls.push({ axis, turned: sign * s < 0 });
-        if (i === 0) wall("x", -1);
-        if (i + 1 >= across) wall("x", 1);
-        if (j === 0) wall("z", -1);
-        if (j + 1 >= along) wall("z", 1);
+        const walls: TileWall[] = [];
+        const addWall = (wall: Wall, sign: number) => walls.push({ wall, turned: sign * s < 0 });
+        if (i === 0) addWall("x", -1);
+        if (i + 1 >= across) addWall("x", 1);
+        if (j === 0) addWall("z", -1);
+        if (j + 1 >= along) addWall("z", 1);
         tiles.push({
-          design: r.int(0, designs - 1),
+          design: Math.floor(designs * r()),
           matrix,
           centre,
           field,
@@ -107,7 +108,14 @@ function worldTurn(tile: Tile, plant: Plant, target: THREE.Quaternion): THREE.Qu
   return plantTurn(plant, -tile.field.angle + (tile.flip ? Math.PI : 0), target);
 }
 
-/** The field tiles near the camera as chunks of corn plants, one InstancedLod per variant; the hero plant is left out. */
+/** A plant variant's instances: `perTile` per slot of `range`, each plant reaching `reach` from its origin. */
+export interface PlantRange {
+  range: Range;
+  perTile: number;
+  reach: number;
+}
+
+/** The field tiles near the camera, written into a slot of each plant variant's range; the hero plant is left out. */
 export class FieldTiles {
   private readonly matrix = new THREE.Matrix4();
   private readonly position = new THREE.Vector3();
@@ -119,8 +127,8 @@ export class FieldTiles {
     private readonly designs: Plant[][],
     private readonly terrain: Terrain,
     private readonly hero: { tile: number; plant: number },
-    /** Per plant variant, the InstancedLod drawing it. */
-    private readonly lods: readonly InstancedLod[],
+    /** Per plant variant, its instances. */
+    private readonly variants: readonly PlantRange[],
   ) {}
 
   /** The tiles whose centres lie within `reach` of `eye`, nearest first. */
@@ -133,24 +141,31 @@ export class FieldTiles {
     return near.sort((a, b) => a.distance - b.distance);
   }
 
-  /** Tile `t`'s plants, a chunk per variant it has plants of. */
-  chunks(t: number): TileChunk[] {
+  /** Writes tile `t`'s plants into slot `slot`, and gives a cluster per variant it has plants of. */
+  fill(t: number, slot: number): TileCluster[] {
     const tile = this.tiles[t];
     if (!tile) throw new Error(`no corn tile ${t}`);
     const design = this.designs[tile.design];
     if (!design) throw new Error(`no corn design ${tile.design}`);
     const plants = design.filter((_, k) => t !== this.hero.tile || k !== this.hero.plant);
-    return this.lods.flatMap((lod, variant) => {
+    return this.variants.flatMap(({ range, perTile, reach }, variant) => {
       const mine = plants.filter((plant) => plant.variant === variant);
       if (mine.length === 0) return [];
-      const instanceMatrix = new THREE.InstancedBufferAttribute(new Float32Array(mine.length * 16), 16);
+      const { node } = range;
+      const start = range.start + slot * perTile;
+      const boundingBox = new THREE.Box3();
       mine.forEach((plant, i) => {
         this.position.set(plant.x, 0, plant.z).applyMatrix4(tile.matrix);
         this.position.y = this.terrain.height(this.position.x, this.position.z);
+        boundingBox.expandByPoint(this.position);
         worldTurn(tile, plant, this.turn);
-        this.matrix.compose(this.position, this.turn, this.one).toArray(instanceMatrix.array, i * 16);
+        node.setMatrixAt(start + i, this.matrix.compose(this.position, this.turn, this.one));
       });
-      return [{ lod, parameters: { instanceMatrix } }];
+      node.instanceMatrix.addUpdateRange(start * 16, mine.length * 16);
+      node.instanceMatrix.needsUpdate = true;
+      if (!node.clusters) throw new Error("Corn plants are drawn once their Scatter has sealed");
+      const cluster = { start, count: mine.length, boundingBox: boundingBox.expandByScalar(reach), minScale: 1, maxScale: 1 };
+      return [{ clusters: node.clusters, cluster }];
     });
   }
 }

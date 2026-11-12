@@ -1,5 +1,4 @@
-import { DefaultLoadingManager, type LoadingManager, type Object3D, type Renderer } from "three/webgpu";
-import { hasLoadingManager } from "./renderer.js";
+import { DefaultLoadingManager, type LoadingManager, type Renderer } from "three/webgpu";
 
 /** How long a held item waits between looks at its renderer's renders (see `look`): a frame's time. */
 const LOOK_MS = 16;
@@ -9,7 +8,7 @@ const LOOK_MS = 16;
  * changed it has returned, so what an app's callback does, such as throw or render, happens outside three's render.
  */
 export class LoadingItem {
-  /** The LoadingManager given; else the nearest Lod above's, else three's default (see `manager`). */
+  /** The LoadingManager given; else three's default (see `manager`). */
   given: LoadingManager | undefined;
   /** The LoadingManager the held item started on, which it ends on. */
   private holding: LoadingManager | undefined;
@@ -18,18 +17,12 @@ export class LoadingItem {
   private renders = 0;
   private looking = false;
 
-  constructor(
-    private readonly lod: Object3D,
-    /** The item's name: the kind of Lod and its uuid. */
-    private readonly name: string,
-    private readonly renderer: Renderer,
-  ) {}
+  /** `name` names the item: the Lod and its uuid. */
+  constructor(private readonly name: string) {}
 
   /** Where the item goes. */
   get manager(): LoadingManager {
-    if (this.given) return this.given;
-    for (let node = this.lod.parent; node; node = node.parent) if (hasLoadingManager(node)) return node.manager;
-    return DefaultLoadingManager;
+    return this.given ?? DefaultLoadingManager;
   }
 
   /** A render updated the Lod: the next look at the renderer's renders does not end the item. */
@@ -37,13 +30,17 @@ export class LoadingItem {
     this.updated = true;
   }
 
-  /** Hold the item if `held`, else end it; while it is held, look at the renderer's renders (see `look`). */
-  sync(held: boolean): void {
-    this.hold(held);
-    if (!this.holding || this.looking) return;
+  /**
+   * Hold the item if `held` and `renderer`, the one drawing the Lod, is known, else end it; while it is held, look at
+   * the renderer's renders (see `look`). Before a render has updated the Lod it holds none: a host loading the Lod
+   * renders it only once its LoadingManager is done.
+   */
+  sync(renderer: Renderer | null, held: boolean): void {
+    this.hold(held && renderer !== null);
+    if (!renderer || !this.holding || this.looking) return;
     // The first look only counts the renders: those still to come in this render are not without an update.
     this.updated = true;
-    this.look();
+    this.look(renderer);
   }
 
   /** Report a failure on the LoadingManager the item is held on, and end the item. */
@@ -73,8 +70,7 @@ export class LoadingItem {
    * starts it again. Renders of other scenes in a separate task can end it early, and the next update reopens it; a
    * renderer that only compiles holds a hidden Lod's item.
    */
-  private look(): void {
-    const { renderer } = this;
+  private look(renderer: Renderer): void {
     this.looking = true;
     const timer: unknown = setTimeout(() => {
       this.looking = false;
@@ -83,7 +79,7 @@ export class LoadingItem {
       if (renders !== this.renders && !this.updated) return this.hold(false);
       this.renders = renders;
       this.updated = false;
-      this.look();
+      this.look(renderer);
     }, LOOK_MS);
     // A held item must not hold Node.js open.
     if (typeof timer === "object" && timer !== null && "unref" in timer && typeof timer.unref === "function") timer.unref();

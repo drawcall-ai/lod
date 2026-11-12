@@ -1,0 +1,81 @@
+import { gltsLoader, isPreview, loadingManager, onDispose, scene } from "@drawcall/glts";
+import { CachedLodLoader, Lod, type LodLevel } from "@drawcall/lod";
+import * as THREE from "three/webgpu";
+
+// A street sign, ?text= one of the town's street names, at levels of detail: source.glts, simplified geometry, then an
+// impostor, gone below 4 px. Every level casts with both sides of its faces.
+loadingManager.addHandler(/\.glts$/i, gltsLoader);
+const loader = new CachedLodLoader(loadingManager, {
+  onLevel: (object) =>
+    object.traverse((node) => {
+      if (node instanceof THREE.Mesh) for (const material of [node.material].flat()) material.shadowSide = THREE.DoubleSide;
+    }),
+});
+const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
+  "Maple St": () =>
+    loader.loadAsync({
+      url: "./source.glts?text=Maple+St",
+      levels: [
+        { type: "simplify", ratio: 0.5 },
+        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 64 },
+        { type: "empty", maxPixels: 4 },
+      ],
+    }),
+  "Church Rd": () =>
+    loader.loadAsync({
+      url: "./source.glts?text=Church+Rd",
+      levels: [
+        { type: "simplify", ratio: 0.5 },
+        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 64 },
+        { type: "empty", maxPixels: 4 },
+      ],
+    }),
+  "Mill Lane": () =>
+    loader.loadAsync({
+      url: "./source.glts?text=Mill+Lane",
+      levels: [
+        { type: "simplify", ratio: 0.5 },
+        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 64 },
+        { type: "empty", maxPixels: 4 },
+      ],
+    }),
+  "Oak Ave": () =>
+    loader.loadAsync({
+      url: "./source.glts?text=Oak+Ave",
+      levels: [
+        { type: "simplify", ratio: 0.5 },
+        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 64 },
+        { type: "empty", maxPixels: 4 },
+      ],
+    }),
+  "High St": () =>
+    loader.loadAsync({
+      url: "./source.glts?text=High+St",
+      levels: [
+        { type: "simplify", ratio: 0.5 },
+        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 64 },
+        { type: "empty", maxPixels: 4 },
+      ],
+    }),
+  "Elm St": () =>
+    loader.loadAsync({
+      url: "./source.glts?text=Elm+St",
+      levels: [
+        { type: "simplify", ratio: 0.5 },
+        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 64 },
+        { type: "empty", maxPixels: 4 },
+      ],
+    }),
+};
+const text = new URL(import.meta.url).searchParams.get("text") ?? "Maple St";
+const load = LADDERS[text];
+if (!load) throw new Error(`street sign: text must be one of ${Object.keys(LADDERS).join(", ")}, not ${text}`);
+const lod = new Lod(await load(), 1, { manager: loadingManager });
+scene.add(lod);
+onDispose(() => lod.dispose());
+
+if (isPreview) {
+  const sun = new THREE.DirectionalLight("white", 3);
+  sun.position.set(4, 6, 3);
+  scene.add(sun, sun.target, new THREE.HemisphereLight("#dbe6f5", "#5b5140", 1.5));
+}

@@ -1,0 +1,83 @@
+import { disposeRecursive, onDispose, scene } from "@drawcall/glts";
+import * as THREE from "three/webgpu";
+import { mergeGeometries, mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
+
+/** A washing line between two posts, with a row of washing pegged to it. */
+function washingLine(): THREE.Group {
+  const parts = new Parts();
+  const post = new THREE.MeshStandardMaterial({ name: "post", color: "#9da3a5", metalness: 0.8, roughness: 0.5 });
+  const line = new THREE.MeshStandardMaterial({ name: "line", color: "#e8e8e0", roughness: 0.7 });
+  const cloth = new THREE.MeshStandardMaterial({ name: "washing", vertexColors: true, roughness: 0.9, side: THREE.DoubleSide });
+  const length = 5;
+  for (const x of [-length / 2, length / 2]) parts.add(post, new THREE.CylinderGeometry(0.03, 0.03, 1.9, 6).translate(x, 0.95, 0));
+  parts.add(line, new THREE.CylinderGeometry(0.004, 0.004, length, 4).rotateZ(Math.PI / 2).translate(0, 1.82, 0));
+  const colors = ["#f2f2ee", "#7b9bc4", "#e3c25a", "#c45a5a", "#f2f2ee", "#6f8a6a"];
+  colors.forEach((c, i) => {
+    const w = 0.5 + (i % 3) * 0.15;
+    const h = 0.4 + (i % 2) * 0.3;
+    parts.add(cloth, tint(new THREE.PlaneGeometry(w, h).translate(-length / 2 + 0.6 + i * 0.75, 1.8 - h / 2, 0), new THREE.Color(c)));
+  });
+  return parts.build("washing line");
+}
+
+/** Adds a constant vertex colour so the geometry can merge with vertex-coloured parts. */
+function tint(g: THREE.BufferGeometry, color: THREE.Color): THREE.BufferGeometry {
+  const n = g.getAttribute("position").count;
+  const data = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) color.toArray(data, i * 3);
+  g.setAttribute("color", new THREE.BufferAttribute(data, 3));
+  return g;
+}
+
+/**
+ * Collects geometry per material and builds one shadowed mesh per material. `at(matrix)`
+ * returns a view that places everything added through it in a local frame.
+ */
+class Parts {
+  constructor(
+    private readonly byMaterial = new Map<THREE.Material, THREE.BufferGeometry[]>(),
+    private readonly matrix?: THREE.Matrix4,
+  ) {}
+
+  at(matrix: THREE.Matrix4): Parts {
+    return new Parts(this.byMaterial, this.matrix ? this.matrix.clone().multiply(matrix) : matrix);
+  }
+
+  add(material: THREE.Material, ...geometries: THREE.BufferGeometry[]): void {
+    const list = this.byMaterial.get(material) ?? [];
+    for (const g of geometries) list.push(this.matrix ? g.applyMatrix4(this.matrix) : g);
+    this.byMaterial.set(material, list);
+  }
+
+  build(name: string): THREE.Group {
+    const group = new THREE.Group();
+    group.name = name;
+    for (const [material, list] of this.byMaterial) {
+      const mesh = new THREE.Mesh(merge(list), material);
+      mesh.name = `${name}:${material.name}`;
+      mesh.castShadow = mesh.receiveShadow = true;
+      group.add(mesh);
+    }
+    return group;
+  }
+}
+
+/** Merges geometries that share attributes; non-indexed inputs get an index first. */
+function merge(list: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  const parts = list.map((g) => (g.index ? strip(g) : mergeVertices(strip(g))));
+  const merged = mergeGeometries(parts);
+  if (!merged) throw new Error("mergeGeometries failed: inputs have different attributes");
+  return merged;
+}
+
+/** Keeps only the attributes all generators share, so any two parts can merge. */
+function strip(g: THREE.BufferGeometry): THREE.BufferGeometry {
+  for (const name of Object.keys(g.attributes)) if (!["position", "normal", "uv", "color"].includes(name)) g.deleteAttribute(name);
+  g.morphAttributes = {};
+  g.clearGroups();
+  return g;
+}
+
+const object = washingLine();
+onDispose(() => disposeRecursive(scene));
+scene.add(object);

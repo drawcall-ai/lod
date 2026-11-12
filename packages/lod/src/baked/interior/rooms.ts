@@ -14,7 +14,7 @@ const OVERLAP = 0.02;
  *
  * Lights are refused: wherever the source draws they would be scene lights, so every
  * switch to or from it changes the scene's light count (and recompiles every lit
- * material), and an InstancedLod's templates light nothing. Lamps glow with emissive
+ * material), and a Lod's templates light nothing. Lamps glow with emissive
  * materials instead.
  */
 export function readBoxes(interior: Object3D, placement: Matrix4): Box3[] {

@@ -14,14 +14,13 @@ const isPipelines = (value: unknown): value is Pipelines =>
 /**
  * r186 caches a pipeline before it finishes, but a compile reusing it receives none of its promises. Share that
  * pipeline's readiness, not the readiness of every earlier level: wrap r186's `_pipelines.getForRender`, as no public
- * API tells when a cached pipeline is ready. Installed once per renderer, by its LodGpu. The adapter
+ * API tells when a cached pipeline is ready. Installed once per renderer, by its Compiler. The adapter
  * follows the renderer's pipeline cache lifetime; pending entries disappear on success or failure and otherwise hold no
  * completed pipelines.
  */
 export function sharePipelines(renderer: Renderer): void {
   const pipelines: unknown = Reflect.get(renderer, "_pipelines");
   if (!isPipelines(pipelines)) throw new Error("Lod: three's renderer keeps no render pipelines (lod mirrors r186)");
-  if (Reflect.get(pipelines.getForRender, SHARED) === true) return;
   const get = pipelines.getForRender;
   const pending = new WeakMap<object, Promise<void>>();
   pipelines.getForRender = (object, promises) => {
@@ -39,11 +38,7 @@ export function sharePipelines(renderer: Renderer): void {
     promises.push(ready);
     return pipeline;
   };
-  Reflect.set(pipelines.getForRender, SHARED, true);
 }
-
-/** Marks the wrapped getForRender: a second LodGpu of the renderer shares its pipelines already. */
-const SHARED = Symbol("lodSharedPipelines");
 
 /**
  * A cached pipeline may have been started by the host before the adapter was installed: wait until the backend's data

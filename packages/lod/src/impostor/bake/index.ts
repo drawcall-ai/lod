@@ -31,7 +31,7 @@ export interface BakeImpostorOptions {
    * sharp as they are at this height, not with the look of their small mips. Alpha-tested
    * materials are read at full detail at every size, which holds their cut-out's coverage.
    * Default: the height where it is sharp (see `texelPixels`, and `framePixels` for a
-   * LodLoader level).
+   * CachedLodLoader level).
    */
   maxPixels?: number;
   /**
@@ -49,10 +49,10 @@ export interface BakeImpostorOptions {
 /**
  * Bake `object` (in its own space, ignoring its own transform) into an impostor, drawing
  * with `renderer`, as three's PMREMGenerator does. Nested LODs are baked at their level 0,
- * an InstancedLod with every instance at its level 0. ImpostorMeshes are refused: bake
+ * a Lod with every instance at its level 0. ImpostorMeshes are refused: bake
  * from their source instead.
  *
- * `renderer` must be one made for bakes: make one with `createBakeRenderer`, as LodLoader
+ * `renderer` must be one made for bakes: make one with `createBakeRenderer`, as CachedLodLoader
  * does for itself and a .glts script that bakes does too. Such a renderer is initialised,
  * clears to transparent black and only when told to (`autoClear = false`), and has no MRT
  * and no XR session; the bake throws otherwise. Nor may its canvas be a square of a frame's size (resolution ×
@@ -73,6 +73,16 @@ export function bakeImpostor(object: Object3D, renderer: Renderer, options: Bake
 
 async function bake(object: Object3D, renderer: Renderer, options: BakeImpostorOptions): Promise<Impostor> {
   checkBakeRenderer(renderer, "bakeImpostor");
+  const copy = await sourceForBake(object);
+  try {
+    return await bakeSource(copy.root, renderer, options);
+  } finally {
+    copy.dispose();
+  }
+}
+
+/** Bake `source`, a copy of the object that the bake may move and change. */
+async function bakeSource(source: Object3D, renderer: Renderer, options: BakeImpostorOptions): Promise<Impostor> {
   const layout = options.layout ?? "full";
   const frames = options.frames ?? (layout === "hemi" ? 12 : 16);
   const resolution = options.resolution ?? 128;
@@ -83,7 +93,6 @@ async function bake(object: Object3D, renderer: Renderer, options: BakeImpostorO
   if (options.maxPixels !== undefined && !(options.maxPixels > 0)) throw new Error("bakeImpostor: maxPixels must be > 0");
   const cell = 2 ** Math.floor(Math.log2(resolution));
 
-  const source = sourceForBake(object);
   source.matrix.identity();
   source.matrix.decompose(source.position, source.quaternion, source.scale);
   // Bones are descendants, so this also moves them; getVertexPosition reads bone.matrixWorld.

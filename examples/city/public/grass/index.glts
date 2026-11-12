@@ -1,0 +1,70 @@
+import { gltsLoader, isPreview, loadingManager, onDispose, scene } from "@drawcall/glts";
+import { CachedLodLoader, foliageLevels, Lod, type LodLevel } from "@drawcall/lod";
+import * as THREE from "three/webgpu";
+import { GREEN } from "./green.ts";
+
+// A patch of grass, ?kind=lawn or meadow and ?variant=0 or 1, at levels of detail: source.glts's blades, then an
+// impostor, gone below 1 px. Every level takes the colour of a meadow's ground, which its blades' neutral shading is
+// multiplied by, as its material colour; it receives shadows but casts none.
+loadingManager.addHandler(/\.glts$/i, gltsLoader);
+const loader = new CachedLodLoader(loadingManager, {
+  onLevel: (object) => {
+    foliageLevels(object, { translucency: 0.5 });
+    object.traverse((node) => {
+      if (!(node instanceof THREE.Mesh)) return;
+      const material = node.material;
+      if (!(material instanceof THREE.MeshStandardNodeMaterial)) throw new Error("grass: its levels need a standard material");
+      material.color.setRGB(...GREEN);
+      node.castShadow = false;
+      node.receiveShadow = true;
+    });
+  },
+});
+const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
+  "lawn 0": () =>
+    loader.loadAsync({
+      url: "./source.glts?kind=lawn&variant=0",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 64 },
+        { type: "empty", maxPixels: 1 },
+      ],
+    }),
+  "lawn 1": () =>
+    loader.loadAsync({
+      url: "./source.glts?kind=lawn&variant=1",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 64 },
+        { type: "empty", maxPixels: 1 },
+      ],
+    }),
+  "meadow 0": () =>
+    loader.loadAsync({
+      url: "./source.glts?kind=meadow&variant=0",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 64 },
+        { type: "empty", maxPixels: 1 },
+      ],
+    }),
+  "meadow 1": () =>
+    loader.loadAsync({
+      url: "./source.glts?kind=meadow&variant=1",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 64 },
+        { type: "empty", maxPixels: 1 },
+      ],
+    }),
+};
+const query = new URL(import.meta.url).searchParams;
+const kind = query.get("kind") ?? "lawn";
+const variant = query.get("variant") ?? "0";
+const load = LADDERS[`${kind} ${variant}`];
+if (!load) throw new Error(`grass: kind must be lawn or meadow and variant 0 or 1, not ${kind} and ${variant}`);
+const lod = new Lod(await load(), 1, { manager: loadingManager });
+scene.add(lod);
+onDispose(() => lod.dispose());
+
+if (isPreview) {
+  const sun = new THREE.DirectionalLight("white", 3);
+  sun.position.set(4, 6, 3);
+  scene.add(sun, sun.target, new THREE.HemisphereLight("#dbe6f5", "#5b5140", 1.5));
+}

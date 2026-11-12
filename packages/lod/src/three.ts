@@ -13,7 +13,6 @@ import {
   type Color,
   type CompressedTexture,
   type InstancedMesh,
-  type Loader,
   type Material,
   type Matrix4,
   type Mesh,
@@ -28,8 +27,8 @@ import {
   type StorageInstancedBufferAttribute,
   type Texture,
 } from "three/webgpu";
-import type { GLTSLoader, GLTSScene } from "@drawcall/glts";
-import type { InstancedLod } from "./instanced/index.js";
+import type { GLTSScene } from "@drawcall/glts";
+import type { Lod } from "./lod.js";
 import type { ImpostorMesh } from "./impostor/mesh/index.js";
 
 // Type guards on three's `isX` flags, which hold across copies of three (and of this
@@ -46,14 +45,12 @@ export const isLight = (node: Object3D): boolean => flag(node, "isLight");
 export const isScene = (node: Object3D): node is Scene => flag(node, "isScene");
 export const isLine = (node: Object3D): boolean => flag(node, "isLine");
 export const isPoints = (node: Object3D): boolean => flag(node, "isPoints");
+export const isSprite = (node: Object3D): boolean => flag(node, "isSprite");
 /** A scene a GLTSLoader loaded: its loader gives it a dispose of its own, which a clone, a plain Scene, lacks. */
 export const isGLTSScene = (node: Object3D): node is GLTSScene => isScene(node) && "source" in node && Object.hasOwn(node, "dispose");
-/** A GLTSLoader, recognized by the bundled module provenance it publishes. */
-export const isGLTSLoader = (loader: Loader): loader is GLTSLoader =>
-  "moduleSources" in loader && typeof loader.moduleSources === "object" && loader.moduleSources !== null;
 export const isImpostorMesh = (node: Object3D): node is ImpostorMesh => flag(node, "isImpostorMesh");
-export const isInstancedLod = (node: Object3D): node is InstancedLod => flag(node, "isInstancedLod");
-/** three's LOD and this package's Lod and InstancedLod. */
+export const isLod = (node: Object3D): node is Lod => flag(node, "isLod");
+/** three's LOD and this package's Lod. */
 export const isLOD = (
   node: Object3D,
 ): node is Object3D & { isLOD: true; autoUpdate: boolean; readonly levels: ReadonlyArray<{ readonly object?: Object3D; readonly box?: Box3 }> } =>
@@ -93,6 +90,7 @@ function nodeMaterialOf(material: Material): new () => NodeMaterial {
   if (!Type) throw new Error(`@drawcall/lod: ${material.type} has no node material to draw with WebGPU`);
   return Type;
 }
+export const isBox3 = (value: unknown): value is Box3 => flag(value, "isBox3");
 export const isTexture = (value: unknown): value is Texture => flag(value, "isTexture");
 export const isCompressedTexture = (value: unknown): value is CompressedTexture => flag(value, "isCompressedTexture");
 export const isColor = (value: unknown): value is Color => flag(value, "isColor");

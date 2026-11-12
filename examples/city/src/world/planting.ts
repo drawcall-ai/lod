@@ -1,26 +1,24 @@
-// The compute pass that plants forests and ground cover in the tiles near the camera. A stand's tiles hold spots on a
-// jittered grid; each spot's hash picks the one InstancedLod that draws it, how large it grows, how it turns and its
-// tint, so a tile planted again shows the same plants. Every InstancedLod has an output of its own: per slot of the ring, a whole tile's spots, each the finished
-// instance where it plants one and a matrix of scale 0 (no instance) elsewhere; the InstancedLod packs only the first.
-import { InstancedLod, type LodGpu, type LodLevel } from "@drawcall/lod";
+// The compute passes that plant forests and ground cover in the tiles near the camera. A stand's tiles hold spots on a
+// jittered grid, which its plantings share out in fixed numbers: each planting takes the spots a shuffled list gives
+// it, turned along by a tile's hash, so that tiles differ and a tile planted again shows the same plants. A spot's hash
+// gives how large its plant grows, how it turns and its tint. Each planting writes its spots into its slot of a range
+// of its asset's instances (see Scatter.take): the finished instance where the spot grows one, a matrix of scale 0
+// (no instance) elsewhere.
 import * as t3 from "@typegpu/three";
-import { storage } from "three/tsl";
+import seedrandom from "seedrandom";
+import { Fn, instanceIndex, storage, uint, vec4 } from "three/tsl";
 import * as THREE from "three/webgpu";
 import { d, std } from "typegpu";
+import { reach } from "./bounds.ts";
 import type { Plan } from "./plan.ts";
-import { NearTiles, tileAt, tileKey, tilesAround, type TileChunk } from "./near-tiles.ts";
+import { NearTiles, tileAt, tileKey, tilesAround } from "./near-tiles.ts";
+import type { Range, Scatter } from "./scatter.ts";
 import { CELL, EXTENT } from "./terrain.ts";
 
-/**
- * Tiles planted per frame, each into one slot of the ring every InstancedLod's output holds. An InstancedLod reads a
- * planted chunk in the first render that updates it, so a slot written in one frame is written again only in the next:
- * the city updates the tiles before each frame's render, and every render draws the InstancedLods.
- */
-const SLOTS = 4;
+/** Tiles planted per frame. */
+const PER_FRAME = 4;
 /** Metres a tile's box of origins reaches beyond the ground's heights under it. */
 const SLACK = 1;
-/** An InstancedLod's room over what its share of the tiles holds on average: a tile's spots fall unevenly among them. */
-const UNEVEN = 1.5;
 
 /** A u32 mixed so that each bit depends on all of them. */
 function scramble(x: number): number {
@@ -44,21 +42,17 @@ export interface Stand {
 }
 
 /**
- * One InstancedLod of a stand: it draws the spots whose hash picks within [from, to) (0..1), scaled within `scale`
- * and, when `tinted`, a little lighter or darker, yellower or bluer.
+ * What a stand plants of one asset: its `share` of the spots (the shares adding up to 1), scaled within `scale` and,
+ * when `tinted`, a little lighter or darker, yellower or bluer; with a `color`, coloured by it at each spot's x, z.
  */
-export interface Planting {
-  name: string;
-  levels: readonly LodLevel[];
-  from: number;
-  to: number;
+export type Planting = {
+  url: string;
+  share: number;
   scale: readonly [number, number];
-  tinted?: boolean;
-}
+} & ({ tinted?: boolean; color?: never } | { color: (xz: THREE.Node<"vec2">) => THREE.Node<"vec3">; tinted?: never });
 
-/** Plants stands on `plan`'s ground, whose heights its passes share on the GPU. */
-export function planter(plan: Plan, gpu: LodGpu) {
-  const { renderer } = gpu;
+/** Plants stands on `plan`'s ground, whose heights its passes, run on `renderer`, share on the GPU, into `scatter`'s assets. */
+export function planter(plan: Plan, scatter: Scatter, renderer: THREE.Renderer) {
   const { heights } = plan.terrain;
   const ground = t3.instancedArray(heights, d.f32);
   const cells = Math.sqrt(heights.length) - 1;
@@ -86,8 +80,8 @@ export function planter(plan: Plan, gpu: LodGpu) {
     return h11 + (groundAt(i, j + 1) - h11) * (1 - fx) + (groundAt(i + 1, j) - h11) * (1 - fz);
   };
 
-  /** The tiles of `stand` near the camera, its InstancedLods made from `plantings`, in their order. */
-  return (stand: Stand, plantings: readonly Planting[]): NearTiles => {
+  /** The tiles of `stand` near the camera, planted with `plantings`, whose instances it takes before `scatter` seals. */
+  return async (stand: Stand, plantings: readonly Planting[]): Promise<NearTiles> => {
     const { tile, density, radius, grows } = stand;
     const side = plan.land.size;
     const raster = (2 * EXTENT) / side;
@@ -106,8 +100,10 @@ export function planter(plan: Plan, gpu: LodGpu) {
     const perSide = Math.max(1, Math.round(tile * Math.sqrt(density)));
     const capacity = perSide * perSide;
     const spacing = tile / perSide;
+    const room = Math.min(Math.ceil((Math.PI * (radius + tile) ** 2) / (tile * tile)), holding.size);
     const growing = t3.instancedArray(growth, d.u32);
     const tileId = t3.uniform(0, d.u32);
+    const turn = t3.uniform(0, d.u32);
     const x0 = t3.uniform(0, d.f32);
     const z0 = t3.uniform(0, d.f32);
     const slot = t3.uniform(0, d.u32);
@@ -121,25 +117,28 @@ export function planter(plan: Plan, gpu: LodGpu) {
       return ((d.u32(growing.$[k >>> 5]) >>> (k & 31)) & 1) === 1;
     };
 
-    /** The output of `planting`'s InstancedLod, and the pass that plants a tile into a slot of it. */
-    const output = ({ from, to, scale: [low, high], tinted = false }: Planting) => {
-      const matrices = new THREE.StorageInstancedBufferAttribute(SLOTS * capacity, 16);
-      const colors = new THREE.StorageInstancedBufferAttribute(SLOTS * capacity, 3);
+    /** The passes that plant a tile's `spots` of `planting` into slot `slot` of `range`. */
+    const pass = ({ scale: [low, high], tinted = false, color }: Planting, spots: Uint32Array, range: Range) => {
+      const { instanceMatrix: matrices, instanceColor: colors } = range.node;
+      if (!(matrices instanceof THREE.StorageInstancedBufferAttribute && colors instanceof THREE.StorageInstancedBufferAttribute))
+        throw new Error(`${stand.name}: plant once its Scatter has sealed, into storage instances`);
       const matrixAt = t3.fromTSL(storage(matrices, "mat4", matrices.count), d.arrayOf(d.mat4x4f));
-      const colorAt = t3.fromTSL(storage(colors, "vec3", colors.count), d.arrayOf(d.vec3f));
+      const colorAt = t3.fromTSL(storage(colors, "vec4", colors.count), d.arrayOf(d.vec4f));
+      const spotAt = t3.instancedArray(spots, d.u32);
+      const count = spots.length;
+      const { start } = range;
       const vary = tinted ? 1 : 0;
-      const pass = t3
+      const plant = t3
         .toTSL(() => {
           "use gpu";
-          const k = t3.instanceIndex.$;
-          const at = slot.$ * capacity + k;
+          const j = t3.instanceIndex.$;
+          const at = start + slot.$ * count + j;
           // no instance, unless this spot plants one
           matrixAt.$[at] = d.mat4x4f();
+          const k = (d.u32(spotAt.$[j]) + turn.$) % capacity;
           const hash = scramble(tileId.$ + k * d.u32(0x9e3779b9));
           const seed = hash | 1;
           const looks = scramble(seed);
-          const pick = d.f32(looks & 0xffff) / 65536;
-          if (pick < from || pick >= to) return;
           const jitter = scramble(hash);
           const x = x0.$ + (d.f32(k % perSide) + d.f32(jitter & 0xffff) / 65536) * spacing;
           const z = z0.$ + (d.f32(std.intdiv(k, perSide)) + d.f32(jitter >>> 16) / 65536) * spacing;
@@ -152,65 +151,103 @@ export function planter(plan: Plan, gpu: LodGpu) {
           const shade = 1 + vary * ((d.f32(shades & 0xffff) / 65536) * 0.28 - 0.18);
           const hue = std.select(d.vec3f(0.85, 0.95, 1), d.vec3f(1.1, 1.05, 0.7), (shades & 0x10000) !== 0);
           matrixAt.$[at] = d.mat4x4f(c, 0, -s, 0, 0, size, 0, 0, s, 0, c, 0, x, heightAt(x, z), z, 1);
-          colorAt.$[at] = std.mix(d.vec3f(shade), hue, vary * 0.35 * (d.f32(shades >>> 17) / 32768));
+          colorAt.$[at] = d.vec4f(std.mix(d.vec3f(shade), hue, vary * 0.35 * (d.f32(shades >>> 17) / 32768)), 1);
         })
-        .compute(capacity);
-      return { matrices, colors, pass };
+        .compute(count);
+      if (!color) return [plant];
+      // in TSL, as `color` is: each instance coloured where the planting placed it
+      const paint = Fn(() => {
+        const at = uint(start).add(slot.node.mul(count)).add(instanceIndex);
+        // a mat4 is four vec4 columns, its fourth the translation
+        const place = storage(matrices, "vec4", matrices.count * 4).toReadOnly().element(at.mul(4).add(3));
+        storage(colors, "vec4", colors.count).element(at).assign(vec4(color(place.xz), 1));
+      })().compute(count);
+      return [plant, paint];
     };
 
-    const area = Math.PI * (radius + tile) ** 2;
-    const tiles = Math.min(Math.ceil(area / (tile * tile)), holding.size);
-    const outputs = plantings.map((planting) => {
-      const lod = new InstancedLod(planting.levels, gpu, {
-        maxInstanceCount: Math.ceil(UNEVEN * tiles * capacity * (planting.to - planting.from)),
-      });
-      lod.name = planting.name;
-      return { lod, planting, ...output(planting) };
-    });
-    const passes = outputs.map(({ pass }) => pass);
+    const counts = shareOut(
+      plantings.map(({ share }) => share),
+      capacity,
+      stand.name,
+    );
+    const order = shuffled(capacity, stand.name);
+    const firsts = counts.map((_, p) => counts.slice(0, p).reduce((a, b) => a + b, 0));
+    const outputs = await Promise.all(
+      plantings.map(async (planting, p) => {
+        const count = counts[p] ?? 0;
+        if (count === 0) return [];
+        const first = firsts[p] ?? 0;
+        const spots = Uint32Array.from(order.slice(first, first + count));
+        const [range, lod] = await Promise.all([scatter.take(planting.url, room * count, true), scatter.lod(planting.url)]);
+        return [{ planting, spots, range, reach: reach(lod.levels) }];
+      }),
+    );
+    const planted = outputs.flat();
+    /** The passes, made as the first tile is planted, once the Scatter has sealed. */
+    let passes: ReturnType<typeof pass> | undefined;
 
     /** The box of tile (i, j)'s origins: over it, between the ground's heights under it. */
     const originBox = (i: number, j: number): THREE.Box3 => {
-      let low = Infinity;
-      let high = -Infinity;
+      let lowest = Infinity;
+      let highest = -Infinity;
       for (let b = 0; b <= tile + CELL; b += CELL)
         for (let a = 0; a <= tile + CELL; a += CELL) {
           const height = plan.terrain.height(i * tile + a, j * tile + b);
-          low = Math.min(low, height);
-          high = Math.max(high, height);
+          lowest = Math.min(lowest, height);
+          highest = Math.max(highest, height);
         }
-      return new THREE.Box3(new THREE.Vector3(i * tile, low - SLACK, j * tile), new THREE.Vector3((i + 1) * tile, high + SLACK, (j + 1) * tile));
+      return new THREE.Box3(new THREE.Vector3(i * tile, lowest - SLACK, j * tile), new THREE.Vector3((i + 1) * tile, highest + SLACK, (j + 1) * tile));
     };
 
-    const planted = new NearTiles(
-      outputs.map(({ lod }) => lod),
-      {
-        near: (eye) => tilesAround(eye, Math.max(0, eye.y - plan.terrain.height(eye.x, eye.z)), { radius, tile, holds: (key) => holding.has(key) }),
-        chunks: (key, at): TileChunk[] => {
-          const [i, j] = tileAt(key);
-          tileId.node.value = key;
-          x0.node.value = i * tile;
-          z0.node.value = j * tile;
-          slot.node.value = at;
-          void renderer.compute(passes);
-          const box = originBox(i, j);
-          return outputs.map(({ lod, planting, matrices, colors }) => ({
-            lod,
-            parameters: {
-              instanceMatrix: matrices,
-              instanceColor: colors,
-              start: at * capacity,
-              count: capacity,
-              originBox: box,
-              minScale: planting.scale[0],
-              maxScale: planting.scale[1],
-            },
-          }));
-        },
-        perFrame: SLOTS,
+    const tiles = new NearTiles({
+      near: (eye) => tilesAround(eye, Math.max(0, eye.y - plan.terrain.height(eye.x, eye.z)), { radius, tile, holds: (key) => holding.has(key) }),
+      fill: (key, at) => {
+        const [i, j] = tileAt(key);
+        tileId.node.value = key;
+        turn.node.value = Math.imul(key, 0x9e3779b1) >>> 0;
+        x0.node.value = i * tile;
+        z0.node.value = j * tile;
+        slot.node.value = at;
+        passes ??= planted.flatMap(({ planting, spots, range }) => pass(planting, spots, range));
+        void renderer.compute(passes);
+        const origins = originBox(i, j);
+        return planted.map(({ planting: { scale }, spots, range, reach }) => {
+          const [minScale, maxScale] = scale;
+          const clusters = range.node.clusters;
+          if (!clusters) throw new Error(`${stand.name}: its Scatter has not sealed`);
+          const boundingBox = origins.clone().expandByScalar(reach * maxScale);
+          return { clusters, cluster: { start: range.start + at * spots.length, count: spots.length, boundingBox, minScale, maxScale } };
+        });
       },
-    );
-    planted.name = stand.name;
-    return planted;
+      perFrame: PER_FRAME,
+      room,
+    });
+    tiles.name = stand.name;
+    return tiles;
   };
+}
+
+/** `total` shared out by `shares`, which add up to 1, in whole numbers: each its share rounded down, the largest remainders up. */
+function shareOut(shares: readonly number[], total: number, name: string): number[] {
+  const sum = shares.reduce((a, b) => a + b, 0);
+  if (Math.abs(sum - 1) > 1e-9) throw new Error(`${name}: its plantings' shares add up to ${sum}, not 1`);
+  const exact = shares.map((share) => share * total);
+  const counts = exact.map(Math.floor);
+  const left = total - counts.reduce((a, b) => a + b, 0);
+  const byRemainder = exact.map((value, i) => ({ i, remainder: value - Math.floor(value) })).sort((a, b) => b.remainder - a.remainder);
+  for (const { i } of byRemainder.slice(0, left)) counts[i] = (counts[i] ?? 0) + 1;
+  return counts;
+}
+
+/** The numbers below `count` in an order seeded by `seed`. */
+function shuffled(count: number, seed: string): number[] {
+  const random = seedrandom(seed);
+  const order = Array.from({ length: count }, (_, i) => i);
+  for (let i = count - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    const swapped = order[j] ?? 0;
+    order[j] = order[i] ?? 0;
+    order[i] = swapped;
+  }
+  return order;
 }

@@ -2,7 +2,6 @@ import {
   AmbientLight,
   Color,
   DirectionalLight,
-  Group,
   Matrix4,
   Mesh,
   MeshStandardMaterial,
@@ -15,11 +14,10 @@ import {
 import { describe, expect, it } from "vitest";
 import { bakeImpostor } from "../../src/impostor/bake/index.js";
 import { ImpostorMesh } from "../../src/impostor/mesh/index.js";
-import { Lod } from "../../src/lod.js";
 import { isMesh } from "../../src/three.js";
 import { Wind } from "../../src/wind/index.js";
-import { GPU_TIMEOUT, bakeRenderer, render, renderer, gpu } from "../renderer.js";
-import { chunkOf, oneChunk } from "../instances.js";
+import { GPU_TIMEOUT, bakeRenderer, render, renderer } from "../renderer.js";
+import { lodOf } from "../instances.js";
 import { box } from "../box.js";
 
 // Casters narrower than a texel of a directional light's shadow map draw nothing into
@@ -70,6 +68,9 @@ async function shadowAt(object: Object3D, ...points: Array<{ x: number; z: numbe
   camera.lookAt(0, 0, 0);
   camera.updateMatrixWorld();
   scene.updateMatrixWorld();
+  // A Lod's first render learns its renderer and draws nothing of it; the map redraws in the next frame.
+  await render(scene, camera, 64);
+  await new Promise(requestAnimationFrame);
   const pixels = await render(scene, camera, 64);
   // Rows run bottom-up: the bottom row is z = 8.
   const red = (x: number, z: number) => pixels[(Math.round(((8 - z) / 16) * 63) * 64 + Math.round(((x + 8) / 16) * 63)) * 4] ?? 0;
@@ -77,26 +78,11 @@ async function shadowAt(object: Object3D, ...points: Array<{ x: number; z: numbe
   return points.map(({ x, z }) => 1 - red(x, z) / lit);
 }
 
-/** `object` placed at `at`, scaled by `scale`. */
-function placed<T extends Object3D>(object: T, at: { x: number; z: number }, scale = 1): T {
-  object.position.set(at.x, 0, at.z);
-  object.scale.setScalar(scale);
-  return object;
-}
-
 const at = (point: { x: number; z: number }, scale = 1) => new Matrix4().makeScale(scale, scale, scale).setPosition(point.x, 0, point.z);
 
 describe("casters smaller than a shadow texel", { timeout: GPU_TIMEOUT }, () => {
-  it("cast nothing: a Lod's meshes, by the whole object", async () => {
-    // 3.5 units across its bounding sphere, narrower than a texel; 3× that, wider.
-    const lods = new Group().add(placed(new Lod([{ object: box() }], gpu), SMALL), placed(new Lod([{ object: box() }], gpu), LARGE, 3));
-    const [small, large] = await shadowAt(lods, SMALL, LARGE);
-    expect(small).toBeLessThan(0.1);
-    expect(large).toBeGreaterThan(0.15);
-  });
-
-  it("cast nothing: an InstancedLod's instances, each by its own size", async () => {
-    const lod = oneChunk([{ object: box() }], [at(SMALL), at(LARGE, 3)]);
+  it("cast nothing: a Lod's instances, each by its own size", async () => {
+    const lod = lodOf([{ object: box() }], [at(SMALL), at(LARGE, 3)]);
     const [small, large] = await shadowAt(lod, SMALL, LARGE);
     expect(small).toBeLessThan(0.1);
     expect(large).toBeGreaterThan(0.15);
@@ -123,7 +109,7 @@ describe("instance fades", { timeout: GPU_TIMEOUT }, () => {
   it("preserves coverage and instance colors when neighbouring levels split the pixels", async () => {
     const camera = new PerspectiveCamera(60, 1, 0.1, 100);
     const distance = (2 * Math.sqrt(3) * 64) / (2 * Math.tan(Math.PI / 6) * 38);
-    const lod = oneChunk(
+    const lod = lodOf(
       [{ object: box() }, { object: box() }],
       [new Matrix4().makeTranslation(-1.2, 0, -distance), new Matrix4().makeTranslation(1.2, 0, -distance)],
       { colors: [new Color(1, 0, 0), new Color(0, 1, 0)] },
@@ -142,10 +128,9 @@ describe("instance fades", { timeout: GPU_TIMEOUT }, () => {
       expect(faded.some((value, i) => i % 4 === 1 && value > 0)).toBe(true);
 
       // The coarser level starts at a nonzero slot; changed colors follow the slots.
-      const chunk = chunkOf(lod);
-      chunk.setColorAt(0, new Color(0, 0, 1));
-      chunk.setColorAt(1, new Color(1, 0, 0));
-      if (chunk.instanceColor) chunk.instanceColor.needsUpdate = true;
+      lod.setColorAt(0, new Color(0, 0, 1));
+      lod.setColorAt(1, new Color(1, 0, 0));
+      if (lod.instanceColor) lod.instanceColor.needsUpdate = true;
       const changed = await render(scene, camera);
       lod.forceLevel = 1;
       expect(await render(scene, camera)).toEqual(changed);

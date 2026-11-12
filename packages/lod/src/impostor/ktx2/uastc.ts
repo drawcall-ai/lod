@@ -67,8 +67,9 @@ async function load(): Promise<Basis> {
   const url = `data:text/javascript,${encodeURIComponent(new TextDecoder().decode(inflate(ENCODER_JS)))}`;
   const factory: unknown = (await import(/* @vite-ignore */ url)).default;
   if (typeof factory !== "function") throw new Error("the Basis encoder module has no factory");
-  // the module names its binary relative to its own URL, which a data: URL's is not: named, then given
-  const basis: unknown = await factory({ wasmBinary: inflate(ENCODER_WASM), locateFile: (name: string) => name });
+  // the module names its binary relative to its own URL, which a data: URL's is not: named, then given. It prints every
+  // image's progress, which nothing needs.
+  const basis: unknown = await factory({ wasmBinary: inflate(ENCODER_WASM), locateFile: (name: string) => name, print: () => {} });
   if (!isBasis(basis)) throw new Error("the Basis encoder module lacks its bindings");
   basis.initializeBasis();
   return basis;

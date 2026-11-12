@@ -1,14 +1,16 @@
-import { type Box3, BufferGeometry, type Camera, type Color, Matrix4, Mesh, type Object3D, type Sphere } from "three/webgpu";
+import { type Box3, BufferGeometry, type Camera, type Color, IndirectStorageBufferAttribute, type Layers, Matrix4, Mesh, type Object3D, type Sphere } from "three/webgpu";
 import { setFadeSource, type DrawnInstances, type InstanceSlots } from "../levels/fade.js";
 import { levelMaterial } from "../levels/material.js";
 import { impostorInstances, type ImpostorMesh } from "../impostor/mesh/index.js";
-import { isImpostorMesh, isInstancedMesh, isLOD, isMesh, rejectSkinned } from "../three.js";
+import { isImpostorMesh, isInstancedMesh, isLOD, isLine, isMesh, isPoints, isSprite, rejectSkinned } from "../three.js";
 import { DRAW_BYTES, type IndirectDraw } from "./rows.js";
 
-// The meshes that draw an InstancedLod's level: one plain three Mesh per mesh and material group of its object, or an
+// The meshes that draw a Lod's level: one plain three Mesh per mesh and material group of its object, or an
 // ImpostorMesh for an impostor, each drawing every instance in its level's list for a camera with one indirect draw.
 
 const IDENTITY = new Matrix4();
+/** One indirect draw of nothing: what a level mesh draws before its Lod's first sort for a camera. */
+const NOTHING = new IndirectStorageBufferAttribute(new Uint32Array(DRAW_BYTES / 4), 1);
 
 /** A mesh of a level's object and one of its material groups, placed in the instance's space. */
 export interface Part {
@@ -18,36 +20,39 @@ export interface Part {
   draw: IndirectDraw;
 }
 
-/** What every level mesh of one InstancedLod draws from. */
+/** What every level mesh of one Lod draws from. */
 export interface MeshInputs {
   /** The instances, which a mesh made later draws too. */
   readonly instances: DrawnInstances;
   /**
-   * Around every instance, in the InstancedLod's space: what its meshes are culled by, and their box, which three's
+   * Around every instance, in the Lod's space: what its meshes are culled by, and their box, which three's
    * Box3.setFromObject reads.
    */
   readonly bounds: Sphere;
   readonly box: Box3;
   /** Per camera, the instances in each level's list and where its indirect draws lie. */
-  readonly slots: (camera: Camera) => InstanceSlots;
+  readonly slots: (camera: Camera) => InstanceSlots | null;
   /** One instance's bounding radius in its own space, which shadow casters are cut off at. */
   readonly radius: number;
+  /** The Lod's layers, which its meshes are on. */
+  readonly layers: Layers;
   /**
-   * Where `camera`'s indirect draws lie as a mesh draws for it with `renderer`, its lists sorted: the camera's due sorts,
-   * every InstancedLod's, run now. Never throws: three is rendering.
+   * Where `camera`'s indirect draws lie as `renderer` draws a mesh for it, its lists sorted: the camera's due sort runs
+   * now; null before the Lod's first sort for it. Never throws: three is rendering.
    */
-  readonly drawFor: (renderer: unknown, camera: Camera) => InstanceSlots["args"];
+  readonly drawFor: (renderer: unknown, camera: Camera) => InstanceSlots["args"] | null;
 }
 
 /** `object`'s meshes and material groups, placed once in the instance's space, for level `level`. */
 export function partsOf(object: Object3D, level: number): Part[] {
-  rejectSkinned(object, "InstancedLod");
+  rejectSkinned(object, "Lod");
   object.updateWorldMatrix(true, true);
   const outside = object.parent ? object.parent.matrixWorld.clone().invert() : new Matrix4();
   const found: Part[] = [];
   object.traverse((node) => {
-    if (isLOD(node)) throw new Error("InstancedLod: levels cannot contain a Lod or InstancedLod; nest them with Lod");
-    if (isInstancedMesh(node) && !isImpostorMesh(node)) throw new Error(`InstancedLod: levels cannot contain an InstancedMesh ("${node.name}")`);
+    if (isLOD(node)) throw new Error(`Lod: levels cannot contain a LOD ("${node.name}")`);
+    if (isInstancedMesh(node) && !isImpostorMesh(node)) throw new Error(`Lod: levels cannot contain an InstancedMesh ("${node.name}")`);
+    if (isLine(node) || isPoints(node) || isSprite(node)) throw new Error(`Lod: levels draw meshes, not the line, points or sprite "${node.name}"`);
     if (!isMesh(node)) return;
     const placement = outside.clone().multiply(node.matrixWorld);
     ranges(node).forEach((range, group) => found.push({ template: node, placement, group, draw: { level, ...range } }));
@@ -90,27 +95,29 @@ export function levelMeshes(parts: readonly Part[], tint: Color, inputs: MeshInp
 
 /** Release `mesh`, which may never have been added. */
 export function freeMesh(mesh: Mesh): void {
-  // ImpostorMesh.dispose also destroys its instance buffers, which are the InstancedLod's.
+  // ImpostorMesh.dispose also destroys its instance buffers, which are the Lod's.
   if (isImpostorMesh(mesh)) mesh.material.release();
   mesh.geometry.dispose();
 }
 
-/** Point every mesh of `meshes` at `instances.matrices`, which changed: survivors scale, or no longer do. */
-export function drawMatrices(meshes: readonly Mesh[], instances: DrawnInstances): void {
-  for (const mesh of meshes) if (isImpostorMesh(mesh)) mesh.instanceMatrix = instances.matrices;
+/** Point every mesh of `meshes` at `instances`, which changed: survivors scale or no longer do, or the attributes were replaced. */
+export function drawInstances(meshes: readonly Mesh[], instances: DrawnInstances): void {
+  for (const mesh of meshes) {
+    if (isImpostorMesh(mesh)) mesh.instanceMatrix = instances.matrices;
+    Object.assign(mesh, { instanceColor: instances.colors });
+  }
 }
 
 /**
  * Material group `group` of `template` drawn for every instance in level `level`'s list, from byte `offset()` of a
- * camera's draws, once there is one.
+ * camera's draws, once there is one, on the Lod's layers. Only the Lod's raycast hits its instances.
  */
 function levelMesh({ template, placement, group }: Part, offset: () => number | null, tint: Color, inputs: MeshInputs): Mesh {
-  const { instances, bounds, box, slots, radius, drawFor } = inputs;
+  const { instances, bounds, box, slots, radius, layers, drawFor } = inputs;
   // An impostor card is placed in the shader; any other mesh draws its geometry moved into the instance's space, so
   // the instance matrix is all it needs.
   const mesh = isImpostorMesh(template) ? card(template, placement, inputs) : plain(template, placement, group, instances);
   setFadeSource(mesh, {
-    kind: "instances",
     slots,
     radius,
     tint,
@@ -119,6 +126,8 @@ function levelMesh({ template, placement, group }: Part, offset: () => number | 
   mesh.name = template.name;
   mesh.castShadow = template.castShadow;
   mesh.receiveShadow = template.receiveShadow;
+  mesh.layers = layers;
+  mesh.raycast = () => {};
   if (!isImpostorMesh(mesh)) mesh.geometry.boundingSphere = bounds;
   mesh.geometry.boundingBox = box;
   const previous = mesh.onBeforeRender;
@@ -129,7 +138,8 @@ function levelMesh({ template, placement, group }: Part, offset: () => number | 
     const start = offset();
     if (start === null) return;
     const args = drawFor(renderer, camera);
-    mesh.geometry.setIndirect(args.attribute, args.offset + start);
+    if (args) mesh.geometry.setIndirect(args.attribute, args.offset + start);
+    else mesh.geometry.setIndirect(NOTHING, 0);
   };
   return mesh;
 }
@@ -165,12 +175,12 @@ function groupMaterial(mesh: Mesh, group: number) {
   if (!Array.isArray(mesh.material)) return levelMaterial(mesh.material);
   const index = mesh.geometry.groups[group]?.materialIndex ?? 0;
   const material = mesh.material[index];
-  if (!material) throw new Error(`InstancedLod: "${mesh.name}" has no material ${index}`);
+  if (!material) throw new Error(`Lod: "${mesh.name}" has no material ${index}`);
   return levelMaterial(material);
 }
 
 /**
- * Placed copies of geometries, shared by every InstancedLod drawing the same mesh the same way: a side table, as three's
+ * Placed copies of geometries, shared by every Lod drawing the same mesh the same way: a side table, as three's
  * BufferGeometry has no room for a package's state.
  */
 const copies = new WeakMap<BufferGeometry, Array<{ placement: Matrix4; geometry: BufferGeometry }>>();

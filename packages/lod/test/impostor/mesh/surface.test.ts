@@ -23,8 +23,7 @@ import { ImpostorMesh } from "../../../src/impostor/mesh/index.js";
 import { cosine } from "../../../src/impostor/mesh/surface.js";
 import { readBytes } from "../../../src/bake.js";
 import { GPU_TIMEOUT, bakeRenderer, render, renderer } from "../../renderer.js";
-import { oneChunk } from "../../instances.js";
-import { LodGpu } from "../../../src/gpu.js";
+import { lodOf } from "../../instances.js";
 
 function atlas(normalDepth = [128, 128, 255, 128]): Impostor {
   return {
@@ -140,8 +139,7 @@ it.each([false, true])("occludes at its reconstructed surface (reversed depth: %
   const target = new RenderTarget(64, 64);
   const source = new Mesh(new BoxGeometry(2, 2, 2), new MeshStandardMaterial({ color: 0xe04020 }));
   const impostor = new ImpostorMesh(await bakeImpostor(source, bakeRenderer, { frames: 4, resolution: 32 }));
-  const on = new LodGpu(drawing);
-  const instanced = oneChunk([{ object: impostor }], 1, { on });
+  const instanced = lodOf([{ object: impostor }], 1);
   const wall = new Mesh(new PlaneGeometry(4, 4), new MeshStandardMaterial({ color: 0x2040e0 }));
   const camera = new PerspectiveCamera(40, 1, 0.1, 20);
   camera.position.z = 6;
@@ -160,6 +158,8 @@ it.each([false, true])("occludes at its reconstructed surface (reversed depth: %
     return red > blue;
   };
   try {
+    // Its first render tells the Lod its renderer, and draws nothing of it.
+    drawing.render(new Scene().add(instanced), camera);
     for (const z of [0.5, 1.5]) {
       wall.position.z = z;
       const real = await redAtCentre(source);
@@ -171,7 +171,6 @@ it.each([false, true])("occludes at its reconstructed surface (reversed depth: %
     }
   } finally {
     instanced.dispose();
-    on.dispose();
     impostor.dispose();
     source.geometry.dispose();
     source.material.dispose();

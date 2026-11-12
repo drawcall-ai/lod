@@ -1,4 +1,4 @@
-import type { Library } from "../../../public/content/materials.ts";
+import type { Textures } from "../materials.ts";
 import * as THREE from "three/webgpu";
 import {
   Fn,
@@ -27,16 +27,22 @@ import {
   uniformArray,
   vec2,
   vec3,
+  mx_fractal_noise_float_2d,
+  mx_noise_float,
 } from "three/tsl";
-import { fbm, noise2 } from "../../../public/content/noise.ts";
 import type { Zones } from "../../world/zones.ts";
 import { Crop, Use } from "../../world/land.ts";
-import { BLOCK, ROWS } from "../../../public/content/corn/layout.ts";
+import { BLOCK, ROWS } from "../../../public/corn/layout.ts";
 
 /** Distance between corn rows (m); with an even number of rows a block's rows stand half of it off every multiple of it from the centre. */
 const ROW = BLOCK / ROWS;
 
 type Node<T extends string> = THREE.Node<T>;
+
+/** MaterialX's Perlin noise, which spans about [-1, 1], remapped to [0, 1], where the thresholds below were tuned. */
+const noise2 = (p: Node<"vec2">) => mx_noise_float(p, 0.5, 0.5);
+/** Four octaves of it, also remapped to [0, 1]: their amplitudes sum to 1.875. */
+const fbm = (p: Node<"vec2">) => mx_fractal_noise_float_2d(p, 4, 2, 0.5, 0.5 / 1.875).add(0.5);
 
 /**
  * `map` at `uv` as given: `sample` applies the texture's repeat (its real-world size, set
@@ -89,11 +95,11 @@ const grey = (c: Node<"vec3">, weights: [number, number, number]) => dot(c, vec3
  * farmland parcels show their crops, and town lawns are mown in stripes.
  * An explicit `footprint` replaces pixel derivatives for a vertex evaluation.
  */
-export function groundShading(library: Library, zones: Zones, footprint?: Node<"float">): Ground {
+export function groundShading(textures: Textures, zones: Zones, footprint?: Node<"float">): Ground {
   // the maps once each: every read of one is a sample of the same binding
-  const lawnMap = texture(library.texture("Grass001", "diff"));
-  const aerialMap = texture(library.texture("aerial_grass_rock", "diff"));
-  const soilMap = texture(library.texture("farm_soil", "diff"));
+  const lawnMap = texture(textures.get("Grass001", "diff"));
+  const aerialMap = texture(textures.get("aerial_grass_rock", "diff"));
+  const soilMap = texture(textures.get("farm_soil", "diff"));
   const top = float(12);
   // arrays cannot be empty: pad with zones far outside the world
   const fields = zones.fields.length > 0 ? zones.fields : [{ x: 1e7, z: 1e7, halfX: 1, halfZ: 1, angle: 0 }];

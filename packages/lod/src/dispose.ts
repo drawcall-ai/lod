@@ -17,22 +17,22 @@ export function disposeCopies(node: Object3D): void {
   for (const child of node.children) disposeCopies(child);
 }
 
-/** What `disposeTree` frees beside geometry and draw state. */
+/** What `disposeRecursive` frees beside geometry and draw state. */
 export interface DisposeOptions {
   /** whether the tree's materials and their textures are its own; false for a tree drawn with its source's, as a simplified level is */
   materials: boolean;
 }
 
-/** Free what `node` and its descendants hold; a nested LOD or an ImpostorMesh frees itself. */
-export function disposeTree(node: Object3D, { materials }: DisposeOptions = { materials: true }): void {
-  // Every object frees its draw state; an ImpostorMesh, a nested Lod and a GLTS scene free the rest too.
+/** Free what `node` and its descendants hold; a LOD or an ImpostorMesh frees itself. */
+export function disposeRecursive(node: Object3D, { materials }: DisposeOptions = { materials: true }): void {
+  // Every object frees its draw state; an ImpostorMesh, a Lod and a GLTS scene free the rest too.
   node.dispose();
   if (isImpostorMesh(node) || isLOD(node) || isGLTSScene(node)) return;
   if (isMesh(node)) {
     node.geometry.dispose();
     if (materials) disposeMaterials(node);
   }
-  for (const child of node.children) disposeTree(child, { materials });
+  for (const child of node.children) disposeRecursive(child, { materials });
 }
 
 /**
@@ -50,8 +50,8 @@ function disposeMaterials(mesh: Mesh): void {
 /** Cleanup must not replace the failure that rejected a load or prevent the other levels from being released. */
 export function disposeRejected(node: Object3D, options?: DisposeOptions): void {
   try {
-    disposeTree(node, options);
+    disposeRecursive(node, options);
   } catch (error) {
-    console.error("LodLoader: failed to dispose a rejected load", error);
+    console.error("CachedLodLoader: failed to dispose a rejected load", error);
   }
 }

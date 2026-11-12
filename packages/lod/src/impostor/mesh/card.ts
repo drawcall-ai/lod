@@ -42,7 +42,7 @@ export interface CardInputs {
   halfSize: Node<"float">;
   /** frames per atlas side */
   frames: Node<"float">;
-  /** where the card sits within an instance's space; identity except under InstancedLod */
+  /** where the card sits within an instance's space; identity except under a Lod */
   placement: Node<"mat4">;
 }
 

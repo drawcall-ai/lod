@@ -30,7 +30,7 @@ const SLACK = 4;
 
 /**
  * The levels levelsToDraw draws with `levels` and the levels of `loaded` loaded, no arrival under way, at every height,
- * by intervals of heights: worked out once, as it walks every chunk's heights each frame and each of its CPU calls
+ * by intervals of heights: worked out once, as it walks every cluster's heights each frame and each of its CPU calls
  * through TypeGPU copies its arguments. What it draws changes only at a level's maxPixels and where its fade starts,
  * whatever is loaded (which only says what stands in for a level): it is asked at the ends of a few f32 steps around
  * each such height, and between them where it changes. levelsToDraw stays the only answer; this is where it changes.
@@ -124,10 +124,13 @@ function windowsOf(levels: d.Infer<typeof DrawLevels>): [low: number, high: numb
 const float = new Float32Array(1);
 const bits = new Uint32Array(float.buffer);
 
-/** The f32 `steps` steps from `value`, a height at or above 0, not below 0. */
+/** The bits of ANY_HEIGHT, the largest finite f32. */
+const LARGEST = 0x7f7fffff;
+
+/** The f32 `steps` steps from `value`, a height at or above 0, not below 0 nor above ANY_HEIGHT. */
 function step(value: number, steps: number): number {
   float[0] = value;
-  bits[0] = Math.max(at(bits, 0) + steps, 0);
+  bits[0] = Math.min(Math.max(at(bits, 0) + steps, 0), LARGEST);
   return at(float, 0);
 }
 

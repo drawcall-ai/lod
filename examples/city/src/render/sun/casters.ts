@@ -1,12 +1,12 @@
 import * as THREE from "three/webgpu";
-import { ImpostorMesh, InstancedLod } from "@drawcall/lod";
+import { ImpostorMesh, Lod } from "@drawcall/lod";
 
 /**
  * The scene's shadow casters by size, so a cascade draws only those whose shadow is at
  * least a few of its texels across: grass and plants only into the fine maps near the
  * camera, props into the middle ones, houses and trees into all. A caster's size is its
  * own mesh's bounding diameter in the world: a house's gutter counts as small even where
- * its walls are large, and an InstancedLod's mesh measures one instance (at scale 1), not
+ * its walls are large, and a Lod's level mesh measures one instance (at scale 1), not
  * all the instances its bounds cover.
  *
  * Casters draw both sides of their faces into the maps (see castBothSides).
@@ -22,7 +22,7 @@ export class Casters {
     this.add(root);
   }
 
-  /** Register only new draws beneath an arriving level or InstancedLod. */
+  /** Register only new draws beneath `root`, such as a Lod whose level arrived. */
   add(root: THREE.Object3D): void {
     root.updateMatrixWorld(true);
     root.traverse((node) => {
@@ -47,12 +47,12 @@ export class Casters {
 }
 
 /**
- * The bounding sphere of `mesh`'s geometry alone. An InstancedLod bounds its level meshes' geometry by all their
- * instances (an impostor's cards keep their own), so those are measured from their vertices, which hold one instance.
+ * The bounding sphere of `mesh`'s geometry alone. A Lod bounds its level meshes' geometry by all their instances (an
+ * impostor's cards keep their own), so those are measured from their vertices, which hold one instance.
  */
 function ownSphere(mesh: THREE.Mesh): THREE.Sphere {
   const geometry: THREE.BufferGeometry = mesh.geometry;
-  if (mesh.parent instanceof InstancedLod && !(mesh instanceof ImpostorMesh)) {
+  if (mesh.parent instanceof Lod && !(mesh instanceof ImpostorMesh)) {
     // (CPU only: never drawn, so it holds no GPU buffers to dispose)
     const vertices = new THREE.BufferGeometry().setAttribute("position", geometry.getAttribute("position"));
     vertices.computeBoundingSphere();

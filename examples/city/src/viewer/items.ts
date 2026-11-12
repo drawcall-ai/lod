@@ -1,18 +1,17 @@
-import type { Textures } from "../../public/content/textures.ts";
-import { Library, assetUrl, surface } from "../../public/content/materials.ts";
-import type { GLTSLoader, GLTSScene } from "@drawcall/glts";
+import { disposeRecursive, type GLTSLoader, type GLTSScene } from "@drawcall/glts";
 import * as THREE from "three/webgpu";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
-import { BLOCK, HERO_VARIANT, layout, type Plant, plantTurn, ROWS, VARIANTS } from "../../public/content/corn/layout.ts";
-import { houseInterior } from "../../public/content/house/interior.ts";
-import { heights, houseParams, HOUSE_VARIANTS } from "../../public/content/house/params.ts";
-import { facades } from "../../public/content/house/facades.ts";
-import type { HousePart } from "../../public/content/house/asset.ts";
-import { ceiling } from "../../public/content/house/furnishings.ts";
-import { foliageModel, MODEL_FOLIAGE } from "../../public/content/foliage.ts";
-import { number } from "../../public/content/parameters.ts";
+import { BLOCK, HERO_VARIANT, layout, type Plant, plantTurn, ROWS, VARIANTS } from "../../public/corn/layout.ts";
+import { interior } from "../../public/house/interior.ts";
+import { heights, houseParams, HOUSE_VARIANTS } from "../../public/house/params.ts";
+import { facades } from "../../public/house/facades.ts";
+import { ceiling } from "../../public/house/finishes.ts";
+import { Materials } from "../../public/house/materials.ts";
+import { seatMatrix } from "../world/corn/seat.ts";
+import { foliageModel } from "@drawcall/lod";
 import { terrain } from "../render/ground/material.ts";
+import { surface, Textures } from "../render/materials.ts";
 
 /** Something the viewer can show: the object, an optional close-up target, and the ground under it. */
 export interface Item {
@@ -30,48 +29,60 @@ export interface Item {
 type Content = Omit<Item, "dispose">;
 type Load = (path: string) => Promise<GLTSScene>;
 
-const soil = (library: Library) => surface(library, "farm_soil");
+/** The fetched models' first variants by model id, as public/assets/manifest.json (from scripts/fetch-assets.ts) lists them. */
+export type Models = ReadonlyMap<string, string>;
 
-async function model(library: Library, id: string): Promise<Content> {
-  const entry = library.manifest().models[id];
-  if (!entry) throw new Error(`model ${id} is not in the manifest`);
-  const variant = entry.variants[0];
-  if (!variant) throw new Error(`model ${id} has no variants`);
-  const gltf = new GLTFLoader(library.manager).setMeshoptDecoder(MeshoptDecoder);
-  const { scene } = await gltf.loadAsync(assetUrl(library, `models/${id}/${variant}.glb`));
+export async function loadModels(manager: THREE.LoadingManager): Promise<Models> {
+  const manifest: unknown = await new THREE.FileLoader(manager).setResponseType("json").loadAsync("/assets/manifest.json");
+  const models = typeof manifest === "object" && manifest !== null ? Reflect.get(manifest, "models") : undefined;
+  if (typeof models !== "object" || models === null) throw new Error("/assets/manifest.json lists no models");
+  return new Map(
+    Object.entries(models).map(([id, entry]: [string, unknown]) => {
+      const variants = typeof entry === "object" && entry !== null ? Reflect.get(entry, "variants") : undefined;
+      const first: unknown = Array.isArray(variants) ? variants[0] : undefined;
+      if (typeof first !== "string") throw new Error(`/assets/manifest.json lists no variants of ${id}`);
+      return [id, first];
+    }),
+  );
+}
+
+const soil = (textures: Textures) => surface(textures, "farm_soil");
+
+async function model(textures: Textures, id: string, variant: string): Promise<Content> {
+  const gltf = new GLTFLoader(textures.manager).setMeshoptDecoder(MeshoptDecoder);
+  const { scene } = await gltf.loadAsync(`/assets/models/${id}/${variant}.glb`);
   scene.traverse((o) => {
     o.castShadow = o.receiveShadow = true;
   });
-  foliageModel(scene, MODEL_FOLIAGE);
-  library.own(scene);
-  return { object: scene, ground: terrain(library) };
+  foliageModel(scene, { translucency: 0.6 });
+  return { object: scene, ground: terrain(textures) };
 }
 
-async function houseItem(library: Library, load: Load, variant: number, part: HousePart): Promise<Content> {
+async function houseItem(textures: Textures, load: Load, variant: number, file: "source" | "low"): Promise<Content> {
   const p = houseParams(variant);
-  const object = await load(`houses/house.glts?variant=${variant}&part=${part}`);
+  const object = await load(`house/${file}.glts?variant=${variant}`);
   // close-up: the front eave corner, where tiles, gutter, downpipe, fascia and a window meet
   const { eave } = heights(p);
   const focus = new THREE.Box3(
     new THREE.Vector3(p.width / 2 - 2.6, eave - 2.2, p.depth / 2 - 0.5),
     new THREE.Vector3(p.width / 2 + 0.5, eave + 1.2, p.depth / 2 + 1),
   );
-  return { object, focus, ground: terrain(library) };
+  return { object, focus, ground: terrain(textures) };
 }
 
 /**
  * A house with its rooms behind see-through glass: close, the view through a ground-floor
  * front window into the room; medium, the whole house.
  */
-async function interiorItem(library: Library, load: Load, variant: number): Promise<Content> {
+async function interiorItem(textures: Textures, load: Load, variant: number): Promise<Content> {
   const p = houseParams(variant);
-  const group = await load(`houses/house.glts?variant=${variant}&part=source`);
+  const group = await load(`house/source.glts?variant=${variant}`);
   const front = facades(p)[0];
   const opening = front?.windows.find((w) => w.y < p.plinth + p.floorHeight);
   if (!front || !opening) throw new Error("the house has no ground-floor front window");
   const centre = new THREE.Vector3(opening.x, opening.y + opening.h / 2, 0).applyMatrix4(front.frame);
   const focus = new THREE.Box3(centre.clone().add(new THREE.Vector3(-1.2, -1, -2.5)), centre.clone().add(new THREE.Vector3(1.2, 1, 0.3)));
-  return { object: group, focus, ground: terrain(library) };
+  return { object: group, focus, ground: terrain(textures) };
 }
 
 /**
@@ -79,17 +90,18 @@ async function interiorItem(library: Library, load: Load, variant: number): Prom
  * storey side by side (ground floor on the left), each cut at 1.6 m above its floor,
  * ceilings and outer walls left out.
  */
-function interiorPlanItem(library: Library, variant: number): Content {
+async function interiorPlanItem(textures: Textures, variant: number): Promise<Content> {
   const p = houseParams(variant);
+  const materials = new Materials(textures.manager, new URL("/assets/", location.href));
   const group = new THREE.Group();
   // each storey is moved down to y = 0, where the cut keeps 0.3 m below its floor to 1.6 m above
   const cut = [new THREE.Plane(new THREE.Vector3(0, -1, 0), 1.6), new THREE.Plane(new THREE.Vector3(0, 1, 0), 0.3)];
   for (let k = 0; k <= p.floors; k++) {
     const y0 = p.plinth + k * p.floorHeight;
-    const storey = houseInterior(library, p);
+    const storey = interior(materials, p);
     storey.traverse((o) => {
       if (!(o instanceof THREE.Mesh) || Array.isArray(o.material)) return;
-      if (o.material === ceiling(library)) o.visible = false;
+      if (o.material === ceiling(materials)) o.visible = false;
       o.material = o.material.clone();
       o.material.clippingPlanes = cut;
     });
@@ -97,27 +109,28 @@ function interiorPlanItem(library: Library, variant: number): Content {
     storey.position.y = -y0;
     group.add(storey);
   }
-  library.own(group);
-  return { object: group, ground: terrain(library), from: new THREE.Vector3(0, 1, 0.12) };
+  await materials.ready();
+  return { object: group, ground: terrain(textures), from: new THREE.Vector3(0, 1, 0.12) };
 }
 
 /** The hero ladybird and its actual plant, framed tight around the beetle. */
-async function ladybirdItem(library: Library, load: Load): Promise<Content> {
-  const [plant, ladybird] = await Promise.all([load(`corn/plant.glts?variant=${HERO_VARIANT}&hero=1`), load(`corn/ladybird.glts?variant=${HERO_VARIANT}`)]);
+async function ladybirdItem(textures: Textures, load: Load): Promise<Content> {
+  const [plant, ladybird] = await Promise.all([load(`corn/source.glts?variant=${HERO_VARIANT}&hero=1`), load("ladybird/source.glts")]);
+  ladybird.applyMatrix4(seatMatrix());
   const object = new THREE.Group().add(plant, ladybird);
-  return { object, focus: new THREE.Box3().setFromObject(ladybird), ground: terrain(library) };
+  return { object, focus: new THREE.Box3().setFromObject(ladybird), ground: terrain(textures) };
 }
 
 /** A corn plant turned so its leaf plane faces the viewer, as the classic side-on silhouette. */
-async function cornItem(library: Library, load: Load, variant: number): Promise<Content> {
-  const plant = await load(`corn/plant.glts?variant=${variant}`);
+async function cornItem(textures: Textures, load: Load, variant: number): Promise<Content> {
+  const plant = await load(`corn/source.glts?variant=${variant}`);
   plant.rotation.y = 0.5;
   plant.updateMatrixWorld();
   // close-up: the (first) ear and the leaves around it
   const ear = plant.getObjectByName("ear");
   if (!ear) throw new Error("corn plant has no ear");
   const focus = new THREE.Box3().setFromCenterAndSize(ear.getWorldPosition(new THREE.Vector3()), new THREE.Vector3(0.45, 0.45, 0.45));
-  return { object: plant, focus, ground: soil(library) };
+  return { object: plant, focus, ground: soil(textures) };
 }
 
 /**
@@ -125,7 +138,7 @@ async function cornItem(library: Library, load: Load, variant: number): Promise<
  * plants that `include` accepts, each variant at full detail.
  */
 async function cornRows(load: Load, blocks: number, include: (p: Plant) => boolean = () => true): Promise<THREE.Group> {
-  const plants = await Promise.all(Array.from({ length: VARIANTS }, (_, variant) => load(`corn/plant.glts?variant=${variant}`)));
+  const plants = await Promise.all(Array.from({ length: VARIANTS }, (_, variant) => load(`corn/source.glts?variant=${variant}`)));
   const field = new THREE.Group();
   const offset = ((blocks - 1) * BLOCK) / 2;
   for (let i = 0; i < blocks; i++)
@@ -141,80 +154,89 @@ async function cornRows(load: Load, blocks: number, include: (p: Plant) => boole
 }
 
 /** About ten plants of a row, seen side-on, to judge density and silhouette. */
-async function cornRowItem(library: Library, load: Load): Promise<Content> {
+async function cornRowItem(textures: Textures, load: Load): Promise<Content> {
   const object = await cornRows(load, 1, (p) => p.z < -BLOCK / 2 + BLOCK / ROWS && p.x < -BLOCK / 2 + 1.8);
-  return { object, ground: soil(library) };
+  return { object, ground: soil(textures) };
 }
 
 /** A block of field, framed from its edge across the rows (close) and from above (medium). */
-async function cornFieldItem(library: Library, load: Load): Promise<Content> {
+async function cornFieldItem(textures: Textures, load: Load): Promise<Content> {
   const object = await cornRows(load, 2);
   const box = new THREE.Box3().setFromObject(object);
   const edge = new THREE.Box3(new THREE.Vector3(-1.5, 0, box.max.z - 2.5), new THREE.Vector3(1.5, 2.6, box.max.z));
-  return { object, focus: edge, ground: soil(library) };
+  return { object, focus: edge, ground: soil(textures) };
 }
 
 /** The ground itself, with one house for scale: close is ~150 m across, medium ~2 km. */
-async function terrainItem(library: Library, load: Load): Promise<Content> {
-  const object = await load("houses/house.glts?variant=0&part=source");
+async function terrainItem(textures: Textures, load: Load): Promise<Content> {
+  const object = await load("house/source.glts?variant=0");
   const focus = new THREE.Box3(new THREE.Vector3(-60, 0, -60), new THREE.Vector3(60, 10, 60));
   const overview = new THREE.Box3(new THREE.Vector3(-500, 0, -500), new THREE.Vector3(500, 50, 500));
-  return { object, focus, overview, ground: terrain(library) };
+  return { object, focus, overview, ground: terrain(textures) };
 }
 
-type Build = (load: Load) => Promise<Content> | Content;
+type Build = (textures: Textures, load: Load) => Promise<Content> | Content;
+
+/** The house variant ?variant= asks the interior plan of. */
+function planVariant(): number {
+  const variant = new URLSearchParams(location.search).get("variant") ?? "3";
+  if (!(/^\d+$/.test(variant) && Number(variant) < HOUSE_VARIANTS)) throw new Error(`variant must be a whole number below ${HOUSE_VARIANTS}, not ${variant}`);
+  return Number(variant);
+}
 
 /** Every viewable item by name; procedural ones first, then the fetched models. */
-function builds(library: Library): Map<string, Build> {
-  const houses = Array.from({ length: HOUSE_VARIANTS }, (_, i): [string, Build] => [`house-${i}`, (load) => houseItem(library, load, i, "source")]);
-  const corn = Array.from({ length: VARIANTS }, (_, variant): [string, Build] => [`corn-${variant}`, (load) => cornItem(library, load, variant)]);
-  const models = Object.keys(library.manifest().models).map((id): [string, Build] => [id, () => model(library, id)]);
+function builds(models: Models): Map<string, Build> {
+  const houses = Array.from({ length: HOUSE_VARIANTS }, (_, i): [string, Build] => [`house-${i}`, (textures, load) => houseItem(textures, load, i, "source")]);
+  const corn = Array.from({ length: VARIANTS }, (_, variant): [string, Build] => [`corn-${variant}`, (textures, load) => cornItem(textures, load, variant)]);
   return new Map<string, Build>([
     ...houses,
-    ["house-low-0", (load) => houseItem(library, load, 0, "low")],
-    ["interior", (load) => interiorItem(library, load, 1)],
-    ["interior-plan", () => interiorPlanItem(library, number(new URLSearchParams(location.search), "variant", 3, 0, HOUSE_VARIANTS - 1, true))],
+    ["house-low-0", (textures, load) => houseItem(textures, load, 0, "low")],
+    ["interior", (textures, load) => interiorItem(textures, load, 1)],
+    ["interior-plan", (textures) => interiorPlanItem(textures, planVariant())],
     ...corn,
-    ["corn-row", (load) => cornRowItem(library, load)],
-    ["corn-field", (load) => cornFieldItem(library, load)],
-    ["fence", async (load) => ({ object: await load("props/fence.glts?length=7.2"), ground: terrain(library) })],
+    ["corn-row", (textures, load) => cornRowItem(textures, load)],
+    ["corn-field", (textures, load) => cornFieldItem(textures, load)],
+    ["fence", async (textures, load) => ({ object: await load("fence/source.glts?length=7.2"), ground: terrain(textures) })],
     [
-      "sign",
-      async (load) => ({
-        object: await load("props/sign.glts?text=Maple%20St"),
+      "street-sign",
+      async (textures, load) => ({
+        object: await load("street-sign/source.glts?text=Maple%20St"),
         focus: new THREE.Box3(new THREE.Vector3(-0.5, 2.3, -0.3), new THREE.Vector3(0.5, 2.9, 0.3)),
-        ground: terrain(library),
+        ground: terrain(textures),
       }),
     ],
-    ["ladybird", (load) => ladybirdItem(library, load)],
-    ["terrain", (load) => terrainItem(library, load)],
-    ...models,
+    ["ladybird", (textures, load) => ladybirdItem(textures, load)],
+    ["terrain", (textures, load) => terrainItem(textures, load)],
+    ...[...models].map(([id, variant]): [string, Build] => [id, (textures) => model(textures, id, variant)]),
   ]);
 }
 
-export function itemNames(library: Library): string[] {
-  return [...builds(library).keys()];
+export function itemNames(models: Models): string[] {
+  return [...builds(models).keys()];
 }
 
-async function content(library: Library, load: Load, name: string): Promise<Content> {
-  const build = builds(library).get(name);
+async function content(textures: Textures, models: Models, load: Load, name: string): Promise<Content> {
+  const build = builds(models).get(name);
   if (!build) throw new Error(`unknown item ${name}`);
-  return build(load);
+  return build(textures, load);
 }
 
-/** Each inspection owns its script executions and helper resources until replaced. */
-export async function buildItem(scripts: GLTSLoader, base: string, name: string, textures: Textures): Promise<Item> {
-  const library = new Library(scripts.manager, base, textures);
+/** Item `name`, whose disposal frees what showing it made: its scripts' scenes, the rest of its object and its ground. */
+export async function buildItem(scripts: GLTSLoader, models: Models, name: string): Promise<Item> {
   const scenes = new Set<GLTSScene>();
   let disposed = false;
-  const dispose = () => {
+  let shown: Content | undefined;
+  const free = () => {
     disposed = true;
     for (const scene of scenes) scene.dispose();
     scenes.clear();
-    library.dispose();
+    if (!shown) return;
+    disposeRecursive(shown.object);
+    // The ground's material and textures, freed as a mesh's are.
+    disposeRecursive(new THREE.Mesh(undefined, shown.ground));
   };
   const load: Load = async (path) => {
-    const scene = await scripts.loadAsync(new URL(`../${path}`, base));
+    const scene = await scripts.loadAsync(`/${path}`);
     if (disposed) {
       scene.dispose();
       throw new Error("Viewer item was disposed while loading");
@@ -223,10 +245,12 @@ export async function buildItem(scripts: GLTSLoader, base: string, name: string,
     return scene;
   };
   try {
-    await library.load();
-    return { ...(await content(library, load, name)), dispose };
+    const textures = new Textures(scripts.manager);
+    shown = await content(textures, models, load, name);
+    await textures.ready();
+    return { ...shown, dispose: free };
   } catch (error) {
-    dispose();
+    free();
     throw error;
   }
 }
