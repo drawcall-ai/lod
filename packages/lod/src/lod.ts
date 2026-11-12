@@ -391,11 +391,9 @@ export class Lod extends Object3D<LodEventMap> {
    * is this Lod. Instances of a storage instanceMatrix, which the CPU cannot read, are not hit. Its level meshes, on its
    * layers, are never hit themselves.
    */
-  override raycast(raycaster: Raycaster, intersects: Intersection[]): boolean {
+  override raycast(raycaster: Raycaster, intersects: Intersection[]): void {
     if (!isStorageInstanced(this.instanceMatrix))
       raycastInstances(this, { parts: this.built.meshes.source, rest: this.built.shape.rest }, this.instanceMatrix.array, this.count, raycaster, intersects);
-    // Stop the raycaster from descending into the level meshes.
-    return false;
   }
 
   /**
