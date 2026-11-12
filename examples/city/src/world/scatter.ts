@@ -113,7 +113,8 @@ export class Scatter extends THREE.Group {
   private asset(url: string): Promise<Scattered> {
     let asset = this.assets.get(url);
     if (!asset) {
-      asset = this.loader.loadInstancesAsync(url, 0).then((node) => {
+      // one instance until `seal` gives the node its own
+      asset = this.loader.loadInstancesAsync(url, 1).then((node) => {
         this.add(node);
         return { node, lod: lodOf(node), placed: [], size: 0, computed: undefined, sealed: false };
       });
