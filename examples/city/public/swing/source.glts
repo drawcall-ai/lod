@@ -16,7 +16,7 @@ function swing(manager: THREE.LoadingManager): THREE.Group {
       parts.add(
         timber,
         box(0.08, 2.25, 0.08)
-          .rotateX(s * 0.32)
+          .rotateX(-s * 0.32)
           .translate(x, h / 2, s * 0.35),
       );
   parts.add(timber, box(span + 0.2, 0.1, 0.1).translate(0, h, 0));
