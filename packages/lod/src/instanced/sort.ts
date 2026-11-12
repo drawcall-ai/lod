@@ -3,7 +3,7 @@ import type { d } from "typegpu";
 import { MAX_LEVELS, type DrawLevels } from "../levels/draw.js";
 import type { InstanceSlots } from "../levels/fade.js";
 import type { Cull } from "./cull.js";
-import { FLOATS_AT, INTS_AT, UNLISTED, argsBuffer, countsBuffer, drawWords, floatsBuffer, forcedWord, wordsBuffer, type IndirectDraw } from "./rows.js";
+import { BLOCKS_AT, FLOATS_AT, INTS_AT, NO_LIVE_COUNT, UNLISTED, argsBuffer, countsBuffer, drawWords, floatsBuffer, forcedWord, wordsBuffer, type IndirectDraw } from "./rows.js";
 import { BLOCK, MAX_BLOCKS, sortPasses, type SortPasses } from "./update.js";
 
 // A Lod sorts its instances for each camera with two passes of its own (see update.ts), one renderer.compute call at
@@ -31,12 +31,13 @@ export interface RowValues {
 
 /** One camera's buffers. */
 interface CameraBuffers {
-  /** Its row's u32s and f32s. */
-  readonly words: StorageBufferAttribute;
+  /** Its row's u32s, followed by the blocks of instances it sorts (see rows.ts), and its f32s. */
+  words: StorageBufferAttribute;
   readonly floats: StorageBufferAttribute;
-  /** The blocks of instances it sorts (see update.ts), and how many. */
-  blocks: StorageBufferAttribute;
+  /** How many blocks it sorts. */
   blockCount: number;
+  /** The live counts of the ranges it sorts; null while none has one. */
+  liveCounts: StorageBufferAttribute | null;
   /** Its lists: per slot, the instance it draws and its signed fade; `listSize` slots per listed level. */
   indices: StorageBufferAttribute;
   fades: StorageBufferAttribute;
@@ -57,6 +58,8 @@ export class Sorter {
   private scaled: { attribute: StorageInstancedBufferAttribute; capacity: number } | null = null;
   /** Where survivors' scaled matrices go while none scale: never written, as no survivor scales. */
   private readonly unscaled = new StorageInstancedBufferAttribute(new Float32Array(16), 16);
+  /** What the sort reads as live counts while no range has one: never read. */
+  private readonly noLiveCounts = new StorageBufferAttribute(new Uint32Array(1), 1);
   private passes: SortPasses | null = null;
 
   /** `listed` tells, as a mask, which levels have an instance list: those that draw something. */
@@ -93,14 +96,16 @@ export class Sorter {
   }
 
   /**
-   * Write `values` as what `camera` sorts by, over the instances of `ranges` (start and count, flat), `instances` in
-   * all, sorted at the camera's next draw. Its lists grow to hold them, within `limit` bytes per buffer.
+   * Write `values` as what `camera` sorts by, over the instances of `ranges` (start, count and item of `liveCounts`,
+   * flat), `instances` in all, sorted at the camera's next draw. Its lists grow to hold them, within `limit` bytes per
+   * buffer.
    */
-  write(camera: Camera, values: RowValues, ranges: readonly number[], instances: number, limit: number): void {
+  write(camera: Camera, values: RowValues, ranges: readonly number[], liveCounts: StorageBufferAttribute | null, instances: number, limit: number): void {
     const buffers = this.cameras.get(camera) ?? this.makeBuffers();
     this.cameras.set(camera, buffers);
     if (instances > buffers.listSize) this.grow(buffers, instances, limit);
     this.writeBlocks(buffers, ranges);
+    buffers.liveCounts = liveCounts;
     const { levels, loaded, before, progress, eye, scale, ortho, cull, source, reach, frustum } = values;
     const words = buffers.words.array;
     words.set([levels.count, levels.coarsest, forcedWord(levels.forced)], INTS_AT.levels * 4);
@@ -125,6 +130,7 @@ export class Sorter {
     const sort = {
       ...buffers,
       matrices,
+      liveCounts: buffers.liveCounts ?? this.noLiveCounts,
       scaled: this.scaled?.attribute ?? this.unscaled,
       counts: this.counts,
       draws: this.drawBuffer,
@@ -152,16 +158,17 @@ export class Sorter {
     this.counts.dispose();
     this.scaled?.attribute.dispose();
     this.unscaled.dispose();
+    this.noLiveCounts.dispose();
     this.passes?.dispose();
     this.passes = null;
   }
 
   private makeBuffers(): CameraBuffers {
     return {
-      words: wordsBuffer(),
+      words: wordsBuffer(1),
       floats: floatsBuffer(),
-      blocks: blocksBuffer(1),
       blockCount: 1,
+      liveCounts: null,
       indices: new StorageBufferAttribute(new Uint32Array(1), 1),
       fades: new StorageBufferAttribute(new Float32Array(1), 1),
       listSize: 0,
@@ -186,26 +193,29 @@ export class Sorter {
     buffers.listSize = size;
   }
 
-  /** Write the blocks of `ranges` into `buffers`: one empty block for none, as a dispatch visits one at least. */
+  /** Write the blocks of `ranges` into `buffers`, growing its words: one empty block for none, as a dispatch visits one at least. */
   private writeBlocks(buffers: CameraBuffers, ranges: readonly number[]): void {
     let count = 0;
-    for (let i = 0; i < ranges.length; i += 2) count += Math.ceil((ranges[i + 1] ?? 0) / BLOCK);
+    for (let i = 0; i < ranges.length; i += 3) count += Math.ceil((ranges[i + 1] ?? 0) / BLOCK);
     if (count > MAX_BLOCKS)
       throw new RangeError(`Lod: a camera sees ${count} blocks of ${BLOCK} instances, more than one dispatch's ${MAX_BLOCKS}: split the instances across Lods`);
-    if (buffers.blocks.count < Math.max(count, 1)) {
-      buffers.blocks.dispose();
-      buffers.blocks = blocksBuffer(count);
+    if (buffers.words.array.length < BLOCKS_AT + Math.max(count, 1) * 4) {
+      const grown = wordsBuffer(count);
+      grown.array.set(buffers.words.array.subarray(0, BLOCKS_AT));
+      buffers.words.dispose();
+      buffers.words = grown;
     }
-    const words = buffers.blocks.array;
-    let at = 0;
-    for (let i = 0; i < ranges.length; i += 2) {
+    const words = buffers.words.array;
+    let at = BLOCKS_AT;
+    for (let i = 0; i < ranges.length; i += 3) {
       const start = ranges[i] ?? 0;
       const end = start + (ranges[i + 1] ?? 0);
-      for (let first = start; first < end; first += BLOCK) words.set([first, end], 2 * at++);
+      const live = ranges[i + 2] ?? NO_LIVE_COUNT;
+      for (let first = start; first < end; first += BLOCK, at += 4) words.set([first, end, start, live], at);
     }
-    if (count === 0) words.set([0, 0], 0);
+    if (count === 0) words.set([0, 0, 0, NO_LIVE_COUNT], at);
     buffers.blockCount = Math.max(count, 1);
-    buffers.blocks.needsUpdate = true;
+    buffers.words.needsUpdate = true;
   }
 
   /** Write the layout of `buffers`' lists and the draw count into its row. */
@@ -223,11 +233,9 @@ export class Sorter {
   }
 }
 
-function disposeBuffers({ words, floats, blocks, indices, fades, args }: CameraBuffers): void {
-  for (const attribute of [words, floats, blocks, indices, fades, args]) attribute.dispose();
+function disposeBuffers({ words, floats, indices, fades, args }: CameraBuffers): void {
+  for (const attribute of [words, floats, indices, fades, args]) attribute.dispose();
 }
-
-const blocksBuffer = (blocks: number) => new StorageBufferAttribute(new Uint32Array(Math.max(blocks, 1) * 2), 2);
 
 /** Set bits of `mask`. */
 function countBits(mask: number): number {

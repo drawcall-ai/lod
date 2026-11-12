@@ -1,7 +1,8 @@
 import { IndirectStorageBufferAttribute, StorageBufferAttribute } from "three/webgpu";
 import { MAX_LEVELS } from "../levels/draw.js";
 
-// What a Lod sorts by for one camera, as the sort passes read it (see update.ts): its row, of u32s and of f32s.
+// What a Lod sorts by for one camera, as the sort passes read it (see update.ts): its row, of u32s and of f32s, and
+// after the row's u32s, in their buffer, the blocks of instances it sorts.
 
 /** vec4s of the row's u32s and of its f32s. */
 export const INT_ROW = 6;
@@ -43,7 +44,15 @@ export function drawWords(draws: readonly IndirectDraw[]): StorageBufferAttribut
   return new StorageBufferAttribute(values, 4);
 }
 
-export const wordsBuffer = () => new StorageBufferAttribute(new Uint32Array(INT_ROW * 4), 4);
+/**
+ * Where the blocks start among the u32s: four per block, its first instance, its range's end and start, and its range's
+ * item of live counts, NO_LIVE_COUNT for none (see `LodCluster.liveCount`).
+ */
+export const BLOCKS_AT = INT_ROW * 4;
+export const NO_LIVE_COUNT = 0xffffffff;
+
+/** The row's u32s and room for `blocks` blocks, one at least. */
+export const wordsBuffer = (blocks: number) => new StorageBufferAttribute(new Uint32Array(BLOCKS_AT + Math.max(blocks, 1) * 4), 4);
 export const floatsBuffer = () => new StorageBufferAttribute(new Float32Array(FLOAT_ROW * 4), 4);
 /** Per level, how many instances its list holds for the camera sorting: the indirect pass clears them. */
 export const countsBuffer = () => new StorageBufferAttribute(new Uint32Array(MAX_LEVELS), 1);

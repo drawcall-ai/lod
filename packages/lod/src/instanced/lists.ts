@@ -1,4 +1,4 @@
-import { Frustum, Matrix4, type Camera, type Renderer, type StorageInstancedBufferAttribute } from "three/webgpu";
+import { Frustum, Matrix4, type Camera, type Renderer, type StorageBufferAttribute, type StorageInstancedBufferAttribute } from "three/webgpu";
 import { has } from "../levels/draw.js";
 import type { InstanceSlots } from "../levels/fade.js";
 import { emptyLevels, type LodLevel } from "../levels/index.js";
@@ -12,9 +12,11 @@ import type { IndirectDraw } from "./rows.js";
 
 /** What one camera's sort reads besides its lists, everything in the Lod's space. */
 export interface SortInputs extends Omit<RowValues, "frustum"> {
-  /** The instances the camera sees, as start and count, flat (see clusters.ts), and how many in all. */
+  /** The instances the camera sees, as start, count and item of `liveCounts`, flat (see clusters.ts), and how many in all. */
   ranges: readonly number[];
   instances: number;
+  /** The live counts of the ranges, which only the GPU knows; null while none has one. */
+  liveCounts: StorageBufferAttribute | null;
   /** Whether every range it sees lies wholly inside its frustum. */
   inside: boolean;
   /**
@@ -100,8 +102,10 @@ export class InstanceLists {
       for (const { normal, constant } of lists.frustum.planes) key.put(normal.x).put(normal.y).put(normal.z).put(constant);
       key.camera(eye, scale, ortho, levels, cull, source).put(loaded).put(before).put(progress).put(reach);
     }
-    if (!key.end()) return;
-    this.sorter.write(camera, { levels, eye, scale, ortho, cull, loaded, before, progress, source, reach, frustum: lists.frustum }, ranges, sort.instances, limit);
+    // Live counts may change at any time: their ranges sort at every update.
+    if (!key.end() && !sort.liveCounts) return;
+    const values = { levels, eye, scale, ortho, cull, loaded, before, progress, source, reach, frustum: lists.frustum };
+    this.sorter.write(camera, values, ranges, sort.liveCounts, sort.instances, limit);
     lists.written = true;
   }
 

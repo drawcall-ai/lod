@@ -24,6 +24,7 @@ import {
   type Renderer,
   type Scene,
   type SkinnedMesh,
+  type StorageBufferAttribute,
   type StorageInstancedBufferAttribute,
   type Texture,
 } from "three/webgpu";
@@ -61,6 +62,7 @@ export const isNodeMaterial = (material: Material): material is NodeMaterial => 
 export const isStandardNode = (material: Material): material is MeshStandardNodeMaterial => flag(material, "isMeshStandardNodeMaterial");
 export const isStorageInstanced = (attribute: BufferAttribute): attribute is StorageInstancedBufferAttribute =>
   flag(attribute, "isStorageInstancedBufferAttribute");
+export const isStorageBuffer = (value: unknown): value is StorageBufferAttribute => flag(value, "isStorageBufferAttribute");
 
 /** The node material each built-in mesh material draws as with WebGPU. */
 const NODE_MATERIALS: Record<string, new () => NodeMaterial> = {

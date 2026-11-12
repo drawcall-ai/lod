@@ -23,19 +23,20 @@ import { MAX_LEVELS, levelsToDrawNode } from "../levels/draw.js";
 import { column, maxScale, stretch } from "../tsl.js";
 import { toTsl } from "../typegpu.js";
 import { cullScale, instanceOnScreen } from "./measure.js";
-import { DRAW_BYTES, FLOATS_AT, INTS_AT, UNLISTED } from "./rows.js";
+import { BLOCKS_AT, DRAW_BYTES, FLOATS_AT, INTS_AT, NO_LIVE_COUNT, UNLISTED } from "./rows.js";
 
 // Sorting a Lod's instances into its levels' instance lists for one camera, on the GPU, in two passes it builds once
 // (see sort.ts).
 //
 // One workgroup per block of `BLOCK` instances of the ranges the camera sees (see clusters.ts), one lane per instance:
-// updateInstance skips an instance at scale 0, thins it out by `cullDistance`, skips it outside the camera's frustum,
-// measures its height on screen from its matrix with instanceOnScreen, picks what it draws with levelsToDraw, the
-// function the CPU runs too, and appends itself to each level it draws: its index and signed fade go to that level's
-// next free slot. Each level that draws something has a list of `listSize` slots, from the start the row gives; the
-// level's draws start there (their first instance). The indirect pass hands each level's count to the indirect draws of
-// the Lod's meshes and clears the counts for the next camera. Both stay within WebGPU's default limit of 8 storage
-// buffers per stage.
+// a lane at or past its range's live count, if it has one, returns at once; updateInstance skips an instance at scale
+// 0, thins it out by `cullDistance`, skips it outside the camera's frustum, measures its height on screen from its
+// matrix with instanceOnScreen, picks what it draws with levelsToDraw, the function the CPU runs too, and appends itself
+// to each level it draws: its index and signed fade go to that level's next free slot. Each level that draws something
+// has a list of `listSize` slots, from the start the row gives; the level's draws start there (their first instance).
+// The indirect pass hands each level's count to the indirect draws of the Lod's meshes and clears the counts for the
+// next camera. Both stay within WebGPU's default limit of 8 storage buffers per stage, the blocks sharing the row's
+// u32s' buffer.
 
 const cullScaleNode = toTsl("lodCullScale", ["origin", "distance", "near", "far", "survivors"], cullScale);
 const instanceOnScreenNode = toTsl("lodInstanceOnScreen", ["matrix", "source", "grow", "eye", "scale", "ortho"], instanceOnScreen);
@@ -48,11 +49,11 @@ export const MAX_BLOCKS = 65535;
 
 /** The buffers the sort passes read and write: pointed at a camera's (row, blocks, lists, args) as it sorts. */
 export interface SortBuffers {
-  /** The camera's row: its u32s and its f32s (see rows.ts). */
+  /** The camera's row, its u32s followed by its blocks, and its f32s (see rows.ts). */
   words: StorageBufferAttribute;
   floats: StorageBufferAttribute;
-  /** Per block the camera sorts, its first instance and the end of its range. */
-  blocks: StorageBufferAttribute;
+  /** The live counts of the ranges the camera sorts (see `LodCluster.liveCount`). */
+  liveCounts: StorageBufferAttribute;
   /** The instances' matrices, and survivors' scaled ones, which the level meshes draw while survivors scale. */
   matrices: StorageInstancedBufferAttribute;
   scaled: StorageInstancedBufferAttribute;
@@ -72,9 +73,14 @@ export function sortPasses(buffers: SortBuffers) {
   const nodes = nodesOf(buffers);
   const update = computeKernel(
     Fn(() => {
-      const block = nodes.blocks.element(workgroupId.x).toVar();
-      const index = block.x.add(localId.x).toVar();
-      If(index.greaterThanEqual(block.y), () => void Return());
+      const block = workgroupId.x.mul(4).add(BLOCKS_AT).toVar();
+      const word = (i: number) => nodes.words.element(block.add(i)).toVar();
+      const [first, end, start, live] = [word(0), word(1), word(2), word(3)];
+      const index = first.add(localId.x).toVar();
+      If(index.greaterThanEqual(end), () => void Return());
+      If(live.notEqual(NO_LIVE_COUNT), () => {
+        If(index.sub(start).greaterThanEqual(nodes.liveCounts.element(live)), () => void Return());
+      });
       updateInstance(nodes, index);
     })(),
     [BLOCK],
@@ -91,7 +97,7 @@ export function sortPasses(buffers: SortBuffers) {
     point(next: SortBuffers, blocks: number): void {
       nodes.words.value = next.words;
       nodes.floats.value = next.floats;
-      nodes.blocks.value = next.blocks;
+      nodes.liveCounts.value = next.liveCounts;
       nodes.matrices.value = next.matrices;
       nodes.scaled.value = next.scaled;
       nodes.indices.value = next.indices;
@@ -115,7 +121,7 @@ function nodesOf(buffers: SortBuffers) {
   return {
     words: storage(buffers.words, "uint", 0).setName("lodRowWords").toReadOnly(),
     floats: storage(buffers.floats, "float", 0).setName("lodRowFloats").toReadOnly(),
-    blocks: storage(buffers.blocks, "uvec2", 0).setName("lodBlocks").toReadOnly(),
+    liveCounts: storage(buffers.liveCounts, "uint", 0).setName("lodLiveCounts").toReadOnly(),
     matrices: storage(buffers.matrices, "mat4", 0).setName("lodMatrices").toReadOnly(),
     scaled: storage(buffers.scaled, "mat4", 0).setName("lodScaledMatrices"),
     indices: storage(buffers.indices, "uint", 0).setName("lodSlotIndices"),

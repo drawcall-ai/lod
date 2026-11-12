@@ -16,6 +16,7 @@ import {
   PerspectiveCamera,
   Raycaster,
   Scene,
+  StorageBufferAttribute,
   StorageInstancedBufferAttribute,
   Vector3,
   RGBAFormat,
@@ -355,6 +356,32 @@ describe("a Lod's instances", { timeout: GPU_TIMEOUT }, () => {
       expect(warned).not.toHaveBeenCalled();
       expect(() => lod.computeBoundingBox()).toThrow(/cannot read a storage instanceMatrix/);
       expect(() => lod.getLevelAt(0, camera)).toThrow(/cannot read a storage instanceMatrix/);
+    } finally {
+      lod.dispose();
+    }
+  });
+
+  it("sorts only the instances of a cluster's live count, which a compute pass writes, at every update", async () => {
+    const liveCounts = new StorageBufferAttribute(new Uint32Array(2), 1);
+    const live = uniform(2, "uint");
+    const write = Fn(() => void storage(liveCounts, "uint", 2).element(1).assign(live))().compute(1);
+    const lod = lodOf([{ object: box("source") }], onAxis([10, 20, 30, 40]));
+    const boundingBox = new Box3(new Vector3(-1, -1, -41), new Vector3(1, 1, -9));
+    lod.clusters = [{ start: 0, count: 4, boundingBox, liveCount: { attribute: liveCounts, index: 1 } }];
+    const camera = new PerspectiveCamera(60, 1, 0.1, 1e5);
+    try {
+      await renderer.computeAsync(write);
+      await renderSorted(lod, camera);
+      expect(await distances(lod, camera)).toEqual([[10, 20]]);
+      live.value = 3;
+      await renderer.computeAsync(write);
+      await renderSorted(lod, camera);
+      expect(await distances(lod, camera)).toEqual([[10, 20, 30]]);
+      lod.clusters = [{ start: 0, count: 4, boundingBox, liveCount: { attribute: new StorageBufferAttribute(new Float32Array(1), 1), index: 0 } }];
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+      await renderSorted(lod, camera);
+      expect(lod.error?.message).toMatch(/liveCount.attribute must be a StorageBufferAttribute of one u32 per item/);
+      logged.mockRestore();
     } finally {
       lod.dispose();
     }
