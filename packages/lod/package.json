@@ -46,7 +46,7 @@
   },
   "peerDependencies": {
     "@drawcall/glts": "^6.0.0",
-    "three": ">=0.186.0",
+    "three": ">=0.186.0 <0.187.0",
     "typegpu": "^0.12.9",
     "vitecache": "^0.5.0"
   },
