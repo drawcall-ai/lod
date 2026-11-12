@@ -20,6 +20,8 @@ export class LodLoadContext {
   constructor(
     private readonly load: () => Promise<Object3D>,
     private readonly onLevel: ((object: Object3D, index: number) => void | Promise<void>) | undefined,
+    /** Called once what the ladder loaded is freed. */
+    private readonly onFree: () => void,
   ) {}
 
   /** The spare source, loaded once. */
@@ -89,5 +91,6 @@ export class LodLoadContext {
     for (const [object, options] of this.loaded) dispose(object, options);
     this.loaded.clear();
     this.built.clear();
+    this.onFree();
   }
 }

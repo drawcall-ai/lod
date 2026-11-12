@@ -234,16 +234,22 @@ describe("CachedLodLoader", () => {
     expect(load).toHaveBeenCalledTimes(2);
   });
 
-  it("bakes with a renderer of its own, which dispose frees", async () => {
+  it("bakes with a renderer of its own, freed with the last levels a Lod held, or by dispose", async () => {
     const { manager } = sourceFixture(() => new Mesh(new BoxGeometry(), new MeshStandardMaterial()), /\.glb$/);
     const loader = new CachedLodLoader(manager);
-    const levels = await loader.loadAsync({ url: "/baker.glb", levels: [{ type: "impostor", maxPixels: 100 }] });
-    await levels[1]?.load?.();
-    const renderer = bakeImpostor.mock.calls[0]?.[1];
-    if (!(renderer instanceof WebGPURenderer)) throw new Error("Expected the loader's renderer");
-    const disposed = vi.spyOn(renderer, "dispose");
-    loader.dispose();
-    await eventually(() => expect(disposed).toHaveBeenCalledOnce());
+    const bake = async (url: string) => {
+      const levels = await loader.loadAsync({ url, levels: [{ type: "impostor", maxPixels: 100 }] });
+      await levels[1]?.load?.();
+      const renderer = bakeImpostor.mock.calls.at(-1)?.[1];
+      if (!(renderer instanceof WebGPURenderer)) throw new Error("Expected the loader's renderer");
+      return { levels, disposed: vi.spyOn(renderer, "dispose") };
+    };
+    const held = await bake("/held.glb");
+    new Lod(held.levels).dispose();
+    await eventually(() => expect(held.disposed).toHaveBeenCalledOnce());
+    const kept = await bake("/kept.glb");
+    void loader.dispose();
+    await eventually(() => expect(kept.disposed).toHaveBeenCalledOnce());
   });
 
   it("reuses cached levels when only a switch threshold or draw option changes", async () => {

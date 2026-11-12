@@ -34,8 +34,8 @@ export interface CachedLodLoaderOptions extends Pick<CacheEntryOptions, "basePat
  *
  * Loads asset URLs through manager handlers, else with a GLTFLoader of its own, which decodes meshopt only: register
  * a GLTFLoader configured with Draco or KTX2 decoders for models compressed with them, and a GLTSLoader for .glts
- * sources. Impostor and interior bakes draw with a renderer of the loader's own, made at its first bake: `dispose`
- * frees it.
+ * sources. Impostor and interior bakes draw with a renderer of the loader's own, made at its first bake and freed with
+ * what the last of the ladders it describes loaded (see `loadAsync`), or by `dispose`.
  */
 export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
   private gltf: GLTFLoader | undefined;
@@ -44,6 +44,8 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
    * frame would draw that frame over the whole target (see `bakeImpostor`).
    */
   private renderer: Promise<WebGPURenderer> | undefined;
+  /** How many ladders it described whose loads are not yet freed. */
+  private ladders = 0;
   /** Whether `loadAsync` builds every level with the ladder rather than when a camera first needs it. */
   protected readonly buildsAll: boolean = false;
 
@@ -71,12 +73,19 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
    *
    * What the levels load is freed when the last Lod holding them is disposed (see `LodLevel.hold`), which spends them:
    * a Lod made from them later throws, so call loadAsync again. Levels no Lod ever holds are never freed: they are
-   * yours until a Lod holds them.
+   * yours until a Lod holds them. Once every ladder it described is freed, so is its bake renderer.
    */
   override async loadAsync(request: LodRequest): Promise<LodLevel[]> {
     const ladder = normalize(request, this.path, (url) => this.publicPath(this.manager.resolveURL(url)));
     const { url, levels: requests } = ladder;
-    const context = new LodLoadContext(() => this.loadAsset(url), this.options.onLevel);
+    this.ladders++;
+    const context = new LodLoadContext(
+      () => this.loadAsset(url),
+      this.options.onLevel,
+      () => {
+        if (--this.ladders === 0) void this.freeRenderer();
+      },
+    );
     this.manager.itemStart(url);
     try {
       // Built with the ladder: every level in Node; elsewhere a simplified or baked level without maxPixels, whose
@@ -232,6 +241,11 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
    * bake with, the scenes of its GLTSLoader included, before it resolves, so there this frees nothing.
    */
   async dispose(): Promise<void> {
+    await this.freeRenderer();
+  }
+
+  /** Free the bake renderer, once made. */
+  private async freeRenderer(): Promise<void> {
     const renderer = this.renderer;
     this.renderer = undefined;
     // A renderer that failed to initialise failed the bake that made it.
