@@ -6,7 +6,7 @@ import type { GLTSLoader } from "@drawcall/glts";
 import { resolve as resolveImport } from "import-meta-resolve";
 import { Loader, LoadingManager, WebGPURenderer, type Object3D } from "three/webgpu";
 import { publicURL, type Input } from "vitecache";
-import { setUpBakeRenderer } from "../bake.js";
+import { createBakeRenderer, setUpBakeRenderer } from "../bake.js";
 import type { LodLevel } from "../levels/index.js";
 import { CachedLodLoader as BrowserCachedLodLoader, type CachedLodLoaderOptions } from "./index.js";
 import type { LodRequest } from "./request.js";
@@ -29,7 +29,8 @@ const sessions = new AsyncLocalStorage<Session>();
  * a .glts source imports from a CDN, fails, since no stored level could be checked against it. Served paths such as
  * `/trees/oak.glts`, and `file:` URLs in the public directory, as a headless .glts script's manager resolves them to,
  * load from vitecache's public directory (see `publicURL`), and `.glts` sources through a GLTSLoader of the load's own;
- * bakes draw on a WebGPU device of @drawcall/webgpu. The manager only resolves the request's URL.
+ * bakes draw on a canvas of the process's document, as a glts host has one, or else on a WebGPU device of
+ * @drawcall/webgpu. The manager only resolves the request's URL.
  *
  * Each `loadAsync` loads and bakes with what it makes for itself, which it frees before resolving, so loads may run
  * concurrently. The levels it returns load their stored bytes as in browsers, and none holds the source: the source
@@ -99,6 +100,9 @@ class SessionLoader extends BrowserCachedLodLoader {
   }
 
   protected override async newBakeRenderer(): Promise<WebGPURenderer> {
+    // A process with a document, such as a glts host's, has WebGPU of its own: bake on a canvas of that document, as a
+    // .glts script does. A second WebGPU runtime beside the host's would take over globals the host's images upload with.
+    if (typeof document !== "undefined") return createBakeRenderer();
     // Three's DOM canvas types exclude native canvases; its constructor checks the actual API.
     const renderer: unknown = Reflect.construct(WebGPURenderer, [{ canvas: await canvas(), antialias: false }]);
     if (!(renderer instanceof WebGPURenderer)) throw new Error("CachedLodLoader: three did not make a WebGPURenderer");
@@ -177,8 +181,8 @@ let current: Install | undefined;
 
 interface Install {
   /**
-   * The canvas bakes draw on, made by the first bake, so loads that only read stored levels or load sources leave the
-   * process's globals alone, such as those of a glts host whose @drawcall/webgpu is another copy.
+   * The canvas bakes draw on in a process without a document, made by the first bake, so loads that only read stored
+   * levels or load sources install no WebGPU runtime.
    */
   canvas?: Promise<Canvas>;
   restore: () => Promise<void>;
