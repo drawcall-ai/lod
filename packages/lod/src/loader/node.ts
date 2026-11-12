@@ -83,6 +83,15 @@ class SessionLoader extends BrowserCachedLodLoader {
     await this.scripts.dispose();
   }
 
+  /**
+   * A path its manager served at the placeholder origin as that path, which `CachedLodLoader.loadAsync` gave below the
+   * app's base: keyed as in browsers whatever document the process has, such as the one a headless GLTS renderer
+   * installs, against which the placeholder origin would be foreign.
+   */
+  protected override publicPath(url: string): string {
+    return url.startsWith(`${placeholderOrigin}/`) ? url.slice(placeholderOrigin.length) : super.publicPath(url);
+  }
+
   /** Load `url` in the load's session, or, once `loadAsync` has resolved, in a session of its own. */
   protected override loadAsset(url: string): Promise<Object3D> {
     if (sessions.getStore()) return super.loadAsset(url);
