@@ -1,9 +1,9 @@
 import * as THREE from "three/webgpu";
-import { cameraPosition, distance, float, positionWorld } from "three/tsl";
-import { Lod, type Wind } from "@drawcall/lod";
+import { cameraPosition, distance, float, positionWorld, vec4 } from "three/tsl";
+import { ImpostorMesh, Lod, type Wind } from "@drawcall/lod";
 import { sourceBox } from "./bounds.ts";
 import { planter } from "./planting.ts";
-import { sharing } from "../loading.ts";
+import { scripts } from "../loading.ts";
 import type { Textures } from "../render/materials.ts";
 import type { Zones } from "./zones.ts";
 import { groundShading } from "../render/ground/shading.ts";
@@ -97,9 +97,11 @@ export async function groundCover(
   wind?: Wind,
 ): Promise<THREE.Group> {
   // Grass samples ground in the vertex stage, where pixel derivatives are unavailable.
-  const ground = groundShading(textures, zones, float(0));
-  const groundColor = () => ground(positionWorld.xz, distance(cameraPosition.xz, positionWorld.xz));
-  const scatter = new Scatter(sharing({ "/grass/ground.ts": { groundColor } }));
+  const shading = groundShading(textures, zones, float(0));
+  const ground = shading(positionWorld.xz, distance(cameraPosition.xz, positionWorld.xz));
+  const carried = ground.toVarying("vGrassGround");
+  const grounded = new WeakSet<THREE.Material>();
+  const scatter = new Scatter(scripts);
   const root = new THREE.Group();
   root.name = "ground cover";
   const reference = new THREE.PerspectiveCamera(50);
@@ -132,10 +134,30 @@ export async function groundCover(
       // The field thins out over the last 40 % of the radius and ends at it, where the levels end.
       lod.cullDistance = { camera, near: radius * 0.6, far: radius };
       wind?.apply(lod, { amplitude: (box.max.y - box.min.y) * 0.07 });
-      lod.addEventListener("levelschange", () => lod.traverse((node) => (node.castShadow = false)));
+      lod.addEventListener("levelschange", () =>
+        lod.traverse((node) => {
+          node.castShadow = false;
+          if (kind.grass) groundGrass(node, ground, carried, grounded);
+        }),
+      );
     });
   root.add(scatter, ...kinds.map(({ cover }) => cover));
   return root;
+}
+
+/**
+ * Colour `node`, a mesh of a grass level, by the ground under it in place of the material colour its asset gives it,
+ * unless its material is among `grounded`, which it joins. An impostor reads `ground` per pixel, as it already uses all
+ * the varyings WebGPU allows and covers few pixels; other meshes read it `carried` from their vertices.
+ */
+function groundGrass(node: THREE.Object3D, ground: THREE.Node<"vec3">, carried: THREE.Node<"vec3">, grounded: WeakSet<THREE.Material>): void {
+  if (!(node instanceof THREE.Mesh) || !(node.material instanceof THREE.MeshStandardNodeMaterial) || grounded.has(node.material)) return;
+  const { material } = node;
+  if (!material.colorNode) throw new Error("ground cover: grass levels need their authored colour node");
+  grounded.add(material);
+  material.color.set(0xffffff);
+  material.colorNode = new THREE.ConvertNode<"vec4">(material.colorNode, "vec4").mul(vec4(node instanceof ImpostorMesh ? ground : carried, 1));
+  material.needsUpdate = true;
 }
 
 /** Which ground a kind grows on, as a test on x, z. */

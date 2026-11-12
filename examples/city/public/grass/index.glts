@@ -1,24 +1,19 @@
-import { gltsLoader, loadingManager, onDispose, scene } from "@drawcall/glts";
-import { CachedLodLoader, foliageLevels, ImpostorMesh, Lod, type LodLevel } from "@drawcall/lod";
+import { gltsLoader, isPreview, loadingManager, onDispose, scene } from "@drawcall/glts";
+import { CachedLodLoader, foliageLevels, Lod, type LodLevel } from "@drawcall/lod";
 import * as THREE from "three/webgpu";
-import { vec4 } from "three/tsl";
-import { groundColor } from "./ground.ts";
 
 // A patch of grass, ?kind=lawn or meadow and ?variant=0 or 1, at levels of detail: source.glts's blades, then an
-// impostor, gone below 1 px. Every level takes its colour from the ground it stands on (see ground.ts) and receives
-// shadows but casts none.
+// impostor, gone below 1 px. Every level takes the colour of a meadow's ground, which its blades' neutral shading is
+// multiplied by, as its material colour; it receives shadows but casts none.
 loadingManager.addHandler(/\.glts$/i, gltsLoader);
-const ground = groundColor();
-const carried = ground.toVarying("vGrassGround");
 const loader = new CachedLodLoader(loadingManager, {
   onLevel: (object) => {
     foliageLevels(object, { translucency: 0.5 });
     object.traverse((node) => {
       if (!(node instanceof THREE.Mesh)) return;
       const material = node.material;
-      if (!(material instanceof THREE.MeshStandardNodeMaterial) || !material.colorNode) throw new Error("grass: its levels need their authored colour node");
-      // An impostor already uses all the varyings WebGPU allows; it covers few pixels, so it reads the ground per pixel.
-      material.colorNode = new THREE.ConvertNode<"vec4">(material.colorNode, "vec4").mul(vec4(node instanceof ImpostorMesh ? ground : carried, 1));
+      if (!(material instanceof THREE.MeshStandardNodeMaterial)) throw new Error("grass: its levels need a standard material");
+      material.color.setRGB(0.16, 0.24, 0.07);
       node.castShadow = false;
       node.receiveShadow = true;
     });
@@ -66,3 +61,9 @@ if (!load) throw new Error(`grass: kind must be lawn or meadow and variant 0 or 
 const lod = new Lod(await load(), 1, { manager: loadingManager });
 scene.add(lod);
 onDispose(() => lod.dispose());
+
+if (isPreview) {
+  const sun = new THREE.DirectionalLight("white", 3);
+  sun.position.set(4, 6, 3);
+  scene.add(sun, sun.target, new THREE.HemisphereLight("#dbe6f5", "#5b5140", 1.5));
+}
