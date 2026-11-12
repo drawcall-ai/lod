@@ -17,6 +17,9 @@ export interface Range {
   count: number;
 }
 
+/** A copy and the region it stands in. */
+type Regioned = readonly [region: string, copy: Copy];
+
 /** Edge of the square regions placed copies are clustered by, so that whole regions out of view are culled. */
 const REGION = 1000;
 
@@ -25,7 +28,7 @@ interface Scattered {
   node: GLTSInstances;
   lod: Lod;
   /** Runs of copies placed, each from its first instance, sorted by region. */
-  placed: { start: number; copies: Copy[] }[];
+  placed: { start: number; copies: Regioned[] }[];
   size: number;
   /** Whether the ranges taken are written by a compute pass, on the GPU, or on the CPU; undefined while none is taken. */
   computed: boolean | undefined;
@@ -57,8 +60,7 @@ export class Scatter extends THREE.Group {
   /** Place `copies` of `url`. */
   async place(url: string, copies: readonly Copy[]): Promise<void> {
     const asset = await this.open(url);
-    const keys = new Map(copies.map((copy) => [copy, regionOf(copy)]));
-    const sorted = [...copies].sort((a, b) => (keys.get(a) ?? "").localeCompare(keys.get(b) ?? ""));
+    const sorted = copies.map((copy): Regioned => [regionOf(copy), copy]).sort(([a], [b]) => a.localeCompare(b));
     asset.placed.push({ start: asset.size, copies: sorted });
     asset.size += copies.length;
   }
@@ -89,7 +91,7 @@ export class Scatter extends THREE.Group {
       const clusters: LodCluster[] = [];
       const box = envelope(lod.levels);
       for (const { start, copies } of placed) {
-        copies.forEach(({ matrix, color }, i) => {
+        copies.forEach(([, { matrix, color }], i) => {
           matrix.toArray(matrices, (start + i) * 16);
           color?.toArray(colors, (start + i) * stride);
         });
@@ -97,7 +99,7 @@ export class Scatter extends THREE.Group {
       }
       node.instanceMatrix = computed ? new THREE.StorageInstancedBufferAttribute(matrices, 16) : new THREE.InstancedBufferAttribute(matrices, 16);
       if (computed) node.instanceColor = new THREE.StorageInstancedBufferAttribute(colors, 4);
-      else if (placed.some(({ copies }) => copies.some(({ color }) => color))) node.instanceColor = new THREE.InstancedBufferAttribute(colors, 3);
+      else if (placed.some(({ copies }) => copies.some(([, { color }]) => color))) node.instanceColor = new THREE.InstancedBufferAttribute(colors, 3);
       node.count = size;
       node.clusters = clusters;
     }
@@ -136,11 +138,10 @@ function regionOf(copy: Copy): string {
  * A cluster per region of `copies`, sorted by region, from instance `start`: bounded by `box`, every level's, at each
  * copy, and, where `scaled`, by the scales of their matrices, which a Lod measures itself of CPU matrices only.
  */
-function regions(start: number, copies: readonly Copy[], box: THREE.Box3, scaled: boolean): LodCluster[] {
+function regions(start: number, copies: readonly Regioned[], box: THREE.Box3, scaled: boolean): LodCluster[] {
   const clusters: LodCluster[] = [];
   let last: string | undefined;
-  for (const [i, copy] of copies.entries()) {
-    const region = regionOf(copy);
+  for (const [i, [region, copy]] of copies.entries()) {
     const scale = copy.matrix.getMaxScaleOnAxis();
     let cluster = clusters.at(-1);
     if (!cluster || region !== last) {
