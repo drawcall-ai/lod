@@ -13,9 +13,6 @@ import { type Plan, TOWN } from "./plan.ts";
 import { Scatter } from "./scatter.ts";
 import { GREEN } from "../../public/grass/green.ts";
 
-/** The green public/grass draws with on its own, which the ground's colour replaces. */
-const GRASS_GREEN = vec3(...GREEN);
-
 /** Edge of a ground-cover tile (m). */
 const TILE = 6;
 
@@ -103,7 +100,7 @@ export async function groundCover(
   // Sampled in a compute pass, where pixel derivatives are unavailable: near, where grass grows.
   const ground = groundShading(textures, zones, float(0));
   // Grass takes the ground's colour in place of the green its asset draws with on its own.
-  const grassColor = (xz: THREE.Node<"vec2">) => ground(xz, float(0)).div(GRASS_GREEN);
+  const grassColor = (xz: THREE.Node<"vec2">) => ground(xz, float(0)).div(vec3(...GREEN));
   const scatter = new Scatter(scripts);
   const root = new THREE.Group();
   root.name = "ground cover";
