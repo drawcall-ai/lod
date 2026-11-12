@@ -12,10 +12,12 @@ test("a sealed scatter clusters the copies placed by region, with colours of 3 f
     const scatter = new Scatter(loader);
     const at = (x: number) => ({ matrix: new Matrix4().makeTranslation(x, 0, 0), color: new Color(1, 0, 0) });
     await scatter.place(BOX, [at(1500), at(10), at(1600)]);
-    // The CPU writes none of its own: only its node is wanted.
-    const { node: placed } = await scatter.take(BOX, 0, false);
-    const computed = await scatter.take(`${BOX}?computed`, 2, true);
+    await scatter.take(`${BOX}?computed`, 2, true);
     await scatter.seal();
+    // as a frame does, handing each node's instances to its Lod
+    scatter.updateMatrixWorld();
+    const placed = await scatter.lod(BOX);
+    const computed = await scatter.lod(`${BOX}?computed`);
     assert.ok(placed.instanceColor instanceof InstancedBufferAttribute);
     assert.deepEqual(
       placed.clusters?.map(({ start, count }) => [start, count]),
@@ -27,8 +29,8 @@ test("a sealed scatter clusters the copies placed by region, with colours of 3 f
     );
     assert.equal(placed.instanceColor.itemSize, 3);
     assert.deepEqual(Array.from(placed.instanceColor.array.slice(0, 3)), [1, 0, 0]);
-    assert.ok(computed.node.instanceColor instanceof StorageInstancedBufferAttribute);
-    assert.equal(computed.node.instanceColor.itemSize, 4);
+    assert.ok(computed.instanceColor instanceof StorageInstancedBufferAttribute);
+    assert.equal(computed.instanceColor.itemSize, 4);
   } finally {
     loader.dispose();
   }
