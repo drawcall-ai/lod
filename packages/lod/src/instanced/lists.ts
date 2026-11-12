@@ -1,4 +1,5 @@
-import { Frustum, Matrix4, type Camera, type Renderer, type StorageBufferAttribute, type StorageInstancedBufferAttribute } from "three/webgpu";
+import { Frustum, Matrix4, type Camera, type Renderer, type StorageInstancedBufferAttribute } from "three/webgpu";
+import type { LodLiveCount } from "./clusters.js";
 import { has } from "../levels/draw.js";
 import type { InstanceSlots } from "../levels/fade.js";
 import { emptyLevels, type LodLevel } from "../levels/index.js";
@@ -16,7 +17,7 @@ export interface SortInputs extends Omit<RowValues, "frustum"> {
   ranges: readonly number[];
   instances: number;
   /** The live counts of the ranges, which only the GPU knows; null while none has one. */
-  liveCounts: StorageBufferAttribute | null;
+  liveCounts: LodLiveCount["attribute"] | null;
   /** Whether every range it sees lies wholly inside its frustum. */
   inside: boolean;
   /**

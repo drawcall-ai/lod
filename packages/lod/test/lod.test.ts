@@ -380,7 +380,7 @@ describe("a Lod's instances", { timeout: GPU_TIMEOUT }, () => {
       lod.clusters = [{ start: 0, count: 4, boundingBox, liveCount: { attribute: new StorageBufferAttribute(new Float32Array(1), 1), index: 0 } }];
       const logged = vi.spyOn(console, "error").mockImplementation(() => {});
       await renderSorted(lod, camera);
-      expect(lod.error?.message).toMatch(/liveCount.attribute must be a StorageBufferAttribute of one u32 per item/);
+      expect(lod.error?.message).toMatch(/liveCount.attribute must be a storage attribute of one u32 per item/);
       logged.mockRestore();
     } finally {
       lod.dispose();

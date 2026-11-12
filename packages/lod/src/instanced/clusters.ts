@@ -1,6 +1,6 @@
-import { Box3, Sphere, Vector3, type Frustum, type StorageBufferAttribute } from "three/webgpu";
+import { Box3, Sphere, Vector3, type Frustum, type StorageBufferAttribute, type StorageInstancedBufferAttribute } from "three/webgpu";
 import { at } from "../at.js";
-import { isBox3, isStorageBuffer } from "../three.js";
+import { isBox3, isStorageBuffer, isStorageInstanced } from "../three.js";
 import type { LocalCamera } from "./camera.js";
 import type { Cull } from "./cull.js";
 import type { Measured } from "./instances.js";
@@ -24,7 +24,7 @@ export interface LodCluster {
   maxScale?: number;
   /**
    * How many of the range's instances are live, from its start, as a GPU pass writes it: the u32 at `index` of
-   * `attribute`, a StorageBufferAttribute of one u32 per item, read at every sort. `count` stays the most the range
+   * `attribute`, a storage attribute of one u32 per item, read at every sort. `count` stays the most the range
    * holds, which its lists and box are made for. Every cluster of a Lod with a liveCount shares one `attribute`.
    */
   liveCount?: LodLiveCount;
@@ -32,11 +32,14 @@ export interface LodCluster {
 
 /** Where a cluster's live count lies (see `LodCluster.liveCount`). */
 export interface LodLiveCount {
-  attribute: StorageBufferAttribute;
+  attribute: StorageBufferAttribute | StorageInstancedBufferAttribute;
   index: number;
 }
 
-/** A cluster as the CPU tests it: its range clipped to `count`, its box grown for survivors (none if unbounded), its scales. */
+/**
+ * A cluster as the CPU tests it: its range clipped to `count`, its box grown for survivors (none if unbounded), its
+ * scales and its liveCount.
+ */
 interface Area {
   start: number;
   size: number;
@@ -94,7 +97,7 @@ export class ClusterView {
   /** The ranges the camera sees, start, count and item of `liveCounts` (NO_LIVE_COUNT for none), flat, clipped to `count`. */
   readonly ranges: number[] = [];
   /** The live counts of the ranges seen; null while none has one. */
-  liveCounts: StorageBufferAttribute | null = null;
+  liveCounts: LodLiveCount["attribute"] | null = null;
   /** How many instances the ranges hold. */
   instances = 0;
   /** Whether every range seen lies wholly inside the camera's frustum. */
@@ -181,7 +184,7 @@ function inside(frustum: Frustum, box: Box3): boolean {
  */
 export function checkClusters(clusters: readonly LodCluster[], capacity: number, last: number[]): void {
   let changed = last.length !== clusters.length * 2;
-  let shared: StorageBufferAttribute | null = null;
+  let shared: LodLiveCount["attribute"] | null = null;
   clusters.forEach(({ start, count, boundingBox, minScale, maxScale, liveCount }, i) => {
     if (!Number.isInteger(start) || !Number.isInteger(count) || start < 0 || count < 0 || start + count > capacity)
       throw new RangeError(`Lod: cluster ${i}, ${count} instances from ${start}, passes the ${capacity} of its instanceMatrix`);
@@ -203,10 +206,10 @@ export function checkClusters(clusters: readonly LodCluster[], capacity: number,
   }
 }
 
-/** Throws unless `liveCount`, cluster `i`'s, is a u32 of a StorageBufferAttribute, `shared` if another cluster's was; its attribute. */
-function checkLiveCount({ attribute, index }: LodLiveCount, i: number, shared: StorageBufferAttribute | null): StorageBufferAttribute {
-  if (!isStorageBuffer(attribute) || !(attribute.array instanceof Uint32Array) || attribute.itemSize !== 1)
-    throw new TypeError(`Lod: cluster ${i}'s liveCount.attribute must be a StorageBufferAttribute of one u32 per item`);
+/** Throws unless `liveCount`, cluster `i`'s, is a u32 of a storage attribute, `shared` if another cluster's was; its attribute. */
+function checkLiveCount({ attribute, index }: LodLiveCount, i: number, shared: LodLiveCount["attribute"] | null): LodLiveCount["attribute"] {
+  if (!(isStorageBuffer(attribute) || isStorageInstanced(attribute)) || !(attribute.array instanceof Uint32Array) || attribute.itemSize !== 1)
+    throw new TypeError(`Lod: cluster ${i}'s liveCount.attribute must be a storage attribute of one u32 per item`);
   if (!Number.isInteger(index) || index < 0 || index >= attribute.count)
     throw new RangeError(`Lod: cluster ${i}'s liveCount.index, ${index}, is not one of its attribute's ${attribute.count} items`);
   if (shared && shared !== attribute) throw new TypeError(`Lod: cluster ${i}'s liveCount.attribute differs from another cluster's: a Lod's clusters share one`);

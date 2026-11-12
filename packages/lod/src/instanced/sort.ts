@@ -2,6 +2,7 @@ import { StorageBufferAttribute, StorageInstancedBufferAttribute, type Camera, t
 import type { d } from "typegpu";
 import { MAX_LEVELS, type DrawLevels } from "../levels/draw.js";
 import type { InstanceSlots } from "../levels/fade.js";
+import type { LodLiveCount } from "./clusters.js";
 import type { Cull } from "./cull.js";
 import { BLOCKS_AT, FLOATS_AT, INTS_AT, NO_LIVE_COUNT, UNLISTED, argsBuffer, countsBuffer, drawWords, floatsBuffer, forcedWord, wordsBuffer, type IndirectDraw } from "./rows.js";
 import { BLOCK, MAX_BLOCKS, sortPasses, type SortPasses } from "./update.js";
@@ -37,7 +38,7 @@ interface CameraBuffers {
   /** How many blocks it sorts. */
   blockCount: number;
   /** The live counts of the ranges it sorts; null while none has one. */
-  liveCounts: StorageBufferAttribute | null;
+  liveCounts: LodLiveCount["attribute"] | null;
   /** Its lists: per slot, the instance it draws and its signed fade; `listSize` slots per listed level. */
   indices: StorageBufferAttribute;
   fades: StorageBufferAttribute;
@@ -100,7 +101,7 @@ export class Sorter {
    * flat), `instances` in all, sorted at the camera's next draw. Its lists grow to hold them, within `limit` bytes per
    * buffer.
    */
-  write(camera: Camera, values: RowValues, ranges: readonly number[], liveCounts: StorageBufferAttribute | null, instances: number, limit: number): void {
+  write(camera: Camera, values: RowValues, ranges: readonly number[], liveCounts: LodLiveCount["attribute"] | null, instances: number, limit: number): void {
     const buffers = this.cameras.get(camera) ?? this.makeBuffers();
     this.cameras.set(camera, buffers);
     if (instances > buffers.listSize) this.grow(buffers, instances, limit);
@@ -200,10 +201,8 @@ export class Sorter {
     if (count > MAX_BLOCKS)
       throw new RangeError(`Lod: a camera sees ${count} blocks of ${BLOCK} instances, more than one dispatch's ${MAX_BLOCKS}: split the instances across Lods`);
     if (buffers.words.array.length < BLOCKS_AT + Math.max(count, 1) * 4) {
-      const grown = wordsBuffer(count);
-      grown.array.set(buffers.words.array.subarray(0, BLOCKS_AT));
       buffers.words.dispose();
-      buffers.words = grown;
+      buffers.words = wordsBuffer(count);
     }
     const words = buffers.words.array;
     let at = BLOCKS_AT;

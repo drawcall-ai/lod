@@ -22,6 +22,7 @@ import {
 import { MAX_LEVELS, levelsToDrawNode } from "../levels/draw.js";
 import { column, maxScale, stretch } from "../tsl.js";
 import { toTsl } from "../typegpu.js";
+import type { LodLiveCount } from "./clusters.js";
 import { cullScale, instanceOnScreen } from "./measure.js";
 import { BLOCKS_AT, DRAW_BYTES, FLOATS_AT, INTS_AT, NO_LIVE_COUNT, UNLISTED } from "./rows.js";
 
@@ -53,7 +54,7 @@ export interface SortBuffers {
   words: StorageBufferAttribute;
   floats: StorageBufferAttribute;
   /** The live counts of the ranges the camera sorts (see `LodCluster.liveCount`). */
-  liveCounts: StorageBufferAttribute;
+  liveCounts: LodLiveCount["attribute"];
   /** The instances' matrices, and survivors' scaled ones, which the level meshes draw while survivors scale. */
   matrices: StorageInstancedBufferAttribute;
   scaled: StorageInstancedBufferAttribute;
@@ -78,7 +79,7 @@ export function sortPasses(buffers: SortBuffers) {
       const [first, end, start, live] = [word(0), word(1), word(2), word(3)];
       const index = first.add(localId.x).toVar();
       If(index.greaterThanEqual(end), () => void Return());
-      If(live.notEqual(NO_LIVE_COUNT), () => {
+      If(live.notEqual(uint(NO_LIVE_COUNT)), () => {
         If(index.sub(start).greaterThanEqual(nodes.liveCounts.element(live)), () => void Return());
       });
       updateInstance(nodes, index);
@@ -206,7 +207,7 @@ function updateInstance(nodes: Nodes, index: Node<"uint">): void {
   const append = (at: Node<"int">, signed: Node<"float">) => {
     const level = uint(at).toVar();
     const start = r.start(level).toVar();
-    If(start.notEqual(UNLISTED), () => {
+    If(start.notEqual(uint(UNLISTED)), () => {
       const k = atomicAdd(nodes.counts.element(level), uint(1)).toVar();
       If(k.lessThan(listSize), () => {
         const slot = start.add(k).toVar();
