@@ -11,7 +11,7 @@ import { texture } from "three/tsl";
 export class Pipeline {
   /**
    * What the last frame drew: the scene pass, its shadow maps and the output pass. three
-   * counts an indirect draw (every level of an InstancedLod) at all the instances it has
+   * counts an indirect draw (every level of a Lod) at all the instances it has
    * room for, not those the GPU selected.
    */
   readonly drawn = { calls: 0, triangles: 0 };

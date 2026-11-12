@@ -7,7 +7,7 @@
 // Forests and ground cover are planted on the GPU in the tiles near the camera (world/near-tiles.ts, world/planting.ts).
 // window.city exposes the tour and frame measurements to scripts/tour.ts.
 import * as THREE from "three/webgpu";
-import { InstancedLod, Lod, LodGpu, Wind } from "@drawcall/lod";
+import { Lod, Wind } from "@drawcall/lod";
 import { Textures } from "./render/materials.ts";
 import { terrainMaterial } from "./render/ground/material.ts";
 import { Fly } from "./flight/fly.ts";
@@ -67,9 +67,6 @@ const textures = new Textures(manager);
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.5, 60000);
 const scene = new THREE.Scene();
 const pipeline = await Pipeline.create(scene, camera, Math.min(devicePixelRatio, 2));
-// What every Lod and InstancedLod of the city shares. Its pool has room for what the InstancedLods' lists hold at most
-// together (about 342k instances in 5.8k chunks), within one storage binding of 128 MiB of matrices.
-const gpu = new LodGpu(pipeline.renderer, { maxInstanceCount: 350_000, maxChunkCount: 6000 });
 loaded("renderer");
 // hidden until the world is built: an empty canvas would sit over the page meanwhile
 pipeline.canvas.style.visibility = "hidden";
@@ -98,11 +95,11 @@ scene.fogNode = haze(
 const zones = { fields: world.fields, forests: world.forests, parcels: { texture: world.land.texture(), extent: EXTENT }, town: TOWN };
 const wind = params.get("wind") === "0" ? undefined : new Wind({ direction: [1, 0.35], speed: 0.22 });
 const content = Promise.all([
-  houses(world, gpu),
-  trees(world, gpu, wind),
-  props(world, gpu),
-  Corn.build(world, gpu),
-  groundCover(textures, world, zones, camera, gpu, wind),
+  houses(world),
+  trees(world, pipeline.renderer, wind),
+  props(world),
+  Corn.build(world),
+  groundCover(textures, world, zones, camera, pipeline.renderer, wind),
 ]);
 // Let cache discovery start before constructing the ground on this thread.
 await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -122,11 +119,11 @@ if (wind) corn.applyWind(wind);
 scene.updateMatrixWorld(true);
 scene.matrixWorldAutoUpdate = false;
 sun.castBy(scene);
-const lods: (Lod | InstancedLod)[] = [];
+const lods: Lod[] = [];
 const nearTiles: NearTiles[] = [];
 scene.traverse((object) => {
   if (object instanceof NearTiles) nearTiles.push(object);
-  if (!(object instanceof Lod || object instanceof InstancedLod)) return;
+  if (!(object instanceof Lod)) return;
   lods.push(object);
   object.manager = lodManager;
   object.addEventListener("levelschange", () => {
@@ -140,7 +137,7 @@ const kinds = [
   { name: "trees", roots: [forest] },
   { name: "props", roots: [objects] },
   { name: "corn blocks", roots: corn.blocks.map((block) => block.lod) },
-  { name: "corn plants", roots: [corn.plants, corn.hero] },
+  { name: "corn plants", roots: [...corn.plantLods, corn.hero] },
   { name: "ladybird", roots: [corn.ladybird] },
   { name: "ground cover", roots: [herbage] },
 ];

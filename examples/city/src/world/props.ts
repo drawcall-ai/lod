@@ -1,217 +1,62 @@
 import * as THREE from "three/webgpu";
-import { CachedLodLoader, type InstancedLod, type LodGpu, type LodLevel } from "@drawcall/lod";
-import { arriving, manager } from "../loading.ts";
 import seedrandom from "seedrandom";
-import { instancedAt, spread } from "./place.ts";
+import { scripts } from "../loading.ts";
+import { copiesAt, Scatter } from "./scatter.ts";
 import type { Plan } from "./plan.ts";
-import { fixtures } from "./fixtures.ts";
-import type { StreetName } from "./town.ts";
 
-const shadows = arriving((object) => object.traverse((node) => (node.castShadow = node.receiveShadow = true)));
-
-/**
- * Street furniture and cars, by model: they keep their meshes nearby and use a small impostor in the distance, whose
- * self-contained textures let the overview defer original model fetches. Below a few pixels (more for thin lamps,
- * which vanish into a line sooner) they disappear.
- */
-const MODELS: Record<string, () => Promise<LodLevel[]>> = {
-  street_lamp_01: () =>
-    new CachedLodLoader(manager, shadows).loadAsync({
-      url: "/assets/models/street_lamp_01/street_lamp_01.glb",
-      levels: [
-        { type: "simplify", ratio: 0.03 },
-        { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 60 },
-        { type: "empty", maxPixels: 8 },
-      ],
-    }),
-  painted_wooden_bench: () =>
-    new CachedLodLoader(manager, shadows).loadAsync({
-      url: "/assets/models/painted_wooden_bench/painted_wooden_bench.glb",
-      levels: [
-        { type: "simplify", ratio: 0.5 },
-        { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 60 },
-        { type: "empty", maxPixels: 3 },
-      ],
-    }),
-  metal_trash_can: () =>
-    new CachedLodLoader(manager, shadows).loadAsync({
-      url: "/assets/models/metal_trash_can/metal_trash_can.glb",
-      levels: [
-        { type: "simplify", ratio: 0.25 },
-        { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 60 },
-        { type: "empty", maxPixels: 3 },
-      ],
-    }),
-  fire_hydrant: () =>
-    new CachedLodLoader(manager, shadows).loadAsync({
-      url: "/assets/models/fire_hydrant/fire_hydrant.glb",
-      levels: [
-        { type: "simplify", ratio: 0.1 },
-        { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 60 },
-        { type: "empty", maxPixels: 3 },
-      ],
-    }),
-  utility_box_01: () =>
-    new CachedLodLoader(manager, shadows).loadAsync({
-      url: "/assets/models/utility_box_01/utility_box_01.glb",
-      levels: [
-        { type: "simplify", ratio: 0.5 },
-        { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 60 },
-        { type: "empty", maxPixels: 3 },
-      ],
-    }),
-  covered_car: () =>
-    new CachedLodLoader(manager, shadows).loadAsync({
-      url: "/assets/models/covered_car/covered_car.glb",
-      levels: [
-        { type: "simplify", ratio: 0.12 },
-        { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 60 },
-        { type: "empty", maxPixels: 4 },
-      ],
-    }),
-  wooden_crate_01: () =>
-    new CachedLodLoader(manager, shadows).loadAsync({
-      url: "/assets/models/wooden_crate_01/wooden_crate_01.glb",
-      levels: [
-        { type: "simplify", ratio: 0.5 },
-        { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 60 },
-        { type: "empty", maxPixels: 3 },
-      ],
-    }),
-  planter_box_01: () =>
-    new CachedLodLoader(manager, shadows).loadAsync({
-      url: "/assets/models/planter_box_01/planter_box_01.glb",
-      levels: [
-        { type: "simplify", ratio: 0.5 },
-        { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 60 },
-        { type: "empty", maxPixels: 3 },
-      ],
-    }),
+/** Street furniture and cars, as assets in public/models, by the plan's model id. */
+const MODELS: Record<string, string> = {
+  street_lamp_01: "/models/street_lamp_01/index.glts",
+  painted_wooden_bench: "/models/painted_wooden_bench/index.glts",
+  metal_trash_can: "/models/metal_trash_can/index.glts",
+  fire_hydrant: "/models/fire_hydrant/index.glts",
+  utility_box_01: "/models/utility_box_01/index.glts",
+  covered_car: "/models/covered_car/index.glts",
+  wooden_crate_01: "/models/wooden_crate_01/index.glts",
+  planter_box_01: "/models/planter_box_01/index.glts",
 };
 
-const fence = () =>
-  new CachedLodLoader(manager, arriving()).loadAsync({
-    url: "/fence/index.glts?length=2.4",
-    levels: [
-      { type: "simplify", ratio: 0.3 },
-      { type: "impostor", layout: "hemi", maxPixels: 40, resolution: 64 },
-      { type: "empty", maxPixels: 10 },
-    ],
-  });
+/** The hedge designs, which the gardens' hedge sections take turns with. */
+const HEDGES = ["/hedge/index.glts?variant=0", "/hedge/index.glts?variant=1", "/hedge/index.glts?variant=2"];
 
-/** A street sign per name, which its query paints on. */
-const STREET_SIGNS: Record<StreetName, () => Promise<LodLevel[]>> = {
-  "Maple St": () =>
-    new CachedLodLoader(manager, arriving()).loadAsync({
-      url: "/street-sign/index.glts?text=Maple+St",
-      levels: [
-        { type: "simplify", ratio: 0.5 },
-        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 64 },
-        { type: "empty", maxPixels: 4 },
-      ],
-    }),
-  "Church Rd": () =>
-    new CachedLodLoader(manager, arriving()).loadAsync({
-      url: "/street-sign/index.glts?text=Church+Rd",
-      levels: [
-        { type: "simplify", ratio: 0.5 },
-        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 64 },
-        { type: "empty", maxPixels: 4 },
-      ],
-    }),
-  "Mill Lane": () =>
-    new CachedLodLoader(manager, arriving()).loadAsync({
-      url: "/street-sign/index.glts?text=Mill+Lane",
-      levels: [
-        { type: "simplify", ratio: 0.5 },
-        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 64 },
-        { type: "empty", maxPixels: 4 },
-      ],
-    }),
-  "Oak Ave": () =>
-    new CachedLodLoader(manager, arriving()).loadAsync({
-      url: "/street-sign/index.glts?text=Oak+Ave",
-      levels: [
-        { type: "simplify", ratio: 0.5 },
-        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 64 },
-        { type: "empty", maxPixels: 4 },
-      ],
-    }),
-  "High St": () =>
-    new CachedLodLoader(manager, arriving()).loadAsync({
-      url: "/street-sign/index.glts?text=High+St",
-      levels: [
-        { type: "simplify", ratio: 0.5 },
-        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 64 },
-        { type: "empty", maxPixels: 4 },
-      ],
-    }),
-  "Elm St": () =>
-    new CachedLodLoader(manager, arriving()).loadAsync({
-      url: "/street-sign/index.glts?text=Elm+St",
-      levels: [
-        { type: "simplify", ratio: 0.5 },
-        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 64 },
-        { type: "empty", maxPixels: 4 },
-      ],
-    }),
-};
+/** Sheds come in a few paints. */
+const PAINTS = ["#ffffff", "#9fb0a0", "#b9a58c", "#8c9aa8", "#c9b9a0"];
 
-/** Hedge designs, which the gardens' hedges take turns with: each keeps its clipped outline through simplified geometry and a distant impostor. */
-const HEDGES: (() => Promise<LodLevel[]>)[] = [
-  () =>
-    new CachedLodLoader(manager, arriving()).loadAsync({
-      url: "/hedge/index.glts?length=2&variant=0",
-      levels: [
-        { type: "simplify", ratio: 0.1, maxPixels: 120 },
-        { type: "impostor", layout: "hemi", maxPixels: 30, resolution: 64 },
-        { type: "empty", maxPixels: 3 },
-      ],
-    }),
-  () =>
-    new CachedLodLoader(manager, arriving()).loadAsync({
-      url: "/hedge/index.glts?length=2&variant=1",
-      levels: [
-        { type: "simplify", ratio: 0.1, maxPixels: 120 },
-        { type: "impostor", layout: "hemi", maxPixels: 30, resolution: 64 },
-        { type: "empty", maxPixels: 3 },
-      ],
-    }),
-  () =>
-    new CachedLodLoader(manager, arriving()).loadAsync({
-      url: "/hedge/index.glts?length=2&variant=2",
-      levels: [
-        { type: "simplify", ratio: 0.1, maxPixels: 120 },
-        { type: "impostor", layout: "hemi", maxPixels: 30, resolution: 64 },
-        { type: "empty", maxPixels: 3 },
-      ],
-    }),
-];
-
-export async function props(plan: Plan, gpu: LodGpu): Promise<THREE.Group> {
-  const root = new THREE.Group();
-  root.name = "props";
-  const pending = Object.entries(MODELS).map(async ([id, load]) => {
+/** Street furniture, cars, fences, street signs, hedges and garden fixtures where the plan put them. */
+export async function props(plan: Plan): Promise<Scatter> {
+  const scatter = new Scatter(scripts);
+  scatter.name = "props";
+  const placing: Promise<void>[] = [];
+  for (const [id, url] of Object.entries(MODELS)) {
     const spots = plan.models.get(id);
-    if (!spots?.length) return [];
-    return spread(gpu, id, [await load()], spots);
+    if (spots?.length) placing.push(scatter.place(url, copiesAt(spots)));
+  }
+  if (plan.fences.length) placing.push(scatter.place("/fence/index.glts", copiesAt(plan.fences)));
+  for (const [name, spots] of plan.streetSigns) placing.push(scatter.place(`/street-sign/index.glts?text=${encodeURIComponent(name)}`, copiesAt(spots)));
+  HEDGES.forEach((url, variant) => {
+    const mine = plan.hedges.filter((_, i) => i % HEDGES.length === variant);
+    // each section a little lighter or darker
+    const r = seedrandom(String(variant + 7));
+    if (mine.length)
+      placing.push(
+        scatter.place(
+          url,
+          copiesAt(mine, () => new THREE.Color(1, 1, 1).multiplyScalar(0.85 + 0.25 * r())),
+        ),
+      );
   });
-  if (plan.fences.length) pending.push(fence().then((levels) => spread(gpu, "fence", [levels], plan.fences)));
-  for (const [name, spots] of plan.streetSigns) pending.push(STREET_SIGNS[name]().then((levels) => spread(gpu, `street sign ${name}`, [levels], spots)));
-  pending.push(fixtures(plan, gpu), hedges(plan, gpu));
-  root.add(...(await Promise.all(pending)).flat());
-  return root;
+  for (const [name, spots] of plan.fixtures) {
+    const r = seedrandom(name);
+    placing.push(scatter.place(`/${name}/index.glts`, copiesAt(spots, name === "shed" ? () => paint(r) : undefined)));
+  }
+  await Promise.all(placing);
+  await scatter.seal();
+  return scatter;
 }
 
-/** The plan's hedge sections, the designs taking turns, each section a little lighter or darker. */
-async function hedges(plan: Plan, gpu: LodGpu): Promise<InstancedLod[]> {
-  const variants = await Promise.all(
-    HEDGES.map(async (load, variant) => {
-      const mine = plan.hedges.filter((_, i) => i % HEDGES.length === variant);
-      if (!mine.length) return [];
-      const r = seedrandom(String(variant + 7));
-      return [instancedAt(gpu, `hedges ${variant}`, await load(), mine, (_, __, color) => color.multiplyScalar(0.85 + 0.25 * r()))];
-    }),
-  );
-  return variants.flat();
+/** A shed's paint, picked by `r`. */
+function paint(r: seedrandom.PRNG): THREE.Color {
+  const picked = PAINTS[Math.floor(r() * PAINTS.length)];
+  if (!picked) throw new Error("no shed paint picked");
+  return new THREE.Color(picked);
 }

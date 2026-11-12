@@ -8,7 +8,7 @@ import { STREET_WIDTH, type Town } from "./town.ts";
 /** Length of one clipped hedge section (m). */
 export const HEDGE = 2;
 
-/** The fixtures a garden holds, each named as its asset folder in public/ (see fixtures.ts). */
+/** The fixtures a garden holds, each named as its asset folder in public/ (see props.ts). */
 export const FIXTURE_NAMES = ["letterbox", "patio-set", "shed", "greenhouse", "washing-line", "swing"] as const;
 export type Fixture = (typeof FIXTURE_NAMES)[number];
 

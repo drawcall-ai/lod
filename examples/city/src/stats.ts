@@ -1,5 +1,5 @@
 import * as THREE from "three/webgpu";
-import { InstancedLod, Lod } from "@drawcall/lod";
+import { Lod } from "@drawcall/lod";
 
 /** Per level: instances drawing it this frame and their triangles. */
 export interface LevelCount {
@@ -12,29 +12,23 @@ export interface LevelCount {
  * draws for `camera`. Instances planted on the GPU are not counted: the CPU cannot see them.
  */
 export function countLevels(roots: readonly THREE.Object3D[], camera: THREE.Camera): LevelCount[] {
-  const lods: (Lod | InstancedLod)[] = [];
+  const lods: Lod[] = [];
   for (const root of roots)
     root.traverse((node) => {
-      if (node instanceof InstancedLod || node instanceof Lod) lods.push(node);
+      if (node instanceof Lod) lods.push(node);
     });
   const counts: LevelCount[] = [];
   for (const lod of lods) {
     const instances = lod.levels.map(() => 0);
-    if (lod instanceof InstancedLod) {
-      for (const chunk of lod.chunks) {
-        if (chunk.instanceMatrix instanceof THREE.StorageInstancedBufferAttribute) continue;
-        for (let i = 0; i < chunk.count; i++) {
-          const index = chunk.getLevelAt(i, camera);
+    if (!(lod.instanceMatrix instanceof THREE.StorageInstancedBufferAttribute))
+      for (const { start, count } of lod.clusters ?? [{ start: 0, count: lod.count }])
+        for (let i = start; i < Math.min(start + count, lod.count); i++) {
+          const index = lod.getLevelAt(i, camera);
           if (index === null) continue;
           const drawing = instances[index];
           if (drawing === undefined) throw new Error(`${lod.name}: missing level ${index}`);
           instances[index] = drawing + 1;
         }
-      }
-    } else
-      lod.levels.forEach((level, index) => {
-        instances[index] = level.object?.visible ? 1 : 0;
-      });
     for (const [index, level] of lod.levels.entries()) {
       const count = (counts[index] ??= { instances: 0, triangles: 0 });
       const drawing = instances[index];

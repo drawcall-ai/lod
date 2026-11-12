@@ -1,13 +1,12 @@
-import { CachedLodLoader, foliageLevels, foliageModel, type InstancedLod, type LodGpu, type LodLevel, type Wind } from "@drawcall/lod";
+import type { Wind } from "@drawcall/lod";
 import * as THREE from "three/webgpu";
 import seedrandom from "seedrandom";
-import { arriving, manager } from "../loading.ts";
-import { MODEL_FOLIAGE } from "./foliage.ts";
+import { scripts } from "../loading.ts";
+import { sourceBox } from "./bounds.ts";
 import { planter, type Planting } from "./planting.ts";
 import { Use } from "./land.ts";
-import { spread } from "./place.ts";
-import { sourceBox } from "./bounds.ts";
-import { inForest, type Plan } from "./plan.ts";
+import { copiesAt, Scatter } from "./scatter.ts";
+import { inForest, type Plan, type Spot } from "./plan.ts";
 
 /** Edge of a forest tile (m), and how far from the camera forests are held: all of the world from the tour's height. */
 const TILE = 96;
@@ -32,182 +31,77 @@ const BORDER: Mix = [
   { id: "tree_small_02", share: 0.12, scale: [2.2, 3.2] },
 ];
 
-/** The forests, planted on the GPU in the tiles near the camera (`update` them before each frame), and the trees the plan placed elsewhere. */
-export async function trees(plan: Plan, gpu: LodGpu, wind?: Wind): Promise<THREE.Group> {
+/**
+ * Trees, shrubs and garden perennials (Poly Haven scans, every leaf a card, as assets in public/models), by species, an
+ * asset per variant.
+ */
+const SPECIES: Record<string, string[]> = {
+  tree_small_02: ["/models/tree_small_02/index.glts"],
+  searsia_lucida: ["/models/searsia_lucida/index.glts?variant=a", "/models/searsia_lucida/index.glts?variant=e"],
+  pine_sapling_small: ["/models/pine_sapling_small/index.glts?variant=a", "/models/pine_sapling_small/index.glts?variant=b"],
+  shrub_02: ["/models/shrub_02/index.glts?variant=a", "/models/shrub_02/index.glts?variant=c"],
+  fern_02: ["/models/fern_02/index.glts?variant=a", "/models/fern_02/index.glts?variant=b"],
+  nettle_plant: ["/models/nettle_plant/index.glts?variant=medium", "/models/nettle_plant/index.glts?variant=tall"],
+};
+
+/**
+ * The trees the plan placed, and the forests, planted on the GPU by `renderer` in the tiles near the camera (`update`
+ * them before each frame); each species variant one asset for both.
+ */
+export async function trees(plan: Plan, renderer: THREE.Renderer, wind?: Wind): Promise<THREE.Group> {
   const root = new THREE.Group();
   root.name = "trees";
-  const sway = (lod: InstancedLod) => {
-    const box = sourceBox(lod.levels);
-    wind?.apply(lod, { amplitude: (box.max.y - box.min.y) * 0.025 });
-    return lod;
+  const scatter = new Scatter(scripts);
+  const urlsOf = (id: string) => {
+    const urls = SPECIES[id];
+    if (!urls) throw new Error(`No species ${id}`);
+    return urls;
   };
-  const grown = new Set([...INSIDE, ...BORDER].map(({ id }) => id));
-  const planted = Object.entries(SPECIES).filter(([id]) => grown.has(id) || plan.models.get(id)?.length);
-  const loaded = new Map(await Promise.all(planted.map(async ([id, variants]) => [id, await Promise.all(variants.map((load) => load()))] as const)));
-  const modelsOf = (id: string) => {
-    const models = loaded.get(id);
-    if (!models) throw new Error(`No species ${id}`);
-    return models;
-  };
+  const placing = Object.entries(SPECIES).flatMap(([id, urls]) => {
+    const variants: Spot[][] = urls.map(() => []);
+    for (const [index, spot] of (plan.models.get(id) ?? []).entries()) variants[((index * 2654435761) % 4294967296) % urls.length]?.push(spot);
+    return urls.flatMap((url, variant) => {
+      const mine = variants[variant] ?? [];
+      return mine.length
+        ? [
+            scatter.place(
+              url,
+              copiesAt(mine, (spot) => foliageTint(Math.round(spot.x * 7 + spot.z * 13))),
+            ),
+          ]
+        : [];
+    });
+  });
 
-  for (const [id, models] of loaded) {
-    const spots = plan.models.get(id);
-    if (spots?.length) root.add(...spread(gpu, id, models, spots, foliageTint).map(sway));
-  }
-
-  const plant = planter(plan, gpu);
+  const plant = planter(plan, scatter, renderer);
   const forest = (x: number, z: number) => plan.land.at(x, z) === Use.Forest;
   const inside = (x: number, z: number) => plan.forests.some((f) => inForest(f, x, z, -EDGE));
   const mixes: [string, Mix, (x: number, z: number) => boolean][] = [
     ["forest", INSIDE, (x, z) => forest(x, z) && inside(x, z)],
     ["forest edge", BORDER, (x, z) => forest(x, z) && !inside(x, z)],
   ];
-  for (const [name, mix, grows] of mixes) {
-    const plantings: Planting[] = [];
-    let from = 0;
-    for (const { id, share, scale } of mix)
-      modelsOf(id).forEach((levels, variant, models) => {
-        const to = from + share / models.length;
-        plantings.push({ name: `${name} ${id} ${variant}`, levels, from, to, scale, tinted: true });
-        from = to;
-      });
-    const planted = plant({ name, tile: TILE, density: DENSITY, radius: RADIUS, grows }, plantings);
-    planted.lods.forEach(sway);
-    root.add(planted);
-  }
+  const stands = mixes.map(([name, mix, grows]) => {
+    const plantings: Planting[] = mix.flatMap(({ id, share, scale }) => {
+      const urls = urlsOf(id);
+      return urls.map((url) => ({ url, share: share / urls.length, scale, tinted: true }));
+    });
+    return plant({ name, tile: TILE, density: DENSITY, radius: RADIUS, grows }, plantings);
+  });
+  const [planted] = await Promise.all([Promise.all(stands), Promise.all(placing)]);
+  await scatter.seal();
+  if (wind)
+    for (const lod of await scatter.lods()) {
+      const box = sourceBox(lod.levels);
+      wind.apply(lod, { amplitude: (box.max.y - box.min.y) * 0.025 });
+    }
+  root.add(scatter, ...planted);
   return root;
 }
 
-const options = arriving((object) => {
-  object.traverse((node) => (node.castShadow = node.receiveShadow = true));
-  foliageModel(object, MODEL_FOLIAGE);
-  foliageLevels(object, MODEL_FOLIAGE);
-});
-
-/**
- * Trees and shrubs (Poly Haven scans, every leaf a card), by species, a load per variant: the source model, a detailed
- * hemispherical impostor (they always stand upright), a 64 px impostor from 60 px, then, for small plants, an empty
- * level that culls them below 2 px. No simplified level: decimated leaf cards look ragged, while the impostor keeps
- * every leaf's look. The switch heights are set for the frame budget; the broadleaf scan keeps its full leaf geometry
- * nearby and a larger impostor.
- */
-const SPECIES: Record<string, (() => Promise<LodLevel[]>)[]> = {
-  tree_small_02: [
-    () =>
-      new CachedLodLoader(manager, options).loadAsync({
-        url: "/assets/models/tree_small_02/tree_small_02_LOD0.glb",
-        levels: [
-          { type: "impostor", layout: "hemi", maxPixels: 900, resolution: 256, frames: 10 },
-          { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
-        ],
-      }),
-  ],
-  searsia_lucida: [
-    () =>
-      new CachedLodLoader(manager, options).loadAsync({
-        url: "/assets/models/searsia_lucida/searsia_lucida_a_LOD0.glb",
-        levels: [
-          { type: "impostor", layout: "hemi", maxPixels: 300 },
-          { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
-        ],
-      }),
-    () =>
-      new CachedLodLoader(manager, options).loadAsync({
-        url: "/assets/models/searsia_lucida/searsia_lucida_e_LOD0.glb",
-        levels: [
-          { type: "impostor", layout: "hemi", maxPixels: 300 },
-          { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
-        ],
-      }),
-  ],
-  pine_sapling_small: [
-    () =>
-      new CachedLodLoader(manager, options).loadAsync({
-        url: "/assets/models/pine_sapling_small/pine_sapling_small_a.glb",
-        levels: [
-          { type: "impostor", layout: "hemi", maxPixels: 300 },
-          { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
-        ],
-      }),
-    () =>
-      new CachedLodLoader(manager, options).loadAsync({
-        url: "/assets/models/pine_sapling_small/pine_sapling_small_b.glb",
-        levels: [
-          { type: "impostor", layout: "hemi", maxPixels: 300 },
-          { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
-        ],
-      }),
-  ],
-  shrub_02: [
-    () =>
-      new CachedLodLoader(manager, options).loadAsync({
-        url: "/assets/models/shrub_02/shrub_02_a.glb",
-        levels: [
-          { type: "impostor", layout: "hemi", maxPixels: 300 },
-          { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
-          { type: "empty", maxPixels: 2 },
-        ],
-      }),
-    () =>
-      new CachedLodLoader(manager, options).loadAsync({
-        url: "/assets/models/shrub_02/shrub_02_c.glb",
-        levels: [
-          { type: "impostor", layout: "hemi", maxPixels: 300 },
-          { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
-          { type: "empty", maxPixels: 2 },
-        ],
-      }),
-  ],
-  // garden perennials and vegetables
-  fern_02: [
-    () =>
-      new CachedLodLoader(manager, options).loadAsync({
-        url: "/assets/models/fern_02/fern_02_a.glb",
-        levels: [
-          { type: "impostor", layout: "hemi", maxPixels: 200 },
-          { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
-          { type: "empty", maxPixels: 2 },
-        ],
-      }),
-    () =>
-      new CachedLodLoader(manager, options).loadAsync({
-        url: "/assets/models/fern_02/fern_02_b.glb",
-        levels: [
-          { type: "impostor", layout: "hemi", maxPixels: 200 },
-          { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
-          { type: "empty", maxPixels: 2 },
-        ],
-      }),
-  ],
-  nettle_plant: [
-    () =>
-      new CachedLodLoader(manager, options).loadAsync({
-        url: "/assets/models/nettle_plant/nettle_plant_medium_a_LOD0.glb",
-        levels: [
-          { type: "impostor", layout: "hemi", maxPixels: 200 },
-          { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
-          { type: "empty", maxPixels: 2 },
-        ],
-      }),
-    () =>
-      new CachedLodLoader(manager, options).loadAsync({
-        url: "/assets/models/nettle_plant/nettle_plant_tall_a_LOD0.glb",
-        levels: [
-          { type: "impostor", layout: "hemi", maxPixels: 200 },
-          { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
-          { type: "empty", maxPixels: 2 },
-        ],
-      }),
-  ],
-};
-
 /** Every tree a little different: lighter or darker, yellower or bluer green. */
-function foliageTint(seed: number, color: THREE.Color): THREE.Color {
+function foliageTint(seed: number): THREE.Color {
   const r = seedrandom(String(seed));
-  return color
-    .setRGB(1, 1, 1)
-    .multiplyScalar(0.82 + 0.28 * r())
-    .lerp(r() < 0.5 ? YELLOWER : BLUER, 0.35 * r());
+  return new THREE.Color(1, 1, 1).multiplyScalar(0.82 + 0.28 * r()).lerp(r() < 0.5 ? YELLOWER : BLUER, 0.35 * r());
 }
 
 const YELLOWER = new THREE.Color(1.1, 1.05, 0.7);

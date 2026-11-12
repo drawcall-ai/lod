@@ -1,5 +1,5 @@
 import type { Camera, Object3D } from "three/webgpu";
-import type { InstancedLod, Lod, Wind } from "@drawcall/lod";
+import type { Lod, Wind } from "@drawcall/lod";
 import type { Tour } from "./flight/tour.ts";
 import type { Pipeline } from "./render/pipeline.ts";
 import type { Sun } from "./render/sun/index.ts";
@@ -15,7 +15,7 @@ interface App {
   wind: Wind | undefined;
   tour: Tour;
   sun: Sun;
-  lods: (Lod | InstancedLod)[];
+  lods: Lod[];
   nearTiles: NearTiles[];
   kinds: { name: string; roots: Object3D[] }[];
   playback: { time: number };

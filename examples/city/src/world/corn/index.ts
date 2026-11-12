@@ -1,14 +1,17 @@
 import * as THREE from "three/webgpu";
-import { InstancedLod, Lod, type LodGpu, type Wind } from "@drawcall/lod";
+import type { GLTSScene } from "@drawcall/glts";
+import { Lod, type Wind } from "@drawcall/lod";
+import { sharing } from "../../loading.ts";
 import { heroPlant } from "./hero.ts";
-import { sourceBox } from "../bounds.ts";
+import { reach, sourceBox } from "../bounds.ts";
 import { NearTiles } from "../near-tiles.ts";
+import { lodOf, Scatter } from "../scatter.ts";
 import { screenScale } from "../screen.ts";
 import type { Plan } from "../plan.ts";
-import { blocks, type Block, type Skirt, skirt as skirtUniform } from "./blocks.ts";
+import { blocks, type Block, skirt } from "./blocks.ts";
 import { cut, FieldTiles, heroSpot } from "./field.ts";
-import { cutoff, PLANTS, setCutoff } from "./levels.ts";
-import { BLOCK, DESIGNS, layout } from "../../../public/corn/layout.ts";
+import { cutoff, setCutoff } from "./levels.ts";
+import { BLOCK, DESIGNS, layout, VARIANTS } from "../../../public/corn/layout.ts";
 import { TOP } from "../../../public/corn/block/shapes.ts";
 
 /** Field blocks whose plants are drawn at once. */
@@ -20,62 +23,79 @@ const BLOCK_RADIUS = Math.hypot(BLOCK / 2, TOP - 1.2, BLOCK / 2);
 
 const eye = new THREE.Vector3();
 
-/** Every field system exists at startup; the package independently requests each plant level. */
+/**
+ * The corn fields: their blocks everywhere, the plants of the blocks near the camera, and the hero plant with its
+ * ladybird. The blocks share `skirt` with their assets, which rise out of the soil by it.
+ */
 export class Corn extends THREE.Object3D {
   private squeeze = 1;
   private fadeFrom = 0;
-  private readonly active: readonly (InstancedLod | Lod)[];
+  /** The plants' Lods and the hero's, which plants dither out of together. */
+  private readonly cut: readonly Lod[];
   private constructor(
     readonly blocks: Block[],
-    private readonly skirt: Skirt,
     readonly plants: NearTiles,
-    readonly hero: Lod,
-    readonly ladybird: Lod,
+    /** Each plant variant's Lod, which the field's plants of it draw with. */
+    readonly plantLods: readonly Lod[],
+    readonly hero: GLTSScene,
+    readonly ladybird: GLTSScene,
     readonly anchors: { hero: THREE.Vector3; ladybird: THREE.Vector3 },
     private readonly plantSize: number,
+    scatter: Scatter,
   ) {
     super();
-    this.active = [...plants.lods, hero];
-    this.add(plants, ...blocks.map((block) => block.lod), hero, ladybird);
+    this.cut = [...plantLods, lodOf(hero)];
+    this.add(scatter, plants, hero, ladybird);
   }
 
-  static async build(plan: Plan, gpu: LodGpu): Promise<Corn> {
+  static async build(plan: Plan): Promise<Corn> {
     const designs = Array.from({ length: DESIGNS }, (_, d) => layout(d));
     const tiles = cut(plan, DESIGNS, TOP);
     const spot = heroSpot(tiles, designs);
-    const skirt = skirtUniform();
-    const baked = blocks(tiles, skirt, gpu);
-    const plants = await Promise.all(
-      PLANTS.map(async (load, variant) => {
-        const levels = await load();
-        // Room for a chunk per tile held, each with as many of this variant's plants as a block design has most.
-        const perTile = Math.max(...designs.map((plants) => plants.filter((plant) => plant.variant === variant).length));
-        const lod = new InstancedLod(levels, gpu, { maxInstanceCount: ROOM * perTile });
-        lod.name = `corn plant ${variant}`;
-        const box = sourceBox(lod.levels);
-        return { lod, size: box.getSize(new THREE.Vector3()).length() };
-      }),
+    const scatter = new Scatter(sharing({ "/corn/block/skirt.ts": { skirt: () => skirt } }));
+    const plants = Array.from({ length: VARIANTS }, async (_, variant) => {
+      const url = `/corn/index.glts?variant=${variant}`;
+      // Room for a slot per tile held, each with as many of this variant's plants as a block design has most.
+      const perTile = Math.max(...designs.map((plants) => plants.filter((plant) => plant.variant === variant).length));
+      const [lod, range] = await Promise.all([scatter.lod(url), scatter.take(url, ROOM * perTile, false)]);
+      const box = sourceBox(lod.levels);
+      return { lod, size: box.getSize(new THREE.Vector3()).length(), variant: { range, perTile, reach: reach(lod.levels) } };
+    });
+    const [baked, variants, details] = await Promise.all([blocks(tiles, scatter), Promise.all(plants), heroPlant(spot, plan.terrain)]);
+    await scatter.seal();
+    const field = new FieldTiles(
+      tiles,
+      designs,
+      plan.terrain,
+      spot,
+      variants.map(({ variant }) => variant),
     );
-    const details = await heroPlant(spot, plan.terrain, gpu);
-    const lods = plants.map(({ lod }) => lod);
-    const field = new FieldTiles(tiles, designs, plan.terrain, spot, lods);
     let corn: Corn | undefined;
-    // One block filled a frame: the CPU builds its plants.
-    const near = new NearTiles(lods, {
+    // One block filled a frame: the CPU writes its plants.
+    const near = new NearTiles({
       near: (position) => {
         if (!corn) throw new Error("Corn tiles requested before initialization");
         return field.near(position, corn.fadeFrom / (1 - Lod.fade) + BLOCK_RADIUS);
       },
-      chunks: (tile) => field.chunks(tile),
+      fill: (tile, slot) => field.fill(tile, slot),
       perFrame: 1,
       room: ROOM,
     });
-    corn = new Corn(await baked, skirt, near, details.hero, details.ladybird, details.anchors, Math.max(...plants.map(({ size }) => size)));
+    corn = new Corn(
+      baked,
+      near,
+      variants.map(({ lod }) => lod),
+      details.hero,
+      details.ladybird,
+      details.anchors,
+      Math.max(...variants.map(({ size }) => size)),
+      scatter,
+    );
     return corn;
   }
 
   applyWind(wind: Wind): void {
-    for (const lod of this.plants.lods) {
+    for (const lod of this.plantLods) {
       const box = sourceBox(lod.levels);
       wind.apply(lod, { amplitude: (box.max.y - box.min.y) * 0.04 });
     }
@@ -94,12 +114,12 @@ export class Corn extends THREE.Object3D {
     this.plants.update(eye.setFromMatrixPosition(camera.matrixWorld));
     const over = this.plants.wanted / ROOM;
     this.squeeze = over > 1 ? Math.min(this.squeeze * Math.max(1.02, Math.sqrt(over)), 4) : Math.max(1, this.squeeze / 1.02);
-    for (const lod of this.active) setCutoff(lod.levels, gone);
+    for (const lod of this.cut) setCutoff(lod.levels, gone);
     const risen = Math.max(this.fadeFrom - LEAD, RAMP);
-    this.skirt.value.set(risen - RAMP, risen);
+    skirt.value.set(risen - RAMP, risen);
     for (const { kind, lod, diameter } of this.blocks) {
       const [, rising, ridged, flat] = lod.levels;
-      if (!rising) throw new Error(`${lod.name} has no baked level`);
+      if (!rising) throw new Error(`${lod.name} has no rising level`);
       // the measure is the distance to the block's centre; a part of it is up to its radius nearer or farther
       rising.maxPixels = (diameter * scale) / ((1 - Lod.fade) * Math.max(risen - RAMP - diameter / 2, 0.5));
       if (kind === "wall") continue;

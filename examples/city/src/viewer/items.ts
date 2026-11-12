@@ -59,7 +59,7 @@ async function model(textures: Textures, id: string, variant: string): Promise<C
   return { object: scene, ground: terrain(textures) };
 }
 
-async function houseItem(textures: Textures, load: Load, variant: number, file: "index" | "low"): Promise<Content> {
+async function houseItem(textures: Textures, load: Load, variant: number, file: "source" | "low"): Promise<Content> {
   const p = houseParams(variant);
   const object = await load(`house/${file}.glts?variant=${variant}`);
   // close-up: the front eave corner, where tiles, gutter, downpipe, fascia and a window meet
@@ -77,7 +77,7 @@ async function houseItem(textures: Textures, load: Load, variant: number, file: 
  */
 async function interiorItem(textures: Textures, load: Load, variant: number): Promise<Content> {
   const p = houseParams(variant);
-  const group = await load(`house/index.glts?variant=${variant}`);
+  const group = await load(`house/source.glts?variant=${variant}`);
   const front = facades(p)[0];
   const opening = front?.windows.find((w) => w.y < p.plinth + p.floorHeight);
   if (!front || !opening) throw new Error("the house has no ground-floor front window");
@@ -116,7 +116,7 @@ async function interiorPlanItem(textures: Textures, variant: number): Promise<Co
 
 /** The hero ladybird and its actual plant, framed tight around the beetle. */
 async function ladybirdItem(textures: Textures, load: Load): Promise<Content> {
-  const [plant, ladybird] = await Promise.all([load(`corn/index.glts?variant=${HERO_VARIANT}&hero=1`), load("ladybird/index.glts")]);
+  const [plant, ladybird] = await Promise.all([load(`corn/source.glts?variant=${HERO_VARIANT}&hero=1`), load("ladybird/source.glts")]);
   ladybird.applyMatrix4(seatMatrix());
   const object = new THREE.Group().add(plant, ladybird);
   return { object, focus: new THREE.Box3().setFromObject(ladybird), ground: terrain(textures) };
@@ -124,7 +124,7 @@ async function ladybirdItem(textures: Textures, load: Load): Promise<Content> {
 
 /** A corn plant turned so its leaf plane faces the viewer, as the classic side-on silhouette. */
 async function cornItem(textures: Textures, load: Load, variant: number): Promise<Content> {
-  const plant = await load(`corn/index.glts?variant=${variant}`);
+  const plant = await load(`corn/source.glts?variant=${variant}`);
   plant.rotation.y = 0.5;
   plant.updateMatrixWorld();
   // close-up: the (first) ear and the leaves around it
@@ -139,7 +139,7 @@ async function cornItem(textures: Textures, load: Load, variant: number): Promis
  * plants that `include` accepts, each variant at full detail.
  */
 async function cornRows(load: Load, blocks: number, include: (p: Plant) => boolean = () => true): Promise<THREE.Group> {
-  const plants = await Promise.all(Array.from({ length: VARIANTS }, (_, variant) => load(`corn/index.glts?variant=${variant}`)));
+  const plants = await Promise.all(Array.from({ length: VARIANTS }, (_, variant) => load(`corn/source.glts?variant=${variant}`)));
   const field = new THREE.Group();
   const offset = ((blocks - 1) * BLOCK) / 2;
   for (let i = 0; i < blocks; i++)
@@ -170,7 +170,7 @@ async function cornFieldItem(textures: Textures, load: Load): Promise<Content> {
 
 /** The ground itself, with one house for scale: close is ~150 m across, medium ~2 km. */
 async function terrainItem(textures: Textures, load: Load): Promise<Content> {
-  const object = await load("house/index.glts?variant=0");
+  const object = await load("house/source.glts?variant=0");
   const focus = new THREE.Box3(new THREE.Vector3(-60, 0, -60), new THREE.Vector3(60, 10, 60));
   const overview = new THREE.Box3(new THREE.Vector3(-500, 0, -500), new THREE.Vector3(500, 50, 500));
   return { object, focus, overview, ground: terrain(textures) };
@@ -187,7 +187,7 @@ function planVariant(): number {
 
 /** Every viewable item by name; procedural ones first, then the fetched models. */
 function builds(models: Models): Map<string, Build> {
-  const houses = Array.from({ length: HOUSE_VARIANTS }, (_, i): [string, Build] => [`house-${i}`, (textures, load) => houseItem(textures, load, i, "index")]);
+  const houses = Array.from({ length: HOUSE_VARIANTS }, (_, i): [string, Build] => [`house-${i}`, (textures, load) => houseItem(textures, load, i, "source")]);
   const corn = Array.from({ length: VARIANTS }, (_, variant): [string, Build] => [`corn-${variant}`, (textures, load) => cornItem(textures, load, variant)]);
   return new Map<string, Build>([
     ...houses,
@@ -197,11 +197,11 @@ function builds(models: Models): Map<string, Build> {
     ...corn,
     ["corn-row", (textures, load) => cornRowItem(textures, load)],
     ["corn-field", (textures, load) => cornFieldItem(textures, load)],
-    ["fence", async (textures, load) => ({ object: await load("fence/index.glts?length=7.2"), ground: terrain(textures) })],
+    ["fence", async (textures, load) => ({ object: await load("fence/source.glts?length=7.2"), ground: terrain(textures) })],
     [
       "street-sign",
       async (textures, load) => ({
-        object: await load("street-sign/index.glts?text=Maple%20St"),
+        object: await load("street-sign/source.glts?text=Maple%20St"),
         focus: new THREE.Box3(new THREE.Vector3(-0.5, 2.3, -0.3), new THREE.Vector3(0.5, 2.9, 0.3)),
         ground: terrain(textures),
       }),
