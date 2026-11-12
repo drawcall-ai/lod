@@ -87,3 +87,8 @@ it("stores a load under its served path when the process has a document, as a he
   }
   expect(await saved()).toEqual(entries);
 });
+
+it("builds the levels of a binary glTF source, its texture decoded, in a process without a document", { timeout: 120_000 }, async () => {
+  const levels = await new CachedLodLoader().loadAsync({ url: "/quad.glb", levels: [{ type: "impostor", resolution: 16 }] });
+  expect(levels).toHaveLength(2);
+});

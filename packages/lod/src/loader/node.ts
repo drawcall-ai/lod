@@ -93,10 +93,15 @@ class SessionLoader extends BrowserCachedLodLoader {
     return url.startsWith(`${placeholderOrigin}/`) ? url.slice(placeholderOrigin.length) : super.publicPath(url);
   }
 
-  /** Load `url` in the load's session, or, once `loadAsync` has resolved, in a session of its own. */
-  protected override loadAsset(url: string): Promise<Object3D> {
-    if (sessions.getStore()) return super.loadAsset(url);
-    return session({ read: new Set(), packages: new Set() }, () => super.loadAsset(url));
+  /**
+   * Load `url` in the load's session, or, once `loadAsync` has resolved, in a session of its own. In a process without a
+   * document, on the canvas's platform: three's loaders report progress with ProgressEvent and decode images, which Node
+   * has not.
+   */
+  protected override async loadAsset(url: string): Promise<Object3D> {
+    if (!sessions.getStore()) return session({ read: new Set(), packages: new Set() }, () => this.loadAsset(url));
+    if (typeof document === "undefined") await canvas();
+    return super.loadAsset(url);
   }
 
   protected override async newBakeRenderer(): Promise<WebGPURenderer> {
@@ -181,8 +186,8 @@ let current: Install | undefined;
 
 interface Install {
   /**
-   * The canvas bakes draw on in a process without a document, made by the first bake, so loads that only read stored
-   * levels or load sources install no WebGPU runtime.
+   * The canvas bakes draw on in a process without a document, made by the first source load or bake, so loads that only
+   * read stored levels install no WebGPU runtime.
    */
   canvas?: Promise<Canvas>;
   restore: () => Promise<void>;
@@ -215,8 +220,8 @@ async function session<T>(state: Session, run: () => Promise<T>): Promise<T> {
 }
 
 /**
- * The served fetch, and a canvas of @drawcall/webgpu once a session bakes, which installs WebGPU, image decoding and
- * workers while it lives.
+ * The served fetch, and a canvas of @drawcall/webgpu once a session loads a source or bakes, which installs WebGPU,
+ * image decoding and workers while it lives.
  */
 function install(): Install {
   const { fetch } = globalThis;
