@@ -25,7 +25,7 @@ describe("impostor map encoding", () => {
 });
 
 /** An RGBA8 `size`² image of gradients and noise, as baked maps hold. */
-function image(size: number): Uint8Array {
+function image(size: number): Uint8Array<ArrayBuffer> {
   const data = new Uint8Array(size * size * 4);
   let seed = 1;
   for (let i = 0; i < data.length; i++) {

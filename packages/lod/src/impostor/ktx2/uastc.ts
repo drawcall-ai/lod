@@ -37,7 +37,7 @@ const PACK_FLAGS = 1 | 128;
  * without RDO, which would trade normal accuracy for size. The encoder's own mips would filter level 0, so each baked
  * level is encoded on its own (see `encodeLayer`).
  */
-export async function encode({ data, width, height, srgb }: Job): Promise<Uint8Array> {
+export async function encode({ data, width, height, srgb }: Job): Promise<Uint8Array<ArrayBuffer>> {
   const encoder = new (await (basis ??= load())).BasisEncoder();
   try {
     encoder.setCreateKTX2File(true);

@@ -2,7 +2,8 @@ import { readdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
-import { CachedLodLoader } from "../../src/loader/node.js";
+// The package as Node runs it, built: Node starts its encoder worker threads on the built modules.
+import { CachedLodLoader } from "../../dist/node.js";
 import type { LodRequest } from "../../src/loader/request.js";
 import { LoadingManager } from "three/webgpu";
 

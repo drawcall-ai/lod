@@ -1,5 +1,5 @@
 import { read, write } from "ktx-parse";
-import { inNode } from "../../node-process.js";
+import { inNode, nodeOnly } from "../../node-process.js";
 
 /** One map's RGBA8 mip levels, `size >> level` square. */
 export interface Layer {
@@ -11,14 +11,14 @@ export interface Layer {
 
 /** What the worker encodes: RGBA8 rows of a mip level, `width` wide and `height` high. */
 export interface Job {
-  data: Uint8Array;
+  data: Uint8Array<ArrayBuffer>;
   width: number;
   height: number;
   srgb: boolean;
 }
 
 /** What the worker answers a job with. */
-export type Reply = { file: Uint8Array } | { error: string };
+export type Reply = { file: Uint8Array<ArrayBuffer> } | { error: string };
 
 interface Task {
   job: Job;
@@ -80,8 +80,7 @@ function strips(data: Uint8Array, size: number, srgb: boolean, parts: number): J
   return jobs;
 }
 
-async function encodeJob(job: Job): Promise<Uint8Array> {
-  if (inNode) return (await import("./uastc.js")).encode(job);
+function encodeJob(job: Job): Promise<Uint8Array> {
   return new Promise((resolve, reject) => {
     queue.push({ job, resolve, reject });
     queue.sort((a, b) => b.job.width * b.job.height - a.job.width * a.job.height);
@@ -89,33 +88,46 @@ async function encodeJob(job: Job): Promise<Uint8Array> {
   });
 }
 
+/** An encoder worker: a module worker in browsers, a worker thread in Node (see `inNode`). */
+interface Encoder {
+  run(job: Job): Promise<Reply>;
+  terminate(): void;
+}
+
 /** One worker, with its own encoder instance, that takes queued jobs until none is left and then ends. */
 async function work(): Promise<void> {
   workers++;
-  let worker: Worker | undefined;
+  let encoder: Encoder | undefined;
   try {
     for (let task = queue.shift(); task; task = queue.shift()) {
       try {
-        worker ??= await start();
-        const reply = await run(worker, task.job);
+        encoder ??= await start();
+        const reply = await encoder.run(task.job);
         if ("file" in reply) task.resolve(reply.file);
         else task.reject(new Error(`encodeImpostorAsync: ${reply.error}`));
       } catch (error) {
         // The worker failed to load or crashed; the next job gets a fresh one.
         task.reject(error);
-        worker?.terminate();
-        worker = undefined;
+        encoder?.terminate();
+        encoder = undefined;
       }
     }
   } finally {
-    worker?.terminate();
+    encoder?.terminate();
     workers--;
   }
 }
 
-async function start(): Promise<Worker> {
-  const { url } = await import("./worker.js");
-  return new Worker(url, { type: "module" });
+async function start(): Promise<Encoder> {
+  const { url, threadData } = await import("./worker.js");
+  if (inNode) {
+    const { Worker } = await nodeOnly<typeof import("node:worker_threads")>("node:worker_threads");
+    // without the process's flags, which are its entry's (such as --input-type) and which a module thread does not need
+    const thread = new Worker(new URL(url), { workerData: threadData, execArgv: [] });
+    return { run: (job) => runThread(thread, job), terminate: () => void thread.terminate() };
+  }
+  const worker = new Worker(url, { type: "module" });
+  return { run: (job) => run(worker, job), terminate: () => worker.terminate() };
 }
 
 /** `job` on `worker`; rejects when the worker fails rather than answers, as one that does not load does. */
@@ -139,5 +151,29 @@ function run(worker: Worker, job: Job): Promise<Reply> {
     worker.addEventListener("error", error);
     worker.addEventListener("messageerror", error);
     worker.postMessage(job, [job.data.buffer]);
+  });
+}
+
+/** `job` on `thread`, as `run` does on a worker; a thread that ends before it answers fails too. */
+function runThread(thread: import("node:worker_threads").Worker, job: Job): Promise<Reply> {
+  return new Promise((resolve, reject) => {
+    const settle = () => {
+      thread.off("message", message);
+      thread.off("error", error);
+      thread.off("exit", error);
+    };
+    const message = (reply: Reply) => {
+      settle();
+      resolve(reply);
+    };
+    const error = (cause: unknown) => {
+      settle();
+      const why = cause instanceof Error ? cause.message : `exit ${String(cause)}`;
+      reject(new Error(`encodeImpostorAsync: the encoder worker failed (${why})`));
+    };
+    thread.on("message", message);
+    thread.on("error", error);
+    thread.on("exit", error);
+    thread.postMessage(job, [job.data.buffer]);
   });
 }
