@@ -2,7 +2,8 @@ import { readdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
-import { CachedLodLoader } from "../../src/loader/node.js";
+// The package as Node runs it, built: Node starts its encoder worker threads on the built modules.
+import { CachedLodLoader } from "../../dist/node.js";
 import type { LodRequest } from "../../src/loader/request.js";
 import { LoadingManager } from "three/webgpu";
 
@@ -71,5 +72,18 @@ it("stores a load at a public file's file: URL, as a headless .glts script's man
   const manager = new LoadingManager();
   manager.setURLModifier((url) => new URL(url, pathToFileURL(join(root, "public/"))).href);
   await new CachedLodLoader(manager).loadAsync(request("./box.glts?size=5"));
+  expect(await saved()).toEqual(entries);
+});
+
+it("stores a load under its served path when the process has a document, as a headless GLTS renderer installs", { timeout: 120_000 }, async () => {
+  const request: LodRequest = { url: "/box.glts?size=6", levels: [{ type: "simplify", ratio: 0.5, maxPixels: 100 }] };
+  await new CachedLodLoader().loadAsync(request);
+  const entries = await saved();
+  vi.stubGlobal("document", { baseURI: pathToFileURL(join(root, "public/")).href });
+  try {
+    await new CachedLodLoader().loadAsync(request);
+  } finally {
+    vi.unstubAllGlobals();
+  }
   expect(await saved()).toEqual(entries);
 });
