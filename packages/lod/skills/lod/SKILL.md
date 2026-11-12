@@ -9,7 +9,7 @@ description: Use @drawcall/lod for cached, progressively loaded levels of detail
 
 Give a `CachedLodLoader` an asset URL and the representations to derive from it. Use `.glb` or `.gltf` for stored models and `.glts` for procedural assets. Put generation parameters in the asset URL's query: each distinct query is a distinct cache identity. Build a `Lod` from the returned levels. A `Lod` is driven like three's `InstancedMesh`: `new Lod(levels)` is one object at the Lod's own transform, and `new Lod(levels, count)` draws `count` copies placed by `instanceMatrix` and tinted by `instanceColor`.
 
-A `Lod` needs no renderer to be made, and neither does `CachedLodLoader`. It draws with the first `WebGPURenderer` that renders it, on WebGPU only: on the WebGL2 fallback it reports an error and draws nothing. That first frame learns the renderer and draws nothing of the Lod; the next one draws. Another renderer drawing it is its error, so a second renderer, such as a minimap's, needs Lods of its own.
+A `Lod` needs no renderer to be made, and neither does `CachedLodLoader`. It draws with the first `WebGPURenderer` that renders it, on WebGPU only: on the WebGL2 fallback it reports an error and draws nothing. Another renderer drawing it is its error, so a second renderer, such as a minimap's, needs Lods of its own.
 
 `loadAsync` resolves with the ladder before its levels load; each level loads when a camera first needs it. A level the cache lacks is built when it first loads, so a far camera builds only the coarse levels it needs. Give simplified and baked levels an explicit `maxPixels`: without one, a level is built with the ladder to measure its default. A simplified level also loads the source for its original materials; a source-only ladder loads its source eagerly. Prefer baked or impostor middle levels for an expensive `.glts`: a simplified level brings the script run forward to that viewing range.
 
@@ -64,7 +64,7 @@ scene.add(lod);
 onDispose(() => lod.dispose());
 ```
 
-A host that draws the asset many times calls `gltsLoader.loadInstancesAsync(url, count)`; glts hands that asset's `instanceMatrix`, `instanceColor`, `count`, `boundingBox` and `clusters` to the Lod, which then draws every copy, sorted on the GPU. The Lod must be the topmost instanced object in the script's scene: a Lod inside another Lod's levels is not supported.
+A host that draws the asset many times calls `gltsLoader.loadInstancesAsync(url, count)`; glts hands that asset's `instanceMatrix`, `instanceColor`, `count`, `boundingBox` and `clusters` to the Lod, which then draws every copy.
 
 ## Cache every level
 
@@ -76,7 +76,7 @@ A page that misses, for a load the plugin could not see, builds the level each t
 
 ## Place, share and dispose levels
 
-Load an asset once and build a `Lod` per spatial region from its levels, each with its own placements and colours; clone a `Lod` for a further copy with its own attributes. Reuse the loaded levels across Lods; adjust each Lod's resolved thresholds through its `levels`. Lods made from the same levels share geometry, materials, textures and deferred loads. Disposing a `Lod` frees only what it made of its levels: objects you give or load are yours to dispose once every Lod drawing them is disposed, while `CachedLodLoader` frees what it loaded when the last Lod holding its levels is disposed.
+Load an asset once and build a `Lod` per spatial region from its levels, each with its own placements and colours; clone a `Lod` for a further copy with its own attributes. Reuse the loaded levels across Lods; adjust each Lod's resolved thresholds through its `levels`. Lods made from the same levels share geometry, materials, textures and deferred loads. Disposing a `Lod` frees only what it made of its levels: objects you give or load are yours to dispose once every Lod drawing them is disposed, while `CachedLodLoader` frees what it loaded, and the renderer it baked with, when the last Lod holding its levels is disposed.
 
 Use the loader's `onLevel` option for application effects and shadow settings, `castShadow` and `shadowSide` included. Put source generation and its materials in the asset so that the same URL also loads correctly outside the LOD host.
 
@@ -94,7 +94,7 @@ Each camera loads the levels, and shows the level meshes, that the instances' bo
 
 When a compute pass of yours writes the instances, assign a `StorageInstancedBufferAttribute` (`instancedArray(n, "mat4")`'s value) as `instanceMatrix`, and a four-float one as `instanceColor`. The Lod reads them in place every frame; no `needsUpdate` is needed. The CPU cannot read them, so set `boundingBox` or `clusters` yourself: without either, every level loads and the Lod warns once. `computeBoundingBox`, `getLevelAt` and `raycast` work on CPU matrices only.
 
-A Lod's `instanceMatrix` must fit one storage binding of the device, 64 bytes per instance; a larger one is the Lod's error, which says to split the instances across Lods or to raise `maxStorageBufferBindingSize` in the renderer's `requiredLimits`.
+A Lod's `instanceMatrix` must fit one storage binding of the device: split large instance sets across Lods, or raise `maxStorageBufferBindingSize` in the renderer's `requiredLimits`.
 
 Give a Lod a `cullDistance` to thin it out towards a distance instead of cutting it off. `scaleSurvivors` enlarges the copies that remain so that small things like grass cover about as much; leave it off for objects whose size reads, such as trees. Thinning does not change which levels load: let the ladder's last drawn level end near `far`, or add an empty level there.
 
@@ -180,7 +180,7 @@ Tune transitions in the intended viewport with `Lod.debug`, then inspect motion 
 
 Group nearby copies into spatial regions. Broad batches can lose useful culling, while tiny batches spend too much time submitting draws. Move changed instances, marking only their update ranges, instead of rebuilding whole Lods. Count material groups as well as triangles; an atlas alone does not combine draws. Each distinct material structure costs a pipeline compile on first use, so variants should share material structure.
 
-Avoid custom shadow nodes on lights that LOD objects should cast into. A `Lod` draws for each camera, shadow maps' included, only the instances inside its frustum, at the level the map's texels resolve, so shadow casting costs about what the map can show. When it still dominates, turn `castShadow` off in `onLevel` on the levels that matter least to the shadow, such as small plants.
+Avoid custom shadow nodes on lights that LOD objects should cast into. When shadow casting dominates, turn `castShadow` off in `onLevel` on the levels that matter least to the shadow, such as small plants.
 
 Judge impostors by covered screen area and overlap as well as triangle count. Compare individual cards with baked patches for dense cover, and inspect parallax and mip quality during transitions.
 
