@@ -119,12 +119,22 @@ async function work(): Promise<void> {
 }
 
 async function start(): Promise<Encoder> {
-  const { url, threadData } = await import("./worker.js");
+  const { url } = await import("./worker.js");
   if (inNode) {
-    const { Worker } = await nodeOnly<typeof import("node:worker_threads")>("node:worker_threads");
-    // without the process's flags, which are its entry's (such as --input-type) and which a module thread does not need
-    const thread = new Worker(new URL(url), { workerData: threadData, execArgv: [] });
-    return { run: (job) => runThread(thread, job), terminate: () => void thread.terminate() };
+    const [{ Worker }, { once }] = await Promise.all([
+      nodeOnly<typeof import("node:worker_threads")>("node:worker_threads"),
+      nodeOnly<typeof import("node:events")>("node:events"),
+    ]);
+    const thread = new Worker(new URL(url), { workerData: url });
+    return {
+      // the thread's next message, or its error
+      async run(job) {
+        thread.postMessage(job, [job.data.buffer]);
+        const reply: Reply = (await once(thread, "message"))[0];
+        return reply;
+      },
+      terminate: () => void thread.terminate(),
+    };
   }
   const worker = new Worker(url, { type: "module" });
   return { run: (job) => run(worker, job), terminate: () => worker.terminate() };
@@ -151,29 +161,5 @@ function run(worker: Worker, job: Job): Promise<Reply> {
     worker.addEventListener("error", error);
     worker.addEventListener("messageerror", error);
     worker.postMessage(job, [job.data.buffer]);
-  });
-}
-
-/** `job` on `thread`, as `run` does on a worker; a thread that ends before it answers fails too. */
-function runThread(thread: import("node:worker_threads").Worker, job: Job): Promise<Reply> {
-  return new Promise((resolve, reject) => {
-    const settle = () => {
-      thread.off("message", message);
-      thread.off("error", error);
-      thread.off("exit", error);
-    };
-    const message = (reply: Reply) => {
-      settle();
-      resolve(reply);
-    };
-    const error = (cause: unknown) => {
-      settle();
-      const why = cause instanceof Error ? cause.message : `exit ${String(cause)}`;
-      reject(new Error(`encodeImpostorAsync: the encoder worker failed (${why})`));
-    };
-    thread.on("message", message);
-    thread.on("error", error);
-    thread.on("exit", error);
-    thread.postMessage(job, [job.data.buffer]);
   });
 }

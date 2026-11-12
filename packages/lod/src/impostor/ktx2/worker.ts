@@ -1,33 +1,28 @@
 // The worker an impostor map encodes in. The page imports this module only for its URL, at which it then starts it as
 // a worker: unlike `new URL("./file", import.meta.url)`, a module's own URL holds wherever a bundler moves it. Node
-// starts it as a worker thread, given `threadData`.
+// starts it as a worker thread, given that URL as its workerData.
 import type { Job, Reply } from "./encode.js";
 import { encode } from "./uastc.js";
 import { inNode, nodeOnly } from "../../node-process.js";
 
 export const url = import.meta.url;
-/** What marks a worker thread as the encoder's, apart from any other thread that imports this module. */
-export const threadData = "@drawcall/lod impostor encoder";
 
-const scope: unknown = Reflect.get(globalThis, "WorkerGlobalScope");
-if (typeof scope === "function" && globalThis instanceof scope) {
-  addEventListener("message", (event: MessageEvent<Job>) => {
-    encode(event.data).then(
-      (file) => reply({ file }, [file.buffer]),
-      (error: unknown) => reply({ error: error instanceof Error ? error.message : String(error) }),
-    );
-  });
+/** `job`'s reply, and the buffers it moves. */
+async function answer(job: Job): Promise<[Reply, ArrayBuffer[]]> {
+  try {
+    const file = await encode(job);
+    return [{ file }, [file.buffer]];
+  } catch (error) {
+    return [{ error: error instanceof Error ? error.message : String(error) }, []];
+  }
 }
 
-const reply = (message: Reply, transfer: Transferable[] = []) => postMessage(message, { transfer });
+const scope: unknown = Reflect.get(globalThis, "WorkerGlobalScope");
+if (typeof scope === "function" && globalThis instanceof scope)
+  addEventListener("message", (event: MessageEvent<Job>) => answer(event.data).then(([reply, transfer]) => postMessage(reply, { transfer })));
 
 if (inNode) {
-  const { parentPort: port, workerData } = await nodeOnly<typeof import("node:worker_threads")>("node:worker_threads");
-  if (port && workerData === threadData)
-    port.on("message", (job: Job) => {
-      encode(job).then(
-        (file) => port.postMessage({ file } satisfies Reply, [file.buffer]),
-        (error: unknown) => port.postMessage({ error: error instanceof Error ? error.message : String(error) } satisfies Reply),
-      );
-    });
+  const { parentPort, workerData } = await nodeOnly<typeof import("node:worker_threads")>("node:worker_threads");
+  const port = workerData === url ? parentPort : null;
+  port?.on("message", (job: Job) => answer(job).then(([reply, transfer]) => port.postMessage(reply, transfer)));
 }
