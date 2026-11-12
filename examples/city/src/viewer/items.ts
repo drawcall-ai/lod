@@ -10,7 +10,6 @@ import { ceiling } from "../../public/house/finishes.ts";
 import { Materials } from "../../public/house/materials.ts";
 import { seatMatrix } from "../world/corn/seat.ts";
 import { foliageModel } from "@drawcall/lod";
-import { MODEL_FOLIAGE } from "../world/foliage.ts";
 import { terrain } from "../render/ground/material.ts";
 import { surface, Textures } from "../render/materials.ts";
 
@@ -55,7 +54,7 @@ async function model(textures: Textures, id: string, variant: string): Promise<C
   scene.traverse((o) => {
     o.castShadow = o.receiveShadow = true;
   });
-  foliageModel(scene, MODEL_FOLIAGE);
+  foliageModel(scene, { translucency: 0.6 });
   return { object: scene, ground: terrain(textures) };
 }
 
