@@ -51,9 +51,9 @@ export class Instances {
   /**
    * Take in `attributes` as they are: an attribute assigned anew, edits marked by `needsUpdate` (within their update
    * ranges), a new count. A storage instanceMatrix, which the app's GPU passes may write any time, counts as changed
-   * at every update. Throws unless they can be drawn. Whether the storage the GPU reads was replaced.
+   * at every update. Throws unless they can be drawn.
    */
-  refresh({ instanceMatrix, instanceColor, count }: InstanceAttributes): boolean {
+  refresh({ instanceMatrix, instanceColor, count }: InstanceAttributes): void {
     check(instanceMatrix, instanceColor, count);
     let replaced = false;
     if (this.matrices?.source !== instanceMatrix) {
@@ -73,7 +73,6 @@ export class Instances {
     if (mirror && (moved || replaced || count !== this.count || !this.measured)) this.measured = measure(instanceMatrix, count, this.measured);
     if (replaced || moved || recoloured || count !== this.count) this.version++;
     this.count = count;
-    return replaced;
   }
 
   /** Release the mirrors; the attributes are the app's. */
