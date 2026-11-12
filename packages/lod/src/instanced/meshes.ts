@@ -1,4 +1,4 @@
-import { type Box3, BufferGeometry, type Camera, type Color, IndirectStorageBufferAttribute, Matrix4, Mesh, type Object3D, type Sphere } from "three/webgpu";
+import { type Box3, BufferGeometry, type Camera, type Color, IndirectStorageBufferAttribute, type Layers, Matrix4, Mesh, type Object3D, type Sphere } from "three/webgpu";
 import { setFadeSource, type DrawnInstances, type InstanceSlots } from "../levels/fade.js";
 import { levelMaterial } from "../levels/material.js";
 import { impostorInstances, type ImpostorMesh } from "../impostor/mesh/index.js";
@@ -34,6 +34,8 @@ export interface MeshInputs {
   readonly slots: (camera: Camera) => InstanceSlots | null;
   /** One instance's bounding radius in its own space, which shadow casters are cut off at. */
   readonly radius: number;
+  /** The Lod's layers, which its meshes are on. */
+  readonly layers: Layers;
   /**
    * Where `camera`'s indirect draws lie as `renderer` draws a mesh for it, its lists sorted: the camera's due sort runs
    * now; null before the Lod's first sort for it. Never throws: three is rendering.
@@ -108,10 +110,10 @@ export function drawInstances(meshes: readonly Mesh[], instances: DrawnInstances
 
 /**
  * Material group `group` of `template` drawn for every instance in level `level`'s list, from byte `offset()` of a
- * camera's draws, once there is one.
+ * camera's draws, once there is one, on the Lod's layers. Only the Lod's raycast hits its instances.
  */
 function levelMesh({ template, placement, group }: Part, offset: () => number | null, tint: Color, inputs: MeshInputs): Mesh {
-  const { instances, bounds, box, slots, radius, drawFor } = inputs;
+  const { instances, bounds, box, slots, radius, layers, drawFor } = inputs;
   // An impostor card is placed in the shader; any other mesh draws its geometry moved into the instance's space, so
   // the instance matrix is all it needs.
   const mesh = isImpostorMesh(template) ? card(template, placement, inputs) : plain(template, placement, group, instances);
@@ -124,6 +126,8 @@ function levelMesh({ template, placement, group }: Part, offset: () => number | 
   mesh.name = template.name;
   mesh.castShadow = template.castShadow;
   mesh.receiveShadow = template.receiveShadow;
+  mesh.layers = layers;
+  mesh.raycast = () => {};
   if (!isImpostorMesh(mesh)) mesh.geometry.boundingSphere = bounds;
   mesh.geometry.boundingBox = box;
   const previous = mesh.onBeforeRender;

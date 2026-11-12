@@ -77,8 +77,8 @@ export interface LodOptions {
  * renderer drawing it is its error. Sequential cameras are supported; a nested render with a camera that the outer
  * render also draws with replaces that camera's instance lists, so exclude the Lod from it with camera layers.
  *
- * Level templates are cloned, then their meshes are instanced, as children of the Lod; it sets each one's `visible`
- * per camera, so hide the Lod itself, never its level meshes. Skinned meshes, InstancedMeshes (except ImpostorMesh),
+ * Level templates are cloned, then their meshes are instanced, as children of the Lod on its layers; it sets each
+ * one's `visible` per camera, so hide the Lod itself, never its level meshes. Skinned meshes, InstancedMeshes (except ImpostorMesh),
  * lines, points, sprites and LODs in levels are refused, as are ShaderMaterials; use static meshes with node materials
  * or supported built-in materials. Build a new Lod after adding or moving meshes within a level: geometry is measured
  * at construction or arrival. For external detail, leave level 0 empty and draw the instances that `getLevelAt`
@@ -224,9 +224,9 @@ export class Lod extends Object3D<LodEventMap> {
   }
 
   /**
-   * The sentinel, drawn until a renderer has drawn the Lod (see `see`): no instances, on every layer, casting. Its box
-   * is the instances' bounds, and its vertices that box's corners (see `placeSentinel`), which precise
-   * Box3.setFromObject reads.
+   * The sentinel, drawn until a renderer has drawn the Lod (see `see`): no instances, on the Lod's layers, casting, and
+   * never hit by a raycast. Its box is the instances' bounds, and its vertices that box's corners (see `placeSentinel`),
+   * which precise Box3.setFromObject reads.
    */
   private makeSentinel(): Mesh<InstancedBufferGeometry> {
     const geometry = new InstancedBufferGeometry().setAttribute("position", new Float32BufferAttribute(new Float32Array(24), 3));
@@ -235,7 +235,8 @@ export class Lod extends Object3D<LodEventMap> {
     geometry.boundingSphere = this.bounds.sphere;
     const sentinel = new Mesh(geometry, SENTINEL_MATERIAL);
     sentinel.frustumCulled = false;
-    sentinel.layers.enableAll();
+    sentinel.layers = this.layers;
+    sentinel.raycast = () => {};
     // Shadow passes draw it too: a Lod that only casts learns its renderer there.
     sentinel.castShadow = true;
     sentinel.onBeforeRender = (renderer) => this.built.loads.guard(() => void this.see(renderer));
@@ -387,8 +388,8 @@ export class Lod extends Object3D<LodEventMap> {
 
   /**
    * Hits the first `count` instances on the source level, with `instanceId` set as on an InstancedMesh's hits; `object`
-   * is this Lod. Instances of a storage instanceMatrix, which the CPU cannot read, and meshes of the source on layers
-   * the raycaster does not test, are not hit.
+   * is this Lod. Instances of a storage instanceMatrix, which the CPU cannot read, are not hit. Its level meshes, on its
+   * layers, are never hit themselves.
    */
   override raycast(raycaster: Raycaster, intersects: Intersection[]): boolean {
     if (!isStorageInstanced(this.instanceMatrix))

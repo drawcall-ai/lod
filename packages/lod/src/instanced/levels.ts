@@ -86,6 +86,7 @@ export class MeshesByLevel {
       box: this.bounds.box,
       slots: (camera) => lists.slots(camera),
       radius: shape.fadeRadius,
+      layers: this.parent.layers,
       drawFor: (renderer, camera) => {
         this.drawFor(renderer, camera);
         return lists.slots(camera)?.args ?? null;

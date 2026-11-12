@@ -14,6 +14,7 @@ import {
   OrthographicCamera,
   PlaneGeometry,
   PerspectiveCamera,
+  Raycaster,
   Scene,
   StorageInstancedBufferAttribute,
   Vector3,
@@ -698,6 +699,28 @@ describe("a Lod's shaders", { timeout: GPU_TIMEOUT }, () => {
       const pixels = await render(scene, camera);
       expect(builds).not.toHaveBeenCalled();
       expect(Array.from(pixels.slice((32 * 64 + 32) * 4, (32 * 64 + 32) * 4 + 4))).toEqual([255, 0, 0, 255]);
+    } finally {
+      lod.dispose();
+    }
+  });
+});
+
+describe("a Lod's layers", { timeout: GPU_TIMEOUT }, () => {
+  it("draws for cameras on its layers, and only raycasters on them hit it, as itself", async () => {
+    const lod = lodOf([{ object: box() }], 1);
+    lod.layers.set(1);
+    const scene = new Scene().add(lod);
+    const camera = new PerspectiveCamera(60, 1, 0.1, 100);
+    camera.position.z = 5;
+    camera.layers.set(1);
+    try {
+      await eventually(async () => expect((await render(scene, camera)).some((value) => value > 0)).toBe(true));
+      const ray = new Raycaster(new Vector3(0, 0, 5), new Vector3(0, 0, -1));
+      expect(ray.intersectObject(scene)).toEqual([]);
+      ray.layers.set(1);
+      const hits = ray.intersectObject(scene);
+      expect(hits.length).toBeGreaterThan(0);
+      expect(hits.every(({ object }) => object === lod)).toBe(true);
     } finally {
       lod.dispose();
     }

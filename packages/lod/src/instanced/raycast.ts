@@ -23,7 +23,7 @@ export function raycastInstances(lod: Object3D, source: RaycastSource, matrices:
   ray.copy(raycaster.ray).applyMatrix4(inverse.copy(lod.matrixWorld).invert());
   // A mesh of several material groups is a part per group: it is hit once. A mesh's parts share its placement.
   const meshes = new Map<Mesh, Matrix4>();
-  for (const { template, placement } of source.parts) if (template.layers.test(raycaster.layers)) meshes.set(template, placement);
+  for (const { template, placement } of source.parts) meshes.set(template, placement);
   for (let index = 0; index < count; index++) {
     instance.fromArray(matrices, index * 16);
     sphere.center.copy(source.rest.center).applyMatrix4(instance);
