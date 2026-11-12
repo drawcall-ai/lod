@@ -27,7 +27,7 @@ import { Lod } from "../../src/lod.js";
 import { must } from "../must.js";
 import { isStandardNode } from "../../src/three.js";
 import { GPU_TIMEOUT, render as draw } from "../renderer.js";
-import { oneChunk } from "../instances.js";
+import { lodOf } from "../instances.js";
 
 /** A pattern of 8×8 colour blocks. */
 function blocks(): DataTexture {
@@ -115,7 +115,7 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
     expect(unwrapped.geometry.getAttribute("uv").array).not.toEqual(box.getAttribute("uv").array);
   });
 
-  it("bakes every instance of an InstancedLod or an InstancedMesh, as the same meshes placed by hand", async () => {
+  it("bakes every instance of a Lod or an InstancedMesh, as the same meshes placed by hand", async () => {
     const geometry = new BoxGeometry(1, 1, 1, 3, 3, 3);
     const material = new MeshStandardMaterial({ map: blocks() });
     const spots = [new Matrix4().makeTranslation(-1, 0, 0), new Matrix4().makeRotationY(0.5).setPosition(1, 0.3, 0), new Matrix4().makeTranslation(0, 0, 1.2)];
@@ -127,7 +127,7 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
       box.matrix.fromArray(Float32Array.from(spot.elements));
       plain.add(box);
     }
-    const lod = oneChunk([{ object: new Mesh(geometry, material) }, { object: new Mesh(new SphereGeometry(), material) }], spots);
+    const lod = lodOf([{ object: new Mesh(geometry, material) }, { object: new Mesh(new SphereGeometry(), material) }], spots);
     const instanced = new InstancedMesh(geometry, material, spots.length);
     spots.forEach((spot, i) => instanced.setMatrixAt(i, spot));
     const low = () => new Mesh(new BoxGeometry(3.2, 1.6, 3.2));
@@ -150,15 +150,17 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
     await expect(bakeMesh(new Group().add(textured(new BoxGeometry()), new ImpostorMesh(impostor)))).rejects.toThrow(/ImpostorMesh/);
   });
 
-  it("bakes normals that turn with an instance: a rotated InstancedLod copy looks like a rotated Lod", async () => {
+  it("bakes normals that turn with an instance: a Lod turned by its instance looks like one turned whole", async () => {
     const baked = await bakeMesh(textured(new BoxGeometry(1, 1, 1, 4, 4, 4)), { textureSize: 128 });
     const turn = new Matrix4().makeRotationY(Math.PI / 2);
     const lod = new Lod([{ object: new Mesh(new BoxGeometry()) }, { object: baked.clone() }]);
     lod.forceLevel = 1;
     lod.quaternion.setFromRotationMatrix(turn);
-    const instanced = oneChunk([{ object: new Mesh(new BoxGeometry()) }, { object: baked.clone() }], [turn]);
+    const instanced = lodOf([{ object: new Mesh(new BoxGeometry()) }, { object: baked.clone() }], [turn]);
     instanced.forceLevel = 1;
     const eye: [number, number, number] = [2, 1.5, 2.5];
+    // A Lod's first render learns its renderer and draws nothing of it.
+    for (const object of [lod, instanced]) await render(object, eye);
     expect(difference(await render(lod, eye), await render(instanced, eye))).toBeLessThan(1);
   });
 

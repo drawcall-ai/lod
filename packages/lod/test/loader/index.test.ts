@@ -20,8 +20,9 @@ import { Lod } from "../../src/lod.js";
 import { InteriorMappingMaterial } from "../../src/baked/interior/material.js";
 import { ImpostorMesh } from "../../src/impostor/mesh/index.js";
 import { CachedLodLoader } from "../../src/loader/index.js";
-import { GPU_TIMEOUT, eventually, nextLevel, render, updateInRender } from "../renderer.js";
+import { GPU_TIMEOUT, eventually, nextLevel, render, renderLod } from "../renderer.js";
 import type { LodRequest } from "../../src/loader/request.js";
+import { drawnMeshes } from "../instanced/fixture.js";
 
 vi.mock("vitecache", async () => ({ CacheEntry: (await import("./fixture.js")).CacheEntry }));
 vi.mock("../../src/impostor/bake/index.js", async () => ({ bakeImpostor: (await import("./fixture.js")).bakeImpostor }));
@@ -314,10 +315,11 @@ describe("CachedLodLoader", () => {
       const lod = new Lod(levels);
       new Scene().add(lod);
       lod.updateMatrixWorld();
-      updateInRender(lod, camera);
+      // The first render learns the renderer, the second sorts.
+      for (let i = 0; i < 2; i++) renderLod(lod, camera);
       expect(lod.error).toBeUndefined();
       // Far away the empty level would draw, but nothing does before the impostor, the coarsest level that draws.
-      expect(lod.levels.flatMap(({ object }, index) => (object?.visible ? [index] : []))).toEqual([]);
+      expect(drawnMeshes(lod).filter((mesh) => mesh.visible)).toEqual([]);
       expect(levels[2]?.object?.position.toArray()).toEqual([2, 3, 4]);
       // Nothing loaded the impostor before a renderer drew the Lod: the source gave the shape once, which its cache entry then does.
       expect(load).toHaveBeenCalledOnce();

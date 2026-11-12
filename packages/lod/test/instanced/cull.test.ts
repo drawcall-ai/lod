@@ -3,7 +3,7 @@ import { d } from "typegpu";
 import { describe, expect, it } from "vitest";
 import { cullScale } from "../../src/instanced/measure.js";
 import { GPU_TIMEOUT, render, renderer } from "../renderer.js";
-import { chunkOf, drawnSlots, oneChunk } from "../instances.js";
+import { drawnSlots, lodOf } from "../instances.js";
 import { must } from "../must.js";
 import { box } from "../box.js";
 import { SIZE, distanceAt, distances, instancesOf, drawnMeshes, readBack, onAxis, renderSorted } from "./fixture.js";
@@ -16,10 +16,9 @@ describe("cullDistance", { timeout: GPU_TIMEOUT }, () => {
   const spots = Array.from({ length: 20 }, (_, i) => 10 * (i + 1));
 
   it("thins the instances by their origins' hashes between near and far: nested subsets as its camera recedes", async () => {
-    const lod = oneChunk([{ object: box("source") }], onAxis(spots));
+    const lod = lodOf([{ object: box("source") }], onAxis(spots));
     const camera = new PerspectiveCamera(60, 1, 0.1, 1e5);
     lod.cullDistance = { camera, near: 40, far: 160 };
-    const chunk = chunkOf(lod);
     try {
       let previous: number[] | null = null;
       for (const eye of [0, 15, 30]) {
@@ -33,7 +32,7 @@ describe("cullDistance", { timeout: GPU_TIMEOUT }, () => {
         expect(drawn.length).toBeLessThan(spots.length);
         if (previous) expect(previous).toEqual(expect.arrayContaining(drawn));
         previous = drawn;
-        expect(spots.map((_, i) => chunk.getLevelAt(i, camera) !== null)).toEqual(spots.map((spot) => expected.includes(spot)));
+        expect(spots.map((_, i) => lod.getLevelAt(i, camera) !== null)).toEqual(spots.map((spot) => expected.includes(spot)));
       }
       lod.cullDistance = null;
       await renderSorted(lod, camera);
@@ -47,7 +46,7 @@ describe("cullDistance", { timeout: GPU_TIMEOUT }, () => {
     const source = box("source");
     source.castShadow = true;
     // In the camera at 10 and 30, behind it at the same distances, and two beyond far.
-    const lod = oneChunk([{ object: source }], onAxis([10, 30, 50, -10, -30, -50]));
+    const lod = lodOf([{ object: source }], onAxis([10, 30, 50, -10, -30, -50]));
     const camera = new PerspectiveCamera(60, 1, 0.1, 1e5);
     lod.cullDistance = { camera, near: 40, far: 45 };
     // The sun is about 50 from every instance: measured from it, none would draw.
@@ -83,23 +82,22 @@ describe("cullDistance", { timeout: GPU_TIMEOUT }, () => {
     const from = (x: number) => Math.hypot(x, distance);
     while (culled(new Vector3(x, 0, -distance), from(x), from(x) - 3, from(x) + 1)) x += 0.01;
     const origin = new Matrix4().makeTranslation(x, 0, -distance);
-    const lod = oneChunk([{ object: box("source") }, { object: box("simplified") }], [origin]);
+    const lod = lodOf([{ object: box("source") }, { object: box("simplified") }], [origin]);
     must(lod.levels[1]).maxPixels = 40;
     const camera = new PerspectiveCamera(60, 1, 0.1, 1e5);
     const near = from(x) - 3;
     lod.cullDistance = { camera, near, far: near + 4 };
-    const chunk = chunkOf(lod);
     try {
       await renderSorted(lod, camera);
-      expect(chunk.getLevelAt(0, camera)).toBe(1);
+      expect(lod.getLevelAt(0, camera)).toBe(1);
       expect((await distances(lod, camera)).map((level) => level.length)).toEqual([0, 1]);
       lod.cullDistance = { ...lod.cullDistance, scaleSurvivors: true };
       await renderSorted(lod, camera);
-      expect(chunk.getLevelAt(0, camera)).toBe(0);
+      expect(lod.getLevelAt(0, camera)).toBe(0);
       expect((await distances(lod, camera)).map((level) => level.length)).toEqual([1, 0]);
       const source = must(drawnMeshes(lod)[0]);
       const { matrices } = instancesOf(source);
-      // The pool index the source level's list holds first: the draw's first instance.
+      // The instance the source level's list holds first: the draw's first instance.
       const { indices, args } = drawnSlots(source, camera);
       const first = new Uint32Array(await readBack(args.attribute))[args.offset / 4 + 4] ?? 0;
       const index = new Uint32Array(await readBack(indices))[first] ?? 0;

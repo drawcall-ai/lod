@@ -19,13 +19,11 @@ import { describe, expect, it, vi } from "vitest";
 import { boundingBox } from "../../src/source/detail.js";
 import type { Impostor } from "../../src/impostor/impostor.js";
 import { ImpostorMesh } from "../../src/impostor/mesh/index.js";
-import { InstancedLod } from "../../src/instanced/index.js";
 import { Lod } from "../../src/lod.js";
 import { simplify } from "../../src/simplify/index.js";
-import { isImpostorMesh, isInstancedMesh, isLOD, isMesh } from "../../src/three.js";
+import { isImpostorMesh, isInstancedMesh, isMesh } from "../../src/three.js";
 import { area } from "../../src/source/surface.js";
 import { must } from "../must.js";
-import { pool } from "../renderer.js";
 
 const triangles = (geometry: BufferGeometry) => (geometry.index?.count ?? 0) / 3;
 const meshes = (root: Object3D) => root.children.filter(isMesh);
@@ -54,19 +52,7 @@ describe("simplify", () => {
     await expect(simplify(source, { ratio: 0 })).rejects.toThrow(/ratio/);
   });
 
-  it("simplifies a nested Lod's source whatever it shows, and leaves its other levels", async () => {
-    const material = new MeshStandardMaterial();
-    const far = new Mesh(new SphereGeometry(1, 8, 4), material);
-    const inner = new Lod([{ object: sphere(material) }, { object: far }]);
-    inner.levels.forEach((level, i) => (must(level.object).visible = i === 1));
-    const [nested] = (await simplify(new Group().add(inner), { ratio: 0.1 })).children;
-    if (!nested || !isLOD(nested)) throw new Error("expected the nested Lod");
-    const [source, cheap] = nested.levels.map((level) => (level.object && isMesh(level.object) ? triangles(level.object.geometry) : 0));
-    expect(source).toBeLessThan(64 * 32 * 2 * 0.15);
-    expect(cheap).toBe(triangles(far.geometry));
-  });
-
-  it("simplifies an InstancedMesh's geometry, leaves ImpostorMeshes as they are and refuses an InstancedLod", async () => {
+  it("simplifies an InstancedMesh's geometry, leaves ImpostorMeshes as they are and refuses a Lod", async () => {
     const impostor: Impostor = {
       version: 4,
       layout: "full",
@@ -87,13 +73,13 @@ describe("simplify", () => {
     expect(triangles(many.geometry)).toBeLessThan(triangles(instanced.geometry) * 0.15);
     expect(many.count).toBe(2);
     expect(same.impostor).toBe(impostor);
-    const lod = new InstancedLod([{ object: sphere() }], pool);
+    const lod = new Lod([{ object: sphere() }]);
     const clone = vi.spyOn(lod, "clone");
     const source = new Group().add(sphere(), lod);
     try {
       for (const visible of [true, false]) {
         lod.visible = visible;
-        await expect(simplify(source, { ratio: 0.5 })).rejects.toThrow(/InstancedLod/);
+        await expect(simplify(source, { ratio: 0.5 })).rejects.toThrow(/cannot simplify a Lod/);
         expect(clone).not.toHaveBeenCalled();
       }
     } finally {

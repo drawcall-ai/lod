@@ -49,7 +49,7 @@ export interface BakeImpostorOptions {
 /**
  * Bake `object` (in its own space, ignoring its own transform) into an impostor, drawing
  * with `renderer`, as three's PMREMGenerator does. Nested LODs are baked at their level 0,
- * an InstancedLod with every instance at its level 0. ImpostorMeshes are refused: bake
+ * a Lod with every instance at its level 0. ImpostorMeshes are refused: bake
  * from their source instead.
  *
  * `renderer` must be one made for bakes: make one with `createBakeRenderer`, as CachedLodLoader

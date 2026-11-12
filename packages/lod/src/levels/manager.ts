@@ -9,9 +9,8 @@ import { has, type DrawLevels } from "./draw.js";
 import type { LodLevel } from "./index.js";
 import { LoadingItem } from "./item.js";
 import { CameraRequests } from "./requests.js";
-import { ChunkWait } from "./wait.js";
 import { ContextCompiles } from "./compiles.js";
-import { busyRenderer } from "./renderer.js";
+import { checkRenderer } from "./renderer.js";
 
 /** How long an arriving level fades in for, over what drew in its place. */
 export const ARRIVAL_MS = 200;
@@ -23,7 +22,7 @@ export interface LodEventMap extends Object3DEventMap {
   levelserror: { error: Error };
 }
 
-/** What a Lod or InstancedLod makes of a level's loaded object: `object` compiles, then joins the loaded levels or is discarded. */
+/** What a Lod makes of a level's loaded object: `object` compiles, then joins the loaded levels or is discarded. */
 export interface PreparedLevel {
   object: Object3D;
   /** The level joins the loaded levels: it draws from now on. */
@@ -40,7 +39,7 @@ interface Loading {
 }
 
 /**
- * Loads a Lod's or InstancedLod's levels as its cameras request them, never blocking a render. The coarsest level that
+ * Loads a Lod's levels as its cameras request them, never blocking a render. The coarsest level that
  * draws something loads first, as nothing draws before it has (see levelsToDraw); the other levels a camera wants
  * start loading once it has loaded. Each level's load runs once; once the render that asked for it has ended, the Lod
  * prepares it (`prepare`), it compiles for the render context of every camera rendering the Lod and joins the loaded
@@ -50,9 +49,9 @@ interface Loading {
  * still building, in any context that shares it, so a level a camera may draw now builds as it first draws instead.
  * Nothing is evicted: a level stays loaded until the Lod is disposed.
  *
- * A Lod draws with the first of `Lod.renderers` that renders it, whose renders it learns its cameras from. Once one
- * has, it holds an item on its LoadingManager while anything a camera wants is missing, compiling or arriving, and an
- * InstancedLod's while the GPU has not shown its chunks taken in (see `chunksChanged`).
+ * A Lod draws with the first renderer that draws one of its meshes (see `see`), whose renders it learns its cameras
+ * from. Once one has, it holds an item on its LoadingManager while anything a camera wants is missing, compiling or
+ * arriving.
  */
 export class LodLevelLoadManager {
   /** The bits of the levels that draw: given ones from the start, deferred ones once loaded and compiled. */
@@ -61,8 +60,10 @@ export class LodLevelLoadManager {
   before = 0;
   /** The first failure; it stops further loading. */
   error: Error | undefined;
-  /** Whether a render has updated the Lod: its shaders are being or have been built. */
+  /** Whether a renderer has drawn the Lod: its shaders are being or have been built. */
   started = false;
+  /** Whether a camera has asked for levels since the Lod was bound: until then it is pending. */
+  private requested = false;
   /** Its item on a LoadingManager. */
   readonly item: LoadingItem;
 
@@ -88,9 +89,7 @@ export class LodLevelLoadManager {
   private disposed = false;
   /** What `LodLevel.hold` answered, each called once the Lod is disposed. */
   private readonly releases: (() => void)[];
-  /** An InstancedLod's chunks, while they wait to be shown taken in (see `chunksChanged`); null for a Lod. */
-  private readonly wait: ChunkWait | null;
-  /** The renderer drawing the Lod and what the cameras rendering it there asked for, once one updated it (see `bind`). */
+  /** The renderer drawing the Lod and what the cameras rendering it there asked for, once one drew it (see `see`). */
   private bound: { readonly renderer: Renderer; readonly requests: CameraRequests } | null = null;
 
   constructor(
@@ -104,8 +103,6 @@ export class LodLevelLoadManager {
     private readonly prepare: (level: number, loaded: Object3D) => PreparedLevel,
     /** What draws a loaded level, compiled for each render context it is wanted in. */
     private readonly drawnBy: (level: number) => readonly Object3D[],
-    /** An InstancedLod's read of whether the GPU shows every chunk taken in (see `ChunkWait`); null for a Lod. */
-    readChunks: (() => Promise<boolean>) | null,
   ) {
     this.loaded = this.before = levels.reduce((bits, level, i) => (level.object ? bits | (1 << i) : bits), 0);
     this.empty = empty;
@@ -116,14 +113,7 @@ export class LodLevelLoadManager {
       (context, bits) => this.compileLevels(context, bits),
       (error) => this.report(error),
     );
-    this.item = new LoadingItem(lod, name);
-    this.wait =
-      readChunks &&
-      new ChunkWait(
-        readChunks,
-        () => this.sync(),
-        (error) => this.report(error),
-      );
+    this.item = new LoadingItem(name);
   }
 
   /** How far the latest arrival has faded in, in [0, 1]: 1 once it has. */
@@ -132,23 +122,25 @@ export class LodLevelLoadManager {
     return Math.min((performance.now() - this.arrival) / ARRIVAL_MS, 1);
   }
 
-  /** The renderer drawing the Lod: the first of `Lod.renderers` whose render updated it; null before. */
+  /** The renderer drawing the Lod: the first that drew one of its meshes; null before. */
   get renderer(): Renderer | null {
     return this.bound?.renderer ?? null;
   }
 
   /**
-   * The renderer updating the Lod now: the one of `Lod.renderers` rendering, else the one drawing it, as when an app
-   * updates it itself; null while neither is known. The first binds the Lod to it; another drawing it throws.
+   * `renderer` draws one of the Lod's meshes, as three tells a mesh but not a LOD's `update`: the first binds the Lod
+   * to it, once checked to draw it; another throws.
    */
-  bind(): Renderer | null {
-    const busy = busyRenderer();
-    if (!this.bound) {
-      if (!busy) return null;
-      this.bound = { renderer: busy, requests: new CameraRequests(busy, this.seen) };
+  see(renderer: Renderer): void {
+    if (this.bound) {
+      if (renderer !== this.bound.renderer) throw new Error(`${this.name}: another renderer than the first that drew it drew it`);
+      return;
     }
-    if (busy && busy !== this.bound.renderer) throw new Error(`${this.name}: another renderer than the first that rendered it drew it`);
-    return this.bound.renderer;
+    checkRenderer(renderer, this.name);
+    this.bound = { renderer, requests: new CameraRequests(renderer, this.seen) };
+    this.started = true;
+    // Its first frame drew nothing of it: it holds its item until the next asks for what its cameras need.
+    this.sync();
   }
 
   /** Whether `camera` still renders the Lod (see `CameraRequests.rendering`). */
@@ -158,18 +150,18 @@ export class LodLevelLoadManager {
 
   get pending(): boolean {
     if (this.disposed || this.error || !this.bound) return false;
+    if (!this.requested) return true;
     const { requests } = this.bound;
     if (this.arriving.size > 0 || this.ready.size > 0 || (requests.needed() & ~this.loaded) !== 0) return true;
     return this.compiles.running(requests);
   }
 
   /**
-   * `camera`, a shadow map's when `shadow`, wants the levels of the bits `wanted` (see levelsToLoad) in an update that
-   * `bind` answered a renderer for: load what is missing, and answer the bits of the levels loaded now. Outside a
+   * `camera`, a shadow map's when `shadow`, wants the levels of the bits `wanted` (see levelsToLoad) in an update once
+   * the Lod is bound to a renderer (see `see`): load what is missing, and answer the bits of the levels loaded now. Outside a
    * Scene a missing level is an error, as no render of it would load it.
    */
   request(camera: Camera, wanted: number, shadow: boolean): number {
-    this.started = true;
     const scene = rootOf(this.lod);
     if (this.disposed || this.error) return this.loaded;
     if (!isScene(scene)) {
@@ -178,22 +170,11 @@ export class LodLevelLoadManager {
     }
     this.item.touch();
     const { requests } = this.boundOrThrow();
+    this.requested = true;
     const frame = requests.set(scene, camera, wanted, shadow);
     this.load(requests, camera, shadow, frame);
-    this.wait?.render();
     this.sync();
     return this.loaded;
-  }
-
-  /**
-   * An InstancedLod's chunks were added or removed: hold the item until, a few renders later, the GPU shows each taken
-   * in, so that a host waiting for its LoadingManager sees them drawn. A chunk the pool lacks room for is the
-   * InstancedLod's error.
-   */
-  chunksChanged(): void {
-    if (!this.wait) throw new Error(`LodLevelLoadManager: chunksChanged on ${this.name}, a Lod without chunks`);
-    this.wait.changed();
-    this.sync();
   }
 
   /**
@@ -204,7 +185,7 @@ export class LodLevelLoadManager {
     return this.seen.heightOf(camera, renderer, shadow);
   }
 
-  /** The renderer drawing the Lod and its cameras' requests: known once a render updated it, before anything loads. */
+  /** The renderer drawing the Lod and its cameras' requests: known once it drew the Lod, before anything loads. */
   private boundOrThrow(): { readonly renderer: Renderer; readonly requests: CameraRequests } {
     if (!this.bound) throw new Error(`${this.name}: no renderer has updated it`);
     return this.bound;
@@ -228,8 +209,8 @@ export class LodLevelLoadManager {
       if (!load || !has(needed, level) || this.loads.has(level) || (!coarsestLoaded && level !== this.coarsest)) continue;
       this.start(level, load);
     }
-    // What draws never changes halfway through a frame: once a camera updated the Lod in it, as for an InstancedLod
-    // its indirect draws, a shadow map rendered later joins nothing. The camera's next update does; a Lod only shadow
+    // What draws never changes halfway through a frame: once a camera updated the Lod in it, its indirect draws among
+    // them, a shadow map rendered later joins nothing. The camera's next update does; a Lod only shadow
     // maps update joins in theirs.
     if (!shadow || requests.cameraFrame !== frame) this.join();
     const context = this.seen.contextOf(camera);
@@ -330,12 +311,11 @@ export class LodLevelLoadManager {
   }
 
   /**
-   * Hold the item while levels a camera wants are missing, compiling or arriving, or chunks wait to be shown taken in,
-   * and end it once they are done, so a host waiting for its LoadingManager renders its cameras complete. Called at
+   * Hold the item while levels a camera wants are missing, compiling or arriving, and end it once they are done, so a host waiting for its LoadingManager renders its cameras complete. Called at
    * the end of each request.
    */
   private sync(): void {
-    this.item.sync(this.renderer, !this.disposed && !this.error && (this.pending || (this.wait !== null && this.wait.waiting) || this.progress < 1));
+    this.item.sync(this.renderer, !this.disposed && !this.error && (this.pending || this.progress < 1));
   }
 
   /**

@@ -1,14 +1,14 @@
 import { d, std, tgpu } from "typegpu";
 import { toTsl } from "../typegpu.js";
 
-// Which levels one object draws at a height, written once: Lod calls levelsToDraw as plain JS, InstancedLod runs the
-// same function per instance on the GPU, resolved into WGSL by TypeGPU.
+// Which levels one object draws at a height, written once: a Lod calls levelsToDraw as plain JS for the CPU's measures,
+// and runs the same function per instance on the GPU, resolved into WGSL by TypeGPU.
 
 /** Share of each level's range over which its finer neighbour fades out. */
 export const FADE = 0.1;
 
 /**
- * The most levels a Lod or InstancedLod has. WGSL has no arrays of a size given at run time, so levelsToDraw reads
+ * The most levels a Lod has. WGSL has no arrays of a size given at run time, so levelsToDraw reads
  * maxPixels from an array of this size, and the loaded sets are bits of one u32. The GPU side passes the array as two
  * vec4s, `low` and `high` (see `levelsToDrawNode`), which hold eight.
  */

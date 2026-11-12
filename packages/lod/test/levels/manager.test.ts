@@ -17,16 +17,14 @@ import { bakeImpostor } from "../../src/impostor/bake/index.js";
 import { ImpostorMesh } from "../../src/impostor/mesh/index.js";
 import { Lod } from "../../src/lod.js";
 import { readBytes } from "../../src/bake.js";
-import { InstancedLod } from "../../src/instanced/index.js";
 import { GPU_TIMEOUT, bakeRenderer, render, renderer, nextLevel, eventually } from "../renderer.js";
 import { box } from "../box.js";
-import { chunkOf, oneChunk } from "../instances.js";
-import { gatedBox, visibleLevels, waitUntilIdle } from "./fixture.js";
+import { gatedBox, waitUntilIdle } from "./fixture.js";
 
-it.each(["Lod", "InstancedLod"].flatMap((kind) => ["load", "compile"].map((waiting) => ({ kind, waiting }))))(
-  "shows a coarse level of $kind while its first fine level waits to $waiting",
+it.each(["load", "compile"].map((waiting) => ({ waiting })))(
+  "shows a coarse level of a Lod while its first fine level waits to $waiting",
   { timeout: GPU_TIMEOUT },
-  async ({ kind, waiting }) => {
+  async ({ waiting }) => {
     let release = () => {};
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -44,7 +42,7 @@ it.each(["Lod", "InstancedLod"].flatMap((kind) => ["load", "compile"].map((waiti
       { load: coarse, maxPixels: 8, box: bounds },
       { object: new Object3D(), maxPixels: 1 },
     ];
-    const lod = kind === "Lod" ? new Lod(levels) : oneChunk(levels, 1);
+    const lod = new Lod(levels);
     lod.position.z = -5;
     const camera = new PerspectiveCamera(60, 1, 0.1, 100);
     const scene = new Scene().add(lod);
@@ -78,10 +76,10 @@ it.each(["Lod", "InstancedLod"].flatMap((kind) => ["load", "compile"].map((waiti
   },
 );
 
-it.each(["Lod", "InstancedLod"])(
-  "starts no finer level's load and draws nothing of a %s until the coarsest level that draws something has loaded",
+it(
+  "starts no finer level's load and draws nothing of a Lod until the coarsest level that draws something has loaded",
   { timeout: GPU_TIMEOUT },
-  async (kind) => {
+  async () => {
     let release = () => {};
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -97,7 +95,7 @@ it.each(["Lod", "InstancedLod"])(
       { load: coarse, maxPixels: 8, box: bounds },
       { object: new Object3D(), maxPixels: 1 },
     ];
-    const lod = kind === "Lod" ? new Lod(levels) : oneChunk(levels, 1);
+    const lod = new Lod(levels);
     lod.position.z = -5;
     const camera = new PerspectiveCamera(60, 1, 0.1, 100);
     const scene = new Scene().add(lod);
@@ -180,13 +178,13 @@ it("lets a level arrive for a second camera rendering to its own target only onc
   }
 });
 
-it.each(["Lod", "InstancedLod"])(
-  "draws the level a new camera of a %s forces at once while the cameras before it compile in the background",
+it(
+  "draws the level a new camera of a Lod forces at once while the cameras before it compile in the background",
   { timeout: GPU_TIMEOUT },
-  async (kind) => {
+  async () => {
     const data = await bakeImpostor(new Mesh(new BoxGeometry(2, 2, 2), new MeshStandardMaterial()), bakeRenderer, { resolution: 64, layout: "full" });
     const levels = [{ object: box() }, { object: new ImpostorMesh(data) }];
-    const lod = kind === "Lod" ? new Lod(levels) : oneChunk(levels, 1);
+    const lod = new Lod(levels);
     lod.position.z = -6;
     lod.forceLevel = 0;
     const scene = new Scene().add(lod);
@@ -217,7 +215,7 @@ it.each(["Lod", "InstancedLod"])(
 );
 
 it.each(["before its compile starts", "while its compile uploads textures"])(
-  "compiles nothing for a render target disposed %s",
+  "compiles nothing for a render target disposed Lod",
   { timeout: GPU_TIMEOUT },
   async (when) => {
     const map = new DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
@@ -258,11 +256,11 @@ it.each(["before its compile starts", "while its compile uploads textures"])(
 );
 
 /**
- * `kind` with a deferred impostor of a box above a coarser box. The impostor is the level's to free, once the Lod lets
+ * A Lod with a deferred impostor of a box above a coarser box. The impostor is the level's to free, once the Lod lets
  * go of it (see `LodLevel.hold`); `freed` settles then. Its material is then disposed only if every copy the Lod made
  * gave its reference back.
  */
-async function deferredImpostor(kind: string) {
+async function deferredImpostor() {
   const source = new ImpostorMesh(await bakeImpostor(box(), bakeRenderer, { frames: 4, resolution: 16 }));
   const made = Promise.resolve(source);
   let free = () => {};
@@ -273,7 +271,7 @@ async function deferredImpostor(kind: string) {
   };
   const deferred = { load: () => made, maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]), hold };
   const levels = [deferred, { object: box() }];
-  const lod = kind === "Lod" ? new Lod(levels) : oneChunk(levels, 1);
+  const lod = new Lod(levels);
   lod.forceLevel = 0;
   lod.position.z = -5;
   const material = vi.spyOn(source.material, "dispose");
@@ -283,10 +281,10 @@ async function deferredImpostor(kind: string) {
 /** Whether `object`, the drawable a compile was asked for, holds an impostor card. */
 const drawsImpostor = (object: Object3D) => object.getObjectsByProperty("isImpostorMesh", true).length > 0;
 
-it.each(["Lod", "InstancedLod"])(
-  "draws the coarser level of a %s until the finer one's compile finishes, and releases the finer one when disposed meanwhile",
-  async (kind) => {
-    const { lod, deferred, source, freed, material } = await deferredImpostor(kind);
+it(
+  "draws the coarser level of a Lod until the finer one's compile finishes, and releases the finer one when disposed meanwhile",
+  async () => {
+    const { lod, deferred, source, freed, material } = await deferredImpostor();
     const camera = new PerspectiveCamera(60, 1, 0.1, 100);
     const scene = new Scene().add(lod);
     let finish = () => {};
@@ -304,8 +302,9 @@ it.each(["Lod", "InstancedLod"])(
     try {
       scene.updateMatrixWorld(true);
       camera.updateMatrixWorld();
-      // A render tells the camera's context and starts the load; the updates that follow are the test's own.
-      renderer.render(scene, camera);
+      // Two renders: the first learns the renderer, the second tells the camera's context and starts the load; the
+      // updates that follow are the test's own.
+      for (let i = 0; i < 2; i++) renderer.render(scene, camera);
       lod.autoUpdate = false;
       await deferred.load();
       vi.spyOn(renderer, "compileAsync").mockImplementation(async (...args) => {
@@ -321,8 +320,7 @@ it.each(["Lod", "InstancedLod"])(
       lod.update(camera);
       expect(installed).not.toHaveBeenCalled();
       expect(lod.levels[0]?.object).toBeUndefined();
-      if (lod instanceof InstancedLod) expect(chunkOf(lod).getLevelAt(0, camera)).toBe(1);
-      else expect(lod.levels[1]?.object?.visible).toBe(true);
+      expect(lod.getLevelAt(0, camera)).toBe(1);
       lod.dispose();
       expect(disposed).not.toHaveBeenCalled();
       finish();
@@ -339,22 +337,20 @@ it.each(["Lod", "InstancedLod"])(
   GPU_TIMEOUT,
 );
 
-it.each(["Lod", "InstancedLod"])("leaves a deferred level of %s unloaded and released when its compilation fails", { timeout: GPU_TIMEOUT }, async (kind) => {
-  const { lod, freed, material } = await deferredImpostor(kind);
+it("leaves a deferred level of Lod unloaded and released when its compilation fails", { timeout: GPU_TIMEOUT }, async () => {
+  const { lod, freed, material } = await deferredImpostor();
   const camera = new PerspectiveCamera(60, 1, 0.1, 100);
   const scene = new Scene().add(lod);
   const failure = new Error("test compile failure");
-  // An InstancedLod's impostor meshes draw its shared instance attributes, which must outlive the failure.
+  // Its impostor meshes draw its instance attributes, which must outlive the failure.
   const slots = vi.fn();
   const compile = renderer.compileAsync.bind(renderer);
   const compileAsync = vi.spyOn(renderer, "compileAsync").mockImplementation(async (...args) => {
     const [object] = args;
     if (!drawsImpostor(object)) return compile(...args);
-    if (lod instanceof InstancedLod) {
-      if (!(object instanceof ImpostorMesh) || !object.instanceColor) throw new Error("Missing prepared impostor slots");
-      object.instanceMatrix.addEventListener("dispose", slots);
-      object.instanceColor.addEventListener("dispose", slots);
-    }
+    if (!(object instanceof ImpostorMesh) || !object.instanceColor) throw new Error("Missing prepared impostor slots");
+    object.instanceMatrix.addEventListener("dispose", slots);
+    object.instanceColor.addEventListener("dispose", slots);
     throw failure;
   });
   const report = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -364,11 +360,9 @@ it.each(["Lod", "InstancedLod"])("leaves a deferred level of %s unloaded and rel
     expect(lod.levels[0]?.object).toBeUndefined();
     expect(drawsImpostor(lod)).toBe(false);
     expect(material).not.toHaveBeenCalled();
-    if (lod instanceof InstancedLod) {
-      expect(slots).not.toHaveBeenCalled();
-      expect(chunkOf(lod).getLevelAt(0, camera)).toBe(1);
-      expect((await render(scene, camera)).some((byte) => byte > 0)).toBe(true);
-    }
+    expect(slots).not.toHaveBeenCalled();
+    expect(lod.getLevelAt(0, camera)).toBe(1);
+    expect((await render(scene, camera)).some((byte) => byte > 0)).toBe(true);
     lod.dispose();
     await freed;
     expect(material).toHaveBeenCalledOnce();
@@ -379,14 +373,14 @@ it.each(["Lod", "InstancedLod"])("leaves a deferred level of %s unloaded and rel
   }
 });
 
-it.each(["Lod", "InstancedLod"].flatMap((kind) => [false, true].map((empty) => ({ kind, empty }))))(
-  "loads a $kind's level only once in sight, then draws it at once where nothing drew before (empty coarser level: $empty)",
+it.each([false, true].map((empty) => ({ empty })))(
+  "loads a Lod's level only once in sight, then draws it at once where nothing drew before (empty coarser level: $empty)",
   { timeout: GPU_TIMEOUT },
-  async ({ kind, empty }) => {
+  async ({ empty }) => {
     const load = vi.fn(async () => new Mesh(new BoxGeometry(), new MeshBasicNodeMaterial()));
     const deferred = { load: load, maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) };
     const levels = empty ? [deferred, { object: new Object3D() }] : [deferred];
-    const lod = kind === "Lod" ? new Lod(levels) : oneChunk(levels, 1);
+    const lod = new Lod(levels);
     lod.forceLevel = 0;
     lod.position.set(1000, 0, -5);
     const camera = new PerspectiveCamera(60, 1, 0.1, 100);
@@ -404,8 +398,7 @@ it.each(["Lod", "InstancedLod"].flatMap((kind) => [false, true].map((empty) => (
       expect(lod.error).toBeUndefined();
       // Nothing drew before it, so the arrival draws at once, without a fade.
       lod.update(camera);
-      if (lod instanceof InstancedLod) expect(chunkOf(lod).getLevelAt(0, camera)).toBe(0);
-      else expect(lod.levels[0]?.object?.visible).toBe(true);
+      expect(lod.getLevelAt(0, camera)).toBe(0);
     } finally {
       vi.restoreAllMocks();
       lod.dispose();
@@ -413,10 +406,10 @@ it.each(["Lod", "InstancedLod"].flatMap((kind) => [false, true].map((empty) => (
   },
 );
 
-it.each(["Lod", "InstancedLod"])("runs a level's load once per %s, a clone's included, each failing on its own", { timeout: GPU_TIMEOUT }, async (kind) => {
+it("runs a level's load once per Lod, a clone's included, each failing on its own", { timeout: GPU_TIMEOUT }, async () => {
   const load = vi.fn<() => Promise<Object3D>>().mockRejectedValue(undefined);
   const levels = [{ load, maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) }];
-  const lod = kind === "Lod" ? new Lod(levels) : oneChunk(levels, 1);
+  const lod = new Lod(levels);
   const clone = lod.clone();
   const camera = new PerspectiveCamera(60, 1, 0.1, 100);
   const scene = new Scene();
@@ -441,7 +434,7 @@ it.each(["Lod", "InstancedLod"])("runs a level's load once per %s, a clone's inc
 it("loads a Lod's level in a scene whose world matrices the app updates itself", { timeout: GPU_TIMEOUT }, async () => {
   const { level, release } = gatedBox();
   const manager = new LoadingManager();
-  const lod = new Lod([level, { object: box(), maxPixels: 1 }], { manager });
+  const lod = new Lod([level, { object: box(), maxPixels: 1 }], 1, { manager });
   lod.position.z = -5;
   const camera = new PerspectiveCamera(60, 1, 0.1, 100);
   const scene = new Scene().add(lod);
@@ -450,7 +443,7 @@ it("loads a Lod's level in a scene whose world matrices the app updates itself",
   release();
   try {
     await waitUntilIdle(manager, () => renderer.render(scene, camera));
-    expect(visibleLevels(lod)).toEqual([0]);
+    expect(lod.getLevelAt(0, camera)).toBe(0);
   } finally {
     lod.dispose();
   }

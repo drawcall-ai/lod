@@ -25,14 +25,13 @@ import {
 } from "three/webgpu";
 import { describe, expect, it, vi } from "vitest";
 import { Lod } from "../../../src/lod.js";
-import { LodPool } from "../../../src/pool.js";
 import { bakeImpostor } from "../../../src/impostor/bake/index.js";
 import { texelPixels, type Impostor } from "../../../src/impostor/impostor.js";
 import { frameDirection } from "../../../src/impostor/octahedral.js";
 import { ImpostorMesh } from "../../../src/impostor/mesh/index.js";
-import { GPU_TIMEOUT, bakeRenderer, pool, render, renderer } from "../../renderer.js";
+import { GPU_TIMEOUT, bakeRenderer, render, renderer } from "../../renderer.js";
 import { disposeCopies } from "../../../src/dispose.js";
-import { oneChunk } from "../../instances.js";
+import { lodOf } from "../../instances.js";
 
 const bake = (object: Object3D, layout: Impostor["layout"] = "full") => bakeImpostor(object, bakeRenderer, { layout, resolution: 32 });
 
@@ -274,7 +273,7 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
     await expect(bakeImpostor(new Mesh(new TorusKnotGeometry(), new MeshStandardMaterial()), renderer)).rejects.toThrow(/autoClear.*createBakeRenderer/);
   });
 
-  it("bakes an InstancedLod the app draws with every instance at full detail, as the same meshes placed by hand", async () => {
+  it("bakes a Lod the app draws with every instance at full detail, as the same meshes placed by hand", async () => {
     const material = new MeshStandardMaterial({ color: 0x40a060 });
     const spots = [new Matrix4().makeTranslation(-1.5, 0, 0), new Matrix4().makeTranslation(1.5, 0.5, 0), new Matrix4().makeTranslation(0, 0, 1.5)];
     const plain = new Group();
@@ -284,14 +283,13 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
       plain.add(box);
     }
     // Its level 1 would draw a sphere, at any height.
-    const field = oneChunk([{ object: new Mesh(new BoxGeometry(), material) }, { object: new Mesh(new SphereGeometry(), material) }], spots);
+    const field = lodOf([{ object: new Mesh(new BoxGeometry(), material) }, { object: new Mesh(new SphereGeometry(), material) }], spots);
     field.forceLevel = 1;
     const group = new Group().add(field);
     const scene = new Scene().add(group);
     const camera = new PerspectiveCamera(50, 1, 0.1, 100);
     camera.position.z = 8;
-    // The app's renderer draws it, then the bake's renderer, which the app never added to Lod.renderers, draws a copy;
-    // the app's draws on after.
+    // The app's renderer draws it, then the bake's renderer draws a copy; the app's draws on after.
     await render(scene, camera);
     const [a, b] = [await bake(plain), await bake(group)];
     await render(scene, camera);
@@ -304,7 +302,7 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
     expect(differing / left.length).toBeLessThan(0.01);
   });
 
-  it("bakes copies of Lods and InstancedLods outside the app's LodPool, and frees them and their LodPools", { timeout: GPU_TIMEOUT }, async () => {
+  it("bakes a copy of the Lods in it, at level 0, holding their levels only while it bakes", { timeout: GPU_TIMEOUT }, async () => {
     let held = 0;
     const hold = () => {
       held++;
@@ -312,23 +310,17 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
     };
     const material = new MeshStandardMaterial();
     const lod = new Lod([{ object: new Mesh(new BoxGeometry(), material), hold }]);
-    const field = () => oneChunk([{ object: new Mesh(new BoxGeometry(), material) }], [new Matrix4().makeTranslation(2, 0, 0)]);
-    // An InstancedLod beside a Lod, as a Lod's level, and under a Group that is one.
-    const subjects = [new Group().add(lod, field()), new Lod([{ object: field() }]), new Lod([{ object: new Group().add(field()) }])];
-    const pools = vi.spyOn(LodPool.prototype, "dispose");
-    const slots = vi.spyOn(pool.pages, "add");
-    const rows = vi.spyOn(pool.sorter, "register");
+    const field = lodOf([{ object: new Mesh(new BoxGeometry(), material) }], [new Matrix4().makeTranslation(2, 0, 0)]);
+    const subject = new Group().add(lod, new Group().add(field));
+    // The copy draws plain meshes: nothing sorts.
+    const sorts = vi.spyOn(bakeRenderer, "compute");
     try {
-      for (const subject of subjects) await bake(subject);
-      expect(slots).not.toHaveBeenCalled();
-      expect(rows).not.toHaveBeenCalled();
+      await bake(subject);
+      expect(sorts).not.toHaveBeenCalled();
       expect(held).toBe(1);
-      expect(pools).toHaveBeenCalledTimes(subjects.length);
     } finally {
-      pools.mockRestore();
-      slots.mockRestore();
-      rows.mockRestore();
-      for (const subject of subjects) disposeCopies(subject);
+      sorts.mockRestore();
+      disposeCopies(subject);
     }
     expect(held).toBe(0);
   });

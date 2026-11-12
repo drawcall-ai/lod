@@ -1,10 +1,8 @@
 import { Box3, type LoadingManager } from "three/webgpu";
 import { vi } from "vitest";
-import type { Lod } from "../../src/lod.js";
 import { box } from "../box.js";
 
-// What the tests of a Lod's loading share: the skill's wait for a LoadingManager, a level whose load waits, and the
-// levels a Lod shows.
+// What the tests of a Lod's loading share: the skill's wait for a LoadingManager, and a level whose load waits.
 
 /**
  * The skill's wait for `manager`: `draw`, wait a frame, and while it is loading, `compile`, `draw` and wait a frame
@@ -37,6 +35,3 @@ export function gatedBox() {
   });
   return { level: { load, maxPixels: Infinity, box: new Box3().setFromArray([-1, -1, -1, 1, 1, 1]) }, load, release };
 }
-
-/** The levels of `lod` that show. */
-export const visibleLevels = (lod: Lod) => lod.levels.flatMap(({ object }, i) => (object?.visible ? [i] : []));

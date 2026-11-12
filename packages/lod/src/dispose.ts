@@ -23,9 +23,9 @@ export interface DisposeOptions {
   materials: boolean;
 }
 
-/** Free what `node` and its descendants hold; a nested LOD or an ImpostorMesh frees itself. */
+/** Free what `node` and its descendants hold; a LOD or an ImpostorMesh frees itself. */
 export function disposeRecursive(node: Object3D, { materials }: DisposeOptions = { materials: true }): void {
-  // Every object frees its draw state; an ImpostorMesh, a nested Lod and a GLTS scene free the rest too.
+  // Every object frees its draw state; an ImpostorMesh, a Lod and a GLTS scene free the rest too.
   node.dispose();
   if (isImpostorMesh(node) || isLOD(node) || isGLTSScene(node)) return;
   if (isMesh(node)) {

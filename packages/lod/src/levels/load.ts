@@ -30,7 +30,7 @@ const SLACK = 4;
 
 /**
  * The levels levelsToDraw draws with `levels` and the levels of `loaded` loaded, no arrival under way, at every height,
- * by intervals of heights: worked out once, as it walks every chunk's heights each frame and each of its CPU calls
+ * by intervals of heights: worked out once, as it walks every cluster's heights each frame and each of its CPU calls
  * through TypeGPU copies its arguments. What it draws changes only at a level's maxPixels and where its fade starts,
  * whatever is loaded (which only says what stands in for a level): it is asked at the ends of a few f32 steps around
  * each such height, and between them where it changes. levelsToDraw stays the only answer; this is where it changes.

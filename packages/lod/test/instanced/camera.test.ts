@@ -1,19 +1,18 @@
 import { Group, Matrix4, OrthographicCamera, PerspectiveCamera, Scene } from "three/webgpu";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ChunkSet } from "../../src/instanced/chunks.js";
 import { Lod } from "../../src/lod.js";
 import { GPU_TIMEOUT, render, renderer } from "../renderer.js";
-import { drawnSlots, oneChunk } from "../instances.js";
+import { drawnSlots, lodOf } from "../instances.js";
 import { must } from "../must.js";
 import { box } from "../box.js";
 import { SIZE, distanceAt, distances, sortedLists, drawnMeshes, onAxis, boxesAtHeights, renderSorted } from "./fixture.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-describe("an InstancedLod's cameras", { timeout: GPU_TIMEOUT }, () => {
+describe("a Lod's cameras", { timeout: GPU_TIMEOUT }, () => {
   it("sorts for two cameras before either draws, each drawing its own instances", async () => {
     // One instance ahead of each camera: `ahead` looks down -z, `behind` down +z.
-    const lod = oneChunk(
+    const lod = lodOf(
       [{ object: box("source") }, { object: box("simplified") }, { object: box("impostor") }],
       [new Matrix4().makeTranslation(0, 0, -distanceAt(100)), new Matrix4().makeTranslation(0, 0, distanceAt(20))],
     );
@@ -36,6 +35,10 @@ describe("an InstancedLod's cameras", { timeout: GPU_TIMEOUT }, () => {
       expect(compute).not.toHaveBeenCalled();
       lod.update(behind);
       expect(compute).not.toHaveBeenCalled();
+      // Each camera's draws run its sort.
+      lod.autoUpdate = false;
+      for (const camera of [ahead, behind]) await render(scene, camera, SIZE);
+      expect(compute).toHaveBeenCalledTimes(2);
       expect(await distances(lod, ahead)).toEqual([[], [Math.round(distanceAt(100))], []]);
       expect(await distances(lod, behind)).toEqual([[], [-Math.round(distanceAt(20))], []]);
     } finally {
@@ -88,40 +91,6 @@ describe("an InstancedLod's cameras", { timeout: GPU_TIMEOUT }, () => {
     lod.dispose();
   });
 
-  it("sorts at its new places once an InstancedLod before it is disposed, though it sorts anew before its next draw", async () => {
-    const before = boxesAtHeights([100]);
-    const { lod, camera } = boxesAtHeights([100]);
-    const scene = new Scene().add(before.lod, lod);
-    await renderSorted(lod, camera);
-    // Its lists and draws move down, and the camera moves before the sort at those places runs.
-    before.lod.dispose();
-    camera.position.z = -distanceAt(5) + distanceAt(100);
-    await renderSorted(lod, camera);
-    expect((await distances(lod, camera)).map((list) => list.length)).toEqual([1, 0, 0]);
-    scene.clear();
-    lod.dispose();
-  });
-
-  it("draws nothing for a camera that never sorted it, where another InstancedLod's draws lay before a layout", async () => {
-    const gone = boxesAtHeights([100]);
-    const { lod, camera } = boxesAtHeights([100]);
-    const scene = new Scene().add(gone.lod, lod);
-    await render(scene, camera, SIZE);
-    await render(scene, camera, SIZE);
-    scene.remove(gone.lod);
-    gone.lod.dispose();
-    // It takes the freed row, its draws where the disposed one's lay in the camera's args, and sorts for another camera.
-    const other = boxesAtHeights([100]);
-    await renderSorted(other.lod, other.camera);
-    // The camera draws its level meshes without updating it, as three does for a Lod whose autoUpdate is off.
-    other.lod.autoUpdate = false;
-    await render(scene.add(other.lod), camera, SIZE);
-    expect((await sortedLists(other.lod, camera)).map((list) => list.length)).toEqual([0, 0, 0]);
-    scene.clear();
-    lod.dispose();
-    other.lod.dispose();
-  });
-
   it("sorts no more for a camera moving about while every instance draws one level wholly inside its frustum", async () => {
     const { lod, camera } = boxesAtHeights([20, 25]);
     const scene = new Scene().add(lod);
@@ -162,7 +131,7 @@ describe("an InstancedLod's cameras", { timeout: GPU_TIMEOUT }, () => {
 
   it("sorts no more for an orthographic camera moving about while its instances lie wholly inside its frustum", async () => {
     // 4 px a unit: the one 4 times as large draws its source, the other its simplified level.
-    const lod = oneChunk(
+    const lod = lodOf(
       [{ object: box("source") }, { object: box("simplified") }, { object: box("impostor") }],
       [new Matrix4().makeScale(4, 4, 4).setPosition(0, 0, -10), new Matrix4().makeTranslation(0, 0, -30)],
     );
@@ -186,23 +155,18 @@ describe("an InstancedLod's cameras", { timeout: GPU_TIMEOUT }, () => {
     }
   });
 
-  it("skips a camera's sort and loading while nothing they read changed, and every sort while it looks away", async () => {
+  it("skips a camera's sort while nothing it reads changed, and every sort while it looks away", async () => {
     const { lod, camera } = boxesAtHeights([100]);
     const scene = new Scene().add(lod);
     try {
       await renderSorted(lod, camera);
       const compute = vi.spyOn(renderer, "compute");
-      // Which levels to load walks every chunk's heights: skipped as well.
-      const heights = vi.spyOn(ChunkSet.prototype, "heights");
       await render(scene, camera, SIZE);
       expect(compute).not.toHaveBeenCalled();
-      expect(heights).not.toHaveBeenCalled();
       camera.position.x = 0.5;
       await render(scene, camera, SIZE);
       // The sort and the copy of its counts, in one call.
       expect(compute).toHaveBeenCalledTimes(1);
-      // One walk for the levels to load and those that draw.
-      expect(heights).toHaveBeenCalledTimes(1);
       // Looking away from afar, the camera draws nothing and sorts nothing, however it turns about.
       const shown = () => drawnMeshes(lod).map((mesh) => mesh.visible);
       camera.position.z = 10;
@@ -229,12 +193,13 @@ describe("an InstancedLod's cameras", { timeout: GPU_TIMEOUT }, () => {
   });
 
   it("gives back the lists of a camera that stopped rendering it", async () => {
-    const lod = oneChunk([{ object: box("source") }], onAxis([5]));
+    const lod = lodOf([{ object: box("source") }], onAxis([5]));
     const scene = new Scene().add(lod);
     const camera = new PerspectiveCamera(60, 1, 0.1, 100);
     const once = camera.clone();
     try {
-      await render(scene, once);
+      // The first render learns the renderer, the second sorts.
+      for (let i = 0; i < 2; i++) await render(scene, once);
       const freed = vi.fn();
       drawnSlots(must(drawnMeshes(lod)[0]), once).indices.addEventListener("dispose", freed);
       // Two rounds of another camera: the one-frame clone no longer renders it.

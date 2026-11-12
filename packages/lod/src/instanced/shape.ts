@@ -1,8 +1,8 @@
-import { Box3, Sphere } from "three/webgpu";
+import { Box3, Sphere, Vector3 } from "three/webgpu";
 import { levelBox, measureLevels } from "../levels/bounds.js";
 import type { LodLevel } from "../levels/index.js";
 
-/** One instance of an InstancedLod as its levels measure it, in its own space: what heights, bounds and fades are measured by. */
+/** One instance of a Lod as its levels measure it, in its own space: what heights, bounds and fades are measured by. */
 export class InstanceShape {
   /** The source's sphere, which heights are measured by. */
   readonly source = new Sphere();
@@ -12,6 +12,8 @@ export class InstanceShape {
   readonly ownRadius: number = 0;
   /** The source's radius padded for sway, where fades and shadow casters are cut off (see `wind`). */
   fadeRadius = 0;
+  /** The diagonal of every level's box: how much a cluster's box shows of its instances' scale. */
+  readonly extent: number = 0;
   /** Every level's box. */
   private readonly envelope = new Box3();
   /** How far levels sway beyond `rest`, relative to it. */
@@ -20,7 +22,7 @@ export class InstanceShape {
   /** The shape of `inputs`, the levels given; none without levels. */
   constructor(inputs: readonly LodLevel[]) {
     if (inputs.length === 0) return;
-    const { own, placed } = measureLevels(inputs, "InstancedLod");
+    const { own, placed } = measureLevels(inputs, "Lod");
     this.ownRadius = own.radius;
     this.source.copy(placed);
     this.rest.copy(placed);
@@ -28,6 +30,7 @@ export class InstanceShape {
     for (const input of inputs) this.envelope.union(levelBox(input));
     // Metadata includes unloaded levels, so later arrivals cannot pass the envelope.
     if (this.envelope.isEmpty()) return;
+    this.extent = this.envelope.getSize(new Vector3()).length();
     const { center } = this.rest;
     const { min, max } = this.envelope;
     this.rest.radius = Math.max(

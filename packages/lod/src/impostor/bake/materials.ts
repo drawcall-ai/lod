@@ -42,10 +42,9 @@ import {
   vec3,
   vec4,
 } from "three/tsl";
-import { isInstancedLod, isMesh, isNodeMaterial, isPhysical, isStandard, isStandardNode, toNodeMaterial } from "../../three.js";
+import { isMesh, isNodeMaterial, isPhysical, isStandard, isStandardNode, toNodeMaterial } from "../../three.js";
 import { affine, isNodeOf } from "../../tsl.js";
 import { placeInstances } from "../../levels/fade.js";
-import { LEVEL_MESHES } from "../../instanced/index.js";
 import { originalOf } from "../../levels/material.js";
 
 /** What every bake material reads, shared by all of them and set per bake. */
@@ -74,7 +73,7 @@ export type Output = (typeof OUTPUTS)[number];
 export function swapMaterials(root: Object3D, settings: BakeSettings): { materials: Material[]; emits: boolean; specular: boolean } {
   const baked = new Map<Material, { material: NodeMaterial; emits: boolean; specular: boolean }>();
   const plain = new Set<string>();
-  traverseDrawn(root, (node) => {
+  root.traverseVisible((node) => {
     // Lines, points and sprites would write their colour into the data targets. Layers
     // rather than `visible`, which would also hide any mesh children.
     if ("isLine" in node || "isPoints" in node || "isSprite" in node) return node.layers.disableAll();
@@ -96,15 +95,6 @@ export function swapMaterials(root: Object3D, settings: BakeSettings): { materia
   if (plain.size > 0) console.warn(`bakeImpostor: ${[...plain].join(", ")} bake as a plain rough MeshStandardMaterial with their color/map only`);
   const entries = [...baked.values()];
   return { materials: entries.map((e) => e.material), emits: entries.some((e) => e.emits), specular: entries.some((e) => e.specular) };
-}
-
-/** Call `visit` with every visible node under `node` that a bake draws: of an InstancedLod, its level 0's meshes. */
-function traverseDrawn(node: Object3D, visit: (node: Object3D) => void): void {
-  if (!node.visible) return;
-  visit(node);
-  // Its sorts show its level meshes, hidden until then.
-  if (isInstancedLod(node)) for (const mesh of node[LEVEL_MESHES](0)) visit(mesh);
-  else for (const child of node.children) traverseDrawn(child, visit);
 }
 
 const STANDARD_KEYS = [

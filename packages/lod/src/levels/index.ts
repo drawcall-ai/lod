@@ -7,12 +7,12 @@ import { isImpostorMesh } from "../three.js";
 import { FADE, MAX_LEVELS, drawLevels, type DrawLevels } from "./draw.js";
 import { LevelHeights } from "./load.js";
 
-// The levels of a Lod or InstancedLod: what one is, the checks a list of them passes, and their default thresholds.
+// The levels of a Lod: what one is, the checks a list of them passes, and their default thresholds.
 
 /**
- * One level of a Lod or InstancedLod: an object given, or one `load` makes when a camera first needs it, which `box`
- * bounds meanwhile. `lod.levels` holds the same shape, with `object` the Lod's own copy, once there is one. For an
- * InstancedLod, `object` is the template its level meshes are made from, never in the scene.
+ * One level of a Lod: an object given, or one `load` makes when a camera first needs it, which `box` bounds meanwhile.
+ * `lod.levels` holds the same shape, with `object` the Lod's own copy, once there is one: the template its level meshes
+ * are made from, never in the scene.
  *
  * Objects you give or load are yours to dispose, as a three Mesh never disposes its geometry or material; a Lod frees
  * only what it made of them. CachedLodLoader's are freed when the last Lod holding them is disposed (see `hold`).
@@ -168,7 +168,7 @@ interface Encoding {
 }
 
 /**
- * A Lod's or InstancedLod's levels as levelsToDraw reads them (see `drawLevels`), checked and encoded again only when a
+ * A Lod's levels as levelsToDraw reads them (see `drawLevels`), checked and encoded again only when a
  * threshold or the forced level has changed. What it returns is shared: read it, do not hold on to it.
  */
 export class EncodedLevels {

@@ -1,13 +1,10 @@
 export { CachedLodLoader, type CachedLodLoaderOptions } from "./loader/index.js";
 export { type LodLevelRequest, type LodRequest } from "./loader/request.js";
 export { encodeMeshAsync, decodeMeshAsync } from "./codec/mesh.js";
-export { LodPool, type LodPoolOptions } from "./pool.js";
 export { Lod, type LodOptions } from "./lod.js";
 export { Wind, type WindOptions, type SwayOptions } from "./wind/index.js";
-export { InstancedLod, type InstancedLodOptions } from "./instanced/index.js";
+export { type LodCluster } from "./instanced/clusters.js";
 export { type CullDistance } from "./instanced/cull.js";
-export { InstancedLodChunk, type InstancedLodChunkParameters } from "./instanced/chunk.js";
-export { type InstancedLodIntersection } from "./instanced/raycast.js";
 export { type LodLevel } from "./levels/index.js";
 export { type SimplifyOptions, simplify } from "./simplify/index.js";
 export { type BakeMeshOptions, bakeMesh } from "./baked/index.js";

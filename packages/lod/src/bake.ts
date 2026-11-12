@@ -1,9 +1,7 @@
-import { Color, DataUtils, WebGPURenderer, type Object3D, type RenderTarget, type Renderer } from "three/webgpu";
+import { Color, DataUtils, Group, InstancedMesh, Matrix4, WebGPURenderer, type Object3D, type RenderTarget, type Renderer } from "three/webgpu";
 import { disposeCopies } from "./dispose.js";
-import { REPOOL } from "./instanced/index.js";
-import { renderers } from "./levels/renderer.js";
-import { LodPool } from "./pool.js";
-import { isInstancedLod } from "./three.js";
+import type { Lod } from "./lod.js";
+import { isLod, isMesh } from "./three.js";
 
 // What the GPU bakes (impostor frames, interior rooms) share: the renderer they draw with, one bake at a time on it,
 // and reading back what they drew.
@@ -45,31 +43,67 @@ const BLACK = new Color(0x000000);
 /** A copy of what a bake draws, and what frees it once drawn. */
 export interface BakeCopy {
   readonly root: Object3D;
-  /** Free every Lod and InstancedLod of the copy, and the LodPools made for it. */
+  /** Free what the copy made: its InstancedMeshes' buffers and every Lod's draw state. */
   dispose(): void;
 }
 
 /**
- * `root`, a fresh copy of what a bake draws, each InstancedLod in it moved into a LodPool of its own, sized to its
- * chunks: a LodPool draws with one renderer, which for the original is the app's, and its room is the app's.
+ * `root`, a fresh copy of what a bake draws, each Lod in it drawn as plain InstancedMeshes of its level 0 at every
+ * instance: a Lod draws with the renderer that first drew it, the app's, and nothing in its first frame.
  */
 export function bakeCopy(root: Object3D): BakeCopy {
-  const pools: LodPool[] = [];
+  const lods: Lod[] = [];
   root.traverse((node) => {
-    if (!isInstancedLod(node)) return;
-    const chunks = [...node.chunks];
-    const instances = chunks.reduce((sum, { count }) => sum + count, 0);
-    const pool = new LodPool({ maxInstanceCount: Math.max(1, instances), maxChunkCount: Math.max(1, chunks.length) });
-    pools.push(pool);
-    node[REPOOL](pool);
+    if (isLod(node)) lods.push(node);
   });
-  return {
-    root,
-    dispose: () => {
-      disposeCopies(root);
-      for (const pool of pools) pool.dispose();
-    },
-  };
+  let copy = root;
+  for (const lod of lods) {
+    const drawn = levelZero(lod);
+    // Only the root has no parent here.
+    const { parent } = lod;
+    if (parent) parent.add(drawn);
+    else copy = drawn;
+    lod.removeFromParent();
+    lod.dispose();
+  }
+  return { root: copy, dispose: () => disposeCopies(copy) };
+}
+
+/**
+ * `lod`'s level 0 as a Group in its place, an InstancedMesh per visible mesh of the level drawing it at every instance,
+ * coloured as the instances are; empty while the level is not loaded. The CPU reads the instances: storage attributes
+ * cannot be baked.
+ */
+function levelZero(lod: Lod): Group {
+  const group = new Group();
+  group.name = lod.name;
+  group.position.copy(lod.position);
+  group.quaternion.copy(lod.quaternion);
+  group.scale.copy(lod.scale);
+  group.matrixAutoUpdate = lod.matrixAutoUpdate;
+  group.matrix.copy(lod.matrix);
+  group.visible = lod.visible;
+  group.layers.mask = lod.layers.mask;
+  const source = lod.levels[0]?.object;
+  if (!source) return group;
+  source.updateWorldMatrix(true, true);
+  const outside = source.parent ? source.parent.matrixWorld.clone().invert() : new Matrix4();
+  const instance = new Matrix4();
+  const color = new Color();
+  source.traverseVisible((node) => {
+    if (!isMesh(node)) return;
+    const placement = outside.clone().multiply(node.matrixWorld);
+    const mesh = new InstancedMesh(node.geometry, node.material, lod.count);
+    for (let i = 0; i < lod.count; i++) {
+      mesh.setMatrixAt(i, lod.getMatrixAt(i, instance).multiply(placement));
+      if (lod.instanceColor) mesh.setColorAt(i, lod.getColorAt(i, color));
+    }
+    mesh.name = node.name;
+    mesh.castShadow = node.castShadow;
+    mesh.receiveShadow = node.receiveShadow;
+    group.add(mesh);
+  });
+  return group;
 }
 
 /**
@@ -79,20 +113,9 @@ export function bakeCopy(root: Object3D): BakeCopy {
  */
 const queues = new WeakMap<Renderer, Promise<unknown>>();
 
-/**
- * Run `bake` on `renderer` once every bake queued on it before has settled, `renderer` among `Lod.renderers` meanwhile:
- * the Lods and InstancedLods a bake draws draw with it.
- */
+/** Run `bake` on `renderer` once every bake queued on it before has settled. */
 export function inTurn<T>(renderer: Renderer, bake: () => Promise<T>): Promise<T> {
-  const next = (queues.get(renderer) ?? Promise.resolve()).then(async () => {
-    const added = !renderers.has(renderer);
-    renderers.add(renderer);
-    try {
-      return await bake();
-    } finally {
-      if (added) renderers.delete(renderer);
-    }
-  });
+  const next = (queues.get(renderer) ?? Promise.resolve()).then(bake);
   // The queue goes on past a failed bake; its caller has the failure.
   queues.set(
     renderer,

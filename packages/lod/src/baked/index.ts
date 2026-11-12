@@ -88,8 +88,8 @@ export type BakeMeshOptions = {
  * colour, or as windows into the rooms of `interior`. Textures must be readable on the
  * CPU (no compressed textures).
  *
- * Nested LODs are baked at their level 0; InstancedMeshes, and the source level of an
- * InstancedLod, once per instance: a field of plants bakes as a whole. Skinned meshes
+ * Nested LODs are baked at their level 0; InstancedMeshes, and the source level of a
+ * Lod, once per instance: a field of plants bakes as a whole. Skinned meshes
  * and ImpostorMeshes (which have no surface to read) are refused.
  *
  * For each texel of the low mesh, the outermost source surface along the low mesh's

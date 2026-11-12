@@ -6,7 +6,7 @@ import { detailed } from "../source/detail.js";
 import { measureDeviation } from "../source/deviation.js";
 import { readSource } from "../source/source.js";
 import { merge } from "../source/surface.js";
-import { isImpostorMesh, isInstancedLod, isMesh, isSkinnedMesh } from "../three.js";
+import { isImpostorMesh, isLod, isMesh, isSkinnedMesh } from "../three.js";
 import { cardMaterials, decimateCards } from "./cards.js";
 
 // The simplified level: a copy of a source with its geometry decimated, drawn with the source's materials.
@@ -22,8 +22,8 @@ export interface SimplifyOptions {
  * levels stay as they are), of an InstancedMesh the geometry its instances share. Materials (and
  * so textures) are the originals, shared with `object`. Meshes that share a geometry
  * share the simplified one. Morph targets are dropped. ImpostorMeshes and hidden meshes
- * stay as they are. Skinned meshes and InstancedLods are refused: simplify an
- * InstancedLod's source and build a new InstancedLod of it.
+ * stay as they are. Skinned meshes and Lods are refused: simplify a Lod's source and
+ * build a new Lod of it.
  *
  * Per material group it preserves UV and normal seams; if that cannot reach the target it
  * lets seams collapse, and as a last resort ignores topology (meshopt's sloppy mode).
@@ -45,10 +45,10 @@ export async function simplify(object: Object3D, options: SimplifyOptions = {}):
 export async function decimate(object: Object3D, ratio: number): Promise<Object3D> {
   if (!(ratio > 0 && ratio <= 1)) throw new Error(`simplify: ratio must be in (0, 1], got ${ratio}`);
   await MeshoptSimplifier.ready;
-  // clone() also visits hidden children, whose InstancedLod allocations must never be
-  // created just to reject them (or skipped by the visible-detail walk below).
+  // clone() also visits hidden children, whose Lod copies must never be made just to
+  // reject them (or skipped by the visible-detail walk below).
   object.traverse((node) => {
-    if (isInstancedLod(node)) throw new Error(`simplify: cannot simplify an InstancedLod ("${node.name}"); simplify its source and build a new one`);
+    if (isLod(node)) throw new Error(`simplify: cannot simplify a Lod ("${node.name}"); simplify its source and build a new one`);
     if (isSkinnedMesh(node)) throw new Error(`simplify: skinned meshes are not supported ("${node.name}")`);
   });
   const copy = object.clone(true);
