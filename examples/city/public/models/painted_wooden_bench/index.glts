@@ -1,4 +1,4 @@
-import { loadingManager, onDispose, scene } from "@drawcall/glts";
+import { isPreview, loadingManager, onDispose, scene } from "@drawcall/glts";
 import { CachedLodLoader, Lod } from "@drawcall/lod";
 import * as THREE from "three/webgpu";
 
@@ -24,3 +24,9 @@ const levels = await loader.loadAsync({
 const lod = new Lod(levels, 1, { manager: loadingManager });
 scene.add(lod);
 onDispose(() => lod.dispose());
+
+if (isPreview) {
+  const sun = new THREE.DirectionalLight("white", 3);
+  sun.position.set(4, 6, 3);
+  scene.add(sun, sun.target, new THREE.HemisphereLight("#dbe6f5", "#5b5140", 1.5));
+}

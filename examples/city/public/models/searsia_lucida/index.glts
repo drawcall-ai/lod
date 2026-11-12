@@ -1,4 +1,4 @@
-import { loadingManager, onDispose, scene } from "@drawcall/glts";
+import { isPreview, loadingManager, onDispose, scene } from "@drawcall/glts";
 import { CachedLodLoader, foliageLevels, foliageModel, Lod, type LodLevel } from "@drawcall/lod";
 import * as THREE from "three/webgpu";
 
@@ -41,3 +41,9 @@ if (!load) throw new Error(`searsia_lucida: variant must be a or e, not ${varian
 const lod = new Lod(await load(), 1, { manager: loadingManager });
 scene.add(lod);
 onDispose(() => lod.dispose());
+
+if (isPreview) {
+  const sun = new THREE.DirectionalLight("white", 3);
+  sun.position.set(4, 6, 3);
+  scene.add(sun, sun.target, new THREE.HemisphereLight("#dbe6f5", "#5b5140", 1.5));
+}
