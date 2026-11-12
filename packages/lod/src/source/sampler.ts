@@ -139,13 +139,15 @@ function pixels(texture: Texture): Mip & { rowsUp: boolean } {
   const source = drawable(image);
   if (!source) throw new Error(`cannot read the image of texture "${texture.name}" on the CPU`);
   const { width, height } = source;
-  // ImageBitmaps are read with @drawcall/webgpu, in browsers as in Node, which has no 2D canvas; they ignore flipY on upload.
-  if (typeof ImageBitmap !== "undefined" && source instanceof ImageBitmap) return { data: readImageBitmap(source).data, width, height, rowsUp: true };
+  // ImageBitmaps ignore flipY on upload.
+  const bitmap = typeof ImageBitmap !== "undefined" && source instanceof ImageBitmap;
+  // Node without a 2D canvas, unlike a glts host's, reads them with @drawcall/webgpu.
+  if (bitmap && typeof OffscreenCanvas === "undefined") return { data: readImageBitmap(source).data, width, height, rowsUp: true };
   const context = new OffscreenCanvas(width, height).getContext("2d", { willReadFrequently: true });
   if (!context) throw new Error("no 2D canvas to read textures with");
   context.drawImage(source, 0, 0);
   const { data } = context.getImageData(0, 0, width, height, { colorSpace: "srgb" });
-  return { data, width, height, rowsUp: false };
+  return { data, width, height, rowsUp: bitmap };
 }
 
 function isData(image: unknown): image is { data: Uint8Array | Uint8ClampedArray; width: number; height: number } {
