@@ -1,12 +1,10 @@
-// The house's rooms, which its baked level shows through the windows.
+// The building's rooms, which its baked level shows through the windows.
 import { disposeRecursive, loadingManager, onDispose, scene } from "@drawcall/glts";
-import { house } from "./model.ts";
 import { interior } from "./interior.ts";
-import { variantOf } from "./params.ts";
+import { variantOf } from "./model.ts";
 import { Materials } from "./materials.ts";
 
-const variant = variantOf(import.meta.url);
-const { params } = house(variant);
+const { params } = variantOf(import.meta.url);
 const materials = new Materials(loadingManager);
 const rooms = interior(materials, params);
 onDispose(() => disposeRecursive(scene));

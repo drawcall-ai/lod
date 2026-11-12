@@ -4,7 +4,8 @@ import type { Materials } from "./materials.ts";
 import { exterior } from "./exterior.ts";
 import { interior } from "./interior.ts";
 import { low } from "./low.ts";
-import { houseParams, type HouseParams } from "./params.ts";
+import { church } from "./church/model.ts";
+import { HOUSE_VARIANTS, houseParams, type HouseParams } from "./params.ts";
 
 // A building's three scripts: the detailed building with its rooms, the low shell its windows bake onto, and the rooms
 // alone, which the bake projects into those windows.
@@ -18,6 +19,15 @@ export interface Building {
 
 /** House variant `variant`, 0-based and below `HOUSE_VARIANTS`. */
 export const house = (variant: number): Building => ({ params: houseParams(variant), low, exterior });
+
+/** The building a script's URL asks for with `?variant=`: a house variant (0 if it does not), or `church`, checked. */
+export function variantOf(url: string): Building {
+  const text = new URL(url).searchParams.get("variant") ?? "0";
+  if (text === "church") return church();
+  const variant = Number(text);
+  if (!(/^\d+$/.test(text) && variant < HOUSE_VARIANTS)) throw new Error(`house: variant must be a whole number below ${HOUSE_VARIANTS} or church, not ${text}`);
+  return house(variant);
+}
 
 /** The building as drawn up close: its exterior with the rooms behind its windows. */
 export function detailed(materials: Materials, { params, exterior }: Building): THREE.Group {

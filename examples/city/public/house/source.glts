@@ -1,11 +1,9 @@
 import { disposeRecursive, loadingManager, onDispose, scene } from "@drawcall/glts";
-import { detailed, house } from "./model.ts";
-import { variantOf } from "./params.ts";
+import { detailed, variantOf } from "./model.ts";
 import { Materials } from "./materials.ts";
 
-const variant = variantOf(import.meta.url);
 const materials = new Materials(loadingManager);
-const building = detailed(materials, house(variant));
+const building = detailed(materials, variantOf(import.meta.url));
 onDispose(() => disposeRecursive(scene));
 scene.add(building);
 await materials.ready();
