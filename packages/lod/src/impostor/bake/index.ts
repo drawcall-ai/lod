@@ -73,7 +73,7 @@ export function bakeImpostor(object: Object3D, renderer: Renderer, options: Bake
 
 async function bake(object: Object3D, renderer: Renderer, options: BakeImpostorOptions): Promise<Impostor> {
   checkBakeRenderer(renderer, "bakeImpostor");
-  const copy = sourceForBake(object);
+  const copy = await sourceForBake(object);
   try {
     return await bakeSource(copy.root, renderer, options);
   } finally {

@@ -1,5 +1,6 @@
 import {
   AdditiveBlending,
+  Box3,
   BoxGeometry,
   BufferGeometry,
   DataTexture,
@@ -20,7 +21,9 @@ import {
   SRGBColorSpace,
   IcosahedronGeometry,
   SphereGeometry,
+  StorageInstancedBufferAttribute,
   TorusKnotGeometry,
+  Vector3,
   type Object3D,
 } from "three/webgpu";
 import { describe, expect, it, vi } from "vitest";
@@ -323,6 +326,19 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
       disposeCopies(subject);
     }
     expect(held).toBe(0);
+  });
+
+  it("loads the deferred level 0 of a Lod in it, and refuses a Lod whose instances are in storage", async () => {
+    const material = new MeshStandardMaterial();
+    const box = new Box3(new Vector3(-0.5, -0.5, -0.5), new Vector3(0.5, 0.5, 0.5));
+    const lod = new Lod([{ load: async () => new Mesh(new BoxGeometry(), material), maxPixels: Infinity, box }]);
+    try {
+      expect(coverage(await bake(new Group().add(lod)))).toBeGreaterThan(0.1);
+      lod.instanceMatrix = new StorageInstancedBufferAttribute(new Float32Array(16), 16);
+      await expect(bake(lod)).rejects.toThrow(/storage instanceMatrix/);
+    } finally {
+      lod.dispose();
+    }
   });
 
   it("refuses ImpostorMeshes, which have no surface to bake", async () => {

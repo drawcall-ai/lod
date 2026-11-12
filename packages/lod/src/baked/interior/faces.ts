@@ -55,7 +55,7 @@ export interface Faces {
  * up for bakes (see `checkBakeRenderer`).
  */
 export async function renderFaces(interior: Object3D, placement: Matrix4, boxes: readonly Box3[], size: number, renderer: Renderer): Promise<Faces> {
-  const baked = bakeCopy(interior.clone());
+  const baked = await bakeCopy(interior);
   const copy = baked.root;
   copy.matrixAutoUpdate = false;
   copy.matrix.copy(placement);

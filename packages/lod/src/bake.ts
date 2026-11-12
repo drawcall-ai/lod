@@ -1,7 +1,9 @@
 import { Color, DataUtils, Group, InstancedMesh, Matrix4, WebGPURenderer, type Object3D, type RenderTarget, type Renderer } from "three/webgpu";
 import { disposeCopies } from "./dispose.js";
 import type { Lod } from "./lod.js";
-import { isLod, isMesh } from "./three.js";
+import { clone } from "three/addons/utils/SkeletonUtils.js";
+import { at } from "./at.js";
+import { isLod, isMesh, isStorageInstanced } from "./three.js";
 
 // What the GPU bakes (impostor frames, interior rooms) share: the renderer they draw with, one bake at a time on it,
 // and reading back what they drew.
@@ -48,33 +50,49 @@ export interface BakeCopy {
 }
 
 /**
- * `root`, a fresh copy of what a bake draws, each Lod in it drawn as plain InstancedMeshes of its level 0 at every
- * instance: a Lod draws with the renderer that first drew it, the app's, and nothing in its first frame.
+ * A fresh copy of `root` to bake, each Lod in it drawn as plain InstancedMeshes of its level 0 at every instance, that
+ * level loaded first where it is deferred: a Lod draws with the renderer that first drew it, the app's, and nothing in
+ * its first frame. The CPU reads the instances, so a Lod with a storage attribute is refused.
  */
-export function bakeCopy(root: Object3D): BakeCopy {
-  const lods: Lod[] = [];
+export async function bakeCopy(root: Object3D): Promise<BakeCopy> {
   root.traverse((node) => {
+    if (isLod(node) && [node.instanceMatrix, node.instanceColor].some((attribute) => attribute && isStorageInstanced(attribute)))
+      throw new Error(`@drawcall/lod: a bake reads a Lod's instances on the CPU, but "${node.name}" has a storage instanceMatrix or instanceColor`);
+  });
+  let copy = clone(root);
+  const lods: Lod[] = [];
+  copy.traverse((node) => {
     if (isLod(node)) lods.push(node);
   });
-  let copy = root;
-  for (const lod of lods) {
-    const drawn = levelZero(lod);
-    // Only the root has no parent here.
-    const { parent } = lod;
-    if (parent) parent.add(drawn);
-    else copy = drawn;
-    lod.removeFromParent();
-    lod.dispose();
+  try {
+    const sources = await Promise.all(lods.map(levelZeroOf));
+    lods.forEach((lod, i) => {
+      const drawn = levelZero(lod, at(sources, i));
+      // Only the root has no parent here.
+      const { parent } = lod;
+      if (parent) parent.add(drawn);
+      else copy = drawn;
+      lod.removeFromParent();
+    });
+  } finally {
+    for (const lod of lods) lod.dispose();
   }
   return { root: copy, dispose: () => disposeCopies(copy) };
 }
 
+/** `lod`'s level 0 object: its own once there is one, else what the level's load makes. */
+async function levelZeroOf(lod: Lod): Promise<Object3D> {
+  const level = at(lod.levels, 0);
+  if (level.object) return level.object;
+  if (!level.load) throw new Error(`@drawcall/lod: level 0 of the Lod "${lod.name}" has neither an object nor a load`);
+  return level.load();
+}
+
 /**
- * `lod`'s level 0 as a Group in its place, an InstancedMesh per visible mesh of the level drawing it at every instance,
- * coloured as the instances are; empty while the level is not loaded. The CPU reads the instances: storage attributes
- * cannot be baked.
+ * `source`, `lod`'s level 0, as a Group in the Lod's place, an InstancedMesh per visible mesh of it drawing it at every
+ * instance, coloured as the instances are.
  */
-function levelZero(lod: Lod): Group {
+function levelZero(lod: Lod, source: Object3D): Group {
   const group = new Group();
   group.name = lod.name;
   group.position.copy(lod.position);
@@ -84,8 +102,6 @@ function levelZero(lod: Lod): Group {
   group.matrix.copy(lod.matrix);
   group.visible = lod.visible;
   group.layers.mask = lod.layers.mask;
-  const source = lod.levels[0]?.object;
-  if (!source) return group;
   source.updateWorldMatrix(true, true);
   const outside = source.parent ? source.parent.matrixWorld.clone().invert() : new Matrix4();
   const instance = new Matrix4();
