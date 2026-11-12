@@ -98,9 +98,9 @@ class SessionLoader extends BrowserCachedLodLoader {
     return session({ read: new Set(), packages: new Set() }, () => super.loadAsset(url));
   }
 
-  protected override newBakeRenderer(): Promise<WebGPURenderer> {
+  protected override async newBakeRenderer(): Promise<WebGPURenderer> {
     // Three's DOM canvas types exclude native canvases; its constructor checks the actual API.
-    const renderer: unknown = Reflect.construct(WebGPURenderer, [{ canvas: canvas(), antialias: false }]);
+    const renderer: unknown = Reflect.construct(WebGPURenderer, [{ canvas: await canvas(), antialias: false }]);
     if (!(renderer instanceof WebGPURenderer)) throw new Error("CachedLodLoader: three did not make a WebGPURenderer");
     return setUpBakeRenderer(renderer);
   }
@@ -166,19 +166,28 @@ class ScriptLoader extends Loader<Object3D> {
 }
 
 let users = 0;
-/** What sessions install while any runs: the canvas, and what restores the globals. */
-let installed: Promise<{ canvas: Canvas; restore: () => Promise<void> }> | undefined;
+/** What sessions install while any runs: the served fetch, and the canvas once one bakes. */
+let installed: Promise<Install> | undefined;
 /**
  * The restore of the last sessions to finish, which the next install waits for: @drawcall/webgpu saves and restores
  * the globals it installs per canvas, so two canvases' lives must not overlap.
  */
 let restored: Promise<void> = Promise.resolve();
-let current: Canvas | undefined;
+let current: Install | undefined;
+
+interface Install {
+  /**
+   * The canvas bakes draw on, made by the first bake, so loads that only read stored levels or load sources leave the
+   * process's globals alone, such as those of a glts host whose @drawcall/webgpu is another copy.
+   */
+  canvas?: Promise<Canvas>;
+  restore: () => Promise<void>;
+}
 
 /** The canvas of the sessions running. */
-function canvas(): Canvas {
+function canvas(): Promise<Canvas> {
   if (!current) throw new Error("CachedLodLoader: baking outside loadAsync");
-  return current;
+  return (current.canvas ??= createCanvas(1, 1));
 }
 
 async function session<T>(state: Session, run: () => Promise<T>): Promise<T> {
@@ -186,7 +195,7 @@ async function session<T>(state: Session, run: () => Promise<T>): Promise<T> {
   // A failed restore failed the session that ran it. Sessions running together share one install.
   const shared = (installed ??= restored.catch(() => {}).then(install));
   try {
-    current = (await shared).canvas;
+    current = await shared;
     return await sessions.run(state, run);
   } finally {
     if (--users === 0) {
@@ -201,16 +210,22 @@ async function session<T>(state: Session, run: () => Promise<T>): Promise<T> {
   }
 }
 
-/** A canvas of @drawcall/webgpu, which installs WebGPU, image decoding and workers while it lives, and the served fetch. */
-async function install(): Promise<{ canvas: Canvas; restore: () => Promise<void> }> {
-  const canvas = await createCanvas(1, 1);
+/**
+ * The served fetch, and a canvas of @drawcall/webgpu once a session bakes, which installs WebGPU, image decoding and
+ * workers while it lives.
+ */
+function install(): Install {
   const { fetch } = globalThis;
   globalThis.fetch = (input, init) => serve(fetch, input, init);
-  const restore = async () => {
-    globalThis.fetch = fetch;
-    await canvas.dispose();
+  const made: Install = {
+    restore: async () => {
+      globalThis.fetch = fetch;
+      // A canvas that failed to make failed the bake that made it.
+      const canvas = await made.canvas?.catch(() => undefined);
+      await canvas?.dispose();
+    },
   };
-  return { canvas, restore };
+  return made;
 }
 
 async function serve(fetch: typeof globalThis.fetch, input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
