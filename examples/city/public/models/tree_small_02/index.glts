@@ -18,7 +18,7 @@ const loader = new CachedLodLoader(loadingManager, {
   },
 });
 const levels = await loader.loadAsync({
-  url: "../../assets/models/tree_small_02/tree_small_02_LOD0.glb",
+  url: "./tree_small_02_LOD0.glb",
   levels: [
     { type: "impostor", layout: "hemi", maxPixels: 900, resolution: 256, frames: 10 },
     { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
@@ -27,6 +27,10 @@ const levels = await loader.loadAsync({
 const lod = new Lod(levels, 1, { manager: loadingManager });
 scene.add(lod);
 onDispose(() => lod.dispose());
+
+scene.defaultCamera = new THREE.PerspectiveCamera(30, 1, 1.1, 110);
+scene.defaultCamera.position.set(6.19, 6.18, 8.84);
+scene.defaultCamera.lookAt(0, 2.25, 0);
 
 if (isPreview) {
   const sun = new THREE.DirectionalLight("white", 3);

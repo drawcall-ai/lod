@@ -50,7 +50,7 @@ const soil = (textures: Textures) => surface(textures, "farm_soil");
 
 async function model(textures: Textures, id: string, variant: string): Promise<Content> {
   const gltf = new GLTFLoader(textures.manager).setMeshoptDecoder(MeshoptDecoder);
-  const { scene } = await gltf.loadAsync(`/assets/models/${id}/${variant}.glb`);
+  const { scene } = await gltf.loadAsync(`/models/${id}/${variant}.glb`);
   scene.traverse((o) => {
     o.castShadow = o.receiveShadow = true;
   });
@@ -92,7 +92,7 @@ async function interiorItem(textures: Textures, load: Load, variant: number): Pr
  */
 async function interiorPlanItem(textures: Textures, variant: number): Promise<Content> {
   const p = houseParams(variant);
-  const materials = new Materials(textures.manager, new URL("/assets/", location.href));
+  const materials = new Materials(textures.manager, new URL("/house/", location.href));
   const group = new THREE.Group();
   // each storey is moved down to y = 0, where the cut keeps 0.3 m below its floor to 1.6 m above
   const cut = [new THREE.Plane(new THREE.Vector3(0, -1, 0), 1.6), new THREE.Plane(new THREE.Vector3(0, 1, 0), 0.3)];

@@ -20,7 +20,7 @@ const loader = new CachedLodLoader(loadingManager, {
 const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
   a: () =>
     loader.loadAsync({
-      url: "../../assets/models/fern_02/fern_02_a.glb",
+      url: "./fern_02_a.glb",
       levels: [
         { type: "impostor", layout: "hemi", maxPixels: 200 },
         { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
@@ -29,7 +29,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
     }),
   b: () =>
     loader.loadAsync({
-      url: "../../assets/models/fern_02/fern_02_b.glb",
+      url: "./fern_02_b.glb",
       levels: [
         { type: "impostor", layout: "hemi", maxPixels: 200 },
         { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
@@ -43,6 +43,10 @@ if (!load) throw new Error(`fern_02: variant must be a or b, not ${variant}`);
 const lod = new Lod(await load(), 1, { manager: loadingManager });
 scene.add(lod);
 onDispose(() => lod.dispose());
+
+scene.defaultCamera = new THREE.PerspectiveCamera(30, 1, 0.14, 14);
+scene.defaultCamera.position.set(0.777, 0.607, 1.109);
+scene.defaultCamera.lookAt(0, 0.115, 0);
 
 if (isPreview) {
   const sun = new THREE.DirectionalLight("white", 3);

@@ -23,6 +23,10 @@ const lod = new Lod(levels, 1, { manager: loadingManager });
 scene.add(lod);
 onDispose(() => lod.dispose());
 
+scene.defaultCamera = new THREE.PerspectiveCamera(30, 1, 0.55, 55);
+scene.defaultCamera.position.set(4.18, 2.48, 4.28);
+scene.defaultCamera.lookAt(1.2, 0.6, 0.03);
+
 if (isPreview) {
   const sun = new THREE.DirectionalLight("white", 3);
   sun.position.set(4, 6, 3);

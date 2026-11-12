@@ -20,7 +20,7 @@ const loader = new CachedLodLoader(loadingManager, {
 const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
   a: () =>
     loader.loadAsync({
-      url: "../../assets/models/shrub_02/shrub_02_a.glb",
+      url: "./shrub_02_a.glb",
       levels: [
         { type: "impostor", layout: "hemi", maxPixels: 300 },
         { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
@@ -29,7 +29,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
     }),
   c: () =>
     loader.loadAsync({
-      url: "../../assets/models/shrub_02/shrub_02_c.glb",
+      url: "./shrub_02_c.glb",
       levels: [
         { type: "impostor", layout: "hemi", maxPixels: 300 },
         { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
@@ -43,6 +43,10 @@ if (!load) throw new Error(`shrub_02: variant must be a or c, not ${variant}`);
 const lod = new Lod(await load(), 1, { manager: loadingManager });
 scene.add(lod);
 onDispose(() => lod.dispose());
+
+scene.defaultCamera = new THREE.PerspectiveCamera(30, 1, 0.54, 54);
+scene.defaultCamera.position.set(2.87, 2.72, 4.19);
+scene.defaultCamera.lookAt(-0.05, 0.86, 0.02);
 
 if (isPreview) {
   const sun = new THREE.DirectionalLight("white", 3);

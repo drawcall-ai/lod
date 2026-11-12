@@ -14,7 +14,7 @@ const loader = new CachedLodLoader(loadingManager, {
   },
 });
 const levels = await loader.loadAsync({
-  url: "../../assets/models/covered_car/covered_car.glb",
+  url: "./covered_car.glb",
   levels: [
     { type: "simplify", ratio: 0.12 },
     { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 60 },
@@ -24,6 +24,10 @@ const levels = await loader.loadAsync({
 const lod = new Lod(levels, 1, { manager: loadingManager });
 scene.add(lod);
 onDispose(() => lod.dispose());
+
+scene.defaultCamera = new THREE.PerspectiveCamera(30, 1, 1, 100);
+scene.defaultCamera.position.set(5.49, 4.19, 7.83);
+scene.defaultCamera.lookAt(0, 0.71, 0);
 
 if (isPreview) {
   const sun = new THREE.DirectionalLight("white", 3);

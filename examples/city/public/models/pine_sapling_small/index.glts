@@ -20,7 +20,7 @@ const loader = new CachedLodLoader(loadingManager, {
 const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
   a: () =>
     loader.loadAsync({
-      url: "../../assets/models/pine_sapling_small/pine_sapling_small_a.glb",
+      url: "./pine_sapling_small_a.glb",
       levels: [
         { type: "impostor", layout: "hemi", maxPixels: 300 },
         { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
@@ -28,7 +28,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
     }),
   b: () =>
     loader.loadAsync({
-      url: "../../assets/models/pine_sapling_small/pine_sapling_small_b.glb",
+      url: "./pine_sapling_small_b.glb",
       levels: [
         { type: "impostor", layout: "hemi", maxPixels: 300 },
         { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
@@ -41,6 +41,10 @@ if (!load) throw new Error(`pine_sapling_small: variant must be a or b, not ${va
 const lod = new Lod(await load(), 1, { manager: loadingManager });
 scene.add(lod);
 onDispose(() => lod.dispose());
+
+scene.defaultCamera = new THREE.PerspectiveCamera(30, 1, 0.28, 28);
+scene.defaultCamera.position.set(1.53, 1.6, 2.18);
+scene.defaultCamera.lookAt(0, 0.63, 0);
 
 if (isPreview) {
   const sun = new THREE.DirectionalLight("white", 3);
