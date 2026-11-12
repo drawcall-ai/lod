@@ -3,6 +3,7 @@ import { disposeCopies } from "./dispose.js";
 import type { Lod } from "./lod.js";
 import { clone } from "three/addons/utils/SkeletonUtils.js";
 import { at } from "./at.js";
+import { instancesOf } from "./source/detail.js";
 import { isLod, isMesh, isStorageInstanced } from "./three.js";
 
 // What the GPU bakes (impostor frames, interior rooms) share: the renderer they draw with, one bake at a time on it,
@@ -50,9 +51,9 @@ export interface BakeCopy {
 }
 
 /**
- * A fresh copy of `root` to bake, each Lod in it drawn as plain InstancedMeshes of its level 0 at every instance, that
- * level loaded first where it is deferred: a Lod draws with the renderer that first drew it, the app's, and nothing in
- * its first frame. The CPU reads the instances, so a Lod with a storage attribute is refused.
+ * A fresh copy of `root` to bake, each Lod in it drawn as plain InstancedMeshes of its level 0 at every instance it
+ * draws, that level loaded first where it is deferred: a Lod draws with the renderer that first drew it, the app's, and
+ * nothing in its first frame. The CPU reads the instances, so a Lod with a storage attribute is refused.
  */
 export async function bakeCopy(root: Object3D): Promise<BakeCopy> {
   root.traverse((node) => {
@@ -90,7 +91,7 @@ async function levelZeroOf(lod: Lod): Promise<Object3D> {
 
 /**
  * `source`, `lod`'s level 0, as a Group in the Lod's place, an InstancedMesh per visible mesh of it drawing it at every
- * instance, coloured as the instances are.
+ * instance the Lod draws (see `instancesOf`), coloured as the instances are.
  */
 function levelZero(lod: Lod, source: Object3D): Group {
   const group = new Group();
@@ -109,11 +110,12 @@ function levelZero(lod: Lod, source: Object3D): Group {
   source.traverseVisible((node) => {
     if (!isMesh(node)) return;
     const placement = outside.clone().multiply(node.matrixWorld);
-    const mesh = new InstancedMesh(node.geometry, node.material, lod.count);
-    for (let i = 0; i < lod.count; i++) {
-      mesh.setMatrixAt(i, lod.getMatrixAt(i, instance).multiply(placement));
-      if (lod.instanceColor) mesh.setColorAt(i, lod.getColorAt(i, color));
-    }
+    const drawn = [...instancesOf(lod)];
+    const mesh = new InstancedMesh(node.geometry, node.material, drawn.length);
+    drawn.forEach((index, i) => {
+      mesh.setMatrixAt(i, lod.getMatrixAt(index, instance).multiply(placement));
+      if (lod.instanceColor) mesh.setColorAt(i, lod.getColorAt(index, color));
+    });
     mesh.name = node.name;
     mesh.castShadow = node.castShadow;
     mesh.receiveShadow = node.receiveShadow;

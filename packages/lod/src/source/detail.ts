@@ -125,8 +125,12 @@ function boxes(node: Object3D, placement: Matrix4, box: Box3): void {
   for (const child of detailed(node)) boxes(child, local(child).premultiply(placement), box);
 }
 
-/** The indices of `lod`'s instances; a storage instanceMatrix's live on the GPU, where the CPU cannot visit them. */
-function* instancesOf(lod: Lod): Generator<number> {
+/**
+ * The indices of the instances `lod` draws: of its first `count`, those in its clusters, if it has any. A storage
+ * instanceMatrix's live on the GPU, where the CPU cannot visit them.
+ */
+export function* instancesOf(lod: Lod): Generator<number> {
   if (isStorageInstanced(lod.instanceMatrix)) throw new Error("@drawcall/lod: a Lod's storage instanceMatrix lives on the GPU: the CPU cannot visit its meshes");
-  for (let index = 0; index < lod.count; index++) yield index;
+  for (const { start, count } of lod.clusters ?? [{ start: 0, count: lod.count }])
+    for (let index = start; index < Math.min(start + count, lod.count); index++) yield index;
 }
