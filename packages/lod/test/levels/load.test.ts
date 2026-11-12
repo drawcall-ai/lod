@@ -31,6 +31,19 @@ it("wants every level a range of heights draws, and only the forced level with o
   expect(levelsToLoad([at(1000)], heights(1))).toBe(0b0110);
 });
 
+it("draws a level used at any height, after an empty source, at every height", () => {
+  const table = new LevelHeights(
+    drawLevels(
+      [Infinity, Infinity, 100].map((maxPixels) => ({ maxPixels })),
+      0b001,
+      null,
+      true,
+    ),
+  );
+  expect(levelsToLoad([at(1e6)], table)).toBe(0b110);
+  expect(levelsToLoad([at(50)], table)).toBe(0b100);
+});
+
 it("draws at every height what levelsToDraw draws, around every maxPixels and fade start and between them, loaded or not", () => {
   const float = new Float32Array(1);
   const bits = new Uint32Array(float.buffer);

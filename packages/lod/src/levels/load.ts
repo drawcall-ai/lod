@@ -124,10 +124,13 @@ function windowsOf(levels: d.Infer<typeof DrawLevels>): [low: number, high: numb
 const float = new Float32Array(1);
 const bits = new Uint32Array(float.buffer);
 
-/** The f32 `steps` steps from `value`, a height at or above 0, not below 0. */
+/** The bits of ANY_HEIGHT, the largest finite f32. */
+const LARGEST = 0x7f7fffff;
+
+/** The f32 `steps` steps from `value`, a height at or above 0, not below 0 nor above ANY_HEIGHT. */
 function step(value: number, steps: number): number {
   float[0] = value;
-  bits[0] = Math.max(at(bits, 0) + steps, 0);
+  bits[0] = Math.min(Math.max(at(bits, 0) + steps, 0), LARGEST);
   return at(float, 0);
 }
 
