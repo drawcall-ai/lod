@@ -1,14 +1,14 @@
 import * as THREE from "three/webgpu";
 import type { GLTSScene } from "@drawcall/glts";
 import { Lod, type Wind } from "@drawcall/lod";
-import { sharing } from "../../loading.ts";
+import { scripts } from "../../loading.ts";
 import { heroPlant } from "./hero.ts";
 import { reach, sourceBox } from "../bounds.ts";
 import { NearTiles } from "../near-tiles.ts";
 import { lodOf, Scatter } from "../scatter.ts";
 import { screenScale } from "../screen.ts";
 import type { Plan } from "../plan.ts";
-import { blocks, type Block, skirt } from "./blocks.ts";
+import { blocks, type Block } from "./blocks.ts";
 import { cut, FieldTiles, heroSpot } from "./field.ts";
 import { cutoff, setCutoff } from "./levels.ts";
 import { BLOCK, DESIGNS, layout, VARIANTS } from "../../../public/corn/layout.ts";
@@ -25,7 +25,7 @@ const eye = new THREE.Vector3();
 
 /**
  * The corn fields: their blocks everywhere, the plants of the blocks near the camera, and the hero plant with its
- * ladybird. The blocks share `skirt` with their assets, which rise out of the soil by it.
+ * ladybird.
  */
 export class Corn extends THREE.Object3D {
   private squeeze = 1;
@@ -52,7 +52,7 @@ export class Corn extends THREE.Object3D {
     const designs = Array.from({ length: DESIGNS }, (_, d) => layout(d));
     const tiles = cut(plan, DESIGNS, TOP);
     const spot = heroSpot(tiles, designs);
-    const scatter = new Scatter(sharing({ "/corn/block/skirt.ts": { skirt: () => skirt } }));
+    const scatter = new Scatter(scripts);
     const plants = Array.from({ length: VARIANTS }, async (_, variant) => {
       const url = `/corn/index.glts?variant=${variant}`;
       // Room for a slot per tile held, each with as many of this variant's plants as a block design has most.
@@ -116,8 +116,8 @@ export class Corn extends THREE.Object3D {
     this.squeeze = over > 1 ? Math.min(this.squeeze * Math.max(1.02, Math.sqrt(over)), 4) : Math.max(1, this.squeeze / 1.02);
     for (const lod of this.cut) setCutoff(lod.levels, gone);
     const risen = Math.max(this.fadeFrom - LEAD, RAMP);
-    skirt.value.set(risen - RAMP, risen);
-    for (const { kind, lod, diameter } of this.blocks) {
+    for (const { kind, lod, rises, diameter } of this.blocks) {
+      rises.set(risen - RAMP, risen);
       const [, rising, ridged, flat] = lod.levels;
       if (!rising) throw new Error(`${lod.name} has no rising level`);
       // the measure is the distance to the block's centre; a part of it is up to its radius nearer or farther
