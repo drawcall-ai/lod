@@ -59,7 +59,7 @@ it("rejects a render pipeline that the backend could not compile", { timeout: GP
 });
 
 it(
-  "uploads every texture a level draws, waiting a frame after each 16 MiB, then compiles every draw at once",
+  "uploads every texture a level draws, waiting a frame after each 16 MiB, then compiles its draws",
   async () => {
     // 2048² RGBA bytes: 16 MiB. A cube of six 1024² faces: 24 MiB.
     const map = new DataTexture(new Uint8Array(2048 * 2048 * 4), 2048, 2048);
@@ -111,13 +111,16 @@ it(
     try {
       await compilerOf(renderer).compileAsync(object, context, alone);
       // Each upload filled the frame; the draws do not wait for one. Frames that empty the budget may follow.
-      const drawn = () => log.slice(0, log.lastIndexOf("draw") + 1);
-      expect(drawn()).toEqual(["map", "frame", "cube", "frame", "atlas", "atlas", "atlas", "draw", "draw", "draw"]);
+      const uploaded = () => log.slice(0, log.indexOf("draw"));
+      const draws = () => log.filter((entry) => entry === "draw");
+      expect(uploaded()).toEqual(["map", "frame", "cube", "frame", "atlas", "atlas", "atlas"]);
+      expect(draws()).toHaveLength(3);
       await new Promise((resolve) => request(resolve));
       log.length = 0;
       await compilerOf(renderer).compileAsync(object, context, alone);
       // Nothing left to upload: nothing waits.
-      expect(drawn()).toEqual(["map", "cube", "atlas", "atlas", "atlas", "draw", "draw", "draw"]);
+      expect(uploaded()).toEqual(["map", "cube", "atlas", "atlas", "atlas"]);
+      expect(draws()).toHaveLength(3);
     } finally {
       vi.restoreAllMocks();
       geometry.dispose();

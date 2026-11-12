@@ -44,8 +44,9 @@ export class Compiler {
    * Prepare the same target and MRT as the camera's draw, even if normal rendering has since restored the canvas, and
    * the shadow maps of `compileFor`, for each mesh that casts. r186 uploads a texture synchronously inside initTexture,
    * and creates a pipeline it meets while rendering synchronously, so each texture and draw is prepared here first.
-   * Textures upload paced across frames (see `paced`); every draw then compiles at once, as do the draws of every
-   * other level the renderer prepares, so their pipelines are created side by side.
+   * Textures upload paced across frames (see `paced`); every draw then compiles at once, but for those of one
+   * multi-material mesh, as do the draws of every other level the renderer prepares, so their pipelines are created
+   * side by side.
    */
   async compileAsync(object: Object3D, context: RenderContext, { shadows, isDisposed }: CompileFor): Promise<void> {
     const { renderer } = this;
@@ -66,9 +67,16 @@ export class Compiler {
       if (mesh.castShadow)
         for (const { camera, target, overrideMaterial, depth } of shadows.filter((map) => map.scene === context.scene))
           targets.push({ context: { ...context, camera, target, mrt: null, cubeFace: 0, mipLevel: 0, depth }, overrideMaterial });
+      if (!Array.isArray(mesh.material)) {
+        for (const target of targets) draws.push(this.compileDraw(mesh, target, mesh.geometry.groups, isDisposed));
+        continue;
+      }
       // r186 starts only the first material before yielding; isolate one draw so setup sees its captured target/MRT.
-      const parts = Array.isArray(mesh.material) ? mesh.geometry.groups.map((group) => [group]) : [mesh.geometry.groups];
-      for (const target of targets) for (const part of parts) draws.push(this.compileDraw(mesh, target, part, isDisposed));
+      // The draws of one mesh compile in turn: with their compiles overlapping, r186 creates some of their pipelines
+      // with another draw's bind group layout, which WebGPU rejects.
+      let turn = Promise.resolve();
+      for (const target of targets)
+        for (const group of mesh.geometry.groups) draws.push((turn = turn.then(() => this.compileDraw(mesh, target, [group], isDisposed))));
     }
     await Promise.all(draws);
   }
