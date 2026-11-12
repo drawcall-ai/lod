@@ -1,15 +1,15 @@
 ---
 name: lod
-description: Use @drawcall/lod for cached, progressively loaded levels of detail in three.js WebGPURenderer scenes. Covers model and procedural assets, mesh simplification, baked meshes, impostors, instanced copies, wind, interior mapping, asset preparation and capturing fully loaded frames; not WebGLRenderer or skinned animation.
+description: Use @drawcall/lod for cached, progressively loaded levels of detail in three.js WebGPURenderer scenes. Covers model and procedural assets, LODs inside .glts assets, mesh simplification, baked meshes, impostors, instanced copies, wind, interior mapping, asset preparation and capturing fully loaded frames; not WebGLRenderer or skinned animation.
 ---
 
 # Level of detail with @drawcall/lod
 
 ## Start with the loader
 
-Give a `CachedLodLoader` an asset URL and the representations to derive from it. Use `.glb` or `.gltf` for stored models and `.glts` for procedural assets. Put generation parameters in the asset URL's query: each distinct query is a distinct cache identity. Build a `Lod` from the returned levels for an independently placed object, or an `InstancedLod` for repeated objects, whose instances arrive and leave in chunks of matrices and colours, from the CPU or from a compute pass of yours.
+Give a `CachedLodLoader` an asset URL and the representations to derive from it. Use `.glb` or `.gltf` for stored models and `.glts` for procedural assets. Put generation parameters in the asset URL's query: each distinct query is a distinct cache identity. Build a `Lod` from the returned levels. A `Lod` is driven like three's `InstancedMesh`: `new Lod(levels)` is one object at the Lod's own transform, and `new Lod(levels, count)` draws `count` copies placed by `instanceMatrix` and tinted by `instanceColor`.
 
-Make a `LodGpu` once the renderer is initialised and give it to every `Lod` and `InstancedLod` drawing with that renderer. Every InstancedLod of one LodGpu sorts for a camera in one compute call. A camera that draws only a few InstancedLods, such as a minimap's, can give those a LodGpu of their own, which bounds the per-camera list memory. `CachedLodLoader` needs no renderer.
+A `Lod` needs no renderer to be made, and neither does `CachedLodLoader`. It draws with the first `WebGPURenderer` that renders it, on WebGPU only: on the WebGL2 fallback it reports an error and draws nothing. That first frame learns the renderer and draws nothing of the Lod; the next one draws. Another renderer drawing it is its error, so a second renderer, such as a minimap's, needs Lods of its own.
 
 `loadAsync` resolves with the ladder before its levels load; each level loads when a camera first needs it. A level the cache lacks is built when it first loads, so a far camera builds only the coarse levels it needs. Give simplified and baked levels an explicit `maxPixels`: without one, a level is built with the ladder to measure its default. A simplified level also loads the source for its original materials; a source-only ladder loads its source eagerly. Prefer baked or impostor middle levels for an expensive `.glts`: a simplified level brings the script run forward to that viewing range.
 
@@ -17,15 +17,12 @@ Choose levels from the asset's silhouette, materials and expected viewing range.
 
 Register the source loaders on the page's loading manager before loading: a `GLTSLoader` for `.glts` URLs, and a `GLTFLoader` with the decoders for models compressed with Draco or KTX2. Follow the [GLTS skill](https://github.com/drawcall-ai/glts/blob/main/packages/glts/skills/glts/SKILL.md) for script authoring and resource lifetimes. The package carries its own workers and WebAssembly; it needs no Vite configuration beyond the vitecache plugin.
 
-This example draws many copies of one procedural asset. `positions` contains their placements in the InstancedLod's space, `renderer` is the application's WebGPURenderer and `scene` its scene.
+This example draws many copies of one procedural asset. `positions` contains their placements in the Lod's space and `scene` is the application's scene.
 
 ```ts
-import { InstancedBufferAttribute, LoadingManager, Matrix4 } from "three/webgpu";
+import { LoadingManager, Matrix4 } from "three/webgpu";
 import { GLTSLoader } from "@drawcall/glts";
-import { CachedLodLoader, InstancedLod, LodGpu } from "@drawcall/lod";
-
-await renderer.init();
-const gpu = new LodGpu(renderer);
+import { CachedLodLoader, Lod } from "@drawcall/lod";
 
 const manager = new LoadingManager();
 manager.addHandler(/\.glts$/, new GLTSLoader(manager));
@@ -36,15 +33,32 @@ const levels = await new CachedLodLoader(manager).loadAsync({
     { type: "empty", maxPixels: 4 },
   ],
 });
-const trees = new InstancedLod(levels, gpu);
+const trees = new Lod(levels, positions.length);
 
 const matrix = new Matrix4();
-const matrices = new Float32Array(positions.flatMap((position) => matrix.makeTranslation(position).toArray()));
-trees.addChunk({ instanceMatrix: new InstancedBufferAttribute(matrices, 16) });
+positions.forEach((position, i) => trees.setMatrixAt(i, matrix.makeTranslation(position)));
+trees.instanceMatrix.needsUpdate = true;
 scene.add(trees);
 ```
 
 Supply authored low shells and baking interiors as asset URLs on a baked level; both resolve relative to the source asset as ordinary URLs, so a query-only value replaces the source's whole query. For a variant of the same script, repeat the source's generation parameters, for example the source URL plus `&part=low`. The source asset should be complete at full detail; a baking interior supplies room structure for the distant windows. Author all three in the same coordinate system.
+
+## Give a .glts asset its own levels
+
+A `.glts` script can draw its asset at levels of detail, so that every glts host gets them without knowing of lod. Keep the detailed asset in a script of its own, here `./model.glts` beside the wrapping script; load its ladder with the wrapping script's `loadingManager`, which resolves URLs relative to the script, and add a `Lod` of it to the script's scene:
+
+```ts
+import { loadingManager, scene } from "@drawcall/glts";
+import { CachedLodLoader, Lod } from "@drawcall/lod";
+
+const levels = await new CachedLodLoader(loadingManager).loadAsync({
+  url: "./model.glts",
+  levels: [{ type: "impostor", maxPixels: 120 }, { type: "empty", maxPixels: 4 }],
+});
+scene.add(new Lod(levels));
+```
+
+A host that draws the asset many times calls `gltsLoader.loadInstancesAsync(url, count)`; glts hands that asset's `instanceMatrix`, `instanceColor`, `count`, `boundingBox` and `clusters` to the Lod, which then draws every copy, sorted on the GPU. The Lod must be the topmost instanced object in the script's scene: a Lod inside another Lod's levels is not supported.
 
 ## Cache every level
 
@@ -56,29 +70,34 @@ A page that misses, for a load the plugin could not see, builds the level each t
 
 ## Place, share and dispose levels
 
-Load an asset once and build an `InstancedLod` per spatial region from its levels, each with its own chunks of placements and colours; clone a `Lod` for further independently placed copies. Reuse the loaded levels across Lods; adjust each Lod's resolved thresholds through its `levels`. Clones and InstancedLods share geometry, materials, textures and deferred loads. Disposing a `Lod` or `InstancedLod` frees only what it made of its levels: objects you give or load are yours to dispose once every Lod drawing them is disposed, while `CachedLodLoader` frees what it loaded when the last Lod holding its levels is disposed.
+Load an asset once and build a `Lod` per spatial region from its levels, each with its own placements and colours; clone a `Lod` for a further copy with its own attributes. Reuse the loaded levels across Lods; adjust each Lod's resolved thresholds through its `levels`. Lods made from the same levels share geometry, materials, textures and deferred loads. Disposing a `Lod` frees only what it made of its levels: objects you give or load are yours to dispose once every Lod drawing them is disposed, while `CachedLodLoader` frees what it loaded when the last Lod holding its levels is disposed.
 
 Use the loader's `onLevel` option for application effects and shadow settings, `castShadow` and `shadowSide` included. Put source generation and its materials in the asset so that the same URL also loads correctly outside the LOD host.
 
 Levels draw with copies of the source's materials, made once through three's `clone`. A custom material class must carry its own state in `copy`, and changes meant to reach drawn levels belong in shared TSL uniforms rather than in properties set on the original afterwards.
 
-Apply a shared `Wind` after assembling a LOD and before its first render; arriving levels inherit the effect. A `Lod` or `InstancedLod` that has rendered refuses wind: its shaders would build in a frame. Apply it separately to nested LODs and independently managed batches.
+Apply a shared `Wind` after assembling a LOD and before its first render; arriving levels inherit the effect. A `Lod` that has rendered refuses wind: its shaders would build in a frame.
 
 Levels are chosen by on-screen size in CSS pixels on the actual render target, so a lower renderer pixel ratio saves shading, not geometry. Compile the initial scene with the actual camera and renderer before revealing it. Render every frame while finer levels load: they upload and compile only inside renders.
 
-## Add instances in chunks and thin them with distance
+## Place instances, and bound them
 
-A fixed set of copies is one chunk. For copies that exist only near the camera, such as plants on patches of ground, add a chunk when a patch comes into reach and remove it when the camera moves on; a few chunks a frame cost about what they hold. Prefer whole chunks over parking unused instances at scale 0. When a compute pass of your own writes the copies, give `addChunk` its storage attributes and the bounds the CPU cannot measure (see `InstancedLodChunkParameters`).
+Edit instances as on an `InstancedMesh`: `setMatrixAt` and `setColorAt`, then set the attribute's `needsUpdate`; with `addUpdateRange`, only those ranges upload. Assigning a new `instanceMatrix` or `instanceColor` takes effect at the next render; `count` draws the first `count` instances. A matrix of scale 0 draws nothing, but prefer `count` and smaller Lods over parking many instances at scale 0.
 
-Give an InstancedLod a `cullDistance` to thin it out towards a distance instead of cutting it off. `scaleSurvivors` enlarges the copies that remain so that small things like grass cover about as much; leave it off for objects whose size reads, such as trees. Thinning does not change which levels load: let the ladder's last drawn level end near `far`, or add an empty level there.
+Each camera loads the levels, and shows the level meshes, that the instances' bounds can need. Without `clusters`, the bounds are `boundingBox` if set, else what the CPU measures of the matrices; reaching from the camera to the horizon, they load every level. Give a Lod that spans a large area `clusters`: disjoint ranges of instances, each with a `boundingBox` in the Lod's space and, where known, `minScale` and `maxScale`. Each cluster is culled and chooses levels on its own, and only instances inside a cluster draw.
 
-In this example `grass` is an InstancedLod, `camera` the camera it thins from, and `matrices` a patch's instance matrices, 16 floats each.
+When a compute pass of yours writes the instances, assign a `StorageInstancedBufferAttribute` (`instancedArray(n, "mat4")`'s value) as `instanceMatrix`, and a four-float one as `instanceColor`. The Lod reads them in place every frame; no `needsUpdate` is needed. The CPU cannot read them, so set `boundingBox` or `clusters` yourself: without either, every level loads and the Lod warns once. `computeBoundingBox`, `getLevelAt` and `raycast` work on CPU matrices only.
+
+A Lod's `instanceMatrix` must fit one storage binding of the device, 64 bytes per instance; a larger one is the Lod's error, which says to split the instances across Lods or to raise `maxStorageBufferBindingSize` in the renderer's `requiredLimits`.
+
+Give a Lod a `cullDistance` to thin it out towards a distance instead of cutting it off. `scaleSurvivors` enlarges the copies that remain so that small things like grass cover about as much; leave it off for objects whose size reads, such as trees. Thinning does not change which levels load: let the ladder's last drawn level end near `far`, or add an empty level there.
+
+In this example `grass` is a Lod, `camera` the camera it thins from, and `matrices` and `bounds` a compute pass's instance matrices and the box they lie in.
 
 ```ts
 grass.cullDistance = { camera, near: 35, far: 60, scaleSurvivors: true };
-const chunk = grass.addChunk({ instanceMatrix: new InstancedBufferAttribute(matrices, 16) });
-// Later, when the patch leaves reach:
-grass.removeChunk(chunk);
+grass.instanceMatrix = matrices;
+grass.boundingBox = bounds;
 ```
 
 ## Assemble levels you already have
@@ -87,18 +106,18 @@ Pass levels in finest-to-coarsest order. An empty object can be a deliberate cul
 
 Describe a deferred representation with a load function, bounds and a transition height. The function returns the object already placed in the Lod's space; the bounds cover it in that same space, including its children. For a cached impostor, decode the atlas and return an `ImpostorMesh` with the intended draw settings.
 
-Here, `loadDetailedMesh` loads the detailed object, `sourceBox` describes its bounds in the Lod's space, `coarseMesh` is already available, and `gpu` is the renderer's LodGpu.
+Here, `loadDetailedMesh` loads the detailed object, `sourceBox` describes its bounds in the Lod's space, and `coarseMesh` is already available.
 
 ```ts
 import { Lod } from "@drawcall/lod";
 
-const object = new Lod([{ load: loadDetailedMesh, maxPixels: Infinity, box: sourceBox }, { object: coarseMesh }], gpu);
+const object = new Lod([{ load: loadDetailedMesh, maxPixels: Infinity, box: sourceBox }, { object: coarseMesh }]);
 scene.add(object);
 ```
 
-A level fades in over the coarser one drawn in its place once it arrives. A `Lod` loads the levels its on-screen height needs; an `InstancedLod` loads every level the heights of its chunks' instances can need for a camera, judged from each chunk's bounds, so give chunks tight bounds: a chunk reaching from the camera to the horizon loads every level. The resources a deferred load uses must stay alive until it finishes.
+A level fades in over the coarser one drawn in its place once it arrives. A Lod loads every level its instances' bounds can need for a camera (see above). Levels are drawn as instanced meshes, so a level may not contain a three `LOD`, an `InstancedMesh` other than an `ImpostorMesh`, or lines, points and sprites. The resources a deferred load uses must stay alive until it finishes.
 
-For direct preparation and storage outside `CachedLodLoader`, combine `simplify`, `bakeMesh`, or `bakeImpostor` with the corresponding codecs and drawing objects. Bakes that draw take a renderer made with `createBakeRenderer`, never the application's, whose canvas a bake would draw over. Use `ImpostorMesh` directly when copies stay distant throughout their lifetime. For external detail systems, combine an empty near level with a coarse representation and ask `lod.getLevel(camera)` or `chunk.getLevelAt(index, camera)` where to supply detail.
+For direct preparation and storage outside `CachedLodLoader`, combine `simplify`, `bakeMesh`, or `bakeImpostor` with the corresponding codecs and drawing objects. Bakes that draw take a renderer made with `createBakeRenderer`, never the application's, whose canvas a bake would draw over. Use `ImpostorMesh` directly when copies stay distant throughout their lifetime. For external detail systems, combine an empty near level with a coarse representation and ask `lod.getLevelAt(index, camera)` where to supply detail.
 
 ## Prepare assets that survive transitions
 
@@ -118,18 +137,18 @@ For dense cover, combine near individuals with a baked distant patch. Jitter pos
 
 ## Wait for a complete frame before a screenshot
 
-Levels load as the camera comes to need them, so a frame drawn soon after loading can lack them. Give the Lods and InstancedLods a `manager` of their own, so that it tracks only them: each holds an item there while the levels its cameras need load, compile or fade in, and ends it once they are complete. Render the `Scene` that holds them each frame, since a Lod loads nothing before such a render.
+Levels load as the camera comes to need them, so a frame drawn soon after loading can lack them. Give the Lods a `manager` of their own, so that it tracks only them: each holds an item there while the levels its cameras need load, compile or fade in, and ends it once they are complete. Render the `Scene` that holds them each frame, since a Lod loads nothing before such a render.
 
-To capture one frame, even with nothing cached, place the camera and render, then wait a frame; while the manager is loading, compile with `renderer.compileAsync(scene, camera)`, render again and wait a frame; capture after a quiet frame, one in which no item started or ended. After moving the camera, wait again. In this example `levels` and `treeLevels` are ladders from `CachedLodLoader`, `gpu` the renderer's LodGpu, `instanceMatrix` an attribute of tree matrices, and `viewpoint` the camera position to capture.
+To capture one frame, even with nothing cached, place the camera and render, then wait a frame; while the manager is loading, compile with `renderer.compileAsync(scene, camera)`, render again and wait a frame; capture after a quiet frame, one in which no item started or ended. After moving the camera, wait again. In this example `levels` and `treeLevels` are ladders from `CachedLodLoader`, `instanceMatrix` an attribute of tree matrices, and `viewpoint` the camera position to capture.
 
 ```ts
 import { LoadingManager } from "three/webgpu";
-import { InstancedLod, Lod } from "@drawcall/lod";
+import { Lod } from "@drawcall/lod";
 
 const manager = new LoadingManager();
-const lod = new Lod(levels, gpu, { manager });
-const trees = new InstancedLod(treeLevels, gpu, { manager });
-trees.addChunk({ instanceMatrix });
+const lod = new Lod(levels, 1, { manager });
+const trees = new Lod(treeLevels, instanceMatrix.count, { manager });
+trees.instanceMatrix = instanceMatrix;
 scene.add(lod, trees);
 
 camera.position.copy(viewpoint);
@@ -153,9 +172,9 @@ Loaded levels stay until their Lod is disposed, which nothing does for you: in a
 
 Tune transitions in the intended viewport with `Lod.debug`, then inspect motion through them. Use `Lod.quality` for a scene-wide adjustment and individual thresholds for particular assets. Give an impostor bake the intended screen size at its switch, then inspect its coverage and colour from several angles. Compare both sides of a switch under one camera, drawing each with the Lod's `forceLevel`, looking toward the sun as well as away: a mismatch can show in one light direction only.
 
-Group nearby copies into spatial regions. Broad batches can lose useful culling, while tiny batches spend too much time submitting draws. Add and remove chunks and move changed instances instead of rebuilding whole InstancedLods. Count material groups as well as triangles; an atlas alone does not combine draws. Each distinct material structure costs a pipeline compile on first use, so variants should share material structure.
+Group nearby copies into spatial regions. Broad batches can lose useful culling, while tiny batches spend too much time submitting draws. Move changed instances, marking only their update ranges, instead of rebuilding whole Lods. Count material groups as well as triangles; an atlas alone does not combine draws. Each distinct material structure costs a pipeline compile on first use, so variants should share material structure.
 
-Avoid custom shadow nodes on lights that LOD objects should cast into. An `InstancedLod` draws for each camera, shadow maps' included, only the instances inside its frustum, at the level the map's texels resolve, so shadow casting costs about what the map can show. When it still dominates, turn `castShadow` off in `onLevel` on the levels that matter least to the shadow, such as small plants.
+Avoid custom shadow nodes on lights that LOD objects should cast into. A `Lod` draws for each camera, shadow maps' included, only the instances inside its frustum, at the level the map's texels resolve, so shadow casting costs about what the map can show. When it still dominates, turn `castShadow` off in `onLevel` on the levels that matter least to the shadow, such as small plants.
 
 Judge impostors by covered screen area and overlap as well as triangle count. Compare individual cards with baked patches for dense cover, and inspect parallax and mip quality during transitions.
 
