@@ -6,7 +6,7 @@
 // (no instance) elsewhere.
 import * as t3 from "@typegpu/three";
 import seedrandom from "seedrandom";
-import { storage } from "three/tsl";
+import { Fn, instanceIndex, storage, uint, vec4 } from "three/tsl";
 import * as THREE from "three/webgpu";
 import { d, std } from "typegpu";
 import { reach } from "./bounds.ts";
@@ -43,13 +43,14 @@ export interface Stand {
 
 /**
  * What a stand plants of one asset: its `share` of the spots (the shares adding up to 1), scaled within `scale` and,
- * when `tinted`, a little lighter or darker, yellower or bluer.
+ * when `tinted`, a little lighter or darker, yellower or bluer; with a `color`, coloured by it at each spot's x, z.
  */
 export interface Planting {
   url: string;
   share: number;
   scale: readonly [number, number];
   tinted?: boolean;
+  color?: (xz: THREE.Node<"vec2">) => THREE.Node<"vec3">;
 }
 
 /** Plants stands on `plan`'s ground, whose heights its passes, run on `renderer`, share on the GPU, into `scatter`'s assets. */
@@ -118,8 +119,8 @@ export function planter(plan: Plan, scatter: Scatter, renderer: THREE.Renderer) 
       return ((d.u32(growing.$[k >>> 5]) >>> (k & 31)) & 1) === 1;
     };
 
-    /** The pass that plants a tile's `spots` of `planting` into slot `slot` of `range`. */
-    const pass = ({ scale: [low, high], tinted = false }: Planting, spots: Uint32Array, range: Range) => {
+    /** The passes that plant a tile's `spots` of `planting` into slot `slot` of `range`. */
+    const pass = ({ scale: [low, high], tinted = false, color }: Planting, spots: Uint32Array, range: Range) => {
       const { instanceMatrix: matrices, instanceColor: colors } = range.node;
       if (!(matrices instanceof THREE.StorageInstancedBufferAttribute && colors instanceof THREE.StorageInstancedBufferAttribute))
         throw new Error(`${stand.name}: plant once its Scatter has sealed, into storage instances`);
@@ -129,7 +130,7 @@ export function planter(plan: Plan, scatter: Scatter, renderer: THREE.Renderer) 
       const count = spots.length;
       const { start } = range;
       const vary = tinted ? 1 : 0;
-      return t3
+      const plant = t3
         .toTSL(() => {
           "use gpu";
           const j = t3.instanceIndex.$;
@@ -155,6 +156,15 @@ export function planter(plan: Plan, scatter: Scatter, renderer: THREE.Renderer) 
           colorAt.$[at] = d.vec4f(std.mix(d.vec3f(shade), hue, vary * 0.35 * (d.f32(shades >>> 17) / 32768)), 1);
         })
         .compute(count);
+      if (!color) return [plant];
+      // in TSL, as `color` is: each instance coloured where the planting placed it
+      const paint = Fn(() => {
+        const at = uint(start).add(slot.node.mul(count)).add(instanceIndex);
+        // a mat4 is four vec4 columns, its fourth the translation
+        const place = storage(matrices, "vec4", matrices.count * 4).toReadOnly().element(at.mul(4).add(3));
+        storage(colors, "vec4", colors.count).element(at).assign(vec4(color(place.xz), 1));
+      })().compute(count);
+      return [plant, paint];
     };
 
     const counts = shareOut(
@@ -176,7 +186,7 @@ export function planter(plan: Plan, scatter: Scatter, renderer: THREE.Renderer) 
     );
     const planted = outputs.flat();
     /** The passes, made as the first tile is planted, once the Scatter has sealed. */
-    let passes: ReturnType<typeof pass>[] | undefined;
+    let passes: ReturnType<typeof pass> | undefined;
 
     /** The box of tile (i, j)'s origins: over it, between the ground's heights under it. */
     const originBox = (i: number, j: number): THREE.Box3 => {
@@ -200,7 +210,7 @@ export function planter(plan: Plan, scatter: Scatter, renderer: THREE.Renderer) 
         x0.node.value = i * tile;
         z0.node.value = j * tile;
         slot.node.value = at;
-        passes ??= planted.map(({ planting, spots, range }) => pass(planting, spots, range));
+        passes ??= planted.flatMap(({ planting, spots, range }) => pass(planting, spots, range));
         void renderer.compute(passes);
         const origins = originBox(i, j);
         return planted.map(({ planting: { scale }, spots, range, reach }) => {
