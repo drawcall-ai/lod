@@ -2,7 +2,7 @@ import { copyFile, mkdir, readFile, stat } from "node:fs/promises";
 import { unzipSync } from "fflate";
 import sharp from "sharp";
 import type { Manifest } from "./manifest.ts";
-import { cache, download, exists } from "./files.ts";
+import { cache, download } from "./files.ts";
 import { credit, fileRef, polyHaven } from "./polyhaven.ts";
 
 const maps = ["diff", "nor", "arm"] as const;
@@ -30,7 +30,6 @@ async function bytes(id: string): Promise<number> {
 export async function textureSet(id: string): Promise<Manifest["textures"][string]> {
   const { files, info } = await polyHaven(id);
   for (const map of maps) {
-    if (await exists(encoded(id, map))) continue;
     const jpg = await download(fileRef(files, keys[map], "jpg"), `${cache}${id}/${keys[map]}.jpg`);
     await sharp(jpg)
       .webp({ quality: map === "nor" ? 92 : 86 })
