@@ -1,0 +1,90 @@
+import { disposeRecursive, loadingManager, onDispose, scene } from "@drawcall/glts";
+import * as THREE from "three/webgpu";
+import seedrandom from "seedrandom";
+
+/**
+ * A clipped hedge, `length` metres along +x from the origin, about a metre high and 0.6 m
+ * deep: a finely subdivided box whose surface bulges and dents a few centimetres, as
+ * clipped privet does, under a leafy texture darkened toward the base.
+ */
+function hedge(manager: THREE.LoadingManager, length: number, seed: number): THREE.Mesh {
+  const r = seedrandom(String(seed));
+  const height = 0.95 + 0.2 * r();
+  const depth = 0.6;
+  const g = new THREE.BoxGeometry(length, height, depth, Math.ceil(length * 8), 8, 5);
+  g.translate(length / 2, height / 2, 0);
+  const position = g.getAttribute("position");
+  const normal = g.getAttribute("normal");
+  const uv = g.getAttribute("uv");
+  const colors = new Float32Array(position.count * 3);
+  const p = new THREE.Vector3();
+  const n = new THREE.Vector3();
+  const phase = 100 * r();
+  for (let i = 0; i < position.count; i++) {
+    p.fromBufferAttribute(position, i);
+    n.fromBufferAttribute(normal, i);
+    // lumpy, and rounded off along the top edges
+    const lump = 0.035 * Math.sin(p.x * 7.1 + phase) * Math.sin(p.y * 9.3 + p.z * 5.7) + 0.02 * Math.sin(p.x * 23 + p.y * 17 + phase);
+    const round = n.y > 0.5 ? -0.04 * (Math.abs(p.z) / (depth / 2)) ** 3 : 0;
+    p.addScaledVector(n, lump).y += round;
+    position.setXYZ(i, p.x, p.y, p.z);
+    // UVs in metres over each face
+    uv.setXY(i, Math.abs(n.x) > 0.5 ? p.z : p.x, Math.abs(n.y) > 0.5 ? p.z : p.y);
+    const shade = 0.55 + 0.45 * Math.min(1, p.y / height);
+    colors.set([shade * 0.9, shade, shade * 0.85], i * 3);
+  }
+  g.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  g.computeVertexNormals();
+  const mesh = new THREE.Mesh(g, hedgeMaterial(manager));
+  mesh.name = "hedge";
+  mesh.castShadow = mesh.receiveShadow = true;
+  return mesh;
+}
+
+/** Clipped leaves: Poly Haven's leafy_grass (2 m a repeat), greyed green and darkened by vertex colours toward the base. */
+function hedgeMaterial(manager: THREE.LoadingManager): THREE.MeshStandardMaterial {
+  const arm = texture(manager, "leafy_grass", "arm", 2);
+  return new THREE.MeshStandardMaterial({
+    name: "leafy_grass",
+    color: "#7f9a6a",
+    map: texture(manager, "leafy_grass", "diff", 2),
+    normalMap: texture(manager, "leafy_grass", "nor", 2),
+    normalScale: new THREE.Vector2(2.5, 2.5),
+    vertexColors: true,
+    aoMap: arm,
+    roughnessMap: arm,
+    roughness: 1.1,
+    // arm stores metalness in blue, which Poly Haven leaves at zero for non-metals
+    metalnessMap: arm,
+    metalness: 1,
+  });
+}
+
+/** Map `name` of Poly Haven set `id` in public/assets/textures (see scripts/fetch-assets.ts), one repeat over `size` metres. */
+function texture(manager: THREE.LoadingManager, id: string, name: "diff" | "nor" | "arm", size: number): THREE.Texture {
+  const texture = new THREE.Texture();
+  texture.flipY = false;
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.setScalar(1 / size);
+  texture.anisotropy = 8;
+  texture.colorSpace = name === "diff" ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+  const url = new URL(`../assets/textures/${id}/${name}.webp`, import.meta.url).href;
+  // through the script's manager, so its load waits for the image
+  new THREE.ImageBitmapLoader(manager).setOptions({ imageOrientation: "flipY", premultiplyAlpha: "none" }).load(url, (image) => {
+    texture.image = image;
+    texture.needsUpdate = true;
+  });
+  return texture;
+}
+
+const query = new URL(import.meta.url).searchParams;
+const lengthText = query.get("length") ?? "2.4";
+const length = Number(lengthText);
+if (!(/^\d+(\.\d+)?$/.test(lengthText) && length >= 0.1 && length <= 100)) throw new Error(`hedge: length must be in [0.1, 100] m, not ${lengthText}`);
+const variantText = query.get("variant") ?? "0";
+const variant = Number(variantText);
+if (!/^\d+$/.test(variantText)) throw new Error(`hedge: variant must be a whole number, not ${variantText}`);
+// Seeds start at 1, which keeps the hedges the variants were first tuned with.
+const object = hedge(loadingManager, length, variant + 1);
+onDispose(() => disposeRecursive(scene));
+scene.add(object);

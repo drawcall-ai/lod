@@ -1,0 +1,14 @@
+import { disposeRecursive, onDispose, scene } from "@drawcall/glts";
+import { plants, wallOf } from "./model.ts";
+import { DESIGNS } from "../layout.ts";
+import { materials } from "../materials.ts";
+
+// The plants of a corn block design, which low.glts's shell is baked from: all of them for its canopy, or with ?wall=x
+// or ?wall=z those near that wall.
+const query = new URL(import.meta.url).searchParams;
+const designText = query.get("design") ?? "0";
+const design = Number(designText);
+if (!(/^\d+$/.test(designText) && design < DESIGNS)) throw new Error(`corn block: design must be a whole number below ${DESIGNS}, not ${designText}`);
+const group = plants(materials(), design, wallOf(query));
+onDispose(() => disposeRecursive(scene));
+scene.add(group);

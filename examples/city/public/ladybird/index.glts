@@ -1,7 +1,23 @@
-import { disposeRecursive, onDispose, scene } from "@drawcall/glts";
-import { ladybird } from "./model.ts";
+import { gltsLoader, loadingManager, onDispose, scene } from "@drawcall/glts";
+import { CachedLodLoader, Lod } from "@drawcall/lod";
+import * as THREE from "three/webgpu";
 
-// A seven-spot ladybird standing on y = 0, facing +z.
-const bug = ladybird();
-onDispose(() => disposeRecursive(scene));
-scene.add(bug);
+// A seven-spot ladybird at levels of detail: source.glts, then an impostor, gone below 2 px. Every level casts with both
+// sides of its faces.
+loadingManager.addHandler(/\.glts$/i, gltsLoader);
+const loader = new CachedLodLoader(loadingManager, {
+  onLevel: (object) =>
+    object.traverse((node) => {
+      if (node instanceof THREE.Mesh) for (const material of [node.material].flat()) material.shadowSide = THREE.DoubleSide;
+    }),
+});
+const levels = await loader.loadAsync({
+  url: "./source.glts",
+  levels: [
+    { type: "impostor", maxPixels: 20, resolution: 64 },
+    { type: "empty", maxPixels: 2 },
+  ],
+});
+const lod = new Lod(levels, 1, { manager: loadingManager });
+scene.add(lod);
+onDispose(() => lod.dispose());

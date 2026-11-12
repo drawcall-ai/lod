@@ -1,0 +1,26 @@
+import { loadingManager, onDispose, scene } from "@drawcall/glts";
+import { CachedLodLoader, Lod } from "@drawcall/lod";
+import * as THREE from "three/webgpu";
+
+// Poly Haven's wooden crate (scripts/fetch-assets.ts fetches it) at levels of detail: its meshes nearby, simplified,
+// then a small impostor, whose self-contained textures defer the model's own, gone below 3 px. Every level casts and
+// receives shadows, both sides of its faces.
+const loader = new CachedLodLoader(loadingManager, {
+  onLevel: (object) => {
+    object.traverse((node) => {
+      node.castShadow = node.receiveShadow = true;
+      if (node instanceof THREE.Mesh) for (const material of [node.material].flat()) material.shadowSide = THREE.DoubleSide;
+    });
+  },
+});
+const levels = await loader.loadAsync({
+  url: "../../assets/models/wooden_crate_01/wooden_crate_01.glb",
+  levels: [
+    { type: "simplify", ratio: 0.5 },
+    { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 60 },
+    { type: "empty", maxPixels: 3 },
+  ],
+});
+const lod = new Lod(levels, 1, { manager: loadingManager });
+scene.add(lod);
+onDispose(() => lod.dispose());

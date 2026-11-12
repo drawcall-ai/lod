@@ -1,208 +1,24 @@
-import { disposeRecursive, loadingManager, onDispose, scene } from "@drawcall/glts";
+import { gltsLoader, loadingManager, onDispose, scene } from "@drawcall/glts";
+import { CachedLodLoader, Lod } from "@drawcall/lod";
 import * as THREE from "three/webgpu";
-import { mergeGeometries, mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
-import seedrandom from "seedrandom";
-import { clamp, Fn, materialColor, max, mix, mx_noise_float, positionGeometry, smoothstep, vec3, vec4 } from "three/tsl";
 
-/**
- * A painted picket fence along +x from the origin: square posts with pyramid caps every
- * 2.4 m, two rails behind the pickets, pointed pickets with irregular wear.
- */
-function picketFence(manager: THREE.LoadingManager, length: number, seed = 1): THREE.Group {
-  const r = seedrandom(String(seed));
-  const parts = new Parts();
-  const paint = paintMaterial(manager);
-  const white = new THREE.Color("#ebe8e0");
-  const bays = Math.max(1, Math.round(length / 2.4));
-  const bay = length / bays;
-  const height = 1.0;
-
-  for (let i = 0; i <= bays; i++) {
-    const x = i * bay;
-    parts.add(paint, tint(box(0.09, height + 0.12, 0.09).translate(x, (height + 0.12) / 2, 0), shade(white, r)));
-    const cap = new THREE.ConeGeometry(0.075, 0.07, 4, 1).rotateY(Math.PI / 4).translate(x, height + 0.12 + 0.035, 0);
-    parts.add(paint, tint(cap, shade(white, r)));
-  }
-  for (const y of [0.22, height - 0.2]) parts.add(paint, tint(box(length, 0.085, 0.035).translate(length / 2, y, 0.0625), shade(white, r)));
-
-  const width = 0.085;
-  const gap = 0.06;
-  const outline = new THREE.Shape([
-    new THREE.Vector2(-width / 2, 0),
-    new THREE.Vector2(width / 2, 0),
-    new THREE.Vector2(width / 2, 0.9),
-    new THREE.Vector2(0, 0.9 + width * 0.7),
-    new THREE.Vector2(-width / 2, 0.9),
-  ]);
-  for (let x = 0.045 + width / 2; x < length - 0.045 - width / 2; x += width + gap) {
-    const h = 0.97 + 0.04 * r();
-    const picket = new THREE.ExtrudeGeometry(outline, { depth: 0.02, bevelEnabled: true, bevelThickness: 0.003, bevelSize: 0.003, bevelSegments: 1 });
-    picket
-      .scale(1, h, 1)
-      .rotateZ(-0.01 + 0.02 * r())
-      .translate(x, 0.05, 0.08 + 0.003);
-    parts.add(paint, tint(picket, shade(white, r)));
-  }
-  return parts.build("fence");
-}
-
-/** Paint varies a little from board to board; some boards are greyer with age. */
-function shade(base: THREE.Color, r: seedrandom.PRNG): THREE.Color {
-  const c = base.clone().offsetHSL(0, -0.02 + 0.04 * r(), -0.05 + 0.07 * r());
-  return r() < 0.12 ? c.lerp(new THREE.Color("#b9b5a8"), 0.2 + 0.3 * r()) : c;
-}
-
-/** A box with UVs in metres on every face, so tiling textures keep their real-world scale. */
-function box(w: number, h: number, d: number): THREE.BufferGeometry {
-  const g = new THREE.BoxGeometry(w, h, d);
-  const uv = g.getAttribute("uv");
-  // BoxGeometry faces in order ±x, ±y, ±z, four vertices each; [u span, v span] per face
-  const spans: [number, number][] = [
-    [d, h],
-    [d, h],
-    [w, d],
-    [w, d],
-    [w, h],
-    [w, h],
-  ];
-  spans.forEach(([su, sv], face) => {
-    for (let i = face * 4; i < face * 4 + 4; i++) uv.setXY(i, uv.getX(i) * su, uv.getY(i) * sv);
-  });
-  return g;
-}
-
-/** Adds a constant vertex colour so the geometry can merge with vertex-coloured parts. */
-function tint(g: THREE.BufferGeometry, color: THREE.Color): THREE.BufferGeometry {
-  const n = g.getAttribute("position").count;
-  const data = new Float32Array(n * 3);
-  for (let i = 0; i < n; i++) color.toArray(data, i * 3);
-  g.setAttribute("color", new THREE.BufferAttribute(data, 3));
-  return g;
-}
-
-/**
- * Collects geometry per material and builds one shadowed mesh per material. `at(matrix)`
- * returns a view that places everything added through it in a local frame.
- */
-class Parts {
-  constructor(
-    private readonly byMaterial = new Map<THREE.Material, THREE.BufferGeometry[]>(),
-    private readonly matrix?: THREE.Matrix4,
-  ) {}
-
-  at(matrix: THREE.Matrix4): Parts {
-    return new Parts(this.byMaterial, this.matrix ? this.matrix.clone().multiply(matrix) : matrix);
-  }
-
-  add(material: THREE.Material, ...geometries: THREE.BufferGeometry[]): void {
-    const list = this.byMaterial.get(material) ?? [];
-    for (const g of geometries) list.push(this.matrix ? g.applyMatrix4(this.matrix) : g);
-    this.byMaterial.set(material, list);
-  }
-
-  build(name: string): THREE.Group {
-    const group = new THREE.Group();
-    group.name = name;
-    for (const [material, list] of this.byMaterial) {
-      const mesh = new THREE.Mesh(merge(list), material);
-      mesh.name = `${name}:${material.name}`;
-      mesh.castShadow = mesh.receiveShadow = true;
-      group.add(mesh);
-    }
-    return group;
-  }
-}
-
-/** Merges geometries that share attributes; non-indexed inputs get an index first. */
-function merge(list: THREE.BufferGeometry[]): THREE.BufferGeometry {
-  const parts = list.map((g) => (g.index ? strip(g) : mergeVertices(strip(g))));
-  const merged = mergeGeometries(parts);
-  if (!merged) throw new Error("mergeGeometries failed: inputs have different attributes");
-  return merged;
-}
-
-/** Keeps only the attributes all generators share, so any two parts can merge. */
-function strip(g: THREE.BufferGeometry): THREE.BufferGeometry {
-  for (const name of Object.keys(g.attributes)) if (!["position", "normal", "uv", "color"].includes(name)) g.deleteAttribute(name);
-  g.morphAttributes = {};
-  g.clearGroups();
-  return g;
-}
-
-/** Weathered paint, coloured per board by vertex colours, over the fine grain of wood_table_001 (1.5 m a repeat). */
-function paintMaterial(manager: THREE.LoadingManager): THREE.MeshStandardNodeMaterial {
-  const arm = texture(manager, "wood_table_001", "arm", 1.5);
-  const m = new THREE.MeshStandardNodeMaterial({
-    name: "paint",
-    vertexColors: true,
-    normalMap: texture(manager, "wood_table_001", "nor", 1.5),
-    normalScale: new THREE.Vector2(0.4, 0.4),
-    aoMap: arm,
-    roughnessMap: arm,
-    roughness: 1.8,
-    // arm stores metalness in blue, which Poly Haven leaves at zero for non-metals
-    metalnessMap: arm,
-    metalness: 1,
-  });
-  // three multiplies vertex colours in after
-  m.colorNode = baseColor.mul(vec4(grime(0.8), 1));
-  return m;
-}
-
-/** Map `name` of Poly Haven set `id` in public/assets/textures (see scripts/fetch-assets.ts), one repeat over `size` metres. */
-function texture(manager: THREE.LoadingManager, id: string, name: "diff" | "nor" | "arm", size: number): THREE.Texture {
-  const texture = new THREE.Texture();
-  texture.flipY = false;
-  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.setScalar(1 / size);
-  texture.anisotropy = 8;
-  texture.colorSpace = name === "diff" ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-  const url = new URL(`../assets/textures/${id}/${name}.webp`, import.meta.url).href;
-  // through the script's manager, so its load waits for the image
-  new THREE.ImageBitmapLoader(manager).setOptions({ imageOrientation: "flipY", premultiplyAlpha: "none" }).load(url, (image) => {
-    texture.image = image;
-    texture.needsUpdate = true;
-  });
-  return texture;
-}
-
-/**
- * Procedural weathering in object space (origin on the ground): broad blotchy discolouring, vertical rain streaks, and
- * splash dirt along the bottom 60 cm. Tiling textures repeat every metre or two; this breaks the repetition the way
- * real grime does.
- */
-function grime(strength: number): THREE.Node<"vec3"> {
-  const p = positionGeometry;
-  // MaterialX's Perlin noise, which spans about [-1, 1], remapped to [0, 1], where the grime below was tuned
-  const noise = (q: THREE.Node<"vec3">) => mx_noise_float(q, 0.5, 0.5);
-  const blotch = noise(p.mul(0.6))
-    .mul(0.55)
-    .add(noise(p.mul(2.1)).mul(0.3))
-    .add(noise(p.mul(8)).mul(0.15));
-  const streak = noise(vec3(p.x.mul(7).add(p.z.mul(7)), p.y.mul(0.4), 0)).mul(noise(p.mul(1.3)));
-  const splash = smoothstep(0, 0.7, p.y).oneMinus();
-  const dirt = blotch
-    .sub(0.45)
-    .mul(0.7)
-    .add(max(streak.sub(0.3), 0).mul(1.6))
-    .add(splash.mul(noise(p.mul(5)).mul(0.5).add(0.45)));
-  return mix(vec3(1), vec3(0.5, 0.45, 0.37), clamp(dirt.mul(strength), -0.25, 0.9));
-}
-
-/**
- * A material's colour times its map, its alpha included: three's `materialColor`, which builds to a vec4 where the
- * material has a map, and to a vec3 (typed so) where not.
- */
-const baseColor = Fn(() => {
-  const color = vec4(1).toVar();
-  color.assign(materialColor);
-  return color;
-})();
-
-const query = new URL(import.meta.url).searchParams;
-const lengthText = query.get("length") ?? "2.4";
-const length = Number(lengthText);
-if (!(/^\d+(\.\d+)?$/.test(lengthText) && length >= 0.1 && length <= 100)) throw new Error(`fence: length must be in [0.1, 100] m, not ${lengthText}`);
-const fence = picketFence(loadingManager, length);
-onDispose(() => disposeRecursive(scene));
-scene.add(fence);
+// A 2.4 m bay of picket fence at levels of detail: source.glts, simplified geometry, then an impostor, gone below 10 px.
+// Every level casts with both sides of its faces.
+loadingManager.addHandler(/\.glts$/i, gltsLoader);
+const loader = new CachedLodLoader(loadingManager, {
+  onLevel: (object) =>
+    object.traverse((node) => {
+      if (node instanceof THREE.Mesh) for (const material of [node.material].flat()) material.shadowSide = THREE.DoubleSide;
+    }),
+});
+const levels = await loader.loadAsync({
+  url: "./source.glts?length=2.4",
+  levels: [
+    { type: "simplify", ratio: 0.3 },
+    { type: "impostor", layout: "hemi", maxPixels: 40, resolution: 64 },
+    { type: "empty", maxPixels: 10 },
+  ],
+});
+const lod = new Lod(levels, 1, { manager: loadingManager });
+scene.add(lod);
+onDispose(() => lod.dispose());

@@ -1,14 +1,78 @@
-import { disposeRecursive, onDispose, scene } from "@drawcall/glts";
-import { VARIANTS } from "./layout.ts";
-import { plant } from "./model.ts";
-import { materials } from "./materials.ts";
+import { gltsLoader, loadingManager, onDispose, scene } from "@drawcall/glts";
+import { CachedLodLoader, foliageLevels, Lod, type LodLevel } from "@drawcall/lod";
+import * as THREE from "three/webgpu";
+import { HERO_VARIANT, VARIANTS } from "./layout.ts";
+import { LEAF_FOLIAGE } from "./leaf.ts";
 
+// A corn plant, ?variant=0 to 3, or with ?variant=2&hero=1 the plant the city's tour ends at, with every leaf in detail,
+// at levels of detail: source.glts, a detailed impostor from 1000 px, a coarse one from 350 px, gone below 215 px, as a
+// field of them, whose blocks take over at a distance, wants. Only the source casts shadows; every level casts with
+// both sides of its faces.
+loadingManager.addHandler(/\.glts$/i, gltsLoader);
+const loader = new CachedLodLoader(loadingManager, {
+  onLevel: (object, index) => {
+    foliageLevels(object, LEAF_FOLIAGE);
+    if (index > 0) object.castShadow = false;
+    object.traverse((node) => {
+      if (node instanceof THREE.Mesh) for (const material of [node.material].flat()) material.shadowSide = THREE.DoubleSide;
+    });
+  },
+});
+const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
+  "0": () =>
+    loader.loadAsync({
+      url: "./source.glts?variant=0",
+      levels: [
+        { type: "impostor", layout: "hemi", maxPixels: 1000, resolution: 256, frames: 8, draw: { parallax: 0 } },
+        { type: "impostor", layout: "hemi", maxPixels: 350, resolution: 64, frames: 8, draw: { parallax: 0 } },
+        { type: "empty", maxPixels: 215 },
+      ],
+    }),
+  "1": () =>
+    loader.loadAsync({
+      url: "./source.glts?variant=1",
+      levels: [
+        { type: "impostor", layout: "hemi", maxPixels: 1000, resolution: 256, frames: 8, draw: { parallax: 0 } },
+        { type: "impostor", layout: "hemi", maxPixels: 350, resolution: 64, frames: 8, draw: { parallax: 0 } },
+        { type: "empty", maxPixels: 215 },
+      ],
+    }),
+  "2": () =>
+    loader.loadAsync({
+      url: "./source.glts?variant=2",
+      levels: [
+        { type: "impostor", layout: "hemi", maxPixels: 1000, resolution: 256, frames: 8, draw: { parallax: 0 } },
+        { type: "impostor", layout: "hemi", maxPixels: 350, resolution: 64, frames: 8, draw: { parallax: 0 } },
+        { type: "empty", maxPixels: 215 },
+      ],
+    }),
+  "3": () =>
+    loader.loadAsync({
+      url: "./source.glts?variant=3",
+      levels: [
+        { type: "impostor", layout: "hemi", maxPixels: 1000, resolution: 256, frames: 8, draw: { parallax: 0 } },
+        { type: "impostor", layout: "hemi", maxPixels: 350, resolution: 64, frames: 8, draw: { parallax: 0 } },
+        { type: "empty", maxPixels: 215 },
+      ],
+    }),
+  "2 hero": () =>
+    loader.loadAsync({
+      url: "./source.glts?variant=2&hero=1",
+      levels: [
+        { type: "impostor", layout: "hemi", maxPixels: 1000, resolution: 256, frames: 8, draw: { parallax: 0 } },
+        { type: "impostor", layout: "hemi", maxPixels: 350, resolution: 64, frames: 8, draw: { parallax: 0 } },
+        { type: "empty", maxPixels: 215 },
+      ],
+    }),
+};
+if (Object.keys(LADDERS).length !== VARIANTS + 1) throw new Error(`corn: ${Object.keys(LADDERS).length - 1} plant ladders for ${VARIANTS} variants`);
+if (!(`${HERO_VARIANT} hero` in LADDERS)) throw new Error(`corn: no hero ladder for variant ${HERO_VARIANT}`);
 const query = new URL(import.meta.url).searchParams;
-const variantText = query.get("variant") ?? "0";
-const variant = Number(variantText);
-if (!(/^\d+$/.test(variantText) && variant < VARIANTS)) throw new Error(`corn: variant must be a whole number below ${VARIANTS}, not ${variantText}`);
+const variant = query.get("variant") ?? "0";
 const hero = query.get("hero") ?? "0";
 if (hero !== "0" && hero !== "1") throw new Error(`corn: hero must be 0 or 1, not ${hero}`);
-const corn = plant(materials(), variant, hero === "1");
-onDispose(() => disposeRecursive(scene));
-scene.add(corn);
+const load = LADDERS[hero === "1" ? `${variant} hero` : variant];
+if (!load) throw new Error(`corn: variant must be a whole number below ${VARIANTS}, or ${HERO_VARIANT} with hero=1, not ${variant}`);
+const lod = new Lod(await load(), 1, { manager: loadingManager });
+scene.add(lod);
+onDispose(() => lod.dispose());

@@ -1,0 +1,43 @@
+import { loadingManager, onDispose, scene } from "@drawcall/glts";
+import { CachedLodLoader, foliageLevels, foliageModel, Lod, type LodLevel } from "@drawcall/lod";
+import * as THREE from "three/webgpu";
+
+// Poly Haven's small pine sapling (scripts/fetch-assets.ts fetches it), ?variant=a or b, at levels of detail: the scan,
+// a detailed hemispherical impostor, then a 64 px one from 60 px. Its leaves are foliage; every level casts and
+// receives shadows, both sides of its faces.
+/** How light passes through its leaves. */
+const FOLIAGE = { translucency: 0.6 };
+const loader = new CachedLodLoader(loadingManager, {
+  onLevel: (object) => {
+    foliageModel(object, FOLIAGE);
+    foliageLevels(object, FOLIAGE);
+    object.traverse((node) => {
+      node.castShadow = node.receiveShadow = true;
+      if (node instanceof THREE.Mesh) for (const material of [node.material].flat()) material.shadowSide = THREE.DoubleSide;
+    });
+  },
+});
+const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
+  a: () =>
+    loader.loadAsync({
+      url: "../../assets/models/pine_sapling_small/pine_sapling_small_a.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", maxPixels: 300 },
+        { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
+      ],
+    }),
+  b: () =>
+    loader.loadAsync({
+      url: "../../assets/models/pine_sapling_small/pine_sapling_small_b.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", maxPixels: 300 },
+        { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
+      ],
+    }),
+};
+const variant = new URL(import.meta.url).searchParams.get("variant") ?? "a";
+const load = LADDERS[variant];
+if (!load) throw new Error(`pine_sapling_small: variant must be a or b, not ${variant}`);
+const lod = new Lod(await load(), 1, { manager: loadingManager });
+scene.add(lod);
+onDispose(() => lod.dispose());

@@ -1,7 +1,7 @@
 import { disposeRecursive, onDispose, scene } from "@drawcall/glts";
 import { shell, wallOf } from "./model.ts";
 
-// The shell index.glts's plants are baked onto, the same for every design: the canopy, or with ?wall=x or ?wall=z that
+// The shell source.glts's plants are baked onto, the same for every design: the canopy, or with ?wall=x or ?wall=z that
 // wall.
 const low = shell(wallOf(new URL(import.meta.url).searchParams));
 onDispose(() => disposeRecursive(scene));

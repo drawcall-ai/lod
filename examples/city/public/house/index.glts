@@ -1,11 +1,114 @@
-import { disposeRecursive, loadingManager, onDispose, scene } from "@drawcall/glts";
-import { detailed, house } from "./model.ts";
-import { variantOf } from "./params.ts";
-import { Materials } from "./materials.ts";
+import { gltsLoader, loadingManager, onDispose, scene } from "@drawcall/glts";
+import { CachedLodLoader, Lod, type LodLevel } from "@drawcall/lod";
+import * as THREE from "three/webgpu";
+import { HOUSE_VARIANTS } from "./params.ts";
 
-const variant = variantOf(import.meta.url);
-const materials = new Materials(loadingManager);
-const building = detailed(materials, house(variant));
-onDispose(() => disposeRecursive(scene));
-scene.add(building);
-await materials.ready();
+// A house, ?variant=0 to 9, or with ?variant=church the church, at levels of detail: source.glts, then its windows
+// and walls baked onto its authored low shell (low.glts) with its rooms (interior.glts) behind the windows, then an
+// impostor. Every level casts with both sides of its faces; the derived ones cast and receive shadows.
+loadingManager.addHandler(/\.glts$/i, gltsLoader);
+const loader = new CachedLodLoader(loadingManager, {
+  onLevel: (object, index) => {
+    if (index > 0) object.castShadow = object.receiveShadow = true;
+    object.traverse((node) => {
+      if (node instanceof THREE.Mesh) for (const material of [node.material].flat()) material.shadowSide = THREE.DoubleSide;
+    });
+  },
+});
+const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
+  "0": () =>
+    loader.loadAsync({
+      url: "./source.glts?variant=0",
+      levels: [
+        { type: "baked", low: "./low.glts?variant=0", interior: "./interior.glts?variant=0", textureSize: 512, maxPixels: 350 },
+        { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 90 },
+      ],
+    }),
+  "1": () =>
+    loader.loadAsync({
+      url: "./source.glts?variant=1",
+      levels: [
+        { type: "baked", low: "./low.glts?variant=1", interior: "./interior.glts?variant=1", textureSize: 512, maxPixels: 350 },
+        { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 90 },
+      ],
+    }),
+  "2": () =>
+    loader.loadAsync({
+      url: "./source.glts?variant=2",
+      levels: [
+        { type: "baked", low: "./low.glts?variant=2", interior: "./interior.glts?variant=2", textureSize: 512, maxPixels: 350 },
+        { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 90 },
+      ],
+    }),
+  "3": () =>
+    loader.loadAsync({
+      url: "./source.glts?variant=3",
+      levels: [
+        { type: "baked", low: "./low.glts?variant=3", interior: "./interior.glts?variant=3", textureSize: 512, maxPixels: 350 },
+        { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 90 },
+      ],
+    }),
+  "4": () =>
+    loader.loadAsync({
+      url: "./source.glts?variant=4",
+      levels: [
+        { type: "baked", low: "./low.glts?variant=4", interior: "./interior.glts?variant=4", textureSize: 512, maxPixels: 350 },
+        { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 90 },
+      ],
+    }),
+  "5": () =>
+    loader.loadAsync({
+      url: "./source.glts?variant=5",
+      levels: [
+        { type: "baked", low: "./low.glts?variant=5", interior: "./interior.glts?variant=5", textureSize: 512, maxPixels: 350 },
+        { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 90 },
+      ],
+    }),
+  "6": () =>
+    loader.loadAsync({
+      url: "./source.glts?variant=6",
+      levels: [
+        { type: "baked", low: "./low.glts?variant=6", interior: "./interior.glts?variant=6", textureSize: 512, maxPixels: 350 },
+        { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 90 },
+      ],
+    }),
+  "7": () =>
+    loader.loadAsync({
+      url: "./source.glts?variant=7",
+      levels: [
+        { type: "baked", low: "./low.glts?variant=7", interior: "./interior.glts?variant=7", textureSize: 512, maxPixels: 350 },
+        { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 90 },
+      ],
+    }),
+  "8": () =>
+    loader.loadAsync({
+      url: "./source.glts?variant=8",
+      levels: [
+        { type: "baked", low: "./low.glts?variant=8", interior: "./interior.glts?variant=8", textureSize: 512, maxPixels: 350 },
+        { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 90 },
+      ],
+    }),
+  "9": () =>
+    loader.loadAsync({
+      url: "./source.glts?variant=9",
+      levels: [
+        { type: "baked", low: "./low.glts?variant=9", interior: "./interior.glts?variant=9", textureSize: 512, maxPixels: 350 },
+        { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 90 },
+      ],
+    }),
+  church: () =>
+    loader.loadAsync({
+      url: "./church/source.glts",
+      levels: [
+        { type: "baked", low: "./low.glts", interior: "./interior.glts", textureSize: 1024, maxPixels: 560 },
+        { type: "impostor", layout: "hemi", frames: 8, resolution: 128, maxPixels: 144 },
+      ],
+    }),
+};
+if (Object.keys(LADDERS).length !== HOUSE_VARIANTS + 1) throw new Error(`house: ${Object.keys(LADDERS).length - 1} ladders for ${HOUSE_VARIANTS} variants`);
+const variant = new URL(import.meta.url).searchParams.get("variant") ?? "0";
+const load = LADDERS[variant];
+if (!load) throw new Error(`house: variant must be a whole number below ${HOUSE_VARIANTS} or church, not ${variant}`);
+const lod = new Lod(await load(), 1, { manager: loadingManager });
+scene.add(lod);
+onDispose(() => lod.dispose());

@@ -1,0 +1,42 @@
+import { loadingManager, onDispose, scene } from "@drawcall/glts";
+import { CachedLodLoader, foliageLevels, foliageModel, Lod, type LodLevel } from "@drawcall/lod";
+import * as THREE from "three/webgpu";
+
+// Poly Haven's dandelion (scripts/fetch-assets.ts fetches it), ?variant=a or c, at levels of detail: the scan, then a
+// 64 px hemispherical impostor, gone below 1 px. Its leaves are foliage; it receives shadows and casts none.
+/** How light passes through its leaves. */
+const FOLIAGE = { translucency: 0.6 };
+const loader = new CachedLodLoader(loadingManager, {
+  onLevel: (object) => {
+    foliageModel(object, FOLIAGE);
+    foliageLevels(object, FOLIAGE);
+    object.traverse((node) => {
+      node.castShadow = false;
+      node.receiveShadow = true;
+    });
+  },
+});
+const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
+  a: () =>
+    loader.loadAsync({
+      url: "../../assets/models/dandelion_01/dandelion_01_a_LOD0.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 64, maxPixels: 64 },
+        { type: "empty", maxPixels: 1 },
+      ],
+    }),
+  c: () =>
+    loader.loadAsync({
+      url: "../../assets/models/dandelion_01/dandelion_01_c_LOD0.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 64, maxPixels: 64 },
+        { type: "empty", maxPixels: 1 },
+      ],
+    }),
+};
+const variant = new URL(import.meta.url).searchParams.get("variant") ?? "a";
+const load = LADDERS[variant];
+if (!load) throw new Error(`dandelion_01: variant must be a or c, not ${variant}`);
+const lod = new Lod(await load(), 1, { manager: loadingManager });
+scene.add(lod);
+onDispose(() => lod.dispose());
