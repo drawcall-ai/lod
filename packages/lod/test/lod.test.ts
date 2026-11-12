@@ -26,6 +26,7 @@ import {
 import { Fn, float, instanceIndex, mat4, storage, uniform } from "three/tsl";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ARRIVAL_MS } from "../src/levels/manager.js";
+import { checkRenderer } from "../src/levels/renderer.js";
 import { Lod } from "../src/lod.js";
 import { Wind } from "../src/wind/index.js";
 import { ImpostorMesh } from "../src/impostor/mesh/index.js";
@@ -770,20 +771,9 @@ describe("renderers", { timeout: GPU_TIMEOUT }, () => {
     }
   });
 
-  it("reports a WebGL backend as its error", async () => {
+  it("refuses a renderer on the WebGL backend", () => {
+    // Forced to WebGL, a renderer has its backend before init(), so no WebGL context is needed.
     const webgl = new WebGPURenderer({ antialias: false, forceWebGL: true });
-    await webgl.init();
-    const lod = lodOf([{ object: box() }], 1);
-    const camera = new PerspectiveCamera(60, 1, 0.1, 100);
-    camera.position.z = 5;
-    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      webgl.render(new Scene().add(lod), camera);
-      expect(lod.error?.message).toMatch(/draws with WebGPU only/);
-    } finally {
-      logged.mockRestore();
-      lod.dispose();
-      webgl.dispose();
-    }
+    expect(() => checkRenderer(webgl, "Lod")).toThrow(/draws with WebGPU only/);
   });
 });
