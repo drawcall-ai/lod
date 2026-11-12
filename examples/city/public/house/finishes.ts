@@ -9,20 +9,13 @@ const INDOORS = 0.12;
 
 /** Painted plaster for walls. */
 export const plaster = (materials: Materials) =>
-  materials.material("house/finishes.ts:plaster", () =>
-    surface(materials, "white_stucco", { vertexColors: true, normalScale: 0.25, roughness: 1.2, envMapIntensity: INDOORS }),
-  );
+  surface(materials, "white_stucco", { vertexColors: true, normalScale: 0.25, roughness: 1.2, envMapIntensity: INDOORS });
 
 /** Plain white ceilings (a material of their own, so a cutaway can leave them out). */
 export const ceiling = (materials: Materials) =>
-  materials.material("house/finishes.ts:ceiling", () =>
-    surface(materials, "white_stucco", { color: "#f4f2ee", normalScale: 0.2, roughness: 1.2, envMapIntensity: INDOORS }),
-  );
+  surface(materials, "white_stucco", { color: "#f4f2ee", normalScale: 0.2, roughness: 1.2, envMapIntensity: INDOORS });
 
-export const floorboards = (materials: Materials) =>
-  materials.material("house/finishes.ts:floorboards", () =>
-    surface(materials, "wood_table_001", { color: "#f2dcb8", normalScale: 0.6, envMapIntensity: INDOORS }),
-  );
+export const floorboards = (materials: Materials) => surface(materials, "wood_table_001", { color: "#f2dcb8", normalScale: 0.6, envMapIntensity: INDOORS });
 
 /** Square ceramic tiles with grout, 30 cm, for kitchens and bathrooms. */
 export const tiles = (materials: Materials) =>
@@ -62,8 +55,7 @@ export const fabric = (materials: Materials) =>
   );
 
 /** Furniture wood: the grain of the table texture under a stain colour. */
-export const wood = (materials: Materials) =>
-  materials.material("house/finishes.ts:wood", () => surface(materials, "wood_table_001", { vertexColors: true, normalScale: 0.4, envMapIntensity: INDOORS }));
+export const wood = (materials: Materials) => surface(materials, "wood_table_001", { vertexColors: true, normalScale: 0.4, envMapIntensity: INDOORS });
 
 /** Lacquered and ceramic surfaces: kitchen fronts, bath, lamp shades, book covers. */
 export const gloss = (materials: Materials) =>
