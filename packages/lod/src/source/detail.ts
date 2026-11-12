@@ -1,4 +1,5 @@
 import { Box3, Matrix4, Vector3, type Mesh, type Object3D } from "three/webgpu";
+import { checkClusters } from "../instanced/clusters.js";
 import type { Lod } from "../lod.js";
 import { isBatchedMesh, isImpostorMesh, isInstancedMesh, isLOD, isLod, isMesh, isStorageInstanced } from "../three.js";
 
@@ -131,6 +132,7 @@ function boxes(node: Object3D, placement: Matrix4, box: Box3): void {
  */
 export function* instancesOf(lod: Lod): Generator<number> {
   if (isStorageInstanced(lod.instanceMatrix)) throw new Error("@drawcall/lod: a Lod's storage instanceMatrix lives on the GPU: the CPU cannot visit its meshes");
+  if (lod.clusters) checkClusters(lod.clusters, lod.instanceMatrix.count, []);
   for (const { start, count } of lod.clusters ?? [{ start: 0, count: lod.count }])
     for (let index = start; index < Math.min(start + count, lod.count); index++) yield index;
 }

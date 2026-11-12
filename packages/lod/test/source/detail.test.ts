@@ -27,7 +27,7 @@ describe("boundingBox", () => {
 
   it("measures only the instances in a Lod's clusters, clipped to its count", () => {
     const lod = lodOf([{ object: new Mesh(new BoxGeometry(1, 2, 1), material) }], spots);
-    lod.clusters = [{ start: 1, count: 5, boundingBox: boundingBox(lod) }];
+    lod.clusters = [{ start: 1, count: 2, boundingBox: boundingBox(lod) }];
     lod.count = 2;
     const only = new Mesh(new BoxGeometry(1, 2, 1), material);
     only.applyMatrix4(must(spots[1]));

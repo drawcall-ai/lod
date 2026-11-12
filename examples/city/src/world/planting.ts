@@ -45,13 +45,11 @@ export interface Stand {
  * What a stand plants of one asset: its `share` of the spots (the shares adding up to 1), scaled within `scale` and,
  * when `tinted`, a little lighter or darker, yellower or bluer; with a `color`, coloured by it at each spot's x, z.
  */
-export interface Planting {
+export type Planting = {
   url: string;
   share: number;
   scale: readonly [number, number];
-  tinted?: boolean;
-  color?: (xz: THREE.Node<"vec2">) => THREE.Node<"vec3">;
-}
+} & ({ tinted?: boolean; color?: never } | { color: (xz: THREE.Node<"vec2">) => THREE.Node<"vec3">; tinted?: never });
 
 /** Plants stands on `plan`'s ground, whose heights its passes, run on `renderer`, share on the GPU, into `scatter`'s assets. */
 export function planter(plan: Plan, scatter: Scatter, renderer: THREE.Renderer) {

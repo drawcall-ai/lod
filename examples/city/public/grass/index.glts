@@ -1,6 +1,7 @@
 import { gltsLoader, isPreview, loadingManager, onDispose, scene } from "@drawcall/glts";
 import { CachedLodLoader, foliageLevels, Lod, type LodLevel } from "@drawcall/lod";
 import * as THREE from "three/webgpu";
+import { GREEN } from "./green.ts";
 
 // A patch of grass, ?kind=lawn or meadow and ?variant=0 or 1, at levels of detail: source.glts's blades, then an
 // impostor, gone below 1 px. Every level takes the colour of a meadow's ground, which its blades' neutral shading is
@@ -13,7 +14,7 @@ const loader = new CachedLodLoader(loadingManager, {
       if (!(node instanceof THREE.Mesh)) return;
       const material = node.material;
       if (!(material instanceof THREE.MeshStandardNodeMaterial)) throw new Error("grass: its levels need a standard material");
-      material.color.setRGB(0.16, 0.24, 0.07);
+      material.color.setRGB(...GREEN);
       node.castShadow = false;
       node.receiveShadow = true;
     });

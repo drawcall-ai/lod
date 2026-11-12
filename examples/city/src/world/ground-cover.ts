@@ -11,9 +11,10 @@ import { Use } from "./land.ts";
 import { reachFor } from "./screen.ts";
 import { type Plan, TOWN } from "./plan.ts";
 import { Scatter } from "./scatter.ts";
+import { GREEN } from "../../public/grass/green.ts";
 
 /** The green public/grass draws with on its own, which the ground's colour replaces. */
-const GRASS_GREEN = vec3(0.16, 0.24, 0.07);
+const GRASS_GREEN = vec3(...GREEN);
 
 /** Edge of a ground-cover tile (m). */
 const TILE = 6;
