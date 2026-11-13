@@ -8,17 +8,7 @@ import typegpu from "unplugin-typegpu/vite";
 // when a second adapter is requested after drawing to a canvas.
 export default defineConfig({
   // Tests write their own GPU code as TypeGPU functions, as an app does.
-  plugins: [
-    typegpu(),
-    {
-      // Vitest wraps every dynamic import in a call to its browser runner, which it defines only in workers Vite
-      // bundles (`?worker_file`); the impostor encoder's worker starts at its module's own URL and imports its encoder.
-      name: "encoder-worker-imports",
-      transform(code, id) {
-        if (id.endsWith("/src/impostor/ktx2/worker.ts")) return `globalThis.__vitest_browser_runner__ ??= { wrapDynamicImport: (f) => f() };\n${code}`;
-      },
-    },
-  ],
+  plugins: [typegpu()],
   test: {
     projects: [
       {

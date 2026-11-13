@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { encodeLayer } from "../../../src/impostor/ktx2/encode.js";
 
-// A worker script that does not load.
-vi.mock("../../../src/impostor/ktx2/worker.js", () => ({ url: "/missing-encoder-worker.js" }));
+// An encoder module that does not load, and with it its worker.
+vi.mock("../../../src/impostor/ktx2/uastc.js", async (original) => ({
+  ...(await original<typeof import("../../../src/impostor/ktx2/uastc.js")>()),
+  encoderSources: async () => ({ js: "throw new Error('no encoder')", wasm: new Uint8Array() }),
+}));
 
 describe("a failing encoder worker", () => {
   it("rejects every job, rather than waiting forever, when the worker does not load", async () => {
