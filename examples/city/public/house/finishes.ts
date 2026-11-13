@@ -26,6 +26,9 @@ export const tiles = (materials: Materials) =>
     // two tiles per repeat over UVs in metres
     map.repeat.set(1 / 0.6, 1 / 0.6);
     map.anisotropy = 8;
+    map.generateMipmaps = true;
+    map.minFilter = THREE.LinearMipmapLinearFilter;
+    map.magFilter = THREE.LinearFilter;
     map.needsUpdate = true;
     return new THREE.MeshStandardMaterial({ name: "tiles", map, roughness: 0.35, envMapIntensity: INDOORS });
   });
