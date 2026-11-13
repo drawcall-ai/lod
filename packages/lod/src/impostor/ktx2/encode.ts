@@ -1,5 +1,6 @@
 import { read, write } from "ktx-parse";
 import { inNode, nodeOnly } from "../../node-process.js";
+import { basisEncoder, encoderSources, type Encode } from "./uastc.js";
 
 /** One map's RGBA8 mip levels, `size >> level` square. */
 export interface Layer {
@@ -88,7 +89,7 @@ function encodeJob(job: Job): Promise<Uint8Array> {
   });
 }
 
-/** An encoder worker: a module worker in browsers, a worker thread in Node (see `inNode`). */
+/** An encoder worker: a module worker from source text in browsers, a worker thread in Node (see `inNode`). */
 interface Encoder {
   run(job: Job): Promise<Reply>;
   terminate(): void;
@@ -119,8 +120,8 @@ async function work(): Promise<void> {
 }
 
 async function start(): Promise<Encoder> {
-  const { url } = await import("./worker.js");
   if (inNode) {
+    const { url } = await import("./worker.js");
     const [{ Worker }, { once }] = await Promise.all([
       nodeOnly<typeof import("node:worker_threads")>("node:worker_threads"),
       nodeOnly<typeof import("node:events")>("node:events"),
@@ -136,8 +137,50 @@ async function start(): Promise<Encoder> {
       terminate: () => void thread.terminate(),
     };
   }
+  const { url, wasm } = await (program ??= workerProgram());
   const worker = new Worker(url, { type: "module" });
+  worker.postMessage(wasm);
   return { run: (job) => run(worker, job), terminate: () => worker.terminate() };
+}
+
+/** The browser workers' program and the encoder's binary, made once for every worker. */
+let program: Promise<{ url: string; wasm: Uint8Array }> | undefined;
+
+/**
+ * The program at a blob: URL, so that its workers are of the page's own origin: browsers start none from another
+ * origin, such as a CDN's that serves this module, and a CDN or bundler may merge this module with others that a
+ * worker cannot load.
+ */
+async function workerProgram(): Promise<{ url: string; wasm: Uint8Array }> {
+  const { js, wasm } = await encoderSources();
+  return { url: blobURL(`import factory from ${JSON.stringify(blobURL(js))};\n(${serve})(${basisEncoder}, factory);`), wasm };
+}
+
+function blobURL(source: string): string {
+  return URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+}
+
+/**
+ * A browser encoder worker's program, run from its source text, and so as self-contained as `basisEncoder`, which it
+ * is given as `start`: it takes the encoder's binary first, then jobs.
+ */
+function serve(start: typeof basisEncoder, factory: unknown): void {
+  let encoder: Promise<Encode> | undefined;
+  addEventListener("message", async (event: MessageEvent<Job | Uint8Array>) => {
+    if (event.data instanceof Uint8Array) {
+      encoder = start(factory, event.data);
+      return;
+    }
+    try {
+      if (!encoder) throw new Error("the encoder worker got a job before its binary");
+      const file = (await encoder)(event.data);
+      const reply: Reply = { file };
+      postMessage(reply, { transfer: [file.buffer] });
+    } catch (error) {
+      const reply: Reply = { error: error instanceof Error ? error.message : String(error) };
+      postMessage(reply);
+    }
+  });
 }
 
 /** `job` on `worker`; rejects when the worker fails rather than answers, as one that does not load does. */

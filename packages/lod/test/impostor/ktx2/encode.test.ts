@@ -1,9 +1,16 @@
 import { inflateSync } from "fflate";
 import { describe, expect, it } from "vitest";
 import { encodeLayer } from "../../../src/impostor/ktx2/encode.js";
-import { encode } from "../../../src/impostor/ktx2/uastc.js";
+import { basisEncoder, encoderSources } from "../../../src/impostor/ktx2/uastc.js";
 import { ENCODER_JS, ENCODER_WASM } from "../../../src/impostor/ktx2/wasm/encoder.js";
 import { TRANSCODER_JS, TRANSCODER_WASM } from "../../../src/impostor/ktx2/wasm/transcoder.js";
+
+/** The package's encoder, started once in this thread. */
+let started: ReturnType<typeof basisEncoder> | undefined;
+const encoder = () =>
+  (started ??= encoderSources().then(async ({ js, wasm }) =>
+    basisEncoder((await import(/* @vite-ignore */ `data:text/javascript,${encodeURIComponent(js)}`)).default, wasm),
+  ));
 
 describe("impostor map encoding", () => {
   it("encodes each level in strips to the blocks it encodes to whole, whatever its size and strip count", { timeout: 60_000 }, async () => {
@@ -12,7 +19,7 @@ describe("impostor map encoding", () => {
         const levels = [image(size), image(size >> 1)];
         const file = await encodeLayer({ levels, size, srgb: true }, parts);
         for (const [m, data] of levels.entries()) {
-          const whole = await encode({ data, width: size >> m, height: size >> m, srgb: true });
+          const whole = (await encoder())({ data, width: size >> m, height: size >> m, srgb: true });
           expect(await transcodes(file, m)).toEqual(await transcodes(whole, 0));
         }
       }
@@ -20,7 +27,7 @@ describe("impostor map encoding", () => {
 
   it("leaves BC7, ASTC and RGBA transcodes as they are with the fastest ETC1 hints", async () => {
     const job = { data: image(64), width: 64, height: 64, srgb: false };
-    expect(await transcodes(await encode(job), 0)).toEqual(await transcodes(await withoutHints(job), 0));
+    expect(await transcodes((await encoder())(job), 0)).toEqual(await transcodes(await withoutHints(job), 0));
   });
 });
 
