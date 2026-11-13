@@ -129,7 +129,7 @@ For direct preparation and storage outside `CachedLodLoader`, combine `simplify`
 
 Ship source models with deduplicated textures, sized to their on-screen use and GPU-compressed as KTX2, using established tools such as gltf-transform. Uploads are paced per frame, so variants that each carry their own uncompressed 2048² textures add up to gigabytes of uploads and long waits before a close-up is complete. Use instance colour variation when it can replace separately textured variants.
 
-Give every texture a material samples linear filtering, with mipmaps where it is minified; mind three's `DataTexture`, whose default is nearest. three binds a nearest-filtered texture without a sampler, and builds of different materials can swap the map three's standard materials share: while a Lod compiles its levels, a material may then get one sampler fewer than its shader declares, its pipeline fails with "Binding type in the shader … doesn't match the type in the layout", and the Lod stays on a coarser level, reporting `Lod: render pipeline compilation failed`.
+Filter every texture a material samples linearly, with mipmaps where it is minified; three's `DataTexture` defaults to nearest. While a Lod compiles its levels, one nearest-filtered map can fail the pipelines of other materials ("Binding type in the shader … doesn't match the type in the layout"), and the Lod then stays on a coarser level, reporting `Lod: render pipeline compilation failed`.
 
 Author sources, simplified geometry, low shells and interiors in one coordinate system. A ground-level pivot helps upright repeated assets.
 
