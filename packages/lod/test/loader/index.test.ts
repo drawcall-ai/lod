@@ -28,15 +28,15 @@ vi.mock("vitecache", async () => ({ CacheEntry: (await import("./fixture.js")).C
 vi.mock("../../src/impostor/bake/index.js", async () => ({ bakeImpostor: (await import("./fixture.js")).bakeImpostor }));
 
 describe("CachedLodLoader", () => {
-  it("loads the baking auxiliaries only on a cache miss", async () => {
+  it("loads the baking auxiliaries only on a cache miss, relative to the source as written", async () => {
     const manager = new LoadingManager();
     manager.setURLModifier((url) => {
-      if (url.startsWith("/resolved/")) throw new Error("URL modifier applied twice");
-      return url.replace("/models/", "/resolved/");
+      if (url.startsWith("resolved/")) throw new Error("URL modifier applied twice");
+      return url.replace("models/", "resolved/");
     });
     const handler = new Loader<Object3D>();
     const load = vi.fn(async (url: string) => {
-      const scene = url === "/models/rooms.glts#bake" ? interior() : url === "/models/house.glts?part=low" ? box() : house().add(interior());
+      const scene = url === "models/rooms.glts#bake" ? interior() : url === "models/house.glts?part=low" ? box() : house().add(interior());
       return gltsScene(...(scene instanceof Group ? [...scene.children] : [scene]));
     });
     handler.loadAsync = load;
@@ -45,7 +45,7 @@ describe("CachedLodLoader", () => {
       url: "house.glts?variant=2",
       levels: [{ type: "baked", low: "?part=low", interior: "rooms.glts#bake", textureSize: 32, maxPixels: 100 }],
     };
-    const loader = new CachedLodLoader(manager).setPath("/models/");
+    const loader = new CachedLodLoader(manager).setPath("models/");
     const cold = (await loader.loadAsync(request))[1];
     if (!cold?.load) throw new Error("Expected a lazy baked level");
     await cold.load();
@@ -59,7 +59,7 @@ describe("CachedLodLoader", () => {
     const source = warm[0];
     if (!source?.load) throw new Error("Expected deferred GLTS source");
     expect((await source.load()).children).toHaveLength(house().children.length + 1);
-    expect(load).toHaveBeenLastCalledWith("/models/house.glts?variant=2");
+    expect(load).toHaveBeenLastCalledWith("models/house.glts?variant=2");
     expect(load).toHaveBeenCalledTimes(4);
   }, 120_000);
 
