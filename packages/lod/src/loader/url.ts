@@ -36,8 +36,12 @@ export function assetPath(url: string): { path: string; extension: string } {
   return { path, extension };
 }
 
+/**
+ * `value`, a baked level's low or interior URL, resolved against `source`, the ladder's source URL, the way `source` is
+ * written: a relative source gives a relative URL, which the loading manager then resolves as it resolves the source,
+ * such as a GLTS script's against the script.
+ */
 export function sourceRelativeURL(value: string, source: string): string {
-  const base = new URL(source, typeof document === "undefined" ? placeholderOrigin : document.baseURI);
-  const url = new URL(value, base);
-  return url.origin === base.origin && !absolute.test(source) ? url.pathname + url.search + url.hash : url.href;
+  const path = urlPath(source);
+  return /^[?#]/.test(value) ? path + value : loaderPathURL(value, LoaderUtils.extractUrlBase(path));
 }
