@@ -2,14 +2,15 @@ import type { Object3D } from "three/webgpu";
 import { disposeRejected, disposeRecursive, type DisposeOptions } from "../dispose.js";
 
 /**
- * What one ladder's loads share: the source loaded to measure or build the ladder with, handed to the first level load
- * (the source level draws it, a build uses it, a stored level disposes it; onLevel has not changed it), the levels built
- * with the ladder, each handed to its first load, and every level object loaded. Those are freed if describing the
- * ladder fails, else when the last Lod holding the levels is disposed (see `hold`), which spends them.
+ * What one ladder's loads share: the source loaded to measure or build the ladder with, handed to the first level
+ * load (the source level draws it, a build uses it, a stored level disposes it; onLevel has not changed it), the bytes
+ * of the levels read or built while describing the ladder, each handed to its first load, and every level object
+ * loaded. Those are freed if describing the ladder fails, else when the last Lod holding the levels is disposed (see
+ * `hold`), which spends them.
  */
 export class LodLoadContext {
-  /** Level bytes built while describing the ladder, by index: a stored level is read again when it loads. */
-  private readonly built = new Map<number, Uint8Array>();
+  /** Level bytes read or built while describing the ladder, by index: undefined where a read missed. */
+  private readonly described = new Map<number, Promise<Uint8Array | undefined>>();
   private spare: Object3D | undefined;
   /** Every level object loaded, and what freeing it frees: a simplified level draws with its source's materials. */
   private readonly loaded = new Map<Object3D, DisposeOptions>();
@@ -37,15 +38,15 @@ export class LodLoadContext {
     return taken;
   }
 
-  /** Hold the bytes of level `index`, built while describing the ladder, for its first load to take. */
-  setBuilt(index: number, bytes: Uint8Array): void {
-    this.built.set(index, bytes);
+  /** Hold the bytes of level `index`, read or built while describing the ladder, for its first load to take. */
+  setDescribed(index: number, bytes: Promise<Uint8Array | undefined>): void {
+    this.described.set(index, bytes);
   }
 
-  /** The bytes of level `index` built while describing the ladder, once: undefined if none were, or once taken. */
-  takeBuilt(index: number): Uint8Array | undefined {
-    const bytes = this.built.get(index);
-    this.built.delete(index);
+  /** The bytes of level `index` read or built while describing the ladder, once: undefined if none were, or once taken. */
+  takeDescribed(index: number): Promise<Uint8Array | undefined> | undefined {
+    const bytes = this.described.get(index);
+    this.described.delete(index);
     return bytes;
   }
 
@@ -90,7 +91,7 @@ export class LodLoadContext {
     if (taken) dispose(taken, { materials: true });
     for (const [object, options] of this.loaded) dispose(object, options);
     this.loaded.clear();
-    this.built.clear();
+    this.described.clear();
     this.onFree();
   }
 }

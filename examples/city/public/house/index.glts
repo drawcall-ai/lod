@@ -5,7 +5,8 @@ import { HOUSE_VARIANTS } from "./params.ts";
 
 // A house, ?variant=0 to 9, or with ?variant=church the church, at levels of detail: source.glts, then its windows
 // and walls baked onto its authored low shell (low.glts) with its rooms (interior.glts) behind the windows, then an
-// impostor. Every level casts with both sides of its faces; the derived ones cast and receive shadows.
+// impostor, then far away the shell baked small without rooms, which are subpixel there. Every level casts with both
+// sides of its faces; the derived ones cast and receive shadows.
 loadingManager.addHandler(/\.glts$/i, gltsLoader);
 const loader = new CachedLodLoader(loadingManager, {
   onLevel: (object, index) => {
@@ -22,6 +23,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
       levels: [
         { type: "baked", low: "./low.glts?variant=0", interior: "./interior.glts?variant=0", textureSize: 512, maxPixels: 350 },
         { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 90 },
+        { type: "baked", low: "./low.glts?variant=0", textureSize: 64, maxPixels: 24 },
       ],
     }),
   "1": () =>
@@ -30,6 +32,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
       levels: [
         { type: "baked", low: "./low.glts?variant=1", interior: "./interior.glts?variant=1", textureSize: 512, maxPixels: 350 },
         { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 90 },
+        { type: "baked", low: "./low.glts?variant=1", textureSize: 64, maxPixels: 24 },
       ],
     }),
   "2": () =>
@@ -38,6 +41,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
       levels: [
         { type: "baked", low: "./low.glts?variant=2", interior: "./interior.glts?variant=2", textureSize: 512, maxPixels: 350 },
         { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 90 },
+        { type: "baked", low: "./low.glts?variant=2", textureSize: 64, maxPixels: 24 },
       ],
     }),
   "3": () =>
@@ -46,6 +50,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
       levels: [
         { type: "baked", low: "./low.glts?variant=3", interior: "./interior.glts?variant=3", textureSize: 512, maxPixels: 350 },
         { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 90 },
+        { type: "baked", low: "./low.glts?variant=3", textureSize: 64, maxPixels: 24 },
       ],
     }),
   "4": () =>
@@ -54,6 +59,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
       levels: [
         { type: "baked", low: "./low.glts?variant=4", interior: "./interior.glts?variant=4", textureSize: 512, maxPixels: 350 },
         { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 90 },
+        { type: "baked", low: "./low.glts?variant=4", textureSize: 64, maxPixels: 24 },
       ],
     }),
   "5": () =>
@@ -62,6 +68,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
       levels: [
         { type: "baked", low: "./low.glts?variant=5", interior: "./interior.glts?variant=5", textureSize: 512, maxPixels: 350 },
         { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 90 },
+        { type: "baked", low: "./low.glts?variant=5", textureSize: 64, maxPixels: 24 },
       ],
     }),
   "6": () =>
@@ -70,6 +77,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
       levels: [
         { type: "baked", low: "./low.glts?variant=6", interior: "./interior.glts?variant=6", textureSize: 512, maxPixels: 350 },
         { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 90 },
+        { type: "baked", low: "./low.glts?variant=6", textureSize: 64, maxPixels: 24 },
       ],
     }),
   "7": () =>
@@ -78,6 +86,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
       levels: [
         { type: "baked", low: "./low.glts?variant=7", interior: "./interior.glts?variant=7", textureSize: 512, maxPixels: 350 },
         { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 90 },
+        { type: "baked", low: "./low.glts?variant=7", textureSize: 64, maxPixels: 24 },
       ],
     }),
   "8": () =>
@@ -86,6 +95,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
       levels: [
         { type: "baked", low: "./low.glts?variant=8", interior: "./interior.glts?variant=8", textureSize: 512, maxPixels: 350 },
         { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 90 },
+        { type: "baked", low: "./low.glts?variant=8", textureSize: 64, maxPixels: 24 },
       ],
     }),
   "9": () =>
@@ -94,6 +104,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
       levels: [
         { type: "baked", low: "./low.glts?variant=9", interior: "./interior.glts?variant=9", textureSize: 512, maxPixels: 350 },
         { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 90 },
+        { type: "baked", low: "./low.glts?variant=9", textureSize: 64, maxPixels: 24 },
       ],
     }),
   church: () =>
@@ -102,6 +113,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
       levels: [
         { type: "baked", low: "./low.glts?variant=church", interior: "./interior.glts?variant=church", textureSize: 1024, maxPixels: 560 },
         { type: "impostor", layout: "hemi", frames: 8, resolution: 128, maxPixels: 144 },
+        { type: "baked", low: "./low.glts?variant=church", textureSize: 128, maxPixels: 40 },
       ],
     }),
 };

@@ -2,7 +2,7 @@ import * as THREE from "three/webgpu";
 import { float, vec3 } from "three/tsl";
 import { Lod, type Wind } from "@drawcall/lod";
 import { sourceBox } from "./bounds.ts";
-import { planter } from "./planting.ts";
+import { planter, type Stand } from "./planting.ts";
 import { scripts } from "../loading.ts";
 import type { Textures } from "../render/materials.ts";
 import type { Zones } from "./zones.ts";
@@ -115,7 +115,7 @@ export async function groundCover(
       // on a screen 1080 pixels tall, where the levels end
       const radius = reachFor(reference, size, cull, 1080, Lod.quality);
       const cover = await plant(
-        { name: kind.name, tile: TILE, density: kind.density, radius, grows: where(plan, kind.ground) },
+        { name: kind.name, tile: TILE, density: kind.density, radius, ...where(kind.ground) },
         kind.urls.map((url) => ({ url, share: 1 / kind.urls.length, scale: kind.scale, color: kind.grass ? grassColor : undefined })),
       );
       return { kind, lods, boxes, cull, radius, cover };
@@ -140,10 +140,10 @@ export async function groundCover(
   return root;
 }
 
-/** Which ground a kind grows on, as a test on x, z. */
-function where(plan: Plan, ground: Habitat): (x: number, z: number) => boolean {
+/** Which land a kind grows on, and where on it. */
+function where(habitat: Habitat): Pick<Stand, "ground" | "grows"> {
   const inTown = (x: number, z: number) => Math.hypot(x - TOWN.x, z - TOWN.z) < TOWN.radius + 40;
-  if (ground === "forest") return (x, z) => plan.land.at(x, z) === Use.Forest;
-  if (ground === "garden") return (x, z) => plan.land.at(x, z) === Use.Lawn && inTown(x, z);
-  return (x, z) => plan.land.at(x, z) === Use.Lawn && !inTown(x, z);
+  if (habitat === "forest") return { ground: Use.Forest };
+  if (habitat === "garden") return { ground: Use.Lawn, grows: inTown };
+  return { ground: Use.Lawn, grows: (x, z) => !inTown(x, z) };
 }

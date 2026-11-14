@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { encodeLayer } from "../../../src/impostor/ktx2/encode.js";
+import { encodeLayer } from "../../src/ktx2/encode.js";
 
 // An encoder module that does not load, and with it its worker.
-vi.mock("../../../src/impostor/ktx2/uastc.js", async (original) => ({
-  ...(await original<typeof import("../../../src/impostor/ktx2/uastc.js")>()),
+vi.mock("../../src/ktx2/uastc.js", async (original) => ({
+  ...(await original<typeof import("../../src/ktx2/uastc.js")>()),
   encoderSources: async () => ({ js: "throw new Error('no encoder')", wasm: new Uint8Array() }),
 }));
 

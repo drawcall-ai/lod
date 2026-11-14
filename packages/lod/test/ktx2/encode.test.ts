@@ -1,9 +1,9 @@
 import { inflateSync } from "fflate";
 import { describe, expect, it } from "vitest";
-import { encodeLayer } from "../../../src/impostor/ktx2/encode.js";
-import { basisEncoder, encoderSources } from "../../../src/impostor/ktx2/uastc.js";
-import { ENCODER_JS, ENCODER_WASM } from "../../../src/impostor/ktx2/wasm/encoder.js";
-import { TRANSCODER_JS, TRANSCODER_WASM } from "../../../src/impostor/ktx2/wasm/transcoder.js";
+import { encodeLayer } from "../../src/ktx2/encode.js";
+import { basisEncoder, encoderSources } from "../../src/ktx2/uastc.js";
+import { ENCODER_JS, ENCODER_WASM } from "../../src/ktx2/wasm/encoder.js";
+import { TRANSCODER_JS, TRANSCODER_WASM } from "../../src/ktx2/wasm/transcoder.js";
 
 /** The package's encoder, started once in this thread. */
 let started: ReturnType<typeof basisEncoder> | undefined;
@@ -12,21 +12,21 @@ const encoder = () =>
     basisEncoder((await import(/* @vite-ignore */ `data:text/javascript,${encodeURIComponent(js)}`)).default, wasm),
   ));
 
-describe("impostor map encoding", () => {
+describe("KTX2 map encoding", () => {
   it("encodes each level in strips to the blocks it encodes to whole, whatever its size and strip count", { timeout: 60_000 }, async () => {
     for (const size of [8, 36, 100])
       for (const parts of [1, 2, 3, 4]) {
         const levels = [image(size), image(size >> 1)];
         const file = await encodeLayer({ levels, size, srgb: true }, parts);
         for (const [m, data] of levels.entries()) {
-          const whole = (await encoder())({ data, width: size >> m, height: size >> m, srgb: true });
+          const whole = (await encoder())({ data, width: size >> m, height: size >> m, srgb: true, supercompress: true });
           expect(await transcodes(file, m)).toEqual(await transcodes(whole, 0));
         }
       }
   });
 
   it("leaves BC7, ASTC and RGBA transcodes as they are with the fastest ETC1 hints", async () => {
-    const job = { data: image(64), width: 64, height: 64, srgb: false };
+    const job = { data: image(64), width: 64, height: 64, srgb: false, supercompress: true };
     expect(await transcodes((await encoder())(job), 0)).toEqual(await transcodes(await withoutHints(job), 0));
   });
 });

@@ -1,7 +1,7 @@
-// Writes src/impostor/ktx2/wasm/encoder.ts and transcoder.ts: Basis Universal's encoder (its Emscripten module and
+// Writes src/ktx2/wasm/encoder.ts and transcoder.ts: Basis Universal's encoder (its Emscripten module and
 // binary) from the ktx2-encoder package, and three's Basis transcoder (its JS wrapper and binary), each deflated and
 // inlined as base64. A package's own files have no URL a pre-bundled dependency can fetch under Vite's dev server in a
-// workspace, whose node_modules lie outside the served root, so the impostor codec carries them. Carrying the encoder's
+// workspace, whose node_modules lie outside the served root, so the package carries them. Carrying the encoder's
 // module as well leaves no bare import that only a cold cache reaches: a Vite dependency cache made without it finds it
 // late and reloads the page, and a build would emit the package's own 3 MB binary.
 //
@@ -58,6 +58,6 @@ export const TRANSCODER_WASM = "${await inline(join(basis, "basis_transcoder.was
 );
 
 async function write(name: string, source: string) {
-  await writeFile(new URL(`../src/impostor/ktx2/wasm/${name}`, import.meta.url), source);
-  console.log(`wrote src/impostor/ktx2/wasm/${name} (${source.length} bytes)`);
+  await writeFile(new URL(`../src/ktx2/wasm/${name}`, import.meta.url), source);
+  console.log(`wrote src/ktx2/wasm/${name} (${source.length} bytes)`);
 }

@@ -1,5 +1,5 @@
-import { read, write } from "ktx-parse";
-import { inNode, nodeOnly } from "../../node-process.js";
+import { KHR_SUPERCOMPRESSION_ZSTD, read, write } from "ktx-parse";
+import { inNode, nodeOnly } from "../node-process.js";
 import { basisEncoder, encoderSources, type Encode } from "./uastc.js";
 
 /** One map's RGBA8 mip levels, `size >> level` square. */
@@ -16,6 +16,8 @@ export interface Job {
   width: number;
   height: number;
   srgb: boolean;
+  /** Whether the encoder compresses the rows with Zstandard. */
+  supercompress: boolean;
 }
 
 /** What the worker answers a job with. */
@@ -40,43 +42,59 @@ const queue: Task[] = [];
 let workers = 0;
 
 /**
- * One map as a KTX2 file of Basis UASTC. Each level encodes as `parts` strips of rows, by default one per worker, so
- * that a map's top level, which holds three quarters of its texels, takes all workers; the strips' and levels' files
- * are then joined. Takes about a second per million texels and worker.
+ * One map as a KTX2 file of Basis UASTC with Zstandard supercompression. Each level encodes as `parts` strips of rows,
+ * by default one per worker, so that a map's top level, which holds three quarters of its texels, takes all workers;
+ * the strips' and levels' files are then joined. Takes about a second per million texels and worker.
  */
 export async function encodeLayer({ levels, size, srgb }: Layer, parts = LIMIT): Promise<Uint8Array> {
-  const files = await Promise.all(levels.map((data, m) => Promise.all(strips(data, size >> m, srgb, parts).map((job) => encodeJob(job).then(read)))));
+  // Node compresses each joined level as one Zstandard stream, about a tenth smaller than a stream per strip; browsers
+  // have no Zstandard compressor, so there the encoder compresses each strip.
+  const zlib = inNode ? await nodeOnly<typeof import("node:zlib")>("node:zlib") : undefined;
+  const files = await Promise.all(levels.map((data, m) => Promise.all(strips(data, size >> m, srgb, !zlib, parts).map((job) => encodeJob(job).then(read)))));
   const first = files[0]?.[0];
-  if (!first) throw new Error("encodeImpostorAsync: a map has no mip levels");
+  if (!first) throw new Error("encodeLayer: a map has no mip levels");
   // UASTC encodes each 4x4 block on its own, and a level's Zstandard data may be several frames, which decode as one:
-  // a level's strips, each a multiple of four rows high but the last, concatenate to data that decodes as the whole level's.
+  // a level's strips, each a multiple of four rows high but the last, concatenate to data that decodes as the whole
+  // level's.
   first.levels = files.map((parts) => {
     const levels = parts.map((file) => {
       const [level] = file.levels;
-      if (!level) throw new Error("encodeImpostorAsync: the encoder wrote a file without levels");
+      if (!level) throw new Error("encodeLayer: the encoder wrote a file without levels");
       return level;
     });
-    const levelData = new Uint8Array(levels.reduce((sum, level) => sum + level.levelData.length, 0));
-    let offset = 0;
-    for (const level of levels) {
-      levelData.set(level.levelData, offset);
-      offset += level.levelData.length;
-    }
-    return { levelData, uncompressedByteLength: levels.reduce((sum, level) => sum + level.uncompressedByteLength, 0) };
+    const joined = concat(levels.map((level) => level.levelData));
+    const uncompressedByteLength = levels.reduce((sum, level) => sum + level.uncompressedByteLength, 0);
+    if (!zlib) return { levelData: joined, uncompressedByteLength };
+    const levelData = Uint8Array.from(zlib.zstdCompressSync(joined, { params: { [zlib.constants.ZSTD_c_compressionLevel]: 19 } }));
+    return { levelData, uncompressedByteLength };
   });
+  first.supercompressionScheme = KHR_SUPERCOMPRESSION_ZSTD;
   first.pixelHeight = size;
   first.levelCount = files.length;
   return write(first);
 }
 
-/** A `size`² level's strips: at most `parts`, each a multiple of four rows high but perhaps the last. */
-function strips(data: Uint8Array, size: number, srgb: boolean, parts: number): Job[] {
+function concat(parts: Uint8Array[]): Uint8Array<ArrayBuffer> {
+  const joined = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    joined.set(part, offset);
+    offset += part.length;
+  }
+  return joined;
+}
+
+/**
+ * A `size`² level's strips: at most `parts`, each a multiple of four rows high but perhaps the last, each Zstandard
+ * compressed if `supercompress`.
+ */
+function strips(data: Uint8Array, size: number, srgb: boolean, supercompress: boolean, parts: number): Job[] {
   const rows = 4 * Math.ceil(size / parts / 4);
   const jobs: Job[] = [];
   // Sliced: each job owns its buffer, which moves to its worker.
   for (let y = 0; y < size; y += rows) {
     const height = Math.min(rows, size - y);
-    jobs.push({ data: data.slice(4 * size * y, 4 * size * (y + height)), width: size, height, srgb });
+    jobs.push({ data: data.slice(4 * size * y, 4 * size * (y + height)), width: size, height, srgb, supercompress });
   }
   return jobs;
 }
@@ -105,7 +123,7 @@ async function work(): Promise<void> {
         encoder ??= await start();
         const reply = await encoder.run(task.job);
         if ("file" in reply) task.resolve(reply.file);
-        else task.reject(new Error(`encodeImpostorAsync: ${reply.error}`));
+        else task.reject(new Error(`encodeLayer: ${reply.error}`));
       } catch (error) {
         // The worker failed to load or crashed; the next job gets a fresh one.
         task.reject(error);
@@ -198,7 +216,7 @@ function run(worker: Worker, job: Job): Promise<Reply> {
     const error = (event: Event) => {
       settle();
       const why = event instanceof ErrorEvent ? event.message : `${event.type} event`;
-      reject(new Error(`encodeImpostorAsync: the encoder worker failed (${why})`));
+      reject(new Error(`encodeLayer: the encoder worker failed (${why})`));
     };
     worker.addEventListener("message", message);
     worker.addEventListener("error", error);

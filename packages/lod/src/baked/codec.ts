@@ -3,7 +3,7 @@ import { pack, unpack } from "../codec/container.js";
 import { deviationOf, recordDeviation } from "../levels/index.js";
 import { boolean, fail, file, number, numbers, object, type Files } from "./fields.js";
 import { InteriorMappingMaterial } from "./interior/material.js";
-import { readTexture, writeTexture } from "./textures.js";
+import { readMap, readTexture, writeMap, writeTexture } from "./textures.js";
 
 /**
  * Encode an unmodified `bakeMesh` result, before adding it to a Lod or changing its
@@ -88,7 +88,7 @@ export async function encodeBakedMeshAsync(mesh: Mesh): Promise<Uint8Array> {
   const { boundingBox: box, boundingSphere: sphere } = geometry;
   if (!box || !sphere) fail("missing bounds");
   const meta = {
-    version: 4,
+    version: 5,
     name: mesh.name,
     bounds: [...box.min.toArray(), ...box.max.toArray(), ...sphere.center.toArray(), sphere.radius],
     deviation,
@@ -99,9 +99,9 @@ export async function encodeBakedMeshAsync(mesh: Mesh): Promise<Uint8Array> {
     receiveShadow: mesh.receiveShadow,
     side: material.side,
     alphaTest: material.alphaTest,
-    map: writeTexture(files, "map", material.map),
-    normal: writeTexture(files, "normal", material.normalMap),
-    orm: writeTexture(files, "orm", material.aoMap),
+    map: await writeMap(files, "map", material.map),
+    normal: await writeMap(files, "normal", material.normalMap),
+    orm: await writeMap(files, "orm", material.aoMap),
     rooms: rooms && {
       boxes: rooms.boxes.map((box) => [...box.min.toArray(), ...box.max.toArray()]),
       span: rooms.span,
@@ -117,7 +117,7 @@ export async function encodeBakedMeshAsync(mesh: Mesh): Promise<Uint8Array> {
 export async function decodeBakedMeshAsync(bytes: Uint8Array): Promise<Mesh> {
   const contents = await unpack(bytes, fail);
   const meta = object(contents.header);
-  if (meta.version !== 4) fail("unsupported version; bake it again");
+  if (meta.version !== 5) fail("unsupported version; bake it again");
   const names = meta.files;
   if (!Array.isArray(names) || names.length !== contents.files.length) fail("file names do not match the files");
   const files: Files = Object.fromEntries(
@@ -136,9 +136,7 @@ export async function decodeBakedMeshAsync(bytes: Uint8Array): Promise<Mesh> {
   const bounds = numbers(meta.bounds, 10);
   const side = meta.side === FrontSide ? FrontSide : meta.side === DoubleSide ? DoubleSide : fail("unsupported side");
   const alphaTest = meta.alphaTest === 0 ? 0 : meta.alphaTest === 0.5 ? 0.5 : fail("unsupported alpha test");
-  const map = readTexture(files, "map", meta.map, false);
-  const normalMap = readTexture(files, "normal", meta.normal, false);
-  const orm = readTexture(files, "orm", meta.orm, false);
+  const [map, normalMap, orm] = await Promise.all([readMap(files, "map", meta.map), readMap(files, "normal", meta.normal), readMap(files, "orm", meta.orm)]);
   const material = meta.rooms === null ? new MeshStandardNodeMaterial() : new InteriorMappingMaterial();
   material.setValues({ map, normalMap, aoMap: orm, roughnessMap: orm, metalnessMap: orm, roughness: 1, metalness: 1, side, alphaTest });
   if (material instanceof InteriorMappingMaterial) {

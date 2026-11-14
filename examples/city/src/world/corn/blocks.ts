@@ -10,7 +10,8 @@ const YELLOWER = new THREE.Color(1.05, 1, 0.85);
 
 /**
  * The blocks of a design, or a field's outer walls along x or z, as public/corn/index.glts draws them: after an empty
- * level 0, a canopy rises out of the soil near, then is ridged, then flat far away; a wall only rises.
+ * level 0, a canopy rises out of the soil near, then is ridged, then flat far away; a wall rises, then draws a small
+ * bake far away.
  */
 export interface Block {
   kind: "canopy" | "wall";

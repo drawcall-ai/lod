@@ -3,8 +3,8 @@ import { CachedLodLoader, foliageLevels, foliageModel, Lod } from "@drawcall/lod
 import * as THREE from "three/webgpu";
 
 // Poly Haven's small broadleaf tree (scripts/fetch-assets.ts fetches it) at levels of detail: the scan with its full
-// leaf geometry nearby, a large hemispherical impostor, then a 64 px one from 60 px. Its leaves are foliage; every
-// level casts and receives shadows, both sides of its faces.
+// leaf geometry nearby, a large hemispherical impostor, a 64 px one from 60 px, then a 16 px one from 20 px. Its leaves
+// are foliage; every level casts and receives shadows, both sides of its faces.
 /** How light passes through its leaves. */
 const FOLIAGE = { translucency: 0.6 };
 const loader = new CachedLodLoader(loadingManager, {
@@ -22,6 +22,7 @@ const levels = await loader.loadAsync({
   levels: [
     { type: "impostor", layout: "hemi", maxPixels: 900, resolution: 256, frames: 10 },
     { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
+    { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 16, frames: 8 },
   ],
 });
 const lod = new Lod(levels, 1, { manager: loadingManager });
