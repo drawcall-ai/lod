@@ -13,7 +13,7 @@ const code: Input[] = [
 /** Plans the city, which takes seconds; the vitecache plugin plans the seeds the app loads literally. */
 export class CachedPlanLoader {
   async loadAsync({ seed }: { seed: number }): Promise<Plan> {
-    const entry = new CacheEntry({ version: "city-plan@5", dependencies: { seed: { value: seed } } });
+    const entry = new CacheEntry({ version: "city-plan@6", dependencies: { seed: { value: seed } } });
     let bytes = await entry.load();
     if (!bytes) {
       bytes = zipSync(await encode(plan(seed)), { level: 0 });

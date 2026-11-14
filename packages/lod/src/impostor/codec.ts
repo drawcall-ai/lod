@@ -2,8 +2,8 @@ import { read } from "ktx-parse";
 import { RGBAFormat } from "three/webgpu";
 import { pack, unpack } from "../codec/container.js";
 import { validateImpostor, type Impostor, type ImpostorMap } from "./impostor.js";
-import { encodeLayer } from "./ktx2/encode.js";
-import { transcode } from "./ktx2/transcode.js";
+import { encodeLayer } from "../ktx2/encode.js";
+import { transcode } from "../ktx2/transcode.js";
 
 const srgb = (map: ImpostorMap) => map === "base" || map === "emissive";
 

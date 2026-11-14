@@ -1,8 +1,8 @@
-// The worker thread an impostor map encodes in under Node, which starts it at this module's own URL, given that URL as
+// The worker thread a map encodes in under Node, which starts it at this module's own URL, given that URL as
 // its workerData. Browsers run their encoder workers from source text instead (see `encode.ts`).
 import type { Job, Reply } from "./encode.js";
 import { basisEncoder, encoderSources } from "./uastc.js";
-import { inNode, nodeOnly } from "../../node-process.js";
+import { inNode, nodeOnly } from "../node-process.js";
 
 export const url = import.meta.url;
 

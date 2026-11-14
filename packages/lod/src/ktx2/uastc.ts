@@ -25,9 +25,9 @@ export type Encode = (job: Job) => Uint8Array<ArrayBuffer>;
 
 /**
  * basisu's encoder, started from its Emscripten module's factory and binary (see `encoderSources`): it encodes rows of
- * a mip level as a KTX2 file of UASTC LDR 4x4 with Zstandard supercompression, at level 1 (see `packFlags`) and without
- * RDO, which would trade normal accuracy for size. The encoder's own mips would filter level 0, so each baked level is
- * encoded on its own (see `encodeLayer`).
+ * a mip level as a KTX2 file of UASTC LDR 4x4, Zstandard supercompressed if the job asks, at level 1 (see `packFlags`)
+ * and without RDO, which would trade normal accuracy for size. The encoder's own mips would filter level 0, so each
+ * baked level is encoded on its own (see `encodeLayer`).
  *
  * Self-contained, using no import or name from outside its body, since browser workers run its source text (see
  * `encode.ts`).
@@ -50,7 +50,7 @@ export async function basisEncoder(factory: unknown, wasmBinary: Uint8Array): Pr
   // desktops and most phones have.
   const packFlags = 1 | 128;
 
-  return ({ data, width, height, srgb }) => {
+  return ({ data, width, height, srgb, supercompress }) => {
     const encoder = new basis.BasisEncoder();
     try {
       encoder.setCreateKTX2File(true);
@@ -62,7 +62,7 @@ export async function basisEncoder(factory: unknown, wasmBinary: Uint8Array): Pr
       encoder.setKTX2AndBasisSRGBTransferFunc(srgb);
       encoder.setMipGen(false);
       encoder.setPackUASTCFlags(packFlags);
-      encoder.setKTX2UASTCSupercompression(true);
+      encoder.setKTX2UASTCSupercompression(supercompress);
       const out = new Uint8Array(4 * width * height + 65536);
       const length = encoder.encode(out);
       if (length === 0) throw new Error(`the Basis encoder failed on a ${width}x${height} image`);

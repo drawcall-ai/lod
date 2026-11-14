@@ -29,10 +29,8 @@ export class Terrain {
     input:
       | Float32Array
       | { seed: number; flats: { x: number; z: number; radius: number }[]; creek: { course: THREE.Vector2[]; depth: number; crossings: THREE.Vector2[] } },
-    geometry?: THREE.BufferGeometry,
   ) {
     const n = this.cells + 1;
-    if (geometry) meshes.set(this, geometry);
     if (input instanceof Float32Array) {
       if (input.length !== n * n || input.some((height) => !Number.isFinite(height))) throw new Error("Invalid terrain heightfield");
       this.heights = input;

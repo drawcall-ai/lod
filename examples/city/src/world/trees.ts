@@ -74,18 +74,17 @@ export async function trees(plan: Plan, renderer: THREE.Renderer, wind?: Wind): 
   });
 
   const plant = planter(plan, scatter, renderer);
-  const forest = (x: number, z: number) => plan.land.at(x, z) === Use.Forest;
   const inside = (x: number, z: number) => plan.forests.some((f) => inForest(f, x, z, -EDGE));
   const mixes: [string, Mix, (x: number, z: number) => boolean][] = [
-    ["forest", INSIDE, (x, z) => forest(x, z) && inside(x, z)],
-    ["forest edge", BORDER, (x, z) => forest(x, z) && !inside(x, z)],
+    ["forest", INSIDE, inside],
+    ["forest edge", BORDER, (x, z) => !inside(x, z)],
   ];
   const stands = mixes.map(([name, mix, grows]) => {
     const plantings: Planting[] = mix.flatMap(({ id, share, scale }) => {
       const urls = urlsOf(id);
       return urls.map((url) => ({ url, share: share / urls.length, scale, tinted: true }));
     });
-    return plant({ name, tile: TILE, density: DENSITY, radius: RADIUS, grows }, plantings);
+    return plant({ name, tile: TILE, density: DENSITY, radius: RADIUS, ground: Use.Forest, grows }, plantings);
   });
   const [planted] = await Promise.all([Promise.all(stands), Promise.all(placing)]);
   await scatter.seal();

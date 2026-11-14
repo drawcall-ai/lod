@@ -122,7 +122,12 @@ export class Corn extends THREE.Object3D {
       if (!rising) throw new Error(`${lod.name} has no rising level`);
       // the measure is the distance to the block's centre; a part of it is up to its radius nearer or farther
       rising.maxPixels = (diameter * scale) / ((1 - Lod.fade) * Math.max(risen - RAMP - diameter / 2, 0.5));
-      if (kind === "wall") continue;
+      if (kind === "wall") {
+        const far = lod.levels[2];
+        if (!far) throw new Error(`${lod.name} needs a far level`);
+        far.maxPixels = Math.min(FLAT_PIXELS, rising.maxPixels * (1 - Lod.fade));
+        continue;
+      }
       if (!ridged || !flat) throw new Error(`${lod.name} needs ridged and flat levels`);
       ridged.maxPixels = Math.min((diameter * scale) / (risen + diameter / 2), rising.maxPixels * (1 - Lod.fade));
       flat.maxPixels = Math.min(FLAT_PIXELS, ridged.maxPixels * (1 - Lod.fade));

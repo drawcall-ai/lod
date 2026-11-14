@@ -5,6 +5,7 @@ import { at } from "../at.js";
 import { createBakeRenderer } from "../bake.js";
 import { disposeRecursive } from "../dispose.js";
 import { framePixels } from "../impostor/impostor.js";
+import { prefetchTranscoder } from "../ktx2/transcode.js";
 import { resolveThresholds, type LodLevel } from "../levels/index.js";
 import { meshoptDecoder } from "../meshopt.js";
 import { isMesh, isObject3D, rejectSkinned } from "../three.js";
@@ -78,6 +79,8 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
   override async loadAsync(request: LodRequest): Promise<LodLevel[]> {
     const ladder = normalize(request, this.path, (url) => this.publicPath(this.manager.resolveURL(url)));
     const { url, levels: requests } = ladder;
+    // Where impostor and baked maps are decoded, not built: in browsers.
+    if (!this.buildsAll && requests.some(({ type }) => type === "impostor" || type === "baked")) prefetchTranscoder();
     this.ladders++;
     const context = new LodLoadContext(
       () => this.loadAsset(url),
@@ -93,16 +96,22 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
       const eager = requests.flatMap((level, index) =>
         level.type !== "empty" && (this.buildsAll || (level.type !== "impostor" && level.maxPixels === undefined)) ? [index + 1] : [],
       );
-      // Only what measures a default threshold: bytes no camera asked for are not held.
+      // A camera draws the coarsest drawable level first, so a browser reads it alongside the ladder's. A failed read
+      // misses, and its load reads again.
+      const coarsest = requests.reduce((last, { type }, position) => (type === "empty" ? last : position + 1), 0);
+      if (!this.buildsAll && coarsest > 0 && !eager.includes(coarsest))
+        context.setDescribed(
+          coarsest,
+          entryOf(ladder, coarsest, this.options)
+            .load()
+            .catch(() => undefined),
+        );
+      // What measures each eager level's default threshold.
       const measured = new Map<number, Entry["level"]>();
       for (const index of eager) {
-        let built = false;
-        const level = await this.cached(ladder, index, async () => {
-          built = true;
-          return this.build(ladder, index, await context.source());
-        });
-        // A level built here is handed to its first load; a stored one is read again then.
-        if (built) context.setBuilt(index, level);
+        const level = await this.cached(ladder, index, async () => this.build(ladder, index, await context.source()));
+        // Handed to its first load, which would otherwise fetch a stored level again.
+        context.setDescribed(index, Promise.resolve(level));
         measured.set(index, readLevel(level).level);
       }
       const shape = readShape(await this.cached(ladder, "shape", async () => encodeShape(shapeOf(await context.source()))));
@@ -143,7 +152,7 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
           if (level.type === "empty")
             return { load: once(async () => context.arrive(new Group(), index, { materials: true })), maxPixels, box: new Box3(), hold };
           const load = once(async () => {
-            const bytes = context.takeBuilt(index) ?? (await this.levelBytes(ladder, index, context.take()));
+            const bytes = await this.levelBytes(ladder, index, context.take(), context.takeDescribed(index));
             const object = await decodeLevel(level.type, readLevel(bytes), materials, level.type === "impostor" ? level.draw : undefined);
             // A simplified level draws with the source level's materials, which that level frees.
             return context.arrive(object, index, { materials: level.type !== "simplify" });
@@ -186,18 +195,28 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
     return [];
   }
 
-  /** A deferred level's bytes, built from `spare`, the ladder's source, or from a source of its own. Disposes `spare` either way. */
-  private async levelBytes(ladder: Ladder, index: number, spare: Object3D | undefined): Promise<Uint8Array> {
+  /**
+   * A deferred level's bytes: those `described`, else stored, else built from `spare`, the ladder's source, or from a
+   * source of its own. Disposes `spare` either way.
+   */
+  private async levelBytes(
+    ladder: Ladder,
+    index: number,
+    spare: Object3D | undefined,
+    described: Promise<Uint8Array | undefined> | undefined,
+  ): Promise<Uint8Array> {
     let used = false;
-    const bytes = await this.cached(ladder, index, async () => {
-      used = true;
-      const source = spare ?? (await this.loadAsset(ladder.url));
-      try {
-        return await this.build(ladder, index, source);
-      } finally {
-        disposeRecursive(source);
-      }
-    });
+    const bytes =
+      (await described) ??
+      (await this.cached(ladder, index, async () => {
+        used = true;
+        const source = spare ?? (await this.loadAsset(ladder.url));
+        try {
+          return await this.build(ladder, index, source);
+        } finally {
+          disposeRecursive(source);
+        }
+      }));
     if (spare && !used) disposeRecursive(spare);
     return bytes;
   }

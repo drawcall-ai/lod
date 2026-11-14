@@ -1,5 +1,5 @@
 import { cachedNumber, cachedRecord } from "./values.ts";
-import { MeshBasicMaterial, Vector2 } from "three/webgpu";
+import { Vector2 } from "three/webgpu";
 import { encode as encodeGeometry, decode as decodeGeometry } from "./geometry.ts";
 import { roadShapes, restoreRoadShapes } from "../roads.ts";
 import { Land } from "../land.ts";
@@ -13,11 +13,8 @@ type Files = Record<string, Uint8Array>;
 
 export async function encode(world: Plan): Promise<Files> {
   const { terrain, land, models, fixtures, streetSigns, ...layout } = world;
-  const material = new MeshBasicMaterial();
   const files: Files = {};
-  const geometries = { terrain: terrain.mesh(material).geometry, ...roadShapes(world) };
-  for (const [name, geometry] of Object.entries(geometries)) encodeGeometry(geometry, name, files);
-  material.dispose();
+  for (const [name, geometry] of Object.entries(roadShapes(world))) encodeGeometry(geometry, name, files);
   return transform(
     {
       ...files,
@@ -38,7 +35,7 @@ export async function decode(files: Files): Promise<Plan> {
   if (heights.byteLength % 4) throw new Error("Invalid terrain bytes");
   const geometry = (name: string) => decodeGeometry(name, files);
   const world: Plan = {
-    terrain: new Terrain(new Float32Array(heights.slice().buffer), geometry("terrain")),
+    terrain: new Terrain(new Float32Array(heights.slice().buffer)),
     land: new Land(required(files, "cells"), required(files, "parcels")),
     roads: list(data.roads, road),
     plaza: rect(data.plaza),

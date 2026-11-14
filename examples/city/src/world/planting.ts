@@ -13,6 +13,7 @@ import { reach } from "./bounds.ts";
 import type { Plan } from "./plan.ts";
 import { NearTiles, tileAt, tileKey, tilesAround } from "./near-tiles.ts";
 import type { Range, Scatter } from "./scatter.ts";
+import type { Use } from "./land.ts";
 import { CELL, EXTENT } from "./terrain.ts";
 
 /** Tiles planted per frame. */
@@ -34,11 +35,14 @@ export interface Stand {
   name: string;
   /** Edge of a tile (m). */
   tile: number;
-  /** Plants per square metre, before `grows`. */
+  /** Plants per square metre, before `ground` and `grows`. */
   density: number;
   /** How far from the camera they are held (m). */
   radius: number;
-  grows: (x: number, z: number) => boolean;
+  /** The land they grow on. */
+  ground: Use;
+  /** Where on that land they grow, by a cell's centre; everywhere without. */
+  grows?: (x: number, z: number) => boolean;
 }
 
 /**
@@ -82,20 +86,22 @@ export function planter(plan: Plan, scatter: Scatter, renderer: THREE.Renderer) 
 
   /** The tiles of `stand` near the camera, planted with `plantings`, whose instances it takes before `scatter` seals. */
   return async (stand: Stand, plantings: readonly Planting[]): Promise<NearTiles> => {
-    const { tile, density, radius, grows } = stand;
-    const side = plan.land.size;
+    const { tile, density, radius, ground: use, grows } = stand;
+    const { size: side, cells: uses } = plan.land;
     const raster = (2 * EXTENT) / side;
     const growth = new Uint32Array(Math.ceil((side * side) / 32));
     const holding = new Set<number>();
-    for (let j = 0; j < side; j++)
-      for (let i = 0; i < side; i++) {
-        const x = -EXTENT + (i + 0.5) * raster;
-        const z = -EXTENT + (j + 0.5) * raster;
-        if (!grows(x, z)) continue;
-        const k = j * side + i;
-        growth[k >>> 5] = (growth[k >>> 5] ?? 0) | (1 << (k & 31));
-        holding.add(tileKey(Math.floor(x / tile), Math.floor(z / tile)));
-      }
+    // cells along a row fall in the same tile: add a tile once per run of them
+    let held = NaN;
+    for (let k = 0; k < uses.length; k++) {
+      if (uses[k] !== use) continue;
+      const x = -EXTENT + ((k % side) + 0.5) * raster;
+      const z = -EXTENT + (Math.floor(k / side) + 0.5) * raster;
+      if (grows && !grows(x, z)) continue;
+      growth[k >>> 5] = (growth[k >>> 5] ?? 0) | (1 << (k & 31));
+      const key = tileKey(Math.floor(x / tile), Math.floor(z / tile));
+      if (key !== held) holding.add((held = key));
+    }
 
     const perSide = Math.max(1, Math.round(tile * Math.sqrt(density)));
     const capacity = perSide * perSide;
@@ -159,8 +165,12 @@ export function planter(plan: Plan, scatter: Scatter, renderer: THREE.Renderer) 
       const paint = Fn(() => {
         const at = uint(start).add(slot.node.mul(count)).add(instanceIndex);
         // a mat4 is four vec4 columns, its fourth the translation
-        const place = storage(matrices, "vec4", matrices.count * 4).toReadOnly().element(at.mul(4).add(3));
-        storage(colors, "vec4", colors.count).element(at).assign(vec4(color(place.xz), 1));
+        const place = storage(matrices, "vec4", matrices.count * 4)
+          .toReadOnly()
+          .element(at.mul(4).add(3));
+        storage(colors, "vec4", colors.count)
+          .element(at)
+          .assign(vec4(color(place.xz), 1));
       })().compute(count);
       return [plant, paint];
     };

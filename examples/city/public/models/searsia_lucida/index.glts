@@ -3,8 +3,8 @@ import { CachedLodLoader, foliageLevels, foliageModel, Lod, type LodLevel } from
 import * as THREE from "three/webgpu";
 
 // Poly Haven's searsia lucida shrub (scripts/fetch-assets.ts fetches it), ?variant=a or e, at levels of detail: the
-// scan, a detailed hemispherical impostor, then a 64 px one from 60 px. Its leaves are foliage; every level casts and
-// receives shadows, both sides of its faces.
+// scan, a detailed hemispherical impostor, a 64 px one from 60 px, then a 16 px one from 20 px. Its leaves are foliage;
+// every level casts and receives shadows, both sides of its faces.
 /** How light passes through its leaves. */
 const FOLIAGE = { translucency: 0.6 };
 const loader = new CachedLodLoader(loadingManager, {
@@ -24,6 +24,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
       levels: [
         { type: "impostor", layout: "hemi", maxPixels: 300 },
         { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
+        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 16, frames: 8 },
       ],
     }),
   e: () =>
@@ -32,6 +33,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
       levels: [
         { type: "impostor", layout: "hemi", maxPixels: 300 },
         { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
+        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 16, frames: 8 },
       ],
     }),
 };
