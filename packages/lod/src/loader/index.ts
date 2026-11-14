@@ -96,13 +96,14 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
       const eager = requests.flatMap((level, index) =>
         level.type !== "empty" && (this.buildsAll || (level.type !== "impostor" && level.maxPixels === undefined)) ? [index + 1] : [],
       );
-      // A camera draws the coarsest drawable level first, so a browser reads it alongside the ladder's. A failed read
-      // misses, and its load reads again.
-      const coarsest = requests.reduce((last, { type }, position) => (type === "empty" ? last : position + 1), 0);
-      if (!this.buildsAll && coarsest > 0 && !eager.includes(coarsest))
+      // A ladder that ends drawn draws its last level at any distance, and nothing before that level loads, so a browser
+      // reads it alongside the ladder's; a ladder ending empty may never draw. A failed read misses, and its load reads
+      // again.
+      const last = requests.length;
+      if (!this.buildsAll && last > 0 && requests[last - 1]?.type !== "empty" && !eager.includes(last))
         context.setDescribed(
-          coarsest,
-          entryOf(ladder, coarsest, this.options)
+          last,
+          entryOf(ladder, last, this.options)
             .load()
             .catch(() => undefined),
         );

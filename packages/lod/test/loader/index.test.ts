@@ -21,7 +21,7 @@ import { InteriorMappingMaterial } from "../../src/baked/interior/material.js";
 import { ImpostorMesh } from "../../src/impostor/mesh/index.js";
 import { CachedLodLoader } from "../../src/loader/index.js";
 import { GPU_TIMEOUT, eventually, nextLevel, render, renderLod } from "../renderer.js";
-import type { LodRequest } from "../../src/loader/request.js";
+import type { LodLevelRequest, LodRequest } from "../../src/loader/request.js";
 import { drawnMeshes } from "../instanced/fixture.js";
 
 vi.mock("vitecache", async () => ({ CacheEntry: (await import("./fixture.js")).CacheEntry }));
@@ -164,7 +164,7 @@ describe("CachedLodLoader", () => {
     expect(cache.saved).toHaveLength(2);
     cache.loaded.length = 0;
     const warm = await loader.loadAsync(request);
-    // The impostor, the coarsest level, is read alongside the measured level and the shape: never built, it misses.
+    // The impostor, the last level, is read alongside the measured level and the shape: never built, it misses.
     expect(cache.loaded).toEqual([false, true, true]);
     expect(load).toHaveBeenCalledOnce();
     expect(warm.map((level) => level.maxPixels)).toEqual(cold.map((level) => level.maxPixels));
@@ -234,25 +234,26 @@ describe("CachedLodLoader", () => {
     expect(cache.loaded).toEqual([true, true]);
   });
 
-  it("reads the coarsest level alongside the ladder, handing it to the level's load", async () => {
+  it("reads the last level of a ladder that ends drawn alongside the ladder, handing it to the level's load", async () => {
     const { manager } = sourceFixture(() => new Mesh(new SphereGeometry(1, 12, 8), new MeshStandardMaterial()));
     const loader = new CachedLodLoader(manager);
-    const request: LodRequest = {
-      url: "/coarse.glb",
-      levels: [
-        { type: "simplify", ratio: 0.5, maxPixels: 200 },
-        { type: "simplify", ratio: 0.1, maxPixels: 50 },
-        { type: "empty", maxPixels: 1 },
-      ],
-    };
+    const levels: LodLevelRequest[] = [
+      { type: "simplify", ratio: 0.5, maxPixels: 200 },
+      { type: "simplify", ratio: 0.1, maxPixels: 50 },
+    ];
+    const request: LodRequest = { url: "/coarse.glb", levels };
     const cold = await loader.loadAsync(request);
     await Promise.all(cold.map((level) => level.load?.()));
     cache.loaded.length = 0;
     const [, , coarsest] = await loader.loadAsync(request);
-    // Before any camera: the coarsest drawable level, then the shape.
+    // Before any camera: the last level, then the shape.
     expect(cache.loaded).toEqual([true, true]);
     await coarsest?.load?.();
     expect(cache.loaded).toEqual([true, true]);
+    // Ending empty, a ladder may never draw: only its shape is read.
+    cache.loaded.length = 0;
+    await loader.loadAsync({ ...request, levels: [...levels, { type: "empty", maxPixels: 1 }] });
+    expect(cache.loaded).toEqual([true]);
   });
 
   it("preloads a placed source when it is the only drawable, on cold and warm loads", async () => {
