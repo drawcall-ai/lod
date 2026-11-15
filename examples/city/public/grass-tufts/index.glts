@@ -1,0 +1,176 @@
+import { isPreview, loadingManager, onDispose, scene } from "@drawcall/glts";
+import { CachedLodLoader, foliageLevels, foliageModel, Lod, type LodLevel } from "@drawcall/lod";
+import * as THREE from "three/webgpu";
+
+// Poly Haven's grass clumps, ?variant=tiny_a, tiny_b, tiny_c, tiny_d, tiny_e, tiny_f, small_a, small_b, mid_a,
+// mid_b, mid_c, large_a, large_b, large_c, tall_a, tall_b or tall_c, at levels of detail: the scan, a 128 px
+// hemispherical impostor, gone below 3 px. Its leaves are foliage. It receives shadows and casts none.
+/** How light passes through its leaves. */
+const FOLIAGE = { translucency: 0.6 };
+const loader = new CachedLodLoader(loadingManager, {
+  onLevel: (object) => {
+    foliageModel(object, FOLIAGE);
+    foliageLevels(object, FOLIAGE);
+    object.traverse((node) => {
+      node.castShadow = false;
+      node.receiveShadow = true;
+    });
+  },
+});
+const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
+  tiny_a: () =>
+    loader.loadAsync({
+      url: "./grass_medium_01_tiny_a_LOD0.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+  tiny_b: () =>
+    loader.loadAsync({
+      url: "./grass_medium_01_tiny_b_LOD0.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+  tiny_c: () =>
+    loader.loadAsync({
+      url: "./grass_medium_01_tiny_c_LOD0.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+  tiny_d: () =>
+    loader.loadAsync({
+      url: "./grass_medium_01_tiny_d_LOD0.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+  tiny_e: () =>
+    loader.loadAsync({
+      url: "./grass_medium_01_tiny_e_LOD0.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+  tiny_f: () =>
+    loader.loadAsync({
+      url: "./grass_medium_01_tiny_f_LOD0.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+  small_a: () =>
+    loader.loadAsync({
+      url: "./grass_medium_01_small_a_LOD0.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+  small_b: () =>
+    loader.loadAsync({
+      url: "./grass_medium_01_small_b_LOD0.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+  mid_a: () =>
+    loader.loadAsync({
+      url: "./grass_medium_01_mid_a_LOD0.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+  mid_b: () =>
+    loader.loadAsync({
+      url: "./grass_medium_01_mid_b_LOD0.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+  mid_c: () =>
+    loader.loadAsync({
+      url: "./grass_medium_01_mid_c_LOD0.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+  large_a: () =>
+    loader.loadAsync({
+      url: "./grass_medium_01_large_a_LOD0.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+  large_b: () =>
+    loader.loadAsync({
+      url: "./grass_medium_01_large_b_LOD0.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+  large_c: () =>
+    loader.loadAsync({
+      url: "./grass_medium_01_large_c_LOD0.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+  tall_a: () =>
+    loader.loadAsync({
+      url: "./grass_medium_01_tall_a_LOD0.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+  tall_b: () =>
+    loader.loadAsync({
+      url: "./grass_medium_01_tall_b_LOD0.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+  tall_c: () =>
+    loader.loadAsync({
+      url: "./grass_medium_01_tall_c_LOD0.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+};
+const variant = new URL(import.meta.url).searchParams.get("variant") ?? "tiny_a";
+const load = LADDERS[variant];
+if (!load)
+  throw new Error(
+    `grass_medium_01: variant must be tiny_a, tiny_b, tiny_c, tiny_d, tiny_e, tiny_f, small_a, small_b, mid_a, mid_b, mid_c, large_a, large_b, large_c, tall_a, tall_b or tall_c, not ${variant}`,
+  );
+const lod = new Lod(await load(), 1, { manager: loadingManager });
+scene.add(lod);
+onDispose(() => lod.dispose());
+
+scene.defaultCamera = new THREE.PerspectiveCamera(30, 1, 0.026, 2.64);
+scene.defaultCamera.position.set(0.145, 0.199, 0.205);
+scene.defaultCamera.lookAt(0, 0.054, 0);
+
+if (isPreview) {
+  const sun = new THREE.DirectionalLight("white", 3);
+  sun.position.set(4, 6, 3);
+  scene.add(sun, sun.target, new THREE.HemisphereLight("#dbe6f5", "#5b5140", 1.5));
+}

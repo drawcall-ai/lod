@@ -1,8 +1,8 @@
-# scripts/fetch-assets.ts downloads these into the folders that load them
+# scripts/fetch-assets.ts downloads these: the page's own textures and sky, and the Market assets' binary files
 public/assets/
 public/*/textures/
-public/models/*/*.glb
-public/models/*/images/
+public/*/images/
+public/*/*.glb
 .artifacts/
 dist/
 public/_vitecache/*

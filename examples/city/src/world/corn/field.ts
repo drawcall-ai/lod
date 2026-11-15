@@ -1,11 +1,11 @@
-import { HERO_VARIANT, BLOCK, plantTurn, type Plant } from "../../../public/corn/layout.ts";
+import { HERO_VARIANT, BLOCK, plantTurn, type Plant } from "../../../public/corn-plant/layout.ts";
 import * as THREE from "three/webgpu";
 import seedrandom from "seedrandom";
 import type { NearTile, TileCluster } from "../near-tiles.ts";
 import type { Range } from "../scatter.ts";
 import { axes, type Field, type Plan } from "../plan.ts";
 import type { Terrain } from "../terrain.ts";
-import type { Wall } from "../../../public/corn/block/model.ts";
+import type { Wall } from "../../../public/corn-plant/block/model.ts";
 
 /** A side of a block on its field's boundary: rows end there (`x`) or run along it (`z`), on the block's +side or, turned, its -side. */
 export interface TileWall {

@@ -11,7 +11,7 @@ import { Use } from "./land.ts";
 import { reachFor } from "./screen.ts";
 import { type Plan, TOWN } from "./plan.ts";
 import { Scatter } from "./scatter.ts";
-import { GREEN } from "../../public/grass/green.ts";
+import { GREEN } from "../../public/grass-patch/green.ts";
 
 /** Edge of a ground-cover tile (m). */
 const TILE = 6;
@@ -45,7 +45,7 @@ const GROUND_COVER: GroundKind[] = [
     reach: 18,
     scale: [0.9, 1.1],
     grass: true,
-    urls: ["/grass/index.glts?kind=lawn&variant=0", "/grass/index.glts?kind=lawn&variant=1"],
+    urls: ["/grass-patch/index.glts?kind=lawn&variant=0", "/grass-patch/index.glts?kind=lawn&variant=1"],
   },
   {
     name: "meadow",
@@ -54,7 +54,7 @@ const GROUND_COVER: GroundKind[] = [
     reach: 22,
     scale: [0.8, 1.25],
     grass: true,
-    urls: ["/grass/index.glts?kind=meadow&variant=0", "/grass/index.glts?kind=meadow&variant=1"],
+    urls: ["/grass-patch/index.glts?kind=meadow&variant=0", "/grass-patch/index.glts?kind=meadow&variant=1"],
   },
   {
     name: "dandelions",
@@ -63,7 +63,7 @@ const GROUND_COVER: GroundKind[] = [
     reach: 45,
     scale: [0.8, 1.2],
     grass: false,
-    urls: ["/models/dandelion_01/index.glts?variant=a", "/models/dandelion_01/index.glts?variant=c"],
+    urls: ["/dandelion/index.glts?variant=a", "/dandelion/index.glts?variant=c"],
   },
   {
     name: "ferns",
@@ -72,7 +72,7 @@ const GROUND_COVER: GroundKind[] = [
     reach: 40,
     scale: [0.8, 1.4],
     grass: false,
-    urls: ["/models/fern_02/index.glts?variant=a", "/models/fern_02/index.glts?variant=b"],
+    urls: ["/fern/index.glts?variant=a", "/fern/index.glts?variant=b"],
   },
   {
     name: "nettles",
@@ -81,7 +81,7 @@ const GROUND_COVER: GroundKind[] = [
     reach: 40,
     scale: [0.9, 1.3],
     grass: false,
-    urls: ["/models/nettle_plant/index.glts?variant=medium", "/models/nettle_plant/index.glts?variant=tall"],
+    urls: ["/nettle-plant/index.glts?variant=medium_a", "/nettle-plant/index.glts?variant=tall_a"],
   },
 ];
 

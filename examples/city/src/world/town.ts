@@ -1,5 +1,5 @@
 import * as THREE from "three/webgpu";
-import type { HouseParams } from "../../public/house/params.ts";
+import type { HouseParams } from "../../public/suburban-house/params.ts";
 import type seedrandom from "seedrandom";
 import { footing, inRect, PAVEMENT, spot, type Rect, type Road, type Spot } from "./plan.ts";
 import { fence, frontHedge, garden, type Fixture } from "./gardens.ts";

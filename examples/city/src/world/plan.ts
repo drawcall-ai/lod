@@ -1,5 +1,5 @@
 import * as THREE from "three/webgpu";
-import { HOUSE_VARIANTS, houseParams, type HouseParams } from "../../public/house/params.ts";
+import { HOUSE_VARIANTS, houseParams, type HouseParams } from "../../public/suburban-house/params.ts";
 import seedrandom from "seedrandom";
 import { type Forest, forestClearings, forestEdge } from "./zones.ts";
 import { country, crossRoad } from "./country.ts";
@@ -63,7 +63,7 @@ export interface Plan {
   church: Spot;
   /** Street-name signs, by name. */
   streetSigns: Map<StreetName, Spot[]>;
-  /** Fetched models (props, trees, shrubs) by manifest id. */
+  /** Scanned models (props, trees, shrubs) by Poly Haven id. */
   models: Map<string, Spot[]>;
 }
 

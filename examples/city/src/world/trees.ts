@@ -32,16 +32,16 @@ const BORDER: Mix = [
 ];
 
 /**
- * Trees, shrubs and garden perennials (Poly Haven scans, every leaf a card, as assets in public/models), by species, an
+ * Trees, shrubs and garden perennials (Poly Haven scans, every leaf a card, as Market assets in public/), by species, an
  * asset per variant.
  */
 const SPECIES: Record<string, string[]> = {
-  tree_small_02: ["/models/tree_small_02/index.glts"],
-  searsia_lucida: ["/models/searsia_lucida/index.glts?variant=a", "/models/searsia_lucida/index.glts?variant=e"],
-  pine_sapling_small: ["/models/pine_sapling_small/index.glts?variant=a", "/models/pine_sapling_small/index.glts?variant=b"],
-  shrub_02: ["/models/shrub_02/index.glts?variant=a", "/models/shrub_02/index.glts?variant=c"],
-  fern_02: ["/models/fern_02/index.glts?variant=a", "/models/fern_02/index.glts?variant=b"],
-  nettle_plant: ["/models/nettle_plant/index.glts?variant=medium", "/models/nettle_plant/index.glts?variant=tall"],
+  tree_small_02: ["/small-tree/index.glts"],
+  searsia_lucida: ["/searsia-lucida/index.glts?variant=a", "/searsia-lucida/index.glts?variant=e"],
+  pine_sapling_small: ["/pine-sapling/index.glts?variant=a", "/pine-sapling/index.glts?variant=b"],
+  shrub_02: ["/shrub/index.glts?variant=a&shadow=1", "/shrub/index.glts?variant=c&shadow=1"],
+  fern_02: ["/fern/index.glts?variant=a", "/fern/index.glts?variant=b"],
+  nettle_plant: ["/nettle-plant/index.glts?variant=medium_a", "/nettle-plant/index.glts?variant=tall_a"],
 };
 
 /**

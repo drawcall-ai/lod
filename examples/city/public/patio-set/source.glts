@@ -10,7 +10,8 @@ function patioSet(): THREE.Group {
   parts.add(paint, new THREE.CylinderGeometry(0.03, 0.03, 0.72, 8).translate(0, 0.36, 0));
   for (let k = 0; k < 4; k++) {
     const a = (k * Math.PI) / 2 + 0.3;
-    const m = new THREE.Matrix4().makeRotationY(-a).setPosition(Math.cos(a) * 0.75, 0, Math.sin(a) * 0.75);
+    // each chair faces the table: its back (+z) turned outward, along (cos a, sin a)
+    const m = new THREE.Matrix4().makeRotationY(Math.PI / 2 - a).setPosition(Math.cos(a) * 0.75, 0, Math.sin(a) * 0.75);
     parts.add(paint, box(0.42, 0.03, 0.42).translate(0, 0.45, 0).applyMatrix4(m));
     parts.add(paint, box(0.42, 0.45, 0.03).translate(0, 0.68, 0.2).applyMatrix4(m));
     for (const [x, z] of [

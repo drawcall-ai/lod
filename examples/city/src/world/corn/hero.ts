@@ -1,6 +1,6 @@
 import * as THREE from "three/webgpu";
 import type { GLTSScene } from "@drawcall/glts";
-import { HERO_VARIANT } from "../../../public/corn/layout.ts";
+import { HERO_VARIANT } from "../../../public/corn-plant/layout.ts";
 import { scripts } from "../../loading.ts";
 import { sourceBox } from "../bounds.ts";
 import { lodOf } from "../scatter.ts";
@@ -13,7 +13,10 @@ export async function heroPlant(
   terrain: Terrain,
 ): Promise<{ hero: GLTSScene; ladybird: GLTSScene; anchors: { hero: THREE.Vector3; ladybird: THREE.Vector3 } }> {
   const at = new THREE.Vector3(spot.at.x, terrain.height(spot.at.x, spot.at.z), spot.at.z);
-  const [hero, ladybird] = await Promise.all([scripts.loadAsync(`/corn/index.glts?variant=${HERO_VARIANT}&hero=1`), scripts.loadAsync("/ladybird/index.glts")]);
+  const [hero, ladybird] = await Promise.all([
+    scripts.loadAsync(`/corn-plant/index.glts?variant=${HERO_VARIANT}&hero=1`),
+    scripts.loadAsync("/ladybird/index.glts"),
+  ]);
   const centre = sourceBox(lodOf(ladybird).levels).getCenter(new THREE.Vector3());
   hero.name = "hero corn plant";
   hero.position.copy(at);

@@ -10,7 +10,7 @@ type MapName = (typeof maps)[number];
 /** Poly Haven's name of each map. */
 const keys = { diff: "Diffuse", nor: "nor_gl", arm: "arm" } as const;
 
-/** Where set `id`'s map is encoded, once, for every folder that draws the set. */
+/** Where set `id`'s map is encoded. */
 const encoded = (id: string, map: MapName) => `${cache}${id}/${map}.webp`;
 
 /** Copies set `id`, encoded by `textureSet` or `ambientSet`, into `folder` as textures/<id>/{diff,nor,arm}.webp. */

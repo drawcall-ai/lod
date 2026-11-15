@@ -1,0 +1,85 @@
+import { isPreview, loadingManager, onDispose, scene } from "@drawcall/glts";
+import { CachedLodLoader, foliageLevels, foliageModel, Lod, type LodLevel } from "@drawcall/lod";
+import * as THREE from "three/webgpu";
+
+// Poly Haven's nettle, ?variant=small_a, small_b, medium_a, medium_b, tall_a or tall_b, at levels of detail: the
+// scan, a 128 px hemispherical impostor, gone below 3 px. Its leaves are foliage. It receives shadows and casts
+// none.
+/** How light passes through its leaves. */
+const FOLIAGE = { translucency: 0.6 };
+const loader = new CachedLodLoader(loadingManager, {
+  onLevel: (object) => {
+    foliageModel(object, FOLIAGE);
+    foliageLevels(object, FOLIAGE);
+    object.traverse((node) => {
+      node.castShadow = false;
+      node.receiveShadow = true;
+    });
+  },
+});
+const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
+  small_a: () =>
+    loader.loadAsync({
+      url: "./nettle_plant_small_a_LOD0.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+  small_b: () =>
+    loader.loadAsync({
+      url: "./nettle_plant_small_b_LOD0.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+  medium_a: () =>
+    loader.loadAsync({
+      url: "./nettle_plant_medium_a_LOD0.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+  medium_b: () =>
+    loader.loadAsync({
+      url: "./nettle_plant_medium_b_LOD0.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+  tall_a: () =>
+    loader.loadAsync({
+      url: "./nettle_plant_tall_a_LOD0.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+  tall_b: () =>
+    loader.loadAsync({
+      url: "./nettle_plant_tall_b_LOD0.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+};
+const variant = new URL(import.meta.url).searchParams.get("variant") ?? "small_a";
+const load = LADDERS[variant];
+if (!load) throw new Error(`nettle_plant: variant must be small_a, small_b, medium_a, medium_b, tall_a or tall_b, not ${variant}`);
+const lod = new Lod(await load(), 1, { manager: loadingManager });
+scene.add(lod);
+onDispose(() => lod.dispose());
+
+scene.defaultCamera = new THREE.PerspectiveCamera(30, 1, 0.017, 1.75);
+scene.defaultCamera.position.set(0.096, 0.126, 0.136);
+scene.defaultCamera.lookAt(0, 0.03, 0);
+
+if (isPreview) {
+  const sun = new THREE.DirectionalLight("white", 3);
+  sun.position.set(4, 6, 3);
+  scene.add(sun, sun.target, new THREE.HemisphereLight("#dbe6f5", "#5b5140", 1.5));
+}

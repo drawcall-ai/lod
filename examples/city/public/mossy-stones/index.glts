@@ -1,0 +1,96 @@
+import { isPreview, loadingManager, onDispose, scene } from "@drawcall/glts";
+import { CachedLodLoader, Lod, type LodLevel } from "@drawcall/lod";
+import * as THREE from "three/webgpu";
+
+// Poly Haven's mossy crags, ?variant=rock07, rock08, rock09, rock10, rock11, rock12 or rock13, at levels of detail:
+// its meshes nearby, simplified to 15 %, a 64 px hemispherical impostor, gone below 2 px. It receives shadows and
+// casts none. The rocks are authored half buried, below y = 0.
+const loader = new CachedLodLoader(loadingManager, {
+  onLevel: (object) => {
+    object.traverse((node) => {
+      node.castShadow = false;
+      node.receiveShadow = true;
+    });
+  },
+});
+const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
+  rock07: () =>
+    loader.loadAsync({
+      url: "./rock_moss_set_02_rock07.glb",
+      levels: [
+        { type: "simplify", ratio: 0.15, maxPixels: 176 },
+        { type: "impostor", layout: "hemi", resolution: 64, frames: 8 },
+        { type: "empty", maxPixels: 2 },
+      ],
+    }),
+  rock08: () =>
+    loader.loadAsync({
+      url: "./rock_moss_set_02_rock08.glb",
+      levels: [
+        { type: "simplify", ratio: 0.15, maxPixels: 98 },
+        { type: "impostor", layout: "hemi", resolution: 64, frames: 8 },
+        { type: "empty", maxPixels: 2 },
+      ],
+    }),
+  rock09: () =>
+    loader.loadAsync({
+      url: "./rock_moss_set_02_rock09.glb",
+      levels: [
+        { type: "simplify", ratio: 0.15, maxPixels: 137 },
+        { type: "impostor", layout: "hemi", resolution: 64, frames: 8 },
+        { type: "empty", maxPixels: 2 },
+      ],
+    }),
+  rock10: () =>
+    loader.loadAsync({
+      url: "./rock_moss_set_02_rock10.glb",
+      levels: [
+        { type: "simplify", ratio: 0.15, maxPixels: 163 },
+        { type: "impostor", layout: "hemi", resolution: 64, frames: 8 },
+        { type: "empty", maxPixels: 2 },
+      ],
+    }),
+  rock11: () =>
+    loader.loadAsync({
+      url: "./rock_moss_set_02_rock11.glb",
+      levels: [
+        { type: "simplify", ratio: 0.15, maxPixels: 112 },
+        { type: "impostor", layout: "hemi", resolution: 64, frames: 8 },
+        { type: "empty", maxPixels: 2 },
+      ],
+    }),
+  rock12: () =>
+    loader.loadAsync({
+      url: "./rock_moss_set_02_rock12.glb",
+      levels: [
+        { type: "simplify", ratio: 0.15, maxPixels: 83 },
+        { type: "impostor", layout: "hemi", resolution: 64, frames: 8 },
+        { type: "empty", maxPixels: 2 },
+      ],
+    }),
+  rock13: () =>
+    loader.loadAsync({
+      url: "./rock_moss_set_02_rock13.glb",
+      levels: [
+        { type: "simplify", ratio: 0.15, maxPixels: 115 },
+        { type: "impostor", layout: "hemi", resolution: 64, frames: 8 },
+        { type: "empty", maxPixels: 2 },
+      ],
+    }),
+};
+const variant = new URL(import.meta.url).searchParams.get("variant") ?? "rock07";
+const load = LADDERS[variant];
+if (!load) throw new Error(`rock_moss_set_02: variant must be rock07, rock08, rock09, rock10, rock11, rock12 or rock13, not ${variant}`);
+const lod = new Lod(await load(), 1, { manager: loadingManager });
+scene.add(lod);
+onDispose(() => lod.dispose());
+
+scene.defaultCamera = new THREE.PerspectiveCamera(30, 1, 0.389, 38.87);
+scene.defaultCamera.position.set(2.14, 2.42, 3.02);
+scene.defaultCamera.lookAt(0, 0.28, 0);
+
+if (isPreview) {
+  const sun = new THREE.DirectionalLight("white", 3);
+  sun.position.set(4, 6, 3);
+  scene.add(sun, sun.target, new THREE.HemisphereLight("#dbe6f5", "#5b5140", 1.5));
+}

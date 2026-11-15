@@ -3,13 +3,13 @@ import type { Lod } from "@drawcall/lod";
 import { levelBox } from "../bounds.ts";
 import type { Copy, Scatter } from "../scatter.ts";
 import { type Tile, vigour } from "./field.ts";
-import { DESIGNS } from "../../../public/corn/layout.ts";
-import type { Wall } from "../../../public/corn/block/model.ts";
+import { DESIGNS } from "../../../public/corn-plant/layout.ts";
+import type { Wall } from "../../../public/corn-plant/block/model.ts";
 
 const YELLOWER = new THREE.Color(1.05, 1, 0.85);
 
 /**
- * The blocks of a design, or a field's outer walls along x or z, as public/corn/index.glts draws them: after an empty
+ * The blocks of a design, or a field's outer walls along x or z, as public/corn-plant/index.glts draws them: after an empty
  * level 0, a canopy rises out of the soil near, then is ridged, then flat far away; a wall rises, then draws a small
  * bake far away.
  */
@@ -28,11 +28,11 @@ export async function blocks(tiles: Tile[], scatter: Scatter): Promise<Block[]> 
     block(
       scatter,
       "canopy",
-      `/corn/index.glts?block=${design}`,
+      `/corn-plant/index.glts?block=${design}`,
       tiles.filter((tile) => tile.design === design).map((tile) => ({ matrix: tile.matrix, color: tint(tile.centre) })),
     ),
   );
-  const walls = (["x", "z"] as const).map((wall) => block(scatter, "wall", `/corn/index.glts?block=${wall}`, wallCopies(tiles, wall)));
+  const walls = (["x", "z"] as const).map((wall) => block(scatter, "wall", `/corn-plant/index.glts?block=${wall}`, wallCopies(tiles, wall)));
   return Promise.all([...canopies, ...walls]);
 }
 

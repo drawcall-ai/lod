@@ -1,7 +1,7 @@
 import { Lod } from "@drawcall/lod";
 
 /**
- * The thresholds the corn plant's ladder (public/corn/index.glts) is loaded with: where the detailed impostor takes
+ * The thresholds the corn plant's ladder (public/corn-plant/index.glts) is loaded with: where the detailed impostor takes
  * over from the source, the coarse one from it, and the plant is gone, unless setCutoff moves the last two.
  */
 const PLANT_PIXELS = 1000;

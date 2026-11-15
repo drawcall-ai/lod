@@ -26,13 +26,3 @@ export async function download(ref: FileRef, path: string): Promise<string> {
   await writeFile(path, data);
   return path;
 }
-
-export async function exists(path: string): Promise<boolean> {
-  return stat(path).then(
-    () => true,
-    (error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return false;
-      throw error;
-    },
-  );
-}

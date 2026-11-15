@@ -1,5 +1,5 @@
 import * as THREE from "three/webgpu";
-import type { HouseParams } from "../../public/house/params.ts";
+import type { HouseParams } from "../../public/suburban-house/params.ts";
 import type seedrandom from "seedrandom";
 import { spot, type Spot } from "./plan.ts";
 import type { Terrain } from "./terrain.ts";
@@ -9,7 +9,7 @@ import { STREET_WIDTH, type Town } from "./town.ts";
 export const HEDGE = 2;
 
 /** The fixtures a garden holds, each named as its asset folder in public/ (see props.ts). */
-export const FIXTURE_NAMES = ["letterbox", "patio-set", "shed", "greenhouse", "washing-line", "swing"] as const;
+export const FIXTURE_NAMES = ["letterbox", "patio-set", "garden-shed", "greenhouse", "washing-line", "garden-swing"] as const;
 export type Fixture = (typeof FIXTURE_NAMES)[number];
 
 /** A lot's position along its street: `at(t, offset)` maps along-street and out-from-the-centre-line metres to x/z. */
@@ -105,7 +105,7 @@ export function garden(town: Town, add: (id: string, at: Spot) => void, terrain:
   }
   if (r() < 0.4) {
     const g = at(t - driveSide * (frontage / 2 - 2), back + yard - 2);
-    addFixture(town, "shed", spot(terrain, g.x, g.y, angle + (r() < 0.5 ? 0 : Math.PI / 2)));
+    addFixture(town, "garden-shed", spot(terrain, g.x, g.y, angle + (r() < 0.5 ? 0 : Math.PI / 2)));
   }
   if (lot.core) return;
   if (r() < 0.35) {
@@ -131,7 +131,7 @@ export function garden(town: Town, add: (id: string, at: Spot) => void, terrain:
   }
   if (r() < 0.15) {
     const g = at(t + driveSide * 2, back + yard - 3);
-    addFixture(town, "swing", spot(terrain, g.x, g.y, angle));
+    addFixture(town, "garden-swing", spot(terrain, g.x, g.y, angle));
   }
 }
 
