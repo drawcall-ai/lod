@@ -1,5 +1,5 @@
-// Fetches a URL off the public directory, which no stored level could be checked against.
-import { scene } from "@drawcall/glts";
-import { Mesh, BoxGeometry, MeshStandardMaterial } from "three/webgpu";
-await fetch("https://example.invalid/data.bin");
+// Loads a URL off the public directory, which no stored level could be checked against.
+import { loadingManager, scene } from "@drawcall/glts";
+import { BoxGeometry, FileLoader, Mesh, MeshStandardMaterial } from "three/webgpu";
+await new FileLoader(loadingManager).loadAsync("https://example.invalid/data.bin");
 scene.add(new Mesh(new BoxGeometry(), new MeshStandardMaterial()));
