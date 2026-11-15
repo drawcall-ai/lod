@@ -1,0 +1,38 @@
+import { isPreview, loadingManager, onDispose, scene } from "@drawcall/glts";
+import { CachedLodLoader, foliageLevels, foliageModel, Lod } from "@drawcall/lod";
+import * as THREE from "three/webgpu";
+
+// Poly Haven's low shrub at levels of detail: the scan, a 128 px hemispherical impostor, gone below 2 px. Its leaves
+// are foliage. It receives shadows and casts none.
+/** How light passes through its leaves. */
+const FOLIAGE = { translucency: 0.6 };
+const loader = new CachedLodLoader(loadingManager, {
+  onLevel: (object) => {
+    foliageModel(object, FOLIAGE);
+    foliageLevels(object, FOLIAGE);
+    object.traverse((node) => {
+      node.castShadow = false;
+      node.receiveShadow = true;
+    });
+  },
+});
+const levels = await loader.loadAsync({
+  url: "./shrub_04.glb",
+  levels: [
+    { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+    { type: "empty", maxPixels: 2 },
+  ],
+});
+const lod = new Lod(levels, 1, { manager: loadingManager });
+scene.add(lod);
+onDispose(() => lod.dispose());
+
+scene.defaultCamera = new THREE.PerspectiveCamera(30, 1, 0.112, 11.25);
+scene.defaultCamera.position.set(0.619, 0.722, 0.875);
+scene.defaultCamera.lookAt(0, 0.104, 0);
+
+if (isPreview) {
+  const sun = new THREE.DirectionalLight("white", 3);
+  sun.position.set(4, 6, 3);
+  scene.add(sun, sun.target, new THREE.HemisphereLight("#dbe6f5", "#5b5140", 1.5));
+}

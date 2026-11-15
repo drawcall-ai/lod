@@ -4,7 +4,7 @@ import { encode as encodeGeometry, decode as decodeGeometry } from "./geometry.t
 import { roadShapes, restoreRoadShapes } from "../roads.ts";
 import { Land } from "../land.ts";
 import { Terrain } from "../terrain.ts";
-import { HOUSE_VARIANTS } from "../../../public/house/params.ts";
+import { HOUSE_VARIANTS } from "../../../public/suburban-house/params.ts";
 import { type Plan, type Spot, type Rect, type Road } from "../plan.ts";
 import { STREET_NAMES, type StreetName } from "../town.ts";
 import { FIXTURE_NAMES, type Fixture } from "../gardens.ts";

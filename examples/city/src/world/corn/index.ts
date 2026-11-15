@@ -11,8 +11,8 @@ import type { Plan } from "../plan.ts";
 import { blocks, type Block } from "./blocks.ts";
 import { cut, FieldTiles, heroSpot } from "./field.ts";
 import { cutoff, setCutoff } from "./levels.ts";
-import { BLOCK, DESIGNS, layout, VARIANTS } from "../../../public/corn/layout.ts";
-import { TOP } from "../../../public/corn/block/shapes.ts";
+import { BLOCK, DESIGNS, layout, VARIANTS } from "../../../public/corn-plant/layout.ts";
+import { TOP } from "../../../public/corn-plant/block/shapes.ts";
 
 /** Field blocks whose plants are drawn at once. */
 const ROOM = 128;
@@ -54,7 +54,7 @@ export class Corn extends THREE.Object3D {
     const spot = heroSpot(tiles, designs);
     const scatter = new Scatter(scripts);
     const plants = Array.from({ length: VARIANTS }, async (_, variant) => {
-      const url = `/corn/index.glts?variant=${variant}`;
+      const url = `/corn-plant/index.glts?variant=${variant}`;
       // Room for a slot per tile held, each with as many of this variant's plants as a block design has most.
       const perTile = Math.max(...designs.map((plants) => plants.filter((plant) => plant.variant === variant).length));
       const [lod, range] = await Promise.all([scatter.lod(url), scatter.take(url, ROOM * perTile, false)]);

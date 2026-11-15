@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import * as THREE from "three/webgpu";
-import { HERO_LEAF, plant } from "../../../public/corn/model.ts";
-import { materials } from "../../../public/corn/materials.ts";
-import { HERO_VARIANT } from "../../../public/corn/layout.ts";
+import { HERO_LEAF, plant } from "../../../public/corn-plant/model.ts";
+import { materials } from "../../../public/corn-plant/materials.ts";
+import { HERO_VARIANT } from "../../../public/corn-plant/layout.ts";
 import { LADYBIRD_SEAT } from "../../../src/world/corn/seat.ts";
 
 test("LADYBIRD_SEAT is where the ladybird sits the ladybird on the hero plant", () => {

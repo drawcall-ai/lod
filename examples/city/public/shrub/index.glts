@@ -1,0 +1,75 @@
+import { isPreview, loadingManager, onDispose, scene } from "@drawcall/glts";
+import { CachedLodLoader, foliageLevels, foliageModel, Lod, type LodLevel } from "@drawcall/lod";
+import * as THREE from "three/webgpu";
+
+// Poly Haven's shrub, ?variant=a, b, c or d, at levels of detail: the scan, a 128 px hemispherical impostor, a 16 px
+// one from 20 px, gone below 2 px. Its leaves are foliage. It receives shadows, and casts none unless ?shadow=1.
+/** How light passes through its leaves. */
+const FOLIAGE = { translucency: 0.6 };
+const shadow = new URL(import.meta.url).searchParams.get("shadow") ?? "0";
+if (shadow !== "0" && shadow !== "1") throw new Error(`shrub_02: shadow must be 0 or 1, not ${shadow}`);
+const loader = new CachedLodLoader(loadingManager, {
+  onLevel: (object) => {
+    foliageModel(object, FOLIAGE);
+    foliageLevels(object, FOLIAGE);
+    object.traverse((node) => {
+      node.castShadow = shadow === "1";
+      node.receiveShadow = true;
+      if (node.castShadow && node instanceof THREE.Mesh) for (const material of [node.material].flat()) material.shadowSide = THREE.DoubleSide;
+    });
+  },
+});
+const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
+  a: () =>
+    loader.loadAsync({
+      url: "./shrub_02_a.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 16, frames: 8 },
+        { type: "empty", maxPixels: 2 },
+      ],
+    }),
+  b: () =>
+    loader.loadAsync({
+      url: "./shrub_02_b.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 16, frames: 8 },
+        { type: "empty", maxPixels: 2 },
+      ],
+    }),
+  c: () =>
+    loader.loadAsync({
+      url: "./shrub_02_c.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 16, frames: 8 },
+        { type: "empty", maxPixels: 2 },
+      ],
+    }),
+  d: () =>
+    loader.loadAsync({
+      url: "./shrub_02_d.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 16, frames: 8 },
+        { type: "empty", maxPixels: 2 },
+      ],
+    }),
+};
+const variant = new URL(import.meta.url).searchParams.get("variant") ?? "a";
+const load = LADDERS[variant];
+if (!load) throw new Error(`shrub_02: variant must be a, b, c or d, not ${variant}`);
+const lod = new Lod(await load(), 1, { manager: loadingManager });
+scene.add(lod);
+onDispose(() => lod.dispose());
+
+scene.defaultCamera = new THREE.PerspectiveCamera(30, 1, 0.473, 47.34);
+scene.defaultCamera.position.set(2.6, 3.44, 3.68);
+scene.defaultCamera.lookAt(0, 0.833, 0);
+
+if (isPreview) {
+  const sun = new THREE.DirectionalLight("white", 3);
+  sun.position.set(4, 6, 3);
+  scene.add(sun, sun.target, new THREE.HemisphereLight("#dbe6f5", "#5b5140", 1.5));
+}

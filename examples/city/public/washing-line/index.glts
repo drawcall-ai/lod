@@ -2,8 +2,8 @@ import { gltsLoader, isPreview, loadingManager, onDispose, scene } from "@drawca
 import { CachedLodLoader, Lod } from "@drawcall/lod";
 import * as THREE from "three/webgpu";
 
-// A washing line at levels of detail: source.glts, then an impostor, gone below 3 px. Every level casts with both sides
-// of its faces.
+// A washing line at levels of detail: source.glts, then an impostor, gone below 3 px. Every level casts with both
+// sides of its faces.
 loadingManager.addHandler(/\.glts$/i, gltsLoader);
 const loader = new CachedLodLoader(loadingManager, {
   onLevel: (object) =>

@@ -4,20 +4,20 @@ import { scripts } from "../loading.ts";
 import { copiesAt, Scatter } from "./scatter.ts";
 import type { Plan } from "./plan.ts";
 
-/** Street furniture and cars, as assets in public/models, by the plan's model id. */
+/** Street furniture and cars, as Market assets in public/, by the plan's model id. */
 const MODELS: Record<string, string> = {
-  street_lamp_01: "/models/street_lamp_01/index.glts",
-  painted_wooden_bench: "/models/painted_wooden_bench/index.glts",
-  metal_trash_can: "/models/metal_trash_can/index.glts",
-  fire_hydrant: "/models/fire_hydrant/index.glts",
-  utility_box_01: "/models/utility_box_01/index.glts",
-  covered_car: "/models/covered_car/index.glts",
-  wooden_crate_01: "/models/wooden_crate_01/index.glts",
-  planter_box_01: "/models/planter_box_01/index.glts",
+  street_lamp_01: "/street-lamp/index.glts",
+  painted_wooden_bench: "/painted-wooden-bench/index.glts",
+  metal_trash_can: "/metal-trash-can/index.glts",
+  fire_hydrant: "/fire-hydrant/index.glts",
+  utility_box_01: "/utility-box/index.glts",
+  covered_car: "/covered-car/index.glts",
+  wooden_crate_01: "/wooden-crate/index.glts",
+  planter_box_01: "/planter-box/index.glts",
 };
 
 /** The hedge designs, which the gardens' hedge sections take turns with. */
-const HEDGES = ["/hedge/index.glts?variant=0", "/hedge/index.glts?variant=1", "/hedge/index.glts?variant=2"];
+const HEDGES = ["/clipped-hedge/index.glts?variant=0", "/clipped-hedge/index.glts?variant=1", "/clipped-hedge/index.glts?variant=2"];
 
 /** Sheds come in a few paints. */
 const PAINTS = ["#ffffff", "#9fb0a0", "#b9a58c", "#8c9aa8", "#c9b9a0"];
@@ -31,7 +31,7 @@ export async function props(plan: Plan): Promise<Scatter> {
     const spots = plan.models.get(id);
     if (spots?.length) placing.push(scatter.place(url, copiesAt(spots)));
   }
-  if (plan.fences.length) placing.push(scatter.place("/fence/index.glts", copiesAt(plan.fences)));
+  if (plan.fences.length) placing.push(scatter.place("/picket-fence/index.glts", copiesAt(plan.fences)));
   for (const [name, spots] of plan.streetSigns) placing.push(scatter.place(`/street-sign/index.glts?text=${encodeURIComponent(name)}`, copiesAt(spots)));
   HEDGES.forEach((url, variant) => {
     const mine = plan.hedges.filter((_, i) => i % HEDGES.length === variant);
@@ -47,7 +47,7 @@ export async function props(plan: Plan): Promise<Scatter> {
   });
   for (const [name, spots] of plan.fixtures) {
     const r = seedrandom(name);
-    placing.push(scatter.place(`/${name}/index.glts`, copiesAt(spots, name === "shed" ? () => paint(r) : undefined)));
+    placing.push(scatter.place(`/${name}/index.glts`, copiesAt(spots, name === "garden-shed" ? () => paint(r) : undefined)));
   }
   await Promise.all(placing);
   await scatter.seal();

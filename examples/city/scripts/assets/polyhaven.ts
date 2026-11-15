@@ -50,12 +50,3 @@ export function fileRef(files: Files, key: string, format: string): FileRef {
 export function credit(id: string, info: Info): Credit {
   return { name: info.name, authors: info.authors, license: "CC0-1.0", source: `https://polyhaven.com/a/${id}` };
 }
-
-export async function downloadModel(id: string, files: Files): Promise<string> {
-  const gltf = at(files, ["gltf", res, "gltf"]);
-  const include = at(gltf, ["include"]);
-  if (!isRecord(include)) throw new Error(`${id}: no ${res} glTF`);
-  const dir = `${cache}${id}/`;
-  await Promise.all(Object.entries(include).map(([name, ref]) => download(polyFile(ref, `${id}/${name}`), dir + name)));
-  return download(polyFile(gltf, `${id} glTF`), `${dir}${id}.gltf`);
-}

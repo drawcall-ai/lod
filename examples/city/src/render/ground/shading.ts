@@ -32,7 +32,7 @@ import {
 } from "three/tsl";
 import type { Zones } from "../../world/zones.ts";
 import { Crop, Use } from "../../world/land.ts";
-import { BLOCK, ROWS } from "../../../public/corn/layout.ts";
+import { BLOCK, ROWS } from "../../../public/corn-plant/layout.ts";
 
 /** Distance between corn rows (m); with an even number of rows a block's rows stand half of it off every multiple of it from the centre. */
 const ROW = BLOCK / ROWS;

@@ -53,7 +53,7 @@ interface SurfaceOptions {
 }
 
 /**
- * A weathered standard material from a Poly Haven texture set in textures/ beside this script (scripts/fetch-assets.ts fetches it),
+ * A weathered standard material from a Poly Haven texture set in textures/ beside this script,
  * its maps loading through `manager`, which resolves them against the script and makes its load wait for them.
  */
 function surface(manager: THREE.LoadingManager, id: keyof typeof TILE, { color = 0xffffff, normalScale = 1, roughness = 1, weather }: SurfaceOptions) {

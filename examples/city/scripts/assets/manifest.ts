@@ -7,9 +7,7 @@ export interface Credit {
 }
 
 export interface Manifest {
-  /** Each variant is an independent GLB at `models/<id>/<variant>.glb`. */
-  models: Record<string, { bytes: number; triangles: number; bounds: number[][]; variants: string[]; credit: Credit }>;
-  /** Each set's maps are at `<folder>/textures/<id>/diff.webp`, `nor.webp` and `arm.webp`, in every folder that draws it. */
+  /** Each set's maps are at `assets/textures/<id>/diff.webp`, `nor.webp` and `arm.webp`. */
   textures: Record<string, { bytes: number; credit: Credit }>;
   /** At `assets/hdri/sky.hdr`. */
   hdri: { credit: Credit };

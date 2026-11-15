@@ -1,0 +1,68 @@
+import { isPreview, loadingManager, onDispose, scene } from "@drawcall/glts";
+import { CachedLodLoader, foliageLevels, foliageModel, Lod, type LodLevel } from "@drawcall/lod";
+import * as THREE from "three/webgpu";
+
+// Poly Haven's fern, ?variant=a, b, c or d, at levels of detail: the scan, a 128 px hemispherical impostor, gone
+// below 3 px. Its leaves are foliage. It receives shadows and casts none.
+/** How light passes through its leaves. */
+const FOLIAGE = { translucency: 0.6 };
+const loader = new CachedLodLoader(loadingManager, {
+  onLevel: (object) => {
+    foliageModel(object, FOLIAGE);
+    foliageLevels(object, FOLIAGE);
+    object.traverse((node) => {
+      node.castShadow = false;
+      node.receiveShadow = true;
+    });
+  },
+});
+const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
+  a: () =>
+    loader.loadAsync({
+      url: "./fern_02_a.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+  b: () =>
+    loader.loadAsync({
+      url: "./fern_02_b.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+  c: () =>
+    loader.loadAsync({
+      url: "./fern_02_c.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+  d: () =>
+    loader.loadAsync({
+      url: "./fern_02_d.glb",
+      levels: [
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
+        { type: "empty", maxPixels: 3 },
+      ],
+    }),
+};
+const variant = new URL(import.meta.url).searchParams.get("variant") ?? "a";
+const load = LADDERS[variant];
+if (!load) throw new Error(`fern_02: variant must be a, b, c or d, not ${variant}`);
+const lod = new Lod(await load(), 1, { manager: loadingManager });
+scene.add(lod);
+onDispose(() => lod.dispose());
+
+scene.defaultCamera = new THREE.PerspectiveCamera(30, 1, 0.153, 15.34);
+scene.defaultCamera.position.set(0.844, 0.958, 1.19);
+scene.defaultCamera.lookAt(0, 0.115, 0);
+
+if (isPreview) {
+  const sun = new THREE.DirectionalLight("white", 3);
+  sun.position.set(4, 6, 3);
+  scene.add(sun, sun.target, new THREE.HemisphereLight("#dbe6f5", "#5b5140", 1.5));
+}
