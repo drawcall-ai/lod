@@ -48,7 +48,7 @@
     "@drawcall/glts": "^6.0.0",
     "three": ">=0.186.0 <0.187.0",
     "typegpu": "^0.12.9",
-    "vitecache": "^0.5.0"
+    "vitecache": "^0.7.0"
   },
   "devDependencies": {
     "@babel/core": "^7.29.13",
@@ -67,7 +67,7 @@
     "typegpu": "0.12.9",
     "typescript": "^5.9.3",
     "unplugin-typegpu": "^0.12.8",
-    "vitecache": "^0.5.0",
+    "vitecache": "^0.7.0",
     "vitest": "^4.0.17",
     "xatlas-wasm": "0.1.3"
   },

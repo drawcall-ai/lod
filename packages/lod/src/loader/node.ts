@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { createCanvas, type Canvas } from "@drawcall/webgpu";
 import type { GLTSLoader } from "@drawcall/glts";
 import { resolve as resolveImport } from "import-meta-resolve";
@@ -28,7 +28,7 @@ const sessions = new AsyncLocalStorage<Session>();
  * packages its .glts sources import. A load that reads anything else, such as a URL off the public directory or a module
  * a .glts source imports from a CDN, fails, since no stored level could be checked against it. Served paths such as
  * `/trees/oak.glts`, and `file:` URLs in the public directory, as a headless .glts script's manager resolves them to,
- * load from vitecache's public directory (see `publicURL`), and `.glts` sources through a GLTSLoader of the load's own;
+ * load from vitecache's public directory with its `publicURL`, and `.glts` sources through a GLTSLoader of the load's own;
  * bakes draw on a canvas of the process's document, as a glts host has one, or else on a WebGPU device of
  * @drawcall/webgpu. The manager only resolves the request's URL.
  *
@@ -61,7 +61,7 @@ export class CachedLodLoader extends BrowserCachedLodLoader {
   /** A `file:` URL in the public directory as its served path; others as in browsers. */
   protected override publicPath(url: string): string {
     if (!url.startsWith("file:")) return super.publicPath(url);
-    const base = publicURL("/");
+    const base = publicDirectory().href;
     if (!url.startsWith(base)) throw new Error(`CachedLodLoader: cannot precompute "${url}", which lies outside the public directory ${base}`);
     return `/${url.slice(base.length)}`;
   }
@@ -75,7 +75,7 @@ class SessionLoader extends BrowserCachedLodLoader {
   constructor(options: CachedLodLoaderOptions) {
     super(servingManager(), options);
     // Packages resolve as the app's do.
-    this.scripts = new ScriptLoader(this.manager, publicURL("/"));
+    this.scripts = new ScriptLoader(this.manager, publicDirectory().href);
     this.manager.addHandler(/\.glts$/i, this.scripts);
   }
 
@@ -121,6 +121,17 @@ class SessionLoader extends BrowserCachedLodLoader {
     const packages = [...new Set(["three", ...state.packages])].sort();
     return [...[...state.read].sort().map((path) => ({ path })), ...packages.map((name) => ({ package: name }))];
   }
+}
+
+/**
+ * vitecache's public directory, which `publicURL` reads: its plugin's, which vitecache keeps on `globalThis.vitecache`
+ * once the plugin has run in this process, else `public` below the working directory.
+ */
+function publicDirectory(): URL {
+  const project: { publicDir?: unknown } | undefined = Reflect.get(globalThis, "vitecache");
+  if (project === undefined) return pathToFileURL(`${join(process.cwd(), "public")}/`);
+  if (typeof project.publicDir !== "string") throw new Error("CachedLodLoader: the vitecache plugin's project has no publicDir");
+  return pathToFileURL(`${project.publicDir}/`);
 }
 
 /** A manager that serves root-relative paths from the public directory while a load runs. */
@@ -243,13 +254,16 @@ async function serve(fetch: typeof globalThis.fetch, input: RequestInfo | URL, i
   if (!state || url.protocol === "data:" || url.protocol === "blob:") return fetch(input, init);
   if (url.origin !== placeholderOrigin)
     throw new Error(`CachedLodLoader: cannot precompute a load that fetches ${url.href}, which a stored level cannot be checked against`);
-  const file = publicURL(url.pathname);
+  let data: string;
   try {
-    const bytes = await readFile(fileURLToPath(file));
-    state.read.add(file);
-    return new Response(bytes);
+    // While the vitecache plugin warms the load, publicURL records the file as the load got it.
+    data = publicURL(url.pathname);
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") return new Response(null, { status: 404 });
     throw error;
   }
+  // The load records it too, for runs without the plugin, such as the glts CLI's.
+  state.read.add(new URL(`.${url.pathname}`, publicDirectory()).href);
+  // A response of its own, without the data: URL, which loaders would resolve the file's relative URLs against.
+  return new Response(await (await fetch(data)).arrayBuffer());
 }
