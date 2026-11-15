@@ -3,7 +3,8 @@ import { LoaderUtils } from "three/webgpu";
 const absolute = /^[a-z][a-z\d+.-]*:/i;
 /**
  * An origin no URL has: paths parse against it where there is no document to resolve them against, and Node loads
- * fetch the app's public files at it, as a page of the app fetches them from its own.
+ * load the app's public files at it, as a page of the app loads them from its own, through a manager that maps its URLs
+ * to the files.
  */
 export const placeholderOrigin = "https://lod.invalid";
 

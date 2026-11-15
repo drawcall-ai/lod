@@ -1,4 +1,4 @@
-import { CacheEntry, type CacheEntryOptions, type JsonValue } from "vitecache";
+import { CacheEntry, type CacheEntryOptions, type Value } from "vitecache";
 import type { Derived } from "./level.js";
 import { derived, type Ladder } from "./request.js";
 
@@ -20,7 +20,7 @@ export function entryOf(ladder: Ladder, of: number | "shape", { basePath, root }
  * What derives a level's content, by its role rather than its ladder position, so adding or removing another level
  * keeps this one's entry. Switch thresholds and impostor draw options apply at decode, so changing one reuses it.
  */
-function parameters(level: Derived): JsonValue {
+function parameters(level: Derived): Value {
   switch (level.type) {
     case "simplify":
       return { type: level.type, ratio: level.ratio ?? null };

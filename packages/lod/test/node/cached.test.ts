@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { readdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -18,7 +19,7 @@ const saved = async () => {
   return Promise.all(names.map(async (name) => [name, (await stat(join(directory, name))).mtimeMs]));
 };
 
-it("builds and saves every level with the public files and packages the ladder read, which a second load reads", { timeout: 120_000 }, async () => {
+it("builds and saves every level with the packages and, as the vitecache plugin warms it, the public files the ladder read", { timeout: 120_000 }, async () => {
   const request: LodRequest = {
     url: "/box.glts?size=2",
     levels: [
@@ -26,9 +27,11 @@ it("builds and saves every level with the public files and packages the ladder r
       { type: "impostor", resolution: 64 },
     ],
   };
-  const { fetch } = globalThis;
-  await new CachedLodLoader().loadAsync(request);
-  expect(globalThis.fetch).toBe(fetch);
+  // The plugin's global, as it warms a load: publicURL records the public files the load reads.
+  const warming = new AsyncLocalStorage<{ files: unknown[]; modules: () => unknown[] }>();
+  vi.stubGlobal("vitecache", { root, publicDir: join(root, "public"), loaded: new Set(), warming });
+  const warm = () => warming.run({ files: [], modules: () => [] }, () => new CachedLodLoader().loadAsync(request));
+  await warm();
   const entries = await saved();
   // The shape and both levels.
   expect(entries).toHaveLength(6);
@@ -42,8 +45,9 @@ it("builds and saves every level with the public files and packages the ladder r
       { package: "three" },
     ]);
   }
-  await new CachedLodLoader().loadAsync(request);
+  await warm();
   expect(await saved()).toEqual(entries);
+  vi.unstubAllGlobals();
 });
 
 it("runs loads on one loader concurrently, each with its own GLTSLoader and bake renderer", { timeout: 120_000 }, async () => {
