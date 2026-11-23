@@ -45,15 +45,15 @@
     "three-mesh-bvh": "^0.9.15"
   },
   "peerDependencies": {
-    "@drawcall/cache": "^0.8.1",
-    "@drawcall/glts": "^6.2.0",
+    "@drawcall/cache": "^0.8.2",
+    "@drawcall/glts": "^7.0.0",
     "three": ">=0.186.0 <0.187.0",
     "typegpu": "^0.12.9"
   },
   "devDependencies": {
     "@babel/core": "^7.29.13",
-    "@drawcall/cache": "^0.8.1",
-    "@drawcall/glts": "^6.2.0",
+    "@drawcall/cache": "^0.8.2",
+    "@drawcall/glts": "^7.0.0",
     "@drawcall/lod": "link:",
     "@typegpu/gl": "^0.12.9",
     "@typegpu/three": "^0.12.2",
