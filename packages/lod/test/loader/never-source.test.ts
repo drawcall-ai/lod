@@ -6,7 +6,7 @@ import { CachedLodLoader } from "../../src/loader/index.js";
 import { GPU_TIMEOUT, nextLevel } from "../renderer.js";
 import type { LodRequest } from "../../src/loader/request.js";
 
-vi.mock("vitecache", async () => ({ CacheEntry: (await import("./fixture.js")).CacheEntry }));
+vi.mock("@drawcall/cache", async () => ({ CacheEntry: (await import("./fixture.js")).CacheEntry }));
 vi.mock("../../src/impostor/bake/index.js", async () => ({ bakeImpostor: (await import("./fixture.js")).bakeImpostor }));
 
 it("never loads the source of a ladder whose first level draws at any height, with the camera inside it too", { timeout: GPU_TIMEOUT }, async () => {

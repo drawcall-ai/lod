@@ -1,6 +1,6 @@
 import { Box3, Group, Loader, LoadingManager, Vector3, type Material, type Object3D, type WebGPURenderer } from "three/webgpu";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import type { CacheEntryOptions, Input } from "vitecache";
+import type { CacheEntryOptions, Input } from "@drawcall/cache";
 import { at } from "../at.js";
 import { createBakeRenderer } from "../bake.js";
 import { disposeRecursive } from "../dispose.js";
@@ -28,10 +28,10 @@ export interface CachedLodLoaderOptions extends Pick<CacheEntryOptions, "basePat
 }
 
 /**
- * Loads levels of detail from asset URLs, storing each derived level, and the source's shape, in vitecache, keyed by
- * the request alone. Load it as a vitecache cached loader, with literal requests, so that the vitecache plugin finds
- * every load and builds its levels in Node, saving them with the files they were built from; browsers read them, and
- * one that misses builds the level itself.
+ * Loads levels of detail from asset URLs, storing each derived level, and the source's shape, in @drawcall/cache, keyed
+ * by the request alone. Load it as a cached loader of @drawcall/cache, with literal requests, so that the cache plugin
+ * finds every load and builds its levels in Node, saving them with the files they were built from; browsers read them,
+ * and one that misses builds the level itself.
  *
  * Loads asset URLs through manager handlers, else with a GLTFLoader of its own, which decodes meshopt only: register
  * a GLTFLoader configured with Draco or KTX2 decoders for models compressed with them, and a GLTSLoader for .glts
@@ -188,7 +188,7 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
    * script.
    */
   protected publicPath(url: string): string {
-    return publicPath(url, this.options.basePath ?? "/_vitecache/");
+    return publicPath(url, this.options.basePath ?? "/_cache/");
   }
 
   /** The files and packages what this loader built so far was built from: none in browsers, which do not save. */

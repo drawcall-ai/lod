@@ -24,7 +24,7 @@ import { GPU_TIMEOUT, eventually, nextLevel, render, renderLod } from "../render
 import type { LodLevelRequest, LodRequest } from "../../src/loader/request.js";
 import { drawnMeshes } from "../instanced/fixture.js";
 
-vi.mock("vitecache", async () => ({ CacheEntry: (await import("./fixture.js")).CacheEntry }));
+vi.mock("@drawcall/cache", async () => ({ CacheEntry: (await import("./fixture.js")).CacheEntry }));
 vi.mock("../../src/impostor/bake/index.js", async () => ({ bakeImpostor: (await import("./fixture.js")).bakeImpostor }));
 
 describe("CachedLodLoader", () => {

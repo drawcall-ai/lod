@@ -1,9 +1,9 @@
 import { unzipSync, zipSync } from "fflate";
-import { CacheEntry } from "vitecache";
+import { CacheEntry } from "@drawcall/cache";
 import { plan, type Plan } from "../plan.ts";
 import { decode, encode } from "./codec.ts";
 
-/** Plans the city, which takes seconds; the vitecache plugin plans the seeds the app loads literally, saving each with the modules planning ran. */
+/** Plans the city, which takes seconds; the cache plugin plans the seeds the app loads literally, saving each with the modules planning ran. */
 export class CachedPlanLoader {
   async loadAsync({ seed }: { seed: number }): Promise<Plan> {
     const entry = new CacheEntry({ version: "city-plan@6", dependencies: { seed: { value: seed } } });

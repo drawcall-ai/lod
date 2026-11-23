@@ -15,4 +15,4 @@ packages/*/LICENSE
 *.tgz
 
 # The Node loader test saves its levels here.
-packages/lod/test/node/public/_vitecache/
+packages/lod/test/node/public/_cache/

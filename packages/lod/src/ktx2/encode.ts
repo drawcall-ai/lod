@@ -29,7 +29,7 @@ interface Task {
   reject(error: unknown): void;
 }
 
-// Read when the module loads, which also happens in Node, as the vitecache plugin builds levels; Node before 21 has no navigator.
+// Read when the module loads, which also happens in Node, as the cache plugin builds levels; Node before 21 has no navigator.
 const cores = globalThis.navigator?.hardwareConcurrency ?? 4;
 /**
  * A worker per core but one, since a cold ladder's encodes take far longer than its bakes; at most 8, since each holds

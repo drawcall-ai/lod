@@ -34,7 +34,7 @@ export default defineConfig({
           },
         },
       },
-      // CachedLodLoader as the vitecache plugin runs it, on a WebGPU device of @drawcall/webgpu.
+      // CachedLodLoader as the cache plugin runs it, on a WebGPU device of @drawcall/webgpu.
       { extends: true, test: { name: "node", include: ["test/node/**/*.test.ts"], environment: "node" } },
     ],
   },

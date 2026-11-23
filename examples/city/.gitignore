@@ -5,6 +5,6 @@ public/*/images/
 public/*/*.glb
 .artifacts/
 dist/
-public/_vitecache/*
+public/_cache/*
 
 .cache/

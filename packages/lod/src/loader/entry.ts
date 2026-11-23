@@ -1,4 +1,4 @@
-import { CacheEntry, type CacheEntryOptions, type Value } from "vitecache";
+import { CacheEntry, type CacheEntryOptions, type Value } from "@drawcall/cache";
 import type { Derived } from "./level.js";
 import { derived, type Ladder } from "./request.js";
 
