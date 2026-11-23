@@ -53,12 +53,15 @@ const coverage = (impostor: Impostor) => {
   return covered / (level.length / 4);
 };
 
-/** Mean red of the covered texels of base mip level `m`. */
+/** Mean red of base mip level `m`, each texel weighted by its coverage, which averaging the level above keeps. */
 const red = (impostor: Impostor, m: number) => {
   const level = base(impostor, m);
   let sum = 0;
   let covered = 0;
-  for (let i = 0; i < level.length; i += 4) if (level[i + 3] !== 0) [sum, covered] = [sum + (level[i] ?? 0), covered + 1];
+  for (let i = 0; i < level.length; i += 4) {
+    sum += (level[i] ?? 0) * (level[i + 3] ?? 0);
+    covered += level[i + 3] ?? 0;
+  }
   return sum / covered;
 };
 
@@ -183,7 +186,7 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
     normal.layers.forEach((layer, i) => layer.mipmaps.forEach((level, m) => expect(same(level, additive.layers[i]?.mipmaps[m])).toBe(true)));
   });
 
-  it("renders every mip level at its own size, where the source may look different, and the top one at maxPixels", async () => {
+  it("renders the top mip level, at maxPixels if larger, and averages every smaller level from it", async () => {
     // A texture whose own mip levels darken, as leaves with dark texels around them do.
     const mipmaps = Array.from({ length: 9 }, (_, m) => {
       const size = 256 >> m;
@@ -198,13 +201,13 @@ describe("bakeImpostor", { timeout: GPU_TIMEOUT }, () => {
     map.needsUpdate = true;
     const plane = new Mesh(new PlaneGeometry(2, 2), new MeshStandardMaterial({ map, side: DoubleSide }));
     const impostor = await bake(plane, "hemi");
-    // Filtered from level 0, every level would hold its brightness.
-    expect(red(impostor, 0) - red(impostor, 3)).toBeGreaterThan(40);
-    // Drawn up to 8 times its sharp height, the top level reads the texture 3 levels finer.
+    // Averaged from level 0, every level keeps its brightness.
+    expect(Math.abs(red(impostor, 3) - red(impostor, 0))).toBeLessThan(2);
+    // Drawn up to 8 times its sharp height, the top level reads the texture 3 levels finer, and the levels below follow.
     const sharp = texelPixels(impostor);
     const close = await bakeImpostor(plane, bakeRenderer, { layout: "hemi", resolution: 32, maxPixels: 8 * sharp });
     expect(red(close, 0) - red(impostor, 0)).toBeGreaterThan(40);
-    expect(red(close, 3)).toBeCloseTo(red(impostor, 3), 0);
+    expect(Math.abs(red(close, 3) - red(close, 0))).toBeLessThan(2);
   });
 
   it("bakes the cut-out of alpha-to-coverage materials", async () => {
