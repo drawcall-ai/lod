@@ -1,7 +1,7 @@
 // What the scripts share: the city's dev server and a headless Chromium on the real GPU.
 // Every script takes
 //
-//   --cold                    empty the browser profile and public/_vitecache first, so
+//   --cold                    empty the browser profile and public/_cache first, so
 //                             derived levels and asset caches rebuild
 //   --browser-profile=<dir>   the profile (relative to the example), default .artifacts/browser;
 //                             a profile of its own keeps the page's bake cache between runs
@@ -26,8 +26,8 @@ export async function open(port: number, viewport: { width: number; height: numb
   const profile = resolve(root, flag("browser-profile") ?? ".artifacts/browser");
   if (args.includes("--cold")) {
     await rm(profile, { recursive: true, force: true });
-    await rm(resolve(root, "public/_vitecache"), { recursive: true, force: true });
-    await mkdir(resolve(root, "public/_vitecache"));
+    await rm(resolve(root, "public/_cache"), { recursive: true, force: true });
+    await mkdir(resolve(root, "public/_cache"));
   }
   const server = await createServer({ root, logLevel: "error", server: { port, strictPort: false } });
   await server.listen();

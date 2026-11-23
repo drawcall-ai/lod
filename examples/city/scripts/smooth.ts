@@ -58,7 +58,7 @@ const requests: { request: Request; path: string }[] = [];
 page.on("request", (r) => {
   const requested = new URL(r.url());
   const path = requested.pathname;
-  if (!/\.(glb|gltf|glts|ktx2|bin|jpg|png|webp|hdr|exr|zip)$|_vitecache/.test(path)) return;
+  if (!/\.(glb|gltf|glts|ktx2|bin|jpg|png|webp|hdr|exr|zip)$|\/_cache\//.test(path)) return;
   requests.push({ request: r, path: path + requested.search });
 });
 try {

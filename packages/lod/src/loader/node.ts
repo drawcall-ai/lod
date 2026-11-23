@@ -2,7 +2,7 @@ import { createCanvas, type Canvas } from "@drawcall/webgpu";
 import type { GLTSLoader } from "@drawcall/glts";
 import { resolve as resolveImport } from "import-meta-resolve";
 import { Loader, LoadingManager, WebGPURenderer, type Object3D } from "three/webgpu";
-import { publicFile, publicURL, type Input } from "vitecache";
+import { publicFile, publicURL, type Input } from "@drawcall/cache";
 import { createBakeRenderer, setUpBakeRenderer } from "../bake.js";
 import type { LodLevel } from "../levels/index.js";
 import { CachedLodLoader as BrowserCachedLodLoader, type CachedLodLoaderOptions } from "./index.js";
@@ -10,14 +10,14 @@ import type { LodRequest } from "./request.js";
 import { loaderPathURL, placeholderOrigin } from "./url.js";
 
 /**
- * CachedLodLoader in Node, as the vitecache plugin and the glts CLI run it: `loadAsync` builds and saves every level of
- * the ladder, each with the installed versions of three and of the packages its .glts sources import; while the plugin
- * warms the load, vitecache adds the public files it read. Served paths such as `/trees/oak.glts`, and `file:` URLs in
- * the public directory, as a headless .glts script's manager resolves them to, load at the placeholder origin, which its
- * manager maps to vitecache's `publicURL` of the path; a load that requests any other URL through it, or a .glts source
- * that imports a module from a CDN, fails, since no stored level could be checked against it. `.glts` sources load through a
- * GLTSLoader of the load's own; bakes draw on a canvas of the process's document, as a glts host has one, or else on a
- * WebGPU device of @drawcall/webgpu. The manager only resolves the request's URL.
+ * CachedLodLoader in Node, as the cache plugin and the glts CLI run it: `loadAsync` builds and saves every level of
+ * the ladder, each with the installed versions of three and of the packages its .glts sources import; while the cache
+ * plugin warms the load, it adds the public files the load read. Served paths such as `/trees/oak.glts`, and `file:`
+ * URLs in the public directory, as a headless .glts script's manager resolves them to, load at the placeholder origin,
+ * which its manager maps to @drawcall/cache's `publicURL` of the path; a load that requests any other URL through it,
+ * or a .glts source that imports a module from a CDN, fails, since no stored level could be checked against it. `.glts`
+ * sources load through a GLTSLoader of the load's own; bakes draw on a canvas of the process's document, as a glts host
+ * has one, or else on a WebGPU device of @drawcall/webgpu. The manager only resolves the request's URL.
  *
  * Each `loadAsync` loads and bakes with what it makes for itself, which it frees before resolving, so loads may run
  * concurrently. The levels it returns load their stored bytes as in browsers, and none holds the source: the source
@@ -105,7 +105,7 @@ class SessionLoader extends BrowserCachedLodLoader {
 }
 
 /**
- * A manager that maps URLs at the placeholder origin to vitecache's `publicURL` of their path, which reads the public
+ * A manager that maps URLs at the placeholder origin to @drawcall/cache's `publicURL` of their path, which reads the public
  * file, and fails any other http(s) URL.
  */
 function publicManager(): LoadingManager {

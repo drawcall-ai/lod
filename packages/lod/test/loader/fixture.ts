@@ -1,6 +1,6 @@
 import { Loader, LoadingManager, Mesh, RGBAFormat, Scene, type Object3D, type Renderer } from "three/webgpu";
 import { beforeEach, vi } from "vitest";
-import type { CacheEntryOptions } from "vitecache";
+import type { CacheEntryOptions } from "@drawcall/cache";
 import { boundingBox } from "../../src/source/detail.js";
 import type { Impostor } from "../../src/impostor/impostor.js";
 
@@ -11,7 +11,7 @@ export const cache = {
   saved: new Array<{ options: CacheEntryOptions }>(),
 };
 
-/** Mirrors vitecache as Node runs it: an entry per version and dependencies, which save() writes after a load(). */
+/** Mirrors @drawcall/cache as Node runs it: an entry per version and dependencies, which save() writes after a load(). */
 export class CacheEntry {
   private readonly key: string;
   private loaded = false;

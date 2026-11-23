@@ -1,5 +1,5 @@
 /**
- * Whether this runs in Node, as the vitecache plugin builds levels there. The Worker @drawcall/webgpu installs there
+ * Whether this runs in Node, as the cache plugin builds levels there. The Worker @drawcall/webgpu installs there
  * runs no module workers and ends with its canvas, which a later load outlives: work runs in Node's worker threads or
  * on the calling thread.
  */

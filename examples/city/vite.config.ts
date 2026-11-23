@@ -1,10 +1,10 @@
 import { defineConfig } from "vite";
 import { glts } from "@drawcall/glts/vite";
 import typegpu from "unplugin-typegpu/vite";
-import { vitecache } from "vitecache/vite";
+import { cache } from "@drawcall/cache/vite";
 
 export default defineConfig({
-  plugins: [typegpu(), vitecache(), glts()],
+  plugins: [typegpu(), cache(), glts()],
   resolve: {
     dedupe: ["three"],
   },

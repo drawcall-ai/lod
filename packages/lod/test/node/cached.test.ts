@@ -9,8 +9,8 @@ import type { LodRequest } from "../../src/loader/request.js";
 import { LoadingManager } from "three/webgpu";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
-const directory = join(root, "public/_vitecache");
-// vitecache's project without its plugin: the working directory, its public directory and cache.
+const directory = join(root, "public/_cache");
+// @drawcall/cache's project without its plugin: the working directory, its public directory and cache.
 beforeAll(() => void vi.spyOn(process, "cwd").mockReturnValue(root));
 afterAll(() => rm(directory, { recursive: true, force: true }));
 
@@ -19,7 +19,7 @@ const saved = async () => {
   return Promise.all(names.map(async (name) => [name, (await stat(join(directory, name))).mtimeMs]));
 };
 
-it("builds and saves every level with the packages and, as the vitecache plugin warms it, the public files the ladder read", { timeout: 120_000 }, async () => {
+it("builds and saves every level with the packages and, as the cache plugin warms it, the public files the ladder read", { timeout: 120_000 }, async () => {
   const request: LodRequest = {
     url: "/box.glts?size=2",
     levels: [
@@ -29,7 +29,7 @@ it("builds and saves every level with the packages and, as the vitecache plugin 
   };
   // The plugin's global, as it warms a load: publicURL records the public files the load reads.
   const warming = new AsyncLocalStorage<{ files: unknown[]; modules: () => unknown[] }>();
-  vi.stubGlobal("vitecache", { root, publicDir: join(root, "public"), loaded: new Set(), warming });
+  vi.stubGlobal("drawcallCache", { root, publicDir: join(root, "public"), loaded: new Set(), warming });
   const warm = () => warming.run({ files: [], modules: () => [] }, () => new CachedLodLoader().loadAsync(request));
   await warm();
   const entries = await saved();

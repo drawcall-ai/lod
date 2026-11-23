@@ -107,7 +107,7 @@ async function fieldBlock(block: string): Promise<Lod> {
   if (query.has("variant") || query.has("hero")) throw new Error(`corn: a block takes no variant or hero, not ${query}`);
   const blocks = new CachedLodLoader(loadingManager);
   // Each design baked twice onto its shell: at 256 px for the near levels, at 64 px for far away, where the near
-  // bake's texels would be subpixel. Requests stay literal, which vitecache finds to build them in Node.
+  // bake's texels would be subpixel. Requests stay literal, which the cache plugin finds to build them in Node.
   const BAKES: Record<string, () => Promise<LodLevel[]>> = {
     "0": () =>
       blocks.loadAsync({
