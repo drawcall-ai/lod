@@ -2,10 +2,10 @@ import { HalfFloatType, NearestFilter, RenderTarget, Vector2, type Matrix4, type
 import { at } from "../../at.js";
 import { readFloats } from "../../bake.js";
 import { nextTask } from "../../task.js";
-import type { ImpostorAtlasMip } from "./atlas.js";
+import { halve, type ImpostorAtlasMip } from "./atlas.js";
 import { OUTPUTS, type Output } from "./materials.js";
 
-// Rendering an atlas mip: its frames side by side in sheets, each read back at once.
+// Rendering an atlas: its frames side by side in sheets, each read back at once.
 
 /** Edge of the largest target frames render into side by side, a sheet, which is read back at once. */
 const SHEET = 1024;
@@ -17,27 +17,34 @@ const SHEET = 1024;
 const PER_TARGET = 4;
 
 /**
- * Render every frame (`frameCameras`: camera matrices, in atlas order) into `atlas`, at its
- * cell size × `supersample`. Frames render side by side into sheets of up to SHEET square,
- * so that each map is read back once per sheet, into targets of up to PER_TARGET outputs.
+ * Render every frame (`frameCameras`: camera matrices, in atlas order) at the top mip's cell
+ * size × `supersample` and write it into every one of `mips`, the top first. Only the top is
+ * rendered: each smaller mip's texel sums the samples of the four above it, which equals
+ * rendering it at its own size with as many samples, without drawing the whole source again
+ * per mip. Its textures are read as for the top mip, so a source whose small texture mips look
+ * different, such as darker, keeps its top mip's look at every size. Frames render side by
+ * side into sheets of up to SHEET square, so that each map is read back once per sheet, into
+ * targets of up to PER_TARGET outputs.
  */
-export async function bakeMip(
-  atlas: ImpostorAtlasMip,
+export async function bakeAtlas(
+  mips: ImpostorAtlasMip[],
   supersample: number,
   renderer: Renderer,
   scene: Scene,
   camera: OrthographicCamera,
   frameCameras: Matrix4[],
 ): Promise<void> {
-  const { frames, maps } = atlas;
-  const side = atlas.cell * supersample;
+  const [top] = mips;
+  if (!top) throw new Error("bakeImpostor: an atlas has no mip levels");
+  const { frames, maps } = top;
+  const side = top.cell * supersample;
   const buffer = renderer.getDrawingBufferSize(new Vector2());
   if (buffer.x === side && buffer.y === side)
     throw new Error(`bakeImpostor: the renderer's canvas is ${side} px square, a frame's size: three would draw that frame over the whole sheet`);
   const per = Math.max(1, Math.min(frames, Math.floor(SHEET / side)));
   const width = per * side;
   // one output per map, then the second way to store the normals (see ImpostorAtlasMip), then the specular
-  const names: Output[] = OUTPUTS.filter((name) => (name === "emissive" ? maps.includes("emissive") : name !== "specular" || atlas.specular));
+  const names: Output[] = OUTPUTS.filter((name) => (name === "emissive" ? maps.includes("emissive") : name !== "specular" || top.specular));
   const targets = Array.from({ length: Math.ceil(names.length / PER_TARGET) }, (_, p) => {
     const outputs = names.slice(p * PER_TARGET, (p + 1) * PER_TARGET);
     const target = new RenderTarget(width, width, {
@@ -63,7 +70,13 @@ export async function bakeMip(
         const placed = sheet.map(({ col, row, x, y }) => ({ matrix: at(frameCameras, row * frames + col), x, y }));
         for (const target of targets) renderSheet(renderer, target, scene, camera, placed, side);
         const pixels = await Promise.all(targets.flatMap((target) => target.textures.map((_, i) => readFloats(renderer, target, i))));
-        for (const { col, row, x, y } of sheet) atlas.write(pixels, width, supersample, col, row, x, y);
+        for (const { col, row, x, y } of sheet) {
+          let sums = top.sum(pixels, width, supersample, x, y);
+          for (const mip of mips) {
+            if (mip !== top) sums = halve(sums);
+            mip.write(sums, col, row);
+          }
+        }
         // Yield to the page between sheets, so that a long bake does not freeze it.
         await nextTask();
       }

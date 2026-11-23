@@ -19,7 +19,7 @@ export type ImpostorMap = (typeof MAPS)[number];
 
 /**
  * One map's mip chain, `size >> level` square, from `size` down to one texel per frame (`frames` square). The levels
- * are baked, not filtered from level 0.
+ * below level 0 average its bake's samples exactly (see `bakeImpostor`), not its stored 8-bit texels.
  */
 export interface ImpostorLayer {
   /**

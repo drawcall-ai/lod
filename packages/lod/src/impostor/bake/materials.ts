@@ -52,8 +52,8 @@ export interface BakeSettings {
   /** the cameras' distance from the bounding box centre, and the bounding radius: the depth encoding */
   distance: number;
   radius: number;
-  /** mip bias of every texture read but an alpha-tested material's, per mip level: textures are read at the size of a texel (see `bakeImpostor`) */
-  textureBias: Node<"float"> & { value: number };
+  /** mip bias of every texture read but an alpha-tested material's (see `bakeImpostor`) */
+  textureBias: number;
 }
 
 /**
@@ -231,7 +231,7 @@ function texelsOf(image: unknown): [number, number] | null {
  * hardware would pick: the level from the read's own texel footprint, plus `bias`. Reads
  * with uv of their own making, or with an explicit level or gradients, are left as they are.
  */
-function biasedTextures(bias: Node<"float">): ContextNode<unknown> {
+function biasedTextures(bias: number): ContextNode<unknown> {
   return context({
     getTextureLevel: (node: TextureNode) => {
       const texture = node.value;

@@ -60,30 +60,25 @@ export class ImpostorAtlasMip {
   }
 
   /**
-   * Box-filter one supersampled frame into cell (col, row): the `cell * ss` square at
-   * (x0, y0) of `pixels[m]`, map m as RGBA floats `width` wide, then the turned normals,
-   * then the specular if baked.
-   * Every value is weighted by coverage, so the silhouette's colour is the object's colour
-   * rather than a mix with the cleared background; coverage itself is the plain average.
+   * The sums of one supersampled frame at this mip's cell size: the `cell * ss` square at (x0, y0) of `pixels[m]`, map m
+   * as RGBA floats `width` wide, then the turned normals, then the specular if baked.
    */
-  write(pixels: Float32Array[], width: number, ss: number, col: number, row: number, x0: number, y0: number): void {
-    const { cell, size, maps, layers } = this;
+  sum(pixels: Float32Array[], width: number, ss: number, x0: number, y0: number): FrameSums {
+    const { cell, maps } = this;
     const [alpha] = pixels;
     if (!alpha || pixels.length !== maps.length + (this.specular ? 2 : 1))
-      throw new Error("ImpostorAtlasMip.write: one pixel array per map, then the turned normals, then the specular if baked");
-    const sources = [...maps, "turned" as const];
-    const specular = this.specular ? pixels[maps.length + 1] : undefined;
+      throw new Error("ImpostorAtlasMip.sum: one pixel array per map, then the turned normals, then the specular if baked");
+    const weight = new Float64Array(cell * cell);
+    const values = pixels.map(() => new Float64Array(cell * cell * 4));
     for (let y = 0; y < cell; y++)
       for (let x = 0; x < cell; x++) {
-        const out = ((row * cell + y) * size + col * cell + x) * 4;
+        const t = y * cell + x;
         const first = ((y0 + y * ss) * width + x0 + x * ss) * 4;
-        let weight = 0;
-        for (let sy = 0; sy < ss; sy++) for (let sx = 0; sx < ss; sx++) weight += alpha[first + (sy * width + sx) * 4 + 3] ?? 0;
-        const cover = weight / (ss * ss);
-        this.coverage[out / 4] = cover;
-        if (weight === 0) continue;
-        // The coverage-weighted mean of `source` over this texel's samples.
-        const average = (source: Float32Array): [number, number, number, number] => {
+        let total = 0;
+        for (let sy = 0; sy < ss; sy++) for (let sx = 0; sx < ss; sx++) total += alpha[first + (sy * width + sx) * 4 + 3] ?? 0;
+        weight[t] = total;
+        if (total === 0) continue;
+        pixels.forEach((source, m) => {
           let [r, g, b, a] = [0, 0, 0, 0];
           for (let sy = 0; sy < ss; sy++)
             for (let sx = 0; sx < ss; sx++) {
@@ -94,18 +89,47 @@ export class ImpostorAtlasMip {
               b += (source[i + 2] ?? 0) * w;
               a += (source[i + 3] ?? 0) * w;
             }
-          return [r / weight, g / weight, b / weight, a / weight];
-        };
+          values[m]?.set([r, g, b, a], t * 4);
+        });
+      }
+    return { cell, samples: ss * ss, weight, values };
+  }
+
+  /**
+   * Write cell (col, row) from `sums` of its frame at this mip's cell size. Every value is the coverage-weighted mean of
+   * the texel's samples, so the silhouette's colour is the object's colour rather than a mix with the cleared
+   * background; coverage itself is the plain mean.
+   */
+  write(sums: FrameSums, col: number, row: number): void {
+    const { cell, size, maps, layers } = this;
+    if (sums.cell !== cell) throw new Error(`ImpostorAtlasMip.write: sums of ${sums.cell} px frames for a mip of ${cell} px frames`);
+    const { samples, weight, values } = sums;
+    const sources = [...maps, "turned" as const];
+    const specular = this.specular ? values[maps.length + 1] : undefined;
+    for (let y = 0; y < cell; y++)
+      for (let x = 0; x < cell; x++) {
+        const t = y * cell + x;
+        const out = ((row * cell + y) * size + col * cell + x) * 4;
+        const total = weight[t] ?? 0;
+        const cover = total / samples;
+        this.coverage[out / 4] = cover;
+        if (total === 0) continue;
+        const mean = (source: Float64Array): [number, number, number, number] => [
+          (source[t * 4] ?? 0) / total,
+          (source[t * 4 + 1] ?? 0) / total,
+          (source[t * 4 + 2] ?? 0) / total,
+          (source[t * 4 + 3] ?? 0) / total,
+        ];
         if (specular) {
           const sum = this.specularSum;
-          sum.value = average(specular).map((v, k) => (sum.value[k] ?? 0) + cover * v);
+          sum.value = mean(specular).map((v, k) => (sum.value[k] ?? 0) + cover * v);
           sum.coverage += cover;
         }
         sources.forEach((map, m) => {
-          const source = pixels[m];
+          const source = values[m];
           const layer = map === "turned" ? this.turned : layers[m];
-          if (!source || !layer) throw new Error(`ImpostorAtlasMip.write: no pixels for ${map}`);
-          const [r, g, b, a] = average(source);
+          if (!source || !layer) throw new Error(`ImpostorAtlasMip.write: no sums for ${map}`);
+          const [r, g, b, a] = mean(source);
           if (map === "normalDepth") this.agreement.own += cover * Math.hypot(r * 2 - 1, g * 2 - 1, b * 2 - 1);
           if (map === "turned") this.agreement.turned += cover * Math.hypot(r * 2 - 1, g * 2 - 1, b * 2 - 1);
           store(layer, out, [r, g, b, map === "base" ? cover : a], map === "base" || map === "emissive");
@@ -169,6 +193,34 @@ export class ImpostorAtlasMip {
       }
     }
   }
+}
+
+/**
+ * One `cell`-square frame's texels as sums of their samples: per texel the coverage summed, and per source (each map,
+ * then the turned normals, then the specular if baked) each RGBA channel times its sample's coverage, summed.
+ */
+export interface FrameSums {
+  cell: number;
+  /** Samples each texel sums. */
+  samples: number;
+  weight: Float64Array;
+  values: Float64Array[];
+}
+
+/** The frame's sums at the next mip's cell size: each texel sums 2 × 2 texels of `sums`. */
+export function halve({ cell, samples, weight, values }: FrameSums): FrameSums {
+  const half = cell / 2;
+  const sum = (from: Float64Array, channels: number) => {
+    const out = new Float64Array(half * half * channels);
+    for (let y = 0; y < half; y++)
+      for (let x = 0; x < half; x++)
+        for (let k = 0; k < channels; k++) {
+          const at = (dx: number, dy: number) => from[((2 * y + dy) * cell + 2 * x + dx) * channels + k] ?? 0;
+          out[(y * half + x) * channels + k] = at(0, 0) + at(1, 0) + at(0, 1) + at(1, 1);
+        }
+    return out;
+  };
+  return { cell: half, samples: samples * 4, weight: sum(weight, 1), values: values.map((v) => sum(v, 4)) };
 }
 
 /**

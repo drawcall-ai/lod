@@ -1,12 +1,11 @@
 import { Matrix4, OrthographicCamera, RGBAFormat, Scene, Vector3, type Object3D, type Renderer } from "three/webgpu";
-import { uniform } from "three/tsl";
 import { MAPS, PAD, boundingRadius, texelPixels, validateImpostor, type Impostor, type ImpostorLayout, type ImpostorMap } from "../impostor.js";
 import { frameBasis, frameDirection, type Vec3 } from "../octahedral.js";
 import { checkBakeRenderer, inTurn } from "../../bake.js";
 import { boundingBox, showDetail } from "../../source/detail.js";
 import { ImpostorAtlasMip } from "./atlas.js";
 import { swapMaterials, type BakeSettings } from "./materials.js";
-import { bakeMip } from "./sheet.js";
+import { bakeAtlas } from "./sheet.js";
 import { sourceForBake } from "./source.js";
 import { fittedHalfSize } from "./fit.js";
 
@@ -28,8 +27,9 @@ export interface BakeImpostorOptions {
    * Largest on-screen height (CSS pixels, as `LodLevel.maxPixels`) the impostor will be
    * drawn at, when that is above the height where it is sharp (its default maxPixels).
    * Larger, it shows its top mip magnified, which then reads the source's textures as
-   * sharp as they are at this height, not with the look of their small mips. Alpha-tested
-   * materials are read at full detail at every size, which holds their cut-out's coverage.
+   * sharp as they are at this height, not with the look of their small mips, and the
+   * levels below average it. Alpha-tested materials are read at full detail at every
+   * size, which holds their cut-out's coverage.
    * Default: the height where it is sharp (see `texelPixels`, and `framePixels` for a
    * CachedLodLoader level).
    */
@@ -41,7 +41,7 @@ export interface BakeImpostorOptions {
   emissive?: boolean;
   /**
    * renders per output pixel per axis, for smooth edges; default 2. Textures are read at
-   * the output pixel's size, as multisampling does.
+   * the size of a top mip output pixel, as multisampling does.
    */
   supersample?: number;
 }
@@ -60,11 +60,11 @@ export interface BakeImpostorOptions {
  * canvas's, and would draw that frame over the whole target. Bakes on one renderer run
  * one at a time.
  *
- * Each frame is an orthographic look at the bounding-box centre, rendered once per mip
- * level at that level's size. The object's materials are rendered unlit into one target
- * per map: base colour + coverage, object-space normal + depth,
- * occlusion/roughness/metalness and, if needed, emissive. A material that changes three's
- * default specular adds the object's mean specular (see `Impostor.specular`).
+ * Each frame is an orthographic look at the bounding-box centre, rendered once at the top
+ * mip level's size; each smaller level averages the one above. The object's materials are
+ * rendered unlit into one target per map: base colour + coverage, object-space normal +
+ * depth, occlusion/roughness/metalness and, if needed, emissive. A material that changes
+ * three's default specular adds the object's mean specular (see `Impostor.specular`).
  * Custom lighting behavior is not baked; the resulting surface is lit at draw time.
  */
 export function bakeImpostor(object: Object3D, renderer: Renderer, options: BakeImpostorOptions = {}): Promise<Impostor> {
@@ -111,19 +111,20 @@ async function bakeSource(source: Object3D, renderer: Renderer, options: BakeImp
   const halfSize = fittedHalfSize(source, centre, directions) * (1 + PAD);
 
   const distance = 2 * radius + 1e-3;
-  // Textures are read at the size of an atlas texel; the top mip's at the size of a pixel at maxPixels. Alpha-tested
+  // Textures are read at the size of a top mip texel, or of a pixel at maxPixels if that is smaller. Alpha-tested
   // materials read theirs at full detail (see `swapMaterials`).
   const sharp = texelPixels({ size: cell * frames, frames, box, halfSize });
-  const textureBias = (m: number) => Math.log2(supersample) - (m === 0 ? Math.log2(Math.max(1, (options.maxPixels ?? sharp) / sharp)) : 0);
-  const settings: BakeSettings = { distance, radius, textureBias: uniform(0) };
+  const settings: BakeSettings = {
+    distance,
+    radius,
+    textureBias: Math.log2(supersample) - Math.log2(Math.max(1, (options.maxPixels ?? sharp) / sharp)),
+  };
   const swapped = swapMaterials(source, settings);
   const emissive = options.emissive ?? swapped.emits;
   const maps: ImpostorMap[] = emissive ? [...MAPS] : ["base", "normalDepth", "orm"];
 
-  // Every mip level is rendered, not filtered from the one above: the source does not look
-  // the same at every size (a texture whose small mips mix in dark texels darkens with
-  // distance), and filtering would freeze the look of the largest.
-  const atlases = Array.from({ length: Math.log2(cell) + 1 }, (_, m) => new ImpostorAtlasMip(maps, frames, cell >> m, swapped.specular));
+  // Only the top mip level is rendered (see `bakeAtlas`).
+  const mips = Array.from({ length: Math.log2(cell) + 1 }, (_, m) => new ImpostorAtlasMip(maps, frames, cell >> m, swapped.specular));
   const scene = new Scene();
   scene.add(source);
   const camera = new OrthographicCamera(-halfSize, halfSize, halfSize, -halfSize, 0, 4 * radius + 1e-3);
@@ -152,28 +153,25 @@ async function bakeSource(source: Object3D, renderer: Renderer, options: BakeImp
     );
   });
   try {
-    for (const [m, atlas] of atlases.entries()) {
-      settings.textureBias.value = textureBias(m);
-      await bakeMip(atlas, supersample, renderer, scene, camera, frameCameras);
-    }
+    await bakeAtlas(mips, supersample, renderer, scene, camera, frameCameras);
   } finally {
     for (const material of swapped.materials) material.dispose();
   }
-  if (!atlases.some((atlas) => atlas.covered())) throw new Error("bakeImpostor: nothing visible was baked");
-  for (const atlas of atlases) atlas.fillGutters();
-  const sum = (way: "own" | "turned") => atlases.reduce((total, atlas) => total + atlas.agreement[way], 0);
-  if (sum("turned") > sum("own")) for (const atlas of atlases) atlas.useTurned();
+  if (!mips.some((mip) => mip.covered())) throw new Error("bakeImpostor: nothing visible was baked");
+  for (const mip of mips) mip.fillGutters();
+  const sum = (way: "own" | "turned") => mips.reduce((total, mip) => total + mip.agreement[way], 0);
+  if (sum("turned") > sum("own")) for (const mip of mips) mip.useTurned();
 
   const layers = maps.map((map, i) => ({
     format: RGBAFormat,
-    mipmaps: atlases.map((atlas) => {
-      const layer = atlas.layers[i];
+    mipmaps: mips.map((mip) => {
+      const layer = mip.layers[i];
       if (!layer) throw new Error(`bakeImpostor: no ${map} layer`);
       return layer;
     }),
   }));
   const impostor: Impostor = { version: 4, layout, frames, size: cell * frames, box, halfSize, maps, layers };
-  const [top] = atlases;
+  const [top] = mips;
   if (!top) throw new Error("bakeImpostor: no mip levels");
   if (swapped.specular) impostor.specular = top.meanSpecular();
   validateImpostor(impostor);

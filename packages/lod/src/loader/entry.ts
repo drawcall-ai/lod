@@ -8,7 +8,7 @@ import { derived, type Ladder } from "./request.js";
  * What builds and lays out a stored level, and so what identifies it beside its request: bump it with any change to
  * the bytes a level or shape entry holds.
  */
-const version = "lod-level@26";
+const version = "lod-level@27";
 
 /** The entry of derived level `of` of `ladder`, or of its source's shape, keyed by the request alone. */
 export function entryOf(ladder: Ladder, of: number | "shape", { basePath, root }: Pick<CacheEntryOptions, "basePath" | "root">): CacheEntry {
@@ -35,7 +35,7 @@ function parameters(level: Derived): Value {
     case "impostor":
       return {
         type: level.type,
-        // The impostor bakes its top mip for this height too.
+        // The impostor reads its textures for this height, at every mip.
         maxPixels: level.maxPixels ?? null,
         layout: level.layout ?? null,
         frames: level.frames ?? null,
