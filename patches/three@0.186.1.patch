@@ -1,5 +1,5 @@
 diff --git a/build/three.webgpu.js b/build/three.webgpu.js
-index 48b30e6bf4bf114ba5524ae509c81c4a043d27ea..a97247ab3b9b28b0e990becfb8bbe22c83f76b38 100644
+index 48b30e6bf4bf114ba5524ae509c81c4a043d27ea..43b642c7dfb8c6c67cf4db43e1f77cdf905610d1 100644
 --- a/build/three.webgpu.js
 +++ b/build/three.webgpu.js
 @@ -30956,7 +30956,7 @@ class RenderObject {
@@ -27,7 +27,24 @@ index 48b30e6bf4bf114ba5524ae509c81c4a043d27ea..a97247ab3b9b28b0e990becfb8bbe22c
  
  		//
  
-@@ -57518,6 +57520,7 @@ class NodeManager extends DataMap {
+@@ -34053,6 +34055,16 @@ function painterSortStable( a, b ) {
+ 
+ 		return a.renderOrder - b.renderOrder;
+ 
++	}
++
++	// Let opaque surfaces write depth before shading cutouts they cover.
++	const aCutout = a.material.alphaTest > 0 || a.material.alphaToCoverage;
++	const bCutout = b.material.alphaTest > 0 || b.material.alphaToCoverage;
++
++	if ( aCutout !== bCutout ) {
++
++		return aCutout ? 1 : - 1;
++
+ 	} else if ( a.z !== b.z ) {
+ 
+ 		return a.z - b.z;
+@@ -57518,6 +57530,7 @@ class NodeManager extends DataMap {
  		 * @type {Map<number,NodeBuilderState>}
  		 */
  		this.nodeBuilderCache = new Map();
@@ -35,46 +52,46 @@ index 48b30e6bf4bf114ba5524ae509c81c4a043d27ea..a97247ab3b9b28b0e990becfb8bbe22c
  
  		/**
  		 * A cache for managing data cache key data.
-@@ -57665,60 +57668,58 @@ class NodeManager extends DataMap {
+@@ -57665,60 +57678,58 @@ class NodeManager extends DataMap {
  
  			if ( nodeBuilderState === undefined ) {
  
 -				const buildNodeBuilder = async () => {
 -
 -					let nodeBuilder = this._createNodeBuilder( renderObject, renderObject.material );
+-
+-					try {
+-
+-						if ( useAsync ) {
 +				if ( useAsync ) {
  
--					try {
+-							await nodeBuilder.buildAsync();
 +					const { pendingNodeBuilders } = this;
 +					let pending = pendingNodeBuilders.get( cacheKey );
  
--						if ( useAsync ) {
+-						} else {
 +					if ( pending === undefined ) {
  
--							await nodeBuilder.buildAsync();
+-							nodeBuilder.build();
 +						const build = async () => {
  
--						} else {
+-						}
 +							let builder = this._createNodeBuilder( renderObject, renderObject.material );
  
--							nodeBuilder.build();
+-					} catch ( e ) {
 +							try {
  
--						}
+-						nodeBuilder = this._createNodeBuilder( renderObject, new NodeMaterial() );
 +								await builder.buildAsync();
  
--					} catch ( e ) {
+-						if ( useAsync ) {
 +							} catch ( e ) {
  
--						nodeBuilder = this._createNodeBuilder( renderObject, new NodeMaterial() );
+-							await nodeBuilder.buildAsync();
 +								builder = this._createNodeBuilder( renderObject, new NodeMaterial() );
 +								await builder.buildAsync();
 +								error( 'TSL: ' + e );
  
--						if ( useAsync ) {
--
--							await nodeBuilder.buildAsync();
--
 -						} else {
 +							}
  
@@ -93,14 +110,14 @@ index 48b30e6bf4bf114ba5524ae509c81c4a043d27ea..a97247ab3b9b28b0e990becfb8bbe22c
  					}
  
 -					return nodeBuilder;
+-
+-				};
 +					return pending.then( ( state ) => {
  
--				};
+-				if ( useAsync ) {
 +						// A synchronous draw may already have attached or published this shader.
 +						if ( renderObjectData.nodeBuilderState === undefined && this.data.get( renderObject ) === renderObjectData ) {
  
--				if ( useAsync ) {
--
 -					return buildNodeBuilder().then( ( nodeBuilder ) => {
 +							state = nodeBuilderCache.get( cacheKey ) || state;
 +							nodeBuilderCache.set( cacheKey, state );
@@ -124,7 +141,7 @@ index 48b30e6bf4bf114ba5524ae509c81c4a043d27ea..a97247ab3b9b28b0e990becfb8bbe22c
  					let nodeBuilder = this._createNodeBuilder( renderObject, renderObject.material );
  
  					try {
-@@ -58615,6 +58616,7 @@ class NodeManager extends DataMap {
+@@ -58615,6 +58626,7 @@ class NodeManager extends DataMap {
  
  		this.nodeFrame = new NodeFrame();
  		this.nodeBuilderCache = new Map();
@@ -132,7 +149,15 @@ index 48b30e6bf4bf114ba5524ae509c81c4a043d27ea..a97247ab3b9b28b0e990becfb8bbe22c
  		this.cacheLib = {};
  
  	}
-@@ -62721,32 +62723,61 @@ class Renderer {
+@@ -62284,6 +62296,7 @@ class Renderer {
+ 		 * @type {WeakMap<Material, Object>}
+ 		 */
+ 		this._cacheShadowNodes = new WeakMap();
++		this._shadowColorsByMask = new WeakMap();
+ 
+ 		/**
+ 		 * Whether the renderer has been initialized or not.
+@@ -62721,32 +62734,61 @@ class Renderer {
  
  		for ( const item of compilationPromises ) {
  
@@ -198,14 +223,14 @@ index 48b30e6bf4bf114ba5524ae509c81c4a043d27ea..a97247ab3b9b28b0e990becfb8bbe22c
  
 -			}
 +			} );
-+
-+			if ( pipelinePromises.length > 0 ) await Promise.all( pipelinePromises );
-+
-+			withDraw( () => {
  
 -			this._isPreCompiling = true;
 -			this._nodes.updateAfter( renderObject );
 -			this._isPreCompiling = false;
++			if ( pipelinePromises.length > 0 ) await Promise.all( pipelinePromises );
++
++			withDraw( () => {
++
 +				this._isPreCompiling = true;
 +				this._nodes.updateAfter( renderObject );
 +
@@ -213,7 +238,31 @@ index 48b30e6bf4bf114ba5524ae509c81c4a043d27ea..a97247ab3b9b28b0e990becfb8bbe22c
  
  			loaded ++;
  
-@@ -65579,28 +65610,16 @@ class Renderer {
+@@ -65170,10 +65212,12 @@ class Renderer {
+ 			const hasMaskNode = ( material.maskShadowNode && material.maskShadowNode.isNode ) || ( material.maskNode && material.maskNode.isNode );
+ 
+ 			let positionNode = null;
+-			let colorNode = null;
++			// A mask with constant shadow color has no material-specific color inputs.
++			const sharedMask = hasMaskNode && ! hasMap && ! hasColorNode && ! hasCastShadowNode ? ( material.maskShadowNode || material.maskNode ) : null;
++			let colorNode = sharedMask ? this._shadowColorsByMask.get( sharedMask ) : null;
+ 			let depthNode = null;
+ 
+-			if ( hasMap || hasColorNode || hasCastShadowNode || hasMaskNode ) {
++			if ( ! colorNode && ( hasMap || hasColorNode || hasCastShadowNode || hasMaskNode ) ) {
+ 
+ 				let shadowRGB;
+ 				let shadowAlpha;
+@@ -65222,6 +65266,8 @@ class Renderer {
+ 
+ 					} )( colorNode );
+ 
++					if ( sharedMask ) this._shadowColorsByMask.set( sharedMask, colorNode );
++
+ 				}
+ 
+ 			}
+@@ -65579,28 +65625,16 @@ class Renderer {
  	 */
  	_createObjectPipeline( object, material, scene, camera, lightsNode, group, clippingContext, passId ) {
  
@@ -246,7 +295,7 @@ index 48b30e6bf4bf114ba5524ae509c81c4a043d27ea..a97247ab3b9b28b0e990becfb8bbe22c
  		renderObject.drawRange = object.geometry.drawRange;
  		renderObject.group = group;
  
-@@ -65619,6 +65638,25 @@ class Renderer {
+@@ -65619,6 +65653,25 @@ class Renderer {
  
  	}
  
@@ -272,6 +321,80 @@ index 48b30e6bf4bf114ba5524ae509c81c4a043d27ea..a97247ab3b9b28b0e990becfb8bbe22c
  	/**
  	 * Callback when the canvas has been resized.
  	 *
+diff --git a/build/three.webgpu.nodes.js b/build/three.webgpu.nodes.js
+index e96c4ae08d528fea66c58e5869923c1675822ac9..4dab0992f246396be3501af3c4d923383a0bc455 100644
+--- a/build/three.webgpu.nodes.js
++++ b/build/three.webgpu.nodes.js
+@@ -34053,6 +34053,16 @@ function painterSortStable( a, b ) {
+ 
+ 		return a.renderOrder - b.renderOrder;
+ 
++	}
++
++	// Let opaque surfaces write depth before shading cutouts they cover.
++	const aCutout = a.material.alphaTest > 0 || a.material.alphaToCoverage;
++	const bCutout = b.material.alphaTest > 0 || b.material.alphaToCoverage;
++
++	if ( aCutout !== bCutout ) {
++
++		return aCutout ? 1 : - 1;
++
+ 	} else if ( a.z !== b.z ) {
+ 
+ 		return a.z - b.z;
+@@ -62284,6 +62294,7 @@ class Renderer {
+ 		 * @type {WeakMap<Material, Object>}
+ 		 */
+ 		this._cacheShadowNodes = new WeakMap();
++		this._shadowColorsByMask = new WeakMap();
+ 
+ 		/**
+ 		 * Whether the renderer has been initialized or not.
+@@ -65170,10 +65181,12 @@ class Renderer {
+ 			const hasMaskNode = ( material.maskShadowNode && material.maskShadowNode.isNode ) || ( material.maskNode && material.maskNode.isNode );
+ 
+ 			let positionNode = null;
+-			let colorNode = null;
++			// A mask with constant shadow color has no material-specific color inputs.
++			const sharedMask = hasMaskNode && ! hasMap && ! hasColorNode && ! hasCastShadowNode ? ( material.maskShadowNode || material.maskNode ) : null;
++			let colorNode = sharedMask ? this._shadowColorsByMask.get( sharedMask ) : null;
+ 			let depthNode = null;
+ 
+-			if ( hasMap || hasColorNode || hasCastShadowNode || hasMaskNode ) {
++			if ( ! colorNode && ( hasMap || hasColorNode || hasCastShadowNode || hasMaskNode ) ) {
+ 
+ 				let shadowRGB;
+ 				let shadowAlpha;
+@@ -65222,6 +65235,8 @@ class Renderer {
+ 
+ 					} )( colorNode );
+ 
++					if ( sharedMask ) this._shadowColorsByMask.set( sharedMask, colorNode );
++
+ 				}
+ 
+ 			}
+diff --git a/src/renderers/common/RenderList.js b/src/renderers/common/RenderList.js
+index 141e8afc3648dd1bbd51c14df483072567b8d656..5142df5b74389fcaf444d15d8fbef76bf732da06 100644
+--- a/src/renderers/common/RenderList.js
++++ b/src/renderers/common/RenderList.js
+@@ -21,6 +21,16 @@ function painterSortStable( a, b ) {
+ 
+ 		return a.renderOrder - b.renderOrder;
+ 
++	}
++
++	// Let opaque surfaces write depth before shading cutouts they cover.
++	const aCutout = a.material.alphaTest > 0 || a.material.alphaToCoverage;
++	const bCutout = b.material.alphaTest > 0 || b.material.alphaToCoverage;
++
++	if ( aCutout !== bCutout ) {
++
++		return aCutout ? 1 : - 1;
++
+ 	} else if ( a.z !== b.z ) {
+ 
+ 		return a.z - b.z;
 diff --git a/src/renderers/common/RenderObject.js b/src/renderers/common/RenderObject.js
 index 8c1091da73db2f1b46c28eca4ad5ded5c1d9eb1d..6971a1bb5b174595656e55b5a5c69aaf2b7e3ab1 100644
 --- a/src/renderers/common/RenderObject.js
@@ -306,10 +429,18 @@ index 93c235c70c866aef768f78ddd6f7045ea13eb6f9..f266a5c88c33e3b710ff4322acb25933
  		//
  
 diff --git a/src/renderers/common/Renderer.js b/src/renderers/common/Renderer.js
-index c05aa68471f07a0bbbf6203865da1096fea503c1..579bdc4b2e93b43a967793d566c3acd5a4ec2b54 100644
+index c05aa68471f07a0bbbf6203865da1096fea503c1..0ae6490993f7c86d99871b0ecb90d88ca6f25b99 100644
 --- a/src/renderers/common/Renderer.js
 +++ b/src/renderers/common/Renderer.js
-@@ -1060,32 +1060,61 @@ class Renderer {
+@@ -623,6 +623,7 @@ class Renderer {
+ 		 * @type {WeakMap<Material, Object>}
+ 		 */
+ 		this._cacheShadowNodes = new WeakMap();
++		this._shadowColorsByMask = new WeakMap();
+ 
+ 		/**
+ 		 * Whether the renderer has been initialized or not.
+@@ -1060,32 +1061,61 @@ class Renderer {
  
  		for ( const item of compilationPromises ) {
  
@@ -375,12 +506,12 @@ index c05aa68471f07a0bbbf6203865da1096fea503c1..579bdc4b2e93b43a967793d566c3acd5
  
 -			}
 +			} );
++
++			if ( pipelinePromises.length > 0 ) await Promise.all( pipelinePromises );
  
 -			this._isPreCompiling = true;
 -			this._nodes.updateAfter( renderObject );
 -			this._isPreCompiling = false;
-+			if ( pipelinePromises.length > 0 ) await Promise.all( pipelinePromises );
-+
 +			withDraw( () => {
 +
 +				this._isPreCompiling = true;
@@ -390,7 +521,31 @@ index c05aa68471f07a0bbbf6203865da1096fea503c1..579bdc4b2e93b43a967793d566c3acd5
  
  			loaded ++;
  
-@@ -3918,28 +3947,16 @@ class Renderer {
+@@ -3509,10 +3539,12 @@ class Renderer {
+ 			const hasMaskNode = ( material.maskShadowNode && material.maskShadowNode.isNode ) || ( material.maskNode && material.maskNode.isNode );
+ 
+ 			let positionNode = null;
+-			let colorNode = null;
++			// A mask with constant shadow color has no material-specific color inputs.
++			const sharedMask = hasMaskNode && ! hasMap && ! hasColorNode && ! hasCastShadowNode ? ( material.maskShadowNode || material.maskNode ) : null;
++			let colorNode = sharedMask ? this._shadowColorsByMask.get( sharedMask ) : null;
+ 			let depthNode = null;
+ 
+-			if ( hasMap || hasColorNode || hasCastShadowNode || hasMaskNode ) {
++			if ( ! colorNode && ( hasMap || hasColorNode || hasCastShadowNode || hasMaskNode ) ) {
+ 
+ 				let shadowRGB;
+ 				let shadowAlpha;
+@@ -3561,6 +3593,8 @@ class Renderer {
+ 
+ 					} )( colorNode );
+ 
++					if ( sharedMask ) this._shadowColorsByMask.set( sharedMask, colorNode );
++
+ 				}
+ 
+ 			}
+@@ -3918,28 +3952,16 @@ class Renderer {
  	 */
  	_createObjectPipeline( object, material, scene, camera, lightsNode, group, clippingContext, passId ) {
  
@@ -423,7 +578,7 @@ index c05aa68471f07a0bbbf6203865da1096fea503c1..579bdc4b2e93b43a967793d566c3acd5
  		renderObject.drawRange = object.geometry.drawRange;
  		renderObject.group = group;
  
-@@ -3958,6 +3975,25 @@ class Renderer {
+@@ -3958,6 +3980,25 @@ class Renderer {
  
  	}
  

@@ -6,7 +6,7 @@ settings:
 
 patchedDependencies:
   three@0.186.1:
-    hash: 07dc8750cf16e0a16350df132e59c3114295108e7a8a346efe79956c0c03e435
+    hash: f95949d735580c48ab3aeec9f20664a89ccb5e899a8f4901841ad5ef4dfb6014
     path: patches/three@0.186.1.patch
 
 importers:
@@ -24,13 +24,13 @@ importers:
         version: 0.8.2(vite@8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15))
       '@drawcall/glts':
         specifier: ^7.0.0
-        version: 7.0.0(@types/node@24.19.1)(three@0.186.1(patch_hash=07dc8750cf16e0a16350df132e59c3114295108e7a8a346efe79956c0c03e435))(typegpu@0.12.9)(typescript@5.9.3)(vite@8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15))
+        version: 7.0.0(@types/node@24.19.1)(three@0.186.1(patch_hash=f95949d735580c48ab3aeec9f20664a89ccb5e899a8f4901841ad5ef4dfb6014))(typegpu@0.12.9)(typescript@5.9.3)(vite@8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15))
       '@drawcall/lod':
         specifier: workspace:*
         version: link:../../packages/lod
       '@typegpu/three':
         specifier: ^0.12.2
-        version: 0.12.2(@typegpu/gl@0.12.9(typegpu@0.12.9))(three@0.186.1(patch_hash=07dc8750cf16e0a16350df132e59c3114295108e7a8a346efe79956c0c03e435))(typegpu@0.12.9)
+        version: 0.12.2(@typegpu/gl@0.12.9(typegpu@0.12.9))(three@0.186.1(patch_hash=f95949d735580c48ab3aeec9f20664a89ccb5e899a8f4901841ad5ef4dfb6014))(typegpu@0.12.9)
       fflate:
         specifier: ^0.8.3
         version: 0.8.3
@@ -39,7 +39,7 @@ importers:
         version: 3.0.5
       three:
         specifier: ^0.186.1
-        version: 0.186.1(patch_hash=07dc8750cf16e0a16350df132e59c3114295108e7a8a346efe79956c0c03e435)
+        version: 0.186.1(patch_hash=f95949d735580c48ab3aeec9f20664a89ccb5e899a8f4901841ad5ef4dfb6014)
       typegpu:
         specifier: ^0.12.9
         version: 0.12.9
@@ -85,7 +85,7 @@ importers:
         version: 0.8.3
       gputex:
         specifier: ^0.16.0
-        version: 0.16.0(three@0.186.1(patch_hash=07dc8750cf16e0a16350df132e59c3114295108e7a8a346efe79956c0c03e435))
+        version: 0.16.0(three@0.186.1(patch_hash=f95949d735580c48ab3aeec9f20664a89ccb5e899a8f4901841ad5ef4dfb6014))
       import-meta-resolve:
         specifier: ^4.2.0
         version: 4.2.0
@@ -101,7 +101,7 @@ importers:
         version: 0.8.2(vite@8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15))
       '@drawcall/glts':
         specifier: ^7.0.0
-        version: 7.0.0(@types/node@24.19.1)(three@0.186.1(patch_hash=07dc8750cf16e0a16350df132e59c3114295108e7a8a346efe79956c0c03e435))(typegpu@0.12.9)(typescript@5.9.3)(vite@8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15))
+        version: 7.0.0(@types/node@24.19.1)(three@0.186.1(patch_hash=f95949d735580c48ab3aeec9f20664a89ccb5e899a8f4901841ad5ef4dfb6014))(typegpu@0.12.9)(typescript@5.9.3)(vite@8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15))
       '@drawcall/lod':
         specifier: 'link:'
         version: 'link:'
@@ -110,7 +110,7 @@ importers:
         version: 0.12.9(typegpu@0.12.9)
       '@typegpu/three':
         specifier: ^0.12.2
-        version: 0.12.2(@typegpu/gl@0.12.9(typegpu@0.12.9))(three@0.186.1(patch_hash=07dc8750cf16e0a16350df132e59c3114295108e7a8a346efe79956c0c03e435))(typegpu@0.12.9)
+        version: 0.12.2(@typegpu/gl@0.12.9(typegpu@0.12.9))(three@0.186.1(patch_hash=f95949d735580c48ab3aeec9f20664a89ccb5e899a8f4901841ad5ef4dfb6014))(typegpu@0.12.9)
       '@types/babel__core':
         specifier: ^7.20.5
         version: 7.20.5
@@ -131,7 +131,7 @@ importers:
         version: 1.63.0
       three:
         specifier: ^0.186.1
-        version: 0.186.1(patch_hash=07dc8750cf16e0a16350df132e59c3114295108e7a8a346efe79956c0c03e435)
+        version: 0.186.1(patch_hash=f95949d735580c48ab3aeec9f20664a89ccb5e899a8f4901841ad5ef4dfb6014)
       typegpu:
         specifier: 0.12.9
         version: 0.12.9
@@ -1726,7 +1726,7 @@ snapshots:
     optionalDependencies:
       vite: 8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15)
 
-  '@drawcall/glts@7.0.0(@types/node@24.19.1)(three@0.186.1(patch_hash=07dc8750cf16e0a16350df132e59c3114295108e7a8a346efe79956c0c03e435))(typegpu@0.12.9)(typescript@5.9.3)(vite@8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15))':
+  '@drawcall/glts@7.0.0(@types/node@24.19.1)(three@0.186.1(patch_hash=f95949d735580c48ab3aeec9f20664a89ccb5e899a8f4901841ad5ef4dfb6014))(typegpu@0.12.9)(typescript@5.9.3)(vite@8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15))':
     dependencies:
       '@babel/standalone': 8.0.10
       '@babel/types': 8.0.10
@@ -1735,7 +1735,7 @@ snapshots:
       commander: 15.0.0
       es-module-lexer: 3.0.4
       sharp: 0.35.5(@types/node@24.19.1)
-      three: 0.186.1(patch_hash=07dc8750cf16e0a16350df132e59c3114295108e7a8a346efe79956c0c03e435)
+      three: 0.186.1(patch_hash=f95949d735580c48ab3aeec9f20664a89ccb5e899a8f4901841ad5ef4dfb6014)
     optionalDependencies:
       typegpu: 0.12.9
       typescript: 5.9.3
@@ -2109,10 +2109,10 @@ snapshots:
       tinyest: 0.3.4
       typegpu: 0.12.9
 
-  '@typegpu/three@0.12.2(@typegpu/gl@0.12.9(typegpu@0.12.9))(three@0.186.1(patch_hash=07dc8750cf16e0a16350df132e59c3114295108e7a8a346efe79956c0c03e435))(typegpu@0.12.9)':
+  '@typegpu/three@0.12.2(@typegpu/gl@0.12.9(typegpu@0.12.9))(three@0.186.1(patch_hash=f95949d735580c48ab3aeec9f20664a89ccb5e899a8f4901841ad5ef4dfb6014))(typegpu@0.12.9)':
     dependencies:
       '@typegpu/gl': 0.12.9(typegpu@0.12.9)
-      three: 0.186.1(patch_hash=07dc8750cf16e0a16350df132e59c3114295108e7a8a346efe79956c0c03e435)
+      three: 0.186.1(patch_hash=f95949d735580c48ab3aeec9f20664a89ccb5e899a8f4901841ad5ef4dfb6014)
       typegpu: 0.12.9
 
   '@types/babel__core@7.20.5':
@@ -2332,9 +2332,9 @@ snapshots:
 
   gensync@1.0.0-beta.2: {}
 
-  gputex@0.16.0(three@0.186.1(patch_hash=07dc8750cf16e0a16350df132e59c3114295108e7a8a346efe79956c0c03e435)):
+  gputex@0.16.0(three@0.186.1(patch_hash=f95949d735580c48ab3aeec9f20664a89ccb5e899a8f4901841ad5ef4dfb6014)):
     optionalDependencies:
-      three: 0.186.1(patch_hash=07dc8750cf16e0a16350df132e59c3114295108e7a8a346efe79956c0c03e435)
+      three: 0.186.1(patch_hash=f95949d735580c48ab3aeec9f20664a89ccb5e899a8f4901841ad5ef4dfb6014)
 
   import-meta-resolve@4.2.0: {}
 
@@ -2523,7 +2523,7 @@ snapshots:
 
   std-env@4.3.0: {}
 
-  three@0.186.1(patch_hash=07dc8750cf16e0a16350df132e59c3114295108e7a8a346efe79956c0c03e435): {}
+  three@0.186.1(patch_hash=f95949d735580c48ab3aeec9f20664a89ccb5e899a8f4901841ad5ef4dfb6014): {}
 
   tinybench@2.9.0: {}
 
