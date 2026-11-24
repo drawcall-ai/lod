@@ -1,14 +1,14 @@
-import { Box3, Matrix4, type Material, type Object3D } from "three/webgpu";
+import { Box3, Matrix4, type Material, type Object3D, type Renderer } from "three/webgpu";
+import type { BlockFormat } from "../blocks/index.js";
 import { decodeBakedMeshAsync, encodeBakedMeshAsync } from "../baked/codec.js";
 import { boundingBox } from "../source/detail.js";
 import { decodeImpostorAsync, encodeImpostorAsync } from "../impostor/codec.js";
 import { ImpostorMesh, type ImpostorMeshOptions } from "../impostor/mesh/index.js";
-import { measure, recordDeviation } from "../levels/index.js";
 import { isImpostorMesh, isMesh } from "../three.js";
 import { decodeMeshAsync, encodeMeshAsync } from "../codec/mesh.js";
 import type { LodLevelRequest } from "./request.js";
 
-// A cached level: the source's shape, what places the level and measures its default threshold, then its payload.
+// A cached level: the source's shape, what places the level, then its payload.
 
 /** A level the loader builds from the source and caches. */
 export type Derived = Exclude<LodLevelRequest, { type: "empty" }>;
@@ -46,8 +46,6 @@ export const placedBox = ({ box, matrix }: Shape): Box3 => box.clone().applyMatr
 
 interface Metadata {
   name: string;
-  deviation?: number;
-  texels?: number;
   matrix: Matrix4;
   matrixAutoUpdate: boolean;
   castShadow: boolean;
@@ -62,7 +60,18 @@ export interface Entry {
 
 const MAGIC = 0x33444f4c;
 
-export async function encodeLevel(object: Object3D, kind: Kind, shape: Shape, materials: readonly Material[]): Promise<Uint8Array> {
+/**
+ * `object`, a level of `kind` built from a source of `shape` drawn with `materials`, encoded with its maps as blocks of
+ * `format`, which a level with maps needs, encoded on `renderer`'s device.
+ */
+export async function encodeLevel(
+  object: Object3D,
+  kind: Kind,
+  shape: Shape,
+  materials: readonly Material[],
+  format: BlockFormat | null,
+  renderer: () => Promise<Renderer>,
+): Promise<Uint8Array> {
   if (object.matrixAutoUpdate) object.updateMatrix();
   const box = boundingBox(object).applyMatrix4(object.matrix);
   if (box.isEmpty()) throw new Error(`CachedLodLoader: the ${kind} level draws nothing`);
@@ -75,12 +84,11 @@ export async function encodeLevel(object: Object3D, kind: Kind, shape: Shape, ma
       .containsBox(box)
   )
     throw new Error(`CachedLodLoader: the ${kind} level extends beyond the source's bounds; derived shapes, such as a low shell, must stay inside the source`);
-  const payload = await encodePayload(object, kind, materials);
+  const payload = await encodePayload(object, kind, materials, format, renderer);
   const header = new TextEncoder().encode(
     JSON.stringify({
       ...shapeFields(shape),
       name: object.name,
-      ...measure(object),
       matrix: object.matrix.toArray(),
       matrixAutoUpdate: object.matrixAutoUpdate,
       castShadow: object.castShadow,
@@ -96,17 +104,21 @@ export async function encodeLevel(object: Object3D, kind: Kind, shape: Shape, ma
   return bytes;
 }
 
-async function encodePayload(object: Object3D, kind: Kind, materials: readonly Material[]): Promise<Uint8Array> {
-  switch (kind) {
-    case "simplify":
-      return encodeMeshAsync(object, materials);
-    case "baked":
-      if (!isMesh(object)) throw new Error("CachedLodLoader: baked level is not a mesh");
-      return encodeBakedMeshAsync(object);
-    case "impostor":
-      if (!isImpostorMesh(object)) throw new Error("CachedLodLoader: impostor level is not an ImpostorMesh");
-      return encodeImpostorAsync(object.impostor);
+async function encodePayload(
+  object: Object3D,
+  kind: Kind,
+  materials: readonly Material[],
+  format: BlockFormat | null,
+  renderer: () => Promise<Renderer>,
+): Promise<Uint8Array> {
+  if (kind === "simplify") return encodeMeshAsync(object, materials);
+  if (!format) throw new Error(`CachedLodLoader: a ${kind} level's maps need a block format`);
+  if (kind === "baked") {
+    if (!isMesh(object)) throw new Error("CachedLodLoader: baked level is not a mesh");
+    return encodeBakedMeshAsync(object, await renderer(), format);
   }
+  if (!isImpostorMesh(object)) throw new Error("CachedLodLoader: impostor level is not an ImpostorMesh");
+  return encodeImpostorAsync(object.impostor, await renderer(), format);
 }
 
 /** Decode a level placed as it was built; `materials` are the source's, which a simplified level draws with. */
@@ -128,7 +140,6 @@ export async function decodeLevel(
   object.matrixAutoUpdate = level.matrixAutoUpdate;
   object.castShadow = level.castShadow;
   object.receiveShadow = level.receiveShadow;
-  if (level.deviation !== undefined) recordDeviation(object, level.deviation);
   return object;
 }
 
@@ -145,16 +156,10 @@ export function readLevel(bytes: Uint8Array): Entry {
     typeof meta.matrixAutoUpdate !== "boolean"
   )
     fail("invalid level settings");
-  const deviation = meta.deviation === undefined ? undefined : finite(meta.deviation);
-  if (deviation !== undefined && deviation < 0) fail("negative deviation");
-  const texels = meta.texels === undefined ? undefined : finite(meta.texels);
-  if (texels !== undefined && texels <= 0) fail("invalid texels");
   return {
     shape: parseShape(meta),
     level: {
       name: meta.name,
-      deviation,
-      texels,
       matrix: new Matrix4().fromArray(numbers(meta.matrix, 16)),
       matrixAutoUpdate: meta.matrixAutoUpdate,
       castShadow: meta.castShadow,

@@ -28,8 +28,7 @@ export async function buildLevel(
     }
     case "baked": {
       const shell = low ? { low } : { ratio: request.ratio };
-      const rooms = interior ? { interior, renderer: await renderer() } : {};
-      return bakeMesh(source, { textureSize: request.textureSize, ...shell, ...rooms });
+      return bakeMesh(source, { textureSize: request.textureSize, renderer: await renderer(), interior, ...shell });
     }
   }
 }

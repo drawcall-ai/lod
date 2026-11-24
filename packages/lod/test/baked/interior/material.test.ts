@@ -80,11 +80,11 @@ function colors(mesh: Mesh): Uint8Array {
 
 describe("interiors", { timeout: GPU_TIMEOUT }, () => {
   it("bakes the exterior alone and flags the glass texels as windows into the room behind", async () => {
-    const plain = await bakeMesh(house(), { low: box(), textureSize: 64 });
+    const plain = await bakeMesh(house(), { renderer: bakeRenderer, low: box(), textureSize: 64 });
     const source = house();
     const rooms = interior();
     source.add(rooms);
-    const baked = await bakeMesh(source, { low: box(), textureSize: 64, interior: rooms, renderer: bakeRenderer });
+    const baked = await bakeMesh(source, { renderer: bakeRenderer, low: box(), textureSize: 64, interior: rooms });
     expect(rooms.visible).toBe(true);
     expect(colors(baked)).toEqual(colors(plain));
     const data = windows(baked);
@@ -100,7 +100,7 @@ describe("interiors", { timeout: GPU_TIMEOUT }, () => {
   it("shows the room through the window, its far wall head-on and a side wall from aside", async () => {
     const rooms = interior();
     const source = house().add(rooms);
-    const baked = await bakeMesh(source, { low: box(), textureSize: 128, interior: rooms, renderer: bakeRenderer });
+    const baked = await bakeMesh(source, { renderer: bakeRenderer, low: box(), textureSize: 128, interior: rooms });
     const front = new Vector3(0, 0, 5);
     const aside = new Vector3(3.5, 0, 3.6);
     // Head-on, the far wall: lit by the light reaching the window, at any intensity.
@@ -119,7 +119,7 @@ describe("interiors", { timeout: GPU_TIMEOUT }, () => {
     const rooms = interior();
     const source = house().add(rooms);
     source.position.set(0.3, 0, 0);
-    const baked = await bakeMesh(source, { low: box(), textureSize: 128, interior: rooms, renderer: bakeRenderer });
+    const baked = await bakeMesh(source, { renderer: bakeRenderer, low: box(), textureSize: 128, interior: rooms });
     const turn = new Matrix4().makeRotationY(0.4);
     const lod = new Lod([{ object: source.clone() }, { object: baked.clone() }]);
     lod.quaternion.setFromRotationMatrix(turn);
@@ -174,7 +174,7 @@ describe("interiors", { timeout: GPU_TIMEOUT }, () => {
     const back = new Mesh(new BoxGeometry(1.8, 1.8, 0.9), new MeshBasicMaterial({ color: 0x2040d0, side: BackSide })).translateZ(-0.45);
     const rooms = new Group().add(front, back);
     const source = house().add(rooms);
-    const baked = await bakeMesh(source, { low: box(), textureSize: 128, interior: rooms, renderer: bakeRenderer });
+    const baked = await bakeMesh(source, { renderer: bakeRenderer, low: box(), textureSize: 128, interior: rooms });
     const eye = new Vector3(0, 0, 5);
     const [real, fake] = [windowColor(await render(source, eye)), windowColor(await render(baked, eye))];
     expect(fake[2]).toBeGreaterThan(fake[0] + 60);
@@ -184,7 +184,7 @@ describe("interiors", { timeout: GPU_TIMEOUT }, () => {
   it("draws the reflection of fully transmissive glass over the room", async () => {
     const rooms = interior();
     const source = house(new MeshPhysicalMaterial({ roughness: 0.3, transmission: 1 })).add(rooms);
-    const baked = await bakeMesh(source, { low: box(), textureSize: 64, interior: rooms, renderer: bakeRenderer });
+    const baked = await bakeMesh(source, { renderer: bakeRenderer, low: box(), textureSize: 64, interior: rooms });
     const eye = new Vector3(0, 0, 5);
     // A sun behind the eye: its highlight sits on the glass, the room is not lit by it.
     const dull = windowColor(await render(baked, eye, undefined, 0.6));
@@ -249,6 +249,6 @@ describe("interiors", { timeout: GPU_TIMEOUT }, () => {
     const lit = interior().add(new PointLight());
     await expect(bakeMesh(house().add(lit), { low: box(), textureSize: 32, interior: lit, renderer: bakeRenderer })).rejects.toThrow(/light/);
     const rooms = new Group().add(new Mesh(new BoxGeometry(0.5, 0.5, 0.5), new MeshBasicMaterial()).translateX(5));
-    await expect(bakeMesh(house(), { low: box(), textureSize: 32, interior: rooms, renderer: bakeRenderer })).rejects.toThrow(/no glass/);
+    await expect(bakeMesh(house(), { renderer: bakeRenderer, low: box(), textureSize: 32, interior: rooms })).rejects.toThrow(/no glass/);
   });
 });

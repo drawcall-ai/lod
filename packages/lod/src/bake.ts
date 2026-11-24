@@ -1,4 +1,17 @@
-import { Color, DataUtils, Group, InstancedMesh, Matrix4, WebGPURenderer, type Object3D, type RenderTarget, type Renderer } from "three/webgpu";
+import {
+  Color,
+  DataUtils,
+  Group,
+  InstancedMesh,
+  Matrix4,
+  NodeMaterial,
+  QuadMesh,
+  WebGPURenderer,
+  type Object3D,
+  type RenderTarget,
+  type Renderer,
+} from "three/webgpu";
+import { mrt, vec4 } from "three/tsl";
 import { disposeCopies } from "./dispose.js";
 import type { Lod } from "./lod.js";
 import { clone } from "three/addons/utils/SkeletonUtils.js";
@@ -179,4 +192,15 @@ function packed<T extends Float32Array | Uint16Array | Uint8Array>(read: T, { wi
   const out = make(row * height);
   for (let y = 0; y < height; y++) out.set(read.subarray(y * stride, y * stride + row), (height - 1 - y) * row);
   return out;
+}
+
+/**
+ * A quad that writes zero to every output of `names`, which a target's colours are cleared with: three clears every
+ * attachment of a target but the first to opaque black.
+ */
+export function zeroes(names: readonly string[]): { quad: QuadMesh; material: NodeMaterial } {
+  const material = new NodeMaterial();
+  material.depthTest = material.depthWrite = false;
+  material.mrtNode = mrt(Object.fromEntries(names.map((name) => [name, vec4(0)])));
+  return { quad: new QuadMesh(material), material };
 }

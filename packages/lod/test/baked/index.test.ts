@@ -3,7 +3,6 @@ import {
   BoxGeometry,
   DataTexture,
   DirectionalLight,
-  DoubleSide,
   Group,
   InstancedMesh,
   LinearFilter,
@@ -24,9 +23,8 @@ import { bakeMesh } from "../../src/baked/index.js";
 import type { Impostor } from "../../src/impostor/impostor.js";
 import { ImpostorMesh } from "../../src/impostor/mesh/index.js";
 import { Lod } from "../../src/lod.js";
-import { must } from "../must.js";
 import { isStandardNode } from "../../src/three.js";
-import { GPU_TIMEOUT, render as draw } from "../renderer.js";
+import { GPU_TIMEOUT, bakeRenderer, render as draw } from "../renderer.js";
 import { lodOf } from "../instances.js";
 
 /** A pattern of 8×8 colour blocks. */
@@ -81,16 +79,15 @@ const EYES: Array<[number, number, number]> = [
 ];
 
 describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
-  it("bakes a mesh that renders like its source, and sets its default maxPixels from its deviation", async () => {
+  it("bakes a mesh that renders like its source", async () => {
     const source = textured(new BoxGeometry(1, 1, 1, 6, 6, 6));
-    const baked = await bakeMesh(source, { textureSize: 256 });
+    const baked = await bakeMesh(source, { renderer: bakeRenderer, textureSize: 256 });
     expect(baked.geometry.index?.count).toBeLessThan((source.geometry.index?.count ?? 0) / 4);
     for (const eye of EYES) {
       const real = await render(source, eye);
       // A plain grey box is off by 7 to 23 here.
       expect(difference(real, await render(baked, eye))).toBeLessThan(5);
     }
-    expect(new Lod([{ object: source }, { object: baked }]).levels[1]?.maxPixels).not.toBe(512);
   });
 
   it("bakes the textures of a source in which some meshes have no UVs", async () => {
@@ -99,19 +96,19 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
     const corner = new Mesh(plain, new MeshStandardMaterial({ color: 0x806040 }));
     corner.position.set(0.6, 0.6, 0.6);
     const source = new Group().add(textured(new BoxGeometry(1, 1, 1, 6, 6, 6)), corner);
-    const baked = await bakeMesh(source, { textureSize: 256 });
+    const baked = await bakeMesh(source, { renderer: bakeRenderer, textureSize: 256 });
     for (const eye of EYES) expect(difference(await render(source, eye), await render(baked, eye))).toBeLessThan(6);
   });
 
   it("uses a low mesh's own UVs when they are usable, and unwraps it again when they overlap", async () => {
     const source = textured(new PlaneGeometry(1, 1, 8, 8));
     const plane = new PlaneGeometry(1, 1);
-    const own = await bakeMesh(source, { low: new Mesh(plane), textureSize: 64 });
+    const own = await bakeMesh(source, { renderer: bakeRenderer, low: new Mesh(plane), textureSize: 64 });
     expect(own.geometry.getAttribute("uv").array).toEqual(plane.getAttribute("uv").array);
 
     // Every face of a box spans all of 0..1.
     const box = new BoxGeometry(1, 1, 1);
-    const unwrapped = await bakeMesh(textured(new BoxGeometry(1, 1, 1, 4, 4, 4)), { low: new Mesh(box), textureSize: 64 });
+    const unwrapped = await bakeMesh(textured(new BoxGeometry(1, 1, 1, 4, 4, 4)), { renderer: bakeRenderer, low: new Mesh(box), textureSize: 64 });
     expect(unwrapped.geometry.getAttribute("uv").array).not.toEqual(box.getAttribute("uv").array);
   });
 
@@ -131,9 +128,9 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
     const instanced = new InstancedMesh(geometry, material, spots.length);
     spots.forEach((spot, i) => instanced.setMatrixAt(i, spot));
     const low = () => new Mesh(new BoxGeometry(3.2, 1.6, 3.2));
-    const expected = colors(await bakeMesh(plain, { low: low(), textureSize: 64 }));
-    expect(colors(await bakeMesh(new Group().add(lod), { low: low(), textureSize: 64 }))).toEqual(expected);
-    expect(colors(await bakeMesh(instanced, { low: low(), textureSize: 64 }))).toEqual(expected);
+    const expected = colors(await bakeMesh(plain, { renderer: bakeRenderer, low: low(), textureSize: 64 }));
+    expect(colors(await bakeMesh(new Group().add(lod), { renderer: bakeRenderer, low: low(), textureSize: 64 }))).toEqual(expected);
+    expect(colors(await bakeMesh(instanced, { renderer: bakeRenderer, low: low(), textureSize: 64 }))).toEqual(expected);
   });
 
   it("refuses ImpostorMeshes, which have no surface to read", async () => {
@@ -147,11 +144,11 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
       maps: ["base", "normalDepth", "orm"],
       layers: [0, 1, 2].map(() => ({ format: RGBAFormat, mipmaps: [16, 8, 4].map((size) => new Uint8Array(size * size * 4)) })),
     };
-    await expect(bakeMesh(new Group().add(textured(new BoxGeometry()), new ImpostorMesh(impostor)))).rejects.toThrow(/ImpostorMesh/);
+    await expect(bakeMesh(new Group().add(textured(new BoxGeometry()), new ImpostorMesh(impostor)), { renderer: bakeRenderer })).rejects.toThrow(/ImpostorMesh/);
   });
 
   it("bakes normals that turn with an instance: a Lod turned by its instance looks like one turned whole", async () => {
-    const baked = await bakeMesh(textured(new BoxGeometry(1, 1, 1, 4, 4, 4)), { textureSize: 128 });
+    const baked = await bakeMesh(textured(new BoxGeometry(1, 1, 1, 4, 4, 4)), { renderer: bakeRenderer, textureSize: 128 });
     const turn = new Matrix4().makeRotationY(Math.PI / 2);
     const lod = new Lod([{ object: new Mesh(new BoxGeometry()) }, { object: baked.clone() }]);
     lod.forceLevel = 1;
@@ -173,7 +170,7 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
     map.needsUpdate = true;
     const plane = new PlaneGeometry(1, 1);
     const source = new Mesh(plane, new MeshStandardMaterial({ map, alphaTest: 0.5 }));
-    const baked = await bakeMesh(source, { low: new Mesh(plane), textureSize: 64 });
+    const baked = await bakeMesh(source, { renderer: bakeRenderer, low: new Mesh(plane), textureSize: 64 });
     const covered = (pixels: Uint8Array) => pixels.filter((_, i) => i % 4 === 3 && pixels[i] !== 0).length;
     // About 8 px across. One nearest-filtered render of the source aliases badly: compare
     // coverage over subpixel phases, while the baked map samples its 8×8 mip.
@@ -203,7 +200,7 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
     const low = () => new Mesh(new PlaneGeometry(2, 2).rotateX(-Math.PI / 2));
     /** Mean RGBA of the baked texels over x > 0.6, the gap's far side. */
     const gap = async (source: Object3D) => {
-      const data = colors(await bakeMesh(source, { low: low(), textureSize: 32 }));
+      const data = colors(await bakeMesh(source, { renderer: bakeRenderer, low: low(), textureSize: 32 }));
       const sum = [0, 0, 0, 0];
       for (let y = 0; y < 32; y++) for (let x = 26; x < 32; x++) for (let c = 0; c < 4; c++) sum[c] = (sum[c] ?? 0) + (data[(y * 32 + x) * 4 + c] ?? 0);
       return sum.map((v) => v / (32 * 6));
@@ -213,27 +210,5 @@ describe("bakeMesh", { timeout: GPU_TIMEOUT }, () => {
     expect(r).toBeLessThan(50);
     // Where nothing shows through, a cut-out source leaves the texel cut out.
     expect((await gap(half(0xff0000, 0, true)))[3]).toBe(0);
-  });
-
-  it("measures its deviation only against source faces seen from outside", async () => {
-    // A box open at the bottom (BoxGeometry groups: +x, -x, +y, -y, +z, -z), as the low mesh too.
-    const shell = () => {
-      const box = new BoxGeometry(2, 2, 2);
-      const index = box.index?.array ?? [];
-      const faces = box.groups.filter((_, i) => i !== 3).flatMap((g) => Array.from(index.slice(g.start, g.start + g.count)));
-      box.setIndex(faces).clearGroups();
-      return box;
-    };
-    const material = new MeshStandardMaterial({ color: 0x8090a0 });
-    const plain = new Group().add(new Mesh(shell(), material));
-    // The same, with a floor facing up inside it and a double-sided partition.
-    const floor = new Mesh(new PlaneGeometry(2, 2), material).rotateX(-Math.PI / 2).translateZ(-0.99);
-    const partition = new Mesh(new PlaneGeometry(1.9, 1.9), new MeshStandardMaterial({ side: DoubleSide }));
-    const furnished = new Group().add(new Mesh(shell(), material), floor, partition);
-    // The deviation, read through the default maxPixels it gives in a Lod: inversely proportional.
-    const deviation = async (source: Object3D) =>
-      1 / must(new Lod([{ object: source }, { object: await bakeMesh(source, { low: new Mesh(shell()), textureSize: 64 }) }]).levels[1]).maxPixels;
-    const [bare, inside] = [await deviation(plain), await deviation(furnished)];
-    expect(Math.abs(inside - bare) / bare).toBeLessThan(0.1);
   });
 });

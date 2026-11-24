@@ -149,25 +149,18 @@ describe("CachedLodLoader", () => {
     }
   });
 
-  it("builds a level without maxPixels eagerly, since its default threshold is measured from it", async () => {
-    const { manager, load } = sourceFixture(() => new Mesh(new SphereGeometry(1, 24, 16), new MeshStandardMaterial()), /\.glb$/);
-    const loader = new CachedLodLoader(manager);
-    const request: LodRequest = {
-      url: "/measured.glb",
+  it("gives a level without maxPixels half its finer neighbour's threshold, without building it", async () => {
+    const { manager } = sourceFixture(() => new Mesh(new SphereGeometry(1, 24, 16), new MeshStandardMaterial()), /\.glb$/);
+    const levels = await new CachedLodLoader(manager).loadAsync({
+      url: "/defaulted.glb",
       levels: [
         { type: "simplify", ratio: 0.2 },
         { type: "impostor", maxPixels: 20 },
       ],
-    };
-    const cold = await loader.loadAsync(request);
-    // The measured level and the shape.
-    expect(cache.saved).toHaveLength(2);
-    cache.loaded.length = 0;
-    const warm = await loader.loadAsync(request);
-    // The impostor, the last level, is read alongside the measured level and the shape: never built, it misses.
-    expect(cache.loaded).toEqual([false, true, true]);
-    expect(load).toHaveBeenCalledOnce();
-    expect(warm.map((level) => level.maxPixels)).toEqual(cold.map((level) => level.maxPixels));
+    });
+    expect(levels.map((level) => level.maxPixels)).toEqual([Infinity, 512, 20]);
+    // The shape alone.
+    expect(cache.saved).toHaveLength(1);
   });
 
   it("rejects a derived level that extends beyond the source's bounds, which every level declares", async () => {
@@ -220,18 +213,6 @@ describe("CachedLodLoader", () => {
     await detail.load();
     expect(await source.load()).toBe(object);
     expect(load).toHaveBeenCalledOnce();
-  });
-
-  it("reads a stored level whose threshold it measures once, handing it to the level's load", async () => {
-    const { manager } = sourceFixture(() => new Mesh(new SphereGeometry(1, 12, 8), new MeshStandardMaterial()));
-    const loader = new CachedLodLoader(manager);
-    const request: LodRequest = { url: "/measured.glb", levels: [{ type: "simplify", ratio: 0.5 }] };
-    await loader.loadAsync(request);
-    cache.loaded.length = 0;
-    const [, detail] = await loader.loadAsync(request);
-    await detail?.load?.();
-    // The level and the shape, each read once.
-    expect(cache.loaded).toEqual([true, true]);
   });
 
   it("reads the last level of a ladder that ends drawn alongside the ladder, handing it to the level's load", async () => {

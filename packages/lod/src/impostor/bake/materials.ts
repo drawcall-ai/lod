@@ -58,11 +58,12 @@ export interface BakeSettings {
 
 /**
  * The outputs a bake material writes, by name: one per atlas map, then the second way to
- * store the normals (see ImpostorAtlasMip) and the specular. A render target takes the ones it has
+ * store the normals (see ImpostorAtlasMip), the specular, and how much light passes through
+ * (glass, see `bakeMesh`) with the opacity `base` is multiplied by. A render target takes the ones it has
  * textures of that name for, so every material writes them all and the bake decides,
  * once it knows every material, which it uses.
  */
-export const OUTPUTS = ["base", "normalDepth", "orm", "emissive", "turned", "specular"] as const;
+export const OUTPUTS = ["base", "normalDepth", "orm", "emissive", "turned", "specular", "transmittance"] as const;
 export type Output = (typeof OUTPUTS)[number];
 
 /**
@@ -193,16 +194,27 @@ function bakeMaterial(source: Material, settings: BakeSettings): { material: Nod
   // Unlit values: the material's own roughness and metalness, not three's lighting ones.
   const roughness = (isStandardNode(material) && material.roughnessNode) || materialRoughness;
   const metalness = (isStandardNode(material) && material.metalnessNode) || materialMetalness;
+  // Every output times the sample's coverage, base's alpha the coverage itself, so that averages of the samples give
+  // the coverage and the coverage-weighted means (see `bakeAtlas`).
+  const covers = clamp(coverage, 0, 1);
   const outputs: Record<Output, Node> = {
-    base: vec4(clamp(diffuseColor.rgb.mul(opacity), 0, 1), clamp(coverage, 0, 1)),
-    normalDepth: vec4(toObject(own), depth),
-    orm: Fn((builder) => vec4(ambientOcclusion, scalar(roughness, builder), scalar(metalness, builder), front))(),
-    emissive: vec4(clamp(emissive, 0, 1), 1),
-    turned: vec4(toObject(normalView.mul(facing.mul(2).sub(1))), facing),
-    specular: vec4(specularColor, specularF90),
+    base: vec4(clamp(diffuseColor.rgb.mul(opacity), 0, 1).mul(covers), covers),
+    normalDepth: vec4(toObject(own), depth).mul(covers),
+    orm: Fn((builder) => vec4(ambientOcclusion, scalar(roughness, builder), scalar(metalness, builder), front).mul(covers))(),
+    emissive: vec4(clamp(emissive, 0, 1), 1).mul(covers),
+    turned: vec4(toObject(normalView.mul(facing.mul(2).sub(1))), facing).mul(covers),
+    specular: vec4(specularColor, specularF90).mul(covers),
+    // and the opacity `base` folds into its colour, which a baked window shows its colour without (see `bakeMesh`)
+    transmittance: vec4(transmittanceOf(source), opacity, 0, 1).mul(covers),
   };
   material.mrtNode = mrt(outputs);
   return { material, emits, specular };
+}
+
+/** The share of light `material` lets through: glass's, by its opacity when blended and its transmission. */
+function transmittanceOf(material: Material): number {
+  const transmission = "transmission" in material && typeof material.transmission === "number" ? material.transmission : 0;
+  return 1 - (material.transparent ? material.opacity : 1) * (1 - transmission);
 }
 
 /** Whether `material` emits light: an emissive node, colour × intensity, or map. */

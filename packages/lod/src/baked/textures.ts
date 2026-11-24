@@ -1,4 +1,3 @@
-import { read } from "ktx-parse";
 import {
   ClampToEdgeWrapping,
   DataArrayTexture,
@@ -11,23 +10,24 @@ import {
   SRGBColorSpace,
   UnsignedByteType,
   UVMapping,
+  type Renderer,
   type Texture,
 } from "three/webgpu";
-import { encodeLayer } from "../ktx2/encode.js";
-import { transcode, transcodedTexture } from "../ktx2/transcode.js";
-import { mipmaps } from "../source/sampler.js";
+import { blockBytes, levelsTexture, threeFormat, type BlockFormat } from "../blocks/index.js";
+import { encodeBlocks } from "../blocks/encode.js";
+import { mipmaps } from "./mips.js";
 import { boolean, fail, file, integer, number, numbers, object, type Files } from "./fields.js";
 
-// A baked mesh's textures in its container, their settings as metadata: its surface maps as KTX2 files of Basis UASTC,
-// which the GPU samples compressed, and the rooms' data textures as their pixels and mips. Only the settings a bake
+// A baked mesh's textures in its container, their settings as metadata: its surface maps as the blocks of a GPU format,
+// which the GPU samples as they are, and the rooms' data textures as their pixels and mips. Only the settings a bake
 // makes are accepted.
 
 /**
- * Add `texture`, a bake's square RGBA surface map, to `files` as `name`: a KTX2 file of its mip levels, or, where it
- * has none, of the box-filtered chain the GPU would make. Returns its metadata. The encoding is lossy, so a decoded
- * map, which is RGBA only where the GPU takes no compressed format, loses detail again.
+ * Add `texture`, a bake's square RGBA surface map, to `files` as `name`: its mip levels, or, where it has none, the
+ * box-filtered chain the GPU would make, as blocks of `format` encoded on `renderer`'s device. Returns its metadata.
+ * The encoding is lossy, so a decoded map loses detail again.
  */
-export async function writeMap(files: Files, name: string, texture: Texture | null) {
+export async function writeMap(files: Files, name: string, texture: Texture | null, renderer: Renderer, format: BlockFormat) {
   const pixels: Files = {};
   const { width, height, depth, channels, srgb, anisotropy, mips } = writeTexture(pixels, name, texture);
   if (depth !== 1 || channels !== 4 || width !== height) fail(`${name} is not a square RGBA map`);
@@ -37,28 +37,19 @@ export async function writeMap(files: Files, name: string, texture: Texture | nu
     : mipmaps({ data: new Uint8ClampedArray(base.buffer, base.byteOffset, base.byteLength), width, height }, srgb).map(
         ({ data }) => new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
       );
-  files[`${name}.ktx2`] = await encodeLayer({ levels, size: width, srgb });
-  return { size: width, srgb, anisotropy };
+  const blocks = await encodeBlocks(renderer, format, levels, width);
+  blocks.forEach((level, m) => (files[`${name}/blocks${m}`] = level));
+  return { size: width, levels: blocks.length, srgb, anisotropy };
 }
 
-/** The map `writeMap` wrote as `name`, with its metadata `value`, transcoded to a format the GPU takes. */
-export async function readMap(files: Files, name: string, value: unknown): Promise<Texture> {
+/** The map `writeMap` wrote as `name` in blocks of `format`, with its metadata `value`. */
+export function readMap(files: Files, name: string, value: unknown, format: BlockFormat): Texture {
   const meta = object(value);
   const size = integer(meta.size);
-  const bytes = file(files, `${name}.ktx2`);
-  let ktx;
-  try {
-    ktx = read(bytes);
-  } catch (error) {
-    fail(`${name} is not a KTX2 file`, error);
-  }
-  if (ktx.pixelWidth !== size || ktx.pixelHeight !== size) fail(`${name} is ${ktx.pixelWidth}x${ktx.pixelHeight}, not ${size}x${size}`);
-  let texture: Texture;
-  try {
-    texture = transcodedTexture(await transcode(bytes), size);
-  } catch (error) {
-    fail(`${name} does not transcode`, error);
-  }
+  const mipmaps = Array.from({ length: integer(meta.levels) }, (_, m) => file(files, `${name}/blocks${m}`));
+  if (mipmaps.length !== Math.log2(size) + 1) fail(`${name} has ${mipmaps.length} levels, not a ${size}² chain`);
+  for (const [m, level] of mipmaps.entries()) if (level.length !== blockBytes(Math.max(1, size >> m))) fail(`${name} level ${m} is not whole blocks`);
+  const texture = levelsTexture({ format: threeFormat(format), mipmaps }, size);
   texture.colorSpace = boolean(meta.srgb) ? SRGBColorSpace : NoColorSpace;
   texture.minFilter = LinearMipmapLinearFilter;
   texture.magFilter = LinearFilter;

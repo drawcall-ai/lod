@@ -1,11 +1,7 @@
 import { BufferAttribute, BufferGeometry, type InterleavedBufferAttribute, type Object3D } from "three/webgpu";
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
 import { MeshoptSimplifier } from "meshoptimizer";
-import { recordDeviation } from "../levels/index.js";
 import { detailed } from "../source/detail.js";
-import { measureDeviation } from "../source/deviation.js";
-import { readSource } from "../source/source.js";
-import { merge } from "../source/surface.js";
 import { isImpostorMesh, isLod, isMesh, isSkinnedMesh } from "../three.js";
 import { cardMaterials, decimateCards } from "./cards.js";
 
@@ -30,19 +26,8 @@ export interface SimplifyOptions {
  * A group drawn with an alpha-tested texture (foliage cards) is decimated card by card
  * instead: about `ratio` of its cards remain, whole, spread evenly and enlarged to cover
  * what all covered (see `decimateCards`).
- *
- * How far the copy's surface is from `object`'s (the 99.9th percentile of the distance
- * between the two, by area, over the parts seen from outside; ImpostorMeshes left out)
- * sets its default maxPixels in a Lod.
  */
-export async function simplify(object: Object3D, options: SimplifyOptions = {}): Promise<Object3D> {
-  const copy = await decimate(object, options.ratio ?? 0.5);
-  recordDeviation(copy, measureDeviation(readSource(object, "simplify", "measure"), merge(copy, "simplify")).deviation);
-  return copy;
-}
-
-/** A copy of `object` decimated to `ratio`, as `simplify` makes it, without measuring it. */
-export async function decimate(object: Object3D, ratio: number): Promise<Object3D> {
+export async function simplify(object: Object3D, { ratio = 0.5 }: SimplifyOptions = {}): Promise<Object3D> {
   if (!(ratio > 0 && ratio <= 1)) throw new Error(`simplify: ratio must be in (0, 1], got ${ratio}`);
   await MeshoptSimplifier.ready;
   // clone() also visits hidden children, whose Lod copies must never be made just to

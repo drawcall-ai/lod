@@ -29,10 +29,9 @@ export interface LodLevel {
   box?: Box3;
   /**
    * Largest on-screen height, in CSS pixels × Lod.quality, at which this level draws: Infinity for level 0, the finest;
-   * every later one at most (1 - Lod.fade) of its finer neighbour's, which leaves room for the fades. A deferred level
-   * needs one. A given level without one gets one measured from its surface deviation (see `simplify`, `bakeMesh`) or
-   * its impostor's texels, else half its finer neighbour's (512 for level 1), raised to leave room for the fades;
-   * `lod.levels` holds what it got.
+   * every later one at most (1 - Lod.fade) of its finer neighbour's, which leaves room for the fades. A level without
+   * one gets the height its impostor is sharp to (see `texelPixels`), else half its finer neighbour's (512 for level 1),
+   * raised to leave room for the fades; `lod.levels` holds what it got.
    */
   maxPixels?: number;
   /**
@@ -76,13 +75,12 @@ function checkThresholds(thresholds: readonly number[], who: string): void {
 }
 
 /**
- * `inputs` as `lod.levels` holds them: each object cloned, each threshold given or measured (see `LodLevel.maxPixels`)
- * for a source `diameter` across. Throws unless they can be drawn.
+ * `inputs` as `lod.levels` holds them: each object cloned, each threshold given or defaulted (see `LodLevel.maxPixels`).
+ * Throws unless they can be drawn.
  */
-export function levelsFrom(inputs: readonly LodLevel[], diameter: number, who: string): ThresholdedLevel[] {
+export function levelsFrom(inputs: readonly LodLevel[], who: string): ThresholdedLevel[] {
   const thresholds = resolveThresholds(
-    inputs.map(({ object, maxPixels }) => ({ maxPixels, measured: object && maxPixels === undefined ? measure(object) : undefined })),
-    diameter,
+    inputs.map(({ object, maxPixels }) => ({ maxPixels, texels: object && isImpostorMesh(object) ? texelPixels(object.impostor) : undefined })),
     who,
   );
   const levels = inputs.map((input, i) => ({ ...input, object: input.object?.clone(), maxPixels: at(thresholds, i) }));
@@ -102,48 +100,22 @@ const WHITE = new Color(1, 1, 1);
 /** Level `index`'s debug tint, or white. */
 export const tintOf = (index: number, debug: boolean): Color => (debug ? at(TINTS, index % TINTS.length) : WHITE);
 
-/**
- * Per simplified or baked object, its deviation: a side table, as three's objects have no typed place for it (userData
- * is the app's).
- */
-const deviations = new WeakMap<Object3D, number>();
-/** Surface deviation from the source, in the source's units. */
-export const recordDeviation = (level: Object3D, deviation: number): void => void deviations.set(level, deviation);
-export const deviationOf = (level: Object3D): number | undefined => deviations.get(level);
-
-/** What a level's default threshold is measured from: surface deviation, else impostor texels. */
-interface Measured {
-  deviation?: number;
+/** A level to find a threshold for: its own maxPixels, else the height its impostor is sharp to, if it is one. */
+interface Unresolved {
+  maxPixels?: number;
   texels?: number;
 }
 
-export function measure(object: Object3D): Measured {
-  return { deviation: deviationOf(object), texels: isImpostorMesh(object) ? texelPixels(object.impostor) : undefined };
-}
-
-/** A level to find a threshold for: its own maxPixels, else what it measured. */
-interface Measurable {
-  maxPixels?: number;
-  measured?: Measured;
-}
-
 /**
- * Thresholds for `levels` of an object `diameter` across: each level's own maxPixels, else its measured surface
- * deviation's or impostor texels' height, else half the previous one (512 for level 1), raised where needed to leave
- * room for the fades. Throws if the result does not (see `checkLevels`).
+ * Thresholds for `levels`: each level's own maxPixels, else its impostor's texels' height, else half the previous one
+ * (512 for level 1), raised where needed to leave room for the fades. Throws if the result does not (see `checkLevels`).
  */
-export function resolveThresholds(levels: readonly Measurable[], diameter: number, who: string): number[] {
+export function resolveThresholds(levels: readonly Unresolved[], who: string): number[] {
   let finer = 1024;
-  const defaults = levels.map(({ maxPixels, measured }, index) => {
+  const defaults = levels.map(({ maxPixels, texels }, index) => {
     if (index === 0) return Infinity;
-    const base = !measured
-      ? maxPixels
-      : measured.deviation !== undefined
-        ? diameter / Math.max(measured.deviation, diameter * 1e-4)
-        : (measured.texels ?? finer / 2);
-    if (base === undefined) throw new Error(`${who}: deferred level ${index} needs maxPixels`);
-    finer = base;
-    return base;
+    finer = maxPixels ?? texels ?? finer / 2;
+    return finer;
   });
   const thresholds = levels.map(() => Infinity);
   let next = 0;

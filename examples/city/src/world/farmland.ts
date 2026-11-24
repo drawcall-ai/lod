@@ -52,6 +52,8 @@ export function farmland(
     const z = (Math.floor(i / side) - span + 0.5 + (-0.35 + 0.7 * r())) * REGION;
     return { x, z, id: i, angle: roadAngle(segments, x, z), width: 60 + 90 * r(), length: 160 + 260 * r() };
   });
+  // What each parcel draws from its own seed, the same for every cell of it.
+  const parcels = new Map<number, { crop: Crop; tint: number; across: boolean }>();
   for (let k = 0; k < land.size * land.size; k++) {
     if (land.useOf(k) !== Use.Lawn) continue;
     const { x, z } = land.centre(k);
@@ -80,8 +82,13 @@ export function farmland(
     const length = region.length * (0.6 + 0.8 * hash(region.id, strip, 0));
     const field = Math.floor((u + hash(region.id, strip, 1) * length) / length);
     const id = Math.floor(hash(region.id, strip, field + 2) * 2 ** 30) + 1;
-    const parcel = seedrandom(String(id));
-    land.sow(k, pick(parcel), parcel(), region.angle + (parcel() < 0.2 ? Math.PI / 2 : 0), id);
+    let parcel = parcels.get(id);
+    if (!parcel) {
+      const draw = seedrandom(String(id));
+      parcel = { crop: pick(draw), tint: draw(), across: draw() < 0.2 };
+      parcels.set(id, parcel);
+    }
+    land.sow(k, parcel.crop, parcel.tint, region.angle + (parcel.across ? Math.PI / 2 : 0), id);
   }
   hedgerows(land, terrain, r, add);
   avenues(roads, land, terrain, town, r, add);

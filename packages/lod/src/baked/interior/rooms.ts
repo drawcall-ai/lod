@@ -1,4 +1,4 @@
-import { Box3, Ray, Vector3, type Matrix4, type Object3D } from "three/webgpu";
+import { Box3, Vector3, type Matrix4, type Object3D } from "three/webgpu";
 import { forEachVertex } from "../../source/detail.js";
 import { isLight } from "../../three.js";
 
@@ -58,24 +58,4 @@ function volume(box: Box3): number {
 export function windowDepth(boxes: readonly Box3[]): number {
   const size = new Vector3();
   return Math.min(...boxes.map((box) => Math.min(...box.getSize(size).toArray()))) / 2;
-}
-
-const ray = new Ray();
-const enter = new Vector3();
-
-/**
- * The room a ray from `origin` along unit `direction` is in or enters first within
- * `far`: the room behind a window. -1 for none.
- */
-export function roomAlong(boxes: readonly Box3[], origin: Vector3, direction: Vector3, far: number): number {
-  ray.set(origin, direction);
-  let nearest = -1;
-  let best = far;
-  boxes.forEach((box, i) => {
-    const distance = box.containsPoint(origin) ? 0 : ray.intersectBox(box, enter)?.distanceTo(origin);
-    if (distance === undefined || distance > best) return;
-    best = distance;
-    nearest = i;
-  });
-  return nearest;
 }

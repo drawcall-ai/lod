@@ -1,4 +1,5 @@
-import { RGBAFormat, type CompressedPixelFormat } from "three/webgpu";
+import { RGBAFormat } from "three/webgpu";
+import { blockBytes, type MapLevels } from "../blocks/index.js";
 
 /** Which part of the view sphere the atlas covers. */
 export type ImpostorLayout = "hemi" | "full";
@@ -18,17 +19,11 @@ export const MAPS = ["base", "normalDepth", "orm", "emissive"] as const;
 export type ImpostorMap = (typeof MAPS)[number];
 
 /**
- * One map's mip chain, `size >> level` square, from `size` down to one texel per frame (`frames` square). The levels
- * below level 0 average its bake's samples exactly (see `bakeImpostor`), not its stored 8-bit texels.
+ * One map's mip chain, `size >> level` square, from `size` down to one texel per frame (`frames` square): RGBA8 as
+ * baked, or the blocks it was stored as once decoded. The levels below level 0 average its bake's samples exactly (see
+ * `bakeImpostor`), not its stored 8-bit texels.
  */
-export interface ImpostorLayer {
-  /**
-   * RGBAFormat: 4 bytes a texel, as baked. A decoded impostor holds the block-compressed format its decoder transcoded
-   * to for the GPU, or RGBAFormat where the GPU takes none.
-   */
-  format: typeof RGBAFormat | CompressedPixelFormat;
-  mipmaps: Uint8Array[];
-}
+export type ImpostorLayer = MapLevels;
 
 /**
  * A baked octahedral impostor: plain data, no GPU resources.
@@ -140,9 +135,8 @@ export function validateImpostor(value: unknown): asserts value is Impostor {
       fail(`every layer must be a mip chain of ${levels} levels`);
     const rgba = layer.format === RGBAFormat;
     layer.mipmaps.forEach((level: unknown, m: number) => {
-      const bytes = (size >> m) ** 2 * 4;
-      if (!(level instanceof Uint8Array) || (rgba ? level.length !== bytes : !level.length))
-        fail(`mip level ${m} must be a Uint8Array${rgba ? ` of ${bytes} bytes` : ""}`);
+      const bytes = rgba ? (size >> m) ** 2 * 4 : blockBytes(size >> m);
+      if (!(level instanceof Uint8Array) || level.length !== bytes) fail(`mip level ${m} must be a Uint8Array of ${bytes} bytes`);
     });
   }
 }

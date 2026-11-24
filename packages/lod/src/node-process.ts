@@ -4,8 +4,3 @@
  * on the calling thread.
  */
 export const inNode = typeof process !== "undefined" && process.versions?.node !== undefined;
-
-/** A module Node has and browsers do not, imported by a name bundlers do not see, so that they keep it out of pages. */
-export function nodeOnly<T>(name: string): Promise<T> {
-  return import(/* @vite-ignore */ name);
-}

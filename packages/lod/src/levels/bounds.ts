@@ -7,16 +7,15 @@ import { isMesh } from "../three.js";
 const sphereOf = (box: Box3): Sphere | null => (box.isEmpty() ? null : new Sphere(box.getCenter(new Vector3()), box.getSize(new Vector3()).length() / 2));
 
 /**
- * The sphere fades measure for a Lod's levels: level 0's, or the first level's that draws
- * anything when level 0 draws nothing; `own` in that level's own space, `placed` in its
- * parent's (the Lod's). It is the centre and half diagonal of the level's `boundingBox`,
- * which an impostor baked from it shares. `who` names the caller in the error.
+ * The sphere fades measure for a Lod's levels, in the Lod's space: level 0's, or the first level's that draws anything
+ * when level 0 draws nothing. It is the centre and half diagonal of the level's `boundingBox`, which an impostor baked
+ * from it shares. `who` names the caller in the error.
  */
-export function measureLevels(levels: readonly { object?: Object3D; box?: Box3 }[], who: string): { own: Sphere; placed: Sphere } {
+export function measureLevels(levels: readonly { object?: Object3D; box?: Box3 }[], who: string): Sphere {
   for (const { object, box } of levels) {
     const own = sphereOf(object ? boundingBox(object) : (box ?? new Box3()));
     if (!own) continue;
-    return { own, placed: object ? own.clone().applyMatrix4(local(object)) : own.clone() };
+    return object ? own.applyMatrix4(local(object)) : own;
   }
   throw new Error(`${who}: no level has visible geometry to measure`);
 }
