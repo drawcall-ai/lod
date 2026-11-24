@@ -17,6 +17,21 @@ function slot<T extends "bool" | "vec3" | "vec4">(node: Node, type: T, builder: 
   return node;
 }
 
+const mask = keepsPixel();
+const tintedOutput = output.mul(vec4(tint, 1));
+
+function positionsFor(positionNode: Node | null, swaying: boolean) {
+  const position = (builder: NodeBuilder) => {
+    placeInstances(builder);
+    const own = positionNode ? slot(positionNode, "vec3", builder) : positionLocal;
+    return swaying ? sway(own) : own;
+  };
+  return { camera: Fn(position)(), shadow: Fn((builder) => castPosition(position(builder)))() };
+}
+
+const stillPositions = positionsFor(null, false);
+const swayingPositions = positionsFor(null, true);
+
 /**
  * The copy of `material` (or of the material it copies) a level of a Lod draws
  * with: it keeps only the pixels of its draw (see fade.ts), tints by
@@ -34,20 +49,18 @@ export function levelMaterial(material: Material, swaying = false): NodeMaterial
   if (existing) return existing;
   const copy = toNodeMaterial(original);
   const { maskNode, outputNode, positionNode, castShadowPositionNode } = copy;
-  copy.maskNode = Fn((builder) => (maskNode ? slot(maskNode, "bool", builder).and(keepsPixel()) : keepsPixel()))();
+  copy.maskNode = maskNode ? Fn((builder) => slot(maskNode, "bool", builder).and(mask))() : mask;
   // The tint goes on what the material outputs: its colour slot is left as it is.
-  copy.outputNode = Fn((builder) => (outputNode ? slot(outputNode, "vec4", builder) : output).mul(vec4(tint, 1)))();
-  const position = (builder: NodeBuilder) => {
-    placeInstances(builder);
-    const own = positionNode ? slot(positionNode, "vec3", builder) : positionLocal;
-    return swaying ? sway(own) : own;
-  };
-  copy.positionNode = Fn(position)();
-  copy.castShadowPositionNode = Fn((builder) => {
-    if (!castShadowPositionNode) return castPosition(position(builder));
-    placeInstances(builder);
-    return castPosition(slot(castShadowPositionNode, "vec3", builder));
-  })();
+  copy.outputNode = outputNode ? Fn((builder) => slot(outputNode, "vec4", builder).mul(vec4(tint, 1)))() : tintedOutput;
+  const defaults = swaying ? swayingPositions : stillPositions;
+  const positions = positionNode ? positionsFor(positionNode, swaying) : defaults;
+  copy.positionNode = positions.camera;
+  copy.castShadowPositionNode = castShadowPositionNode
+    ? Fn((builder) => {
+        placeInstances(builder);
+        return castPosition(slot(castShadowPositionNode, "vec3", builder));
+      })()
+    : positions.shadow;
   known[kind] = copy;
   originals.set(copy, original);
   original.addEventListener("dispose", () => copy.dispose());
