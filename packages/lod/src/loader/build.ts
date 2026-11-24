@@ -18,7 +18,7 @@ export async function buildLevel(
 ): Promise<Object3D> {
   switch (request.type) {
     case "simplify":
-      return simplify(source, { ratio: request.ratio });
+      return simplify(source, request);
     case "impostor": {
       const { type: _, draw: __, ...options } = request;
       const object = new ImpostorMesh(await bakeImpostor(source, await renderer(), options));

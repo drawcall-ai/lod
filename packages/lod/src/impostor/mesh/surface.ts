@@ -168,11 +168,13 @@ export function buildSurface(inputs: SurfaceInputs, card: Card, pass: Pass): Sur
   const c0 = read(maps.base, r0.at).toVar();
   const c1 = read(maps.base, r1.at).toVar();
   const c2 = read(maps.base, r2.at).toVar();
-  const trusted = card.weights.mul(vec3(r0.trust, r1.trust, r2.trust));
-  const covered = trusted
+  // The frame weights already sum to one. Only parallax discounts an unreliable sample.
+  const weights = pass.parallax ? card.weights.mul(vec3(r0.trust, r1.trust, r2.trust)).toVar() : card.weights;
+  const total = pass.parallax ? max(weights.x.add(weights.y).add(weights.z), 1e-4) : float(1);
+  const covered = weights
     .mul(vec3(r0.inside, r1.inside, r2.inside))
     .mul(vec3(c0.a, c1.a, c2.a))
-    .div(max(trusted.x.add(trusted.y).add(trusted.z), 1e-4));
+    .div(total);
   const cover = covered.x.add(covered.y).add(covered.z).toVar();
   const w = covered.div(max(cover, 1e-4)).toVar();
   const blend = (a: Node<"vec4">, b: Node<"vec4">, c: Node<"vec4">) => a.mul(w.x).add(b.mul(w.y)).add(c.mul(w.z));

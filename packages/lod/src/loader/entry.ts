@@ -1,7 +1,7 @@
 import { CacheEntry, type CacheEntryOptions, type Value } from "@drawcall/cache";
 import type { BlockFormat } from "../blocks/index.js";
 import type { Derived } from "./level.js";
-import { derived, type Ladder } from "./request.js";
+import { derived, inferredImpostor, type Ladder } from "./request.js";
 
 // What a level is stored under.
 
@@ -17,22 +17,33 @@ const version = "lod-level@28";
  */
 export function entryOf(
   ladder: Ladder,
-  of: number | "shape",
+  of: number | "shape" | "ladder",
   { basePath, root }: Pick<CacheEntryOptions, "basePath" | "root">,
   format: BlockFormat | null = null,
 ): CacheEntry {
-  const level = of === "shape" ? { type: of } : parameters(derived(ladder.levels, of));
-  return new CacheEntry({ basePath, root, version, dependencies: { level: { value: { url: ladder.key, level, ...(format && { format }) } } } });
+  const level = typeof of === "number" ? parameters(derived(ladder.levels, of)) : { type: "shape" };
+  // Only inferred impostors need a ladder-specific shape. The others share the source shape.
+  const fits = of === "ladder" ? ladder.levels.filter(inferredImpostor).map(parameters) : [];
+  return new CacheEntry({
+    basePath,
+    root,
+    version,
+    dependencies: { level: { value: { url: ladder.key, level, ...(fits.length > 0 && { fits }), ...(format && { format }) } } },
+  });
 }
 
 /**
  * What derives a level's content, by its role rather than its ladder position, so adding or removing another level
- * keeps this one's entry. Switch thresholds and impostor draw options apply at decode, so changing one reuses it.
+ * keeps this one's entry. Runtime draw options do not affect the entry.
  */
 function parameters(level: Derived): Value {
   switch (level.type) {
     case "simplify":
-      return { type: level.type, ratio: level.ratio ?? null };
+      return {
+        type: level.type,
+        ratio: level.ratio ?? null,
+        ...(level.maxPixels !== undefined && Number.isFinite(level.maxPixels) && level.ratio !== 1 && { maxPixels: level.maxPixels }),
+      };
     case "baked":
       return {
         type: level.type,

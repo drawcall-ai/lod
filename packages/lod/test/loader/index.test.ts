@@ -16,6 +16,7 @@ import {
   WebGPURenderer,
   type Object3D,
 } from "three/webgpu";
+import { texelPixels } from "../../src/impostor/impostor.js";
 import { Lod } from "../../src/lod.js";
 import { InteriorMappingMaterial } from "../../src/baked/interior/material.js";
 import { ImpostorMesh } from "../../src/impostor/mesh/index.js";
@@ -28,6 +29,25 @@ vi.mock("@drawcall/cache", async () => ({ CacheEntry: (await import("./fixture.j
 vi.mock("../../src/impostor/bake/index.js", async () => ({ bakeImpostor: (await import("./fixture.js")).bakeImpostor }));
 
 describe("CachedLodLoader", () => {
+  it("describes a prebuilt impostor at its measured sharpness before loading it", { timeout: GPU_TIMEOUT }, async () => {
+    class BuildLoader extends CachedLodLoader {
+      protected override readonly buildsAll = true;
+    }
+    const { manager } = sourceFixture(() => gltsScene(new Mesh(new BoxGeometry(), new MeshStandardMaterial())));
+    const request: LodRequest = { url: "/fitted.glb", levels: [{ type: "impostor" }, { type: "empty", maxPixels: 0.01 }] };
+    const built = await new BuildLoader(manager).loadAsync(request);
+    const browser = new CachedLodLoader();
+    cache.loaded.length = 0;
+    const levels = await browser.loadAsync(request);
+    expect(cache.loaded).toEqual([true]);
+    const mesh = await levels[1]?.load?.();
+    if (!(mesh instanceof ImpostorMesh)) throw new Error("Expected impostor");
+    expect(levels[1]?.maxPixels).toBe(texelPixels(mesh.impostor));
+    expect(built[1]?.maxPixels).toBe(levels[1]?.maxPixels);
+    new Lod(levels).dispose();
+    new Lod(built).dispose();
+  });
+
   it("loads the baking auxiliaries only on a cache miss, relative to the source as written", async () => {
     const manager = new LoadingManager();
     manager.setURLModifier((url) => {

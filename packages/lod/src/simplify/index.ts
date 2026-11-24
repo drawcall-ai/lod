@@ -10,6 +10,8 @@ import { cardMaterials, decimateCards } from "./cards.js";
 export interface SimplifyOptions {
   /** share of each mesh's triangles that remains, in (0, 1]; default 0.5 */
   ratio?: number;
+  /** Largest screen height of this level, in CSS pixels. A foliage card can shed interior triangles at this scale. */
+  maxPixels?: number;
 }
 
 /**
@@ -25,10 +27,11 @@ export interface SimplifyOptions {
  * lets seams collapse, and as a last resort ignores topology (meshopt's sloppy mode).
  * A group drawn with an alpha-tested texture (foliage cards) is decimated card by card
  * instead: about `ratio` of its cards remain, whole, spread evenly and enlarged to cover
- * what all covered (see `decimateCards`).
+ * what all covered (see `decimateCards`). At a finite `maxPixels`, their interior tessellation can simplify with the border locked.
  */
-export async function simplify(object: Object3D, { ratio = 0.5 }: SimplifyOptions = {}): Promise<Object3D> {
+export async function simplify(object: Object3D, { ratio = 0.5, maxPixels = Infinity }: SimplifyOptions = {}): Promise<Object3D> {
   if (!(ratio > 0 && ratio <= 1)) throw new Error(`simplify: ratio must be in (0, 1], got ${ratio}`);
+  if (!(maxPixels > 0)) throw new Error(`simplify: maxPixels must be > 0, got ${maxPixels}`);
   await MeshoptSimplifier.ready;
   // clone() also visits hidden children, whose Lod copies must never be made just to
   // reject them (or skipped by the visible-detail walk below).
@@ -37,7 +40,7 @@ export async function simplify(object: Object3D, { ratio = 0.5 }: SimplifyOption
     if (isSkinnedMesh(node)) throw new Error(`simplify: skinned meshes are not supported ("${node.name}")`);
   });
   const copy = object.clone(true);
-  decimateTree(copy, ratio, new Map());
+  decimateTree(copy, ratio, Math.min(1, 1 / maxPixels), new Map());
   return copy;
 }
 
@@ -45,18 +48,18 @@ export async function simplify(object: Object3D, { ratio = 0.5 }: SimplifyOption
  * Decimate the meshes of `node` drawn at full detail; `done` maps each geometry, with
  * which of its material indices are cards, to its simplified one.
  */
-function decimateTree(node: Object3D, ratio: number, done: Map<string, BufferGeometry>): void {
+function decimateTree(node: Object3D, ratio: number, error: number, done: Map<string, BufferGeometry>): void {
   if (isMesh(node) && !isImpostorMesh(node)) {
     const cards = cardMaterials(node);
     const key = `${node.geometry.uuid} ${cards.join()}`;
     let geometry = done.get(key);
-    if (!geometry) done.set(key, (geometry = simplifyGeometry(node.geometry, ratio, cards)));
+    if (!geometry) done.set(key, (geometry = simplifyGeometry(node.geometry, ratio, cards, error)));
     node.geometry = geometry;
   }
-  for (const child of detailed(node)) decimateTree(child, ratio, done);
+  for (const child of detailed(node)) decimateTree(child, ratio, error, done);
 }
 
-function simplifyGeometry(source: BufferGeometry, ratio: number, cards: boolean[]): BufferGeometry {
+function simplifyGeometry(source: BufferGeometry, ratio: number, cards: boolean[], error: number): BufferGeometry {
   const geometry = source.index ? source : mergeVertices(source);
   const index = geometry.index;
   if (!index) throw new Error("simplify: geometry could not be indexed");
@@ -64,6 +67,8 @@ function simplifyGeometry(source: BufferGeometry, ratio: number, cards: boolean[
   const { attributes, stride, weights } = simplifierAttributes(geometry);
   const groups = geometry.groups.length > 0 ? geometry.groups : [{ start: 0, count: index.count, materialIndex: 0 }];
 
+  // Only these attributes participate in the error metric. Additional channels can carry arbitrary effects.
+  const reduceCards = ratio < 1 && error > 0 && Object.keys(geometry.attributes).every((name) => ["position", "normal", "uv"].includes(name));
   const parts: Array<{ indices: Uint32Array; materialIndex: number }> = [];
   let decimatedCards = false;
   for (const group of groups) {
@@ -73,9 +78,14 @@ function simplifyGeometry(source: BufferGeometry, ratio: number, cards: boolean[
     // A single material draws every group.
     const card = (cards.length === 1 ? cards[0] : cards[materialIndex]) ?? false;
     if (card) decimatedCards = true;
-    const simplified = card
+    let simplified = card
       ? decimateCards(indices, positions, ratio)
       : simplifyIndices(indices, positions, attributes, stride, weights, Math.floor((indices.length / 3) * ratio) * 3)[0];
+    // Keep the selected cards and their outlines. Meshopt bounds the interior position, normal and UV error.
+    if (card && reduceCards) {
+      const [interior] = MeshoptSimplifier.simplifyWithAttributes(simplified, positions, 3, attributes, stride, weights, null, 0, error, ["LockBorder"]);
+      if (interior.length) simplified = interior;
+    }
     parts.push({ indices: simplified, materialIndex });
   }
 

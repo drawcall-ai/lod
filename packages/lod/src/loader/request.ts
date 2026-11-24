@@ -9,13 +9,12 @@ import { loaderPathURL } from "./url.js";
 /**
  * Levels derived from the source, finest first. In browsers each derived level is built when it first loads; in Node
  * every level is built with the ladder. A level without `maxPixels` gets the default `LodLevel.maxPixels` describes;
- * an impostor's is `framePixels` of its resolution: the threshold of a frame fitted to the source's bounding sphere, so
- * the level before it draws smaller than it needs to. The frame the bake fits to the source is up to about 1.5 times tighter; give `maxPixels` to
- * switch to the impostor sooner. Changing `maxPixels` or an impostor's `draw` reuses them, except an impostor's
- * `maxPixels`, which also sizes its bake.
+ * a prebuilt impostor uses the sharpness of its fitted atlas. Without that measurement the loader estimates it from the bounding sphere.
+ * A simplified level uses an explicit finite `maxPixels` to simplify the interiors of foliage cards. An impostor's
+ * `maxPixels` sizes its bake.
  */
 export type LodLevelRequest =
-  | ({ type: "simplify"; maxPixels?: number } & SimplifyOptions)
+  | ({ type: "simplify" } & SimplifyOptions)
   | ({
       type: "baked";
       maxPixels?: number;
@@ -32,6 +31,11 @@ export type LodLevelRequest =
     ))
   | ({ type: "impostor"; draw?: ImpostorMeshOptions } & BakeImpostorOptions)
   | { type: "empty"; maxPixels: number };
+
+/** An impostor whose fitted atlas supplies the missing threshold. */
+export function inferredImpostor(level: LodLevelRequest): level is Extract<LodLevelRequest, { type: "impostor" }> {
+  return level.type === "impostor" && level.maxPixels === undefined;
+}
 
 /** A .glb, .gltf or .glts asset URL. Source and simplified levels load the original asset on demand. */
 export type LodRequest = string | { url: string; levels?: readonly LodLevelRequest[] };
