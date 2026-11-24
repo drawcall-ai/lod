@@ -1,4 +1,5 @@
-// What the scripts share: the city's dev server and a headless Chromium on the real GPU.
+// What the scripts share: the city's dev server and a Chromium on the real GPU, headless but on Linux, which needs a
+// display (on a server, run the script under `xvfb-run`).
 // Every script takes
 //
 //   --cold                    empty the browser profile and public/_cache first, so
@@ -37,10 +38,17 @@ export async function open(port: number, viewport: { width: number; height: numb
     // new headless: the old headless shell loses every WebGPU device once a page asks for a
     // second adapter, as the package's bakes do
     channel: "chromium",
-    headless: true,
+    // Linux reaches WebGPU's Vulkan device only with a display to composite on: run under one (`xvfb-run` on a server).
+    headless: process.platform !== "linux",
     viewport,
     deviceScaleFactor,
-    args: ["--enable-unsafe-webgpu", "--enable-webgpu-developer-features", "--enable-gpu", "--ignore-gpu-blocklist"],
+    args: [
+      "--enable-unsafe-webgpu",
+      "--enable-webgpu-developer-features",
+      "--enable-gpu",
+      "--ignore-gpu-blocklist",
+      ...(process.platform === "linux" ? ["--enable-features=Vulkan"] : []),
+    ],
   });
   return {
     url,

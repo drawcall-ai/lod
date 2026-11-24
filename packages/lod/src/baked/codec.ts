@@ -1,20 +1,18 @@
-import { Box3, BufferAttribute, BufferGeometry, DoubleSide, FrontSide, Mesh, MeshStandardNodeMaterial, Sphere, Vector3 } from "three/webgpu";
+import { Box3, BufferAttribute, BufferGeometry, DoubleSide, FrontSide, Mesh, MeshStandardNodeMaterial, Sphere, Vector3, type Renderer } from "three/webgpu";
+import type { BlockFormat } from "../blocks/index.js";
 import { pack, unpack } from "../codec/container.js";
-import { deviationOf, recordDeviation } from "../levels/index.js";
 import { boolean, fail, file, number, numbers, object, type Files } from "./fields.js";
 import { InteriorMappingMaterial } from "./interior/material.js";
 import { readMap, readTexture, writeMap, writeTexture } from "./textures.js";
 
 /**
- * Encode an unmodified `bakeMesh` result, before adding it to a Lod or changing its
- * materials. This is a baked-result format, not an Object3D/NodeMaterial serializer.
- * Geometry, map bytes (including cutout mips), rooms, placement and LOD deviation survive
- * exactly. Decoding makes fresh resources; the input mesh stays its caller's.
+ * Encode an unmodified `bakeMesh` result, before adding it to a Lod or changing its materials, its maps as blocks of
+ * `format` encoded on `renderer`'s device (see `encodeImpostorAsync`). This is a baked-result format, not an
+ * Object3D/NodeMaterial serializer. Geometry, rooms and placement survive exactly. Decoding makes fresh resources; the
+ * input mesh stays its caller's.
  */
-export async function encodeBakedMeshAsync(mesh: Mesh): Promise<Uint8Array> {
-  const deviation = deviationOf(mesh);
+export async function encodeBakedMeshAsync(mesh: Mesh, renderer: Renderer, format: BlockFormat): Promise<Uint8Array> {
   const { geometry, material } = mesh;
-  if (deviation === undefined || !(deviation >= 0) || !Number.isFinite(deviation)) fail("expected a bakeMesh result with its LOD deviation");
   if (
     mesh.children.length ||
     !mesh.matrixAutoUpdate ||
@@ -88,10 +86,9 @@ export async function encodeBakedMeshAsync(mesh: Mesh): Promise<Uint8Array> {
   const { boundingBox: box, boundingSphere: sphere } = geometry;
   if (!box || !sphere) fail("missing bounds");
   const meta = {
-    version: 5,
+    version: 7,
     name: mesh.name,
     bounds: [...box.min.toArray(), ...box.max.toArray(), ...sphere.center.toArray(), sphere.radius],
-    deviation,
     position: mesh.position.toArray(),
     quaternion: mesh.quaternion.toArray(),
     scale: mesh.scale.toArray(),
@@ -99,9 +96,10 @@ export async function encodeBakedMeshAsync(mesh: Mesh): Promise<Uint8Array> {
     receiveShadow: mesh.receiveShadow,
     side: material.side,
     alphaTest: material.alphaTest,
-    map: await writeMap(files, "map", material.map),
-    normal: await writeMap(files, "normal", material.normalMap),
-    orm: await writeMap(files, "orm", material.aoMap),
+    format,
+    map: await writeMap(files, "map", material.map, renderer, format),
+    normal: await writeMap(files, "normal", material.normalMap, renderer, format),
+    orm: await writeMap(files, "orm", material.aoMap, renderer, format),
     rooms: rooms && {
       boxes: rooms.boxes.map((box) => [...box.min.toArray(), ...box.max.toArray()]),
       span: rooms.span,
@@ -117,15 +115,13 @@ export async function encodeBakedMeshAsync(mesh: Mesh): Promise<Uint8Array> {
 export async function decodeBakedMeshAsync(bytes: Uint8Array): Promise<Mesh> {
   const contents = await unpack(bytes, fail);
   const meta = object(contents.header);
-  if (meta.version !== 5) fail("unsupported version; bake it again");
+  if (meta.version !== 7) fail("unsupported version; bake it again");
   const names = meta.files;
   if (!Array.isArray(names) || names.length !== contents.files.length) fail("file names do not match the files");
   const files: Files = Object.fromEntries(
     names.map((name: unknown, i) => [typeof name === "string" ? name : fail("invalid file name"), contents.files[i] ?? fail("missing file")]),
   );
   if (typeof meta.name !== "string") fail("missing name");
-  const deviation = number(meta.deviation);
-  if (deviation < 0) fail("negative LOD deviation");
   // The container's CRC rejects corrupt bytes, so lengths are checked but values are not walked.
   const position = typedArray(file(files, "position"), Float32Array);
   const normal = typedArray(file(files, "normal"), Float32Array);
@@ -136,7 +132,12 @@ export async function decodeBakedMeshAsync(bytes: Uint8Array): Promise<Mesh> {
   const bounds = numbers(meta.bounds, 10);
   const side = meta.side === FrontSide ? FrontSide : meta.side === DoubleSide ? DoubleSide : fail("unsupported side");
   const alphaTest = meta.alphaTest === 0 ? 0 : meta.alphaTest === 0.5 ? 0.5 : fail("unsupported alpha test");
-  const [map, normalMap, orm] = await Promise.all([readMap(files, "map", meta.map), readMap(files, "normal", meta.normal), readMap(files, "orm", meta.orm)]);
+  const format = meta.format === "bc7" || meta.format === "astc" ? meta.format : fail("unknown block format");
+  const [map, normalMap, orm] = [
+    readMap(files, "map", meta.map, format),
+    readMap(files, "normal", meta.normal, format),
+    readMap(files, "orm", meta.orm, format),
+  ];
   const material = meta.rooms === null ? new MeshStandardNodeMaterial() : new InteriorMappingMaterial();
   material.setValues({ map, normalMap, aoMap: orm, roughnessMap: orm, metalnessMap: orm, roughness: 1, metalness: 1, side, alphaTest });
   if (material instanceof InteriorMappingMaterial) {
@@ -170,7 +171,6 @@ export async function decodeBakedMeshAsync(bytes: Uint8Array): Promise<Mesh> {
   mesh.scale.fromArray(numbers(meta.scale, 3));
   mesh.castShadow = boolean(meta.castShadow);
   mesh.receiveShadow = boolean(meta.receiveShadow);
-  recordDeviation(mesh, deviation);
   return mesh;
 }
 

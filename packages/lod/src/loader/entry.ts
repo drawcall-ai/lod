@@ -1,4 +1,5 @@
 import { CacheEntry, type CacheEntryOptions, type Value } from "@drawcall/cache";
+import type { BlockFormat } from "../blocks/index.js";
 import type { Derived } from "./level.js";
 import { derived, type Ladder } from "./request.js";
 
@@ -8,12 +9,20 @@ import { derived, type Ladder } from "./request.js";
  * What builds and lays out a stored level, and so what identifies it beside its request: bump it with any change to
  * the bytes a level or shape entry holds.
  */
-const version = "lod-level@27";
+const version = "lod-level@28";
 
-/** The entry of derived level `of` of `ladder`, or of its source's shape, keyed by the request alone. */
-export function entryOf(ladder: Ladder, of: number | "shape", { basePath, root }: Pick<CacheEntryOptions, "basePath" | "root">): CacheEntry {
+/**
+ * The entry of derived level `of` of `ladder` with its maps in `format`, or of its source's shape, keyed by the request
+ * alone. A level with maps is stored once per block format; a simplified level, which has none, once.
+ */
+export function entryOf(
+  ladder: Ladder,
+  of: number | "shape",
+  { basePath, root }: Pick<CacheEntryOptions, "basePath" | "root">,
+  format: BlockFormat | null = null,
+): CacheEntry {
   const level = of === "shape" ? { type: of } : parameters(derived(ladder.levels, of));
-  return new CacheEntry({ basePath, root, version, dependencies: { level: { value: { url: ladder.key, level } } } });
+  return new CacheEntry({ basePath, root, version, dependencies: { level: { value: { url: ladder.key, level, ...(format && { format }) } } } });
 }
 
 /**

@@ -1,4 +1,4 @@
-import type { Mip } from "../source/sampler.js";
+import type { Mip } from "./mips.js";
 
 /**
  * Preserve the base mip's cut-out coverage down the chain: scale each smaller mip's alpha, in place, so that the same

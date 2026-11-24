@@ -8,8 +8,6 @@ export class InstanceShape {
   readonly source = new Sphere();
   /** Around every level, unloaded ones included. */
   readonly rest = new Sphere();
-  /** The source's radius in its own space, which default thresholds are measured from. */
-  readonly ownRadius: number = 0;
   /** The source's radius padded for sway, where fades and shadow casters are cut off (see `wind`). */
   fadeRadius = 0;
   /** The diagonal of every level's box: how much a cluster's box shows of its instances' scale. */
@@ -22,8 +20,7 @@ export class InstanceShape {
   /** The shape of `inputs`, the levels given; none without levels. */
   constructor(inputs: readonly LodLevel[]) {
     if (inputs.length === 0) return;
-    const { own, placed } = measureLevels(inputs, "Lod");
-    this.ownRadius = own.radius;
+    const placed = measureLevels(inputs, "Lod");
     this.source.copy(placed);
     this.rest.copy(placed);
     this.fadeRadius = placed.radius;

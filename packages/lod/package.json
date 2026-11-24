@@ -33,16 +33,14 @@
     "build": "rm -rf dist && tsc -p tsconfig.json && node --experimental-strip-types --no-warnings scripts/typegpu.ts",
     "typecheck": "tsc -p tsconfig.test.json",
     "test": "vitest run",
-    "xatlas": "node --experimental-strip-types --no-warnings scripts/xatlas.ts",
-    "basis": "node --experimental-strip-types --no-warnings scripts/basis.ts"
+    "xatlas": "node --experimental-strip-types --no-warnings scripts/xatlas.ts"
   },
   "dependencies": {
     "@drawcall/webgpu": "^0.2.1",
     "fflate": "^0.8.2",
+    "gputex": "^0.16.0",
     "import-meta-resolve": "^4.2.0",
-    "ktx-parse": "^2.0.0",
-    "meshoptimizer": "^1.3.0",
-    "three-mesh-bvh": "^0.9.15"
+    "meshoptimizer": "^1.3.0"
   },
   "peerDependencies": {
     "@drawcall/cache": "^0.8.2",
@@ -62,7 +60,6 @@
     "@types/three": "^0.186.0",
     "@vitest/browser-playwright": "4.1.11",
     "@webgpu/types": "^0.1.74",
-    "ktx2-encoder": "0.6.0",
     "playwright": "1.63.0",
     "three": "^0.186.1",
     "typegpu": "0.12.9",

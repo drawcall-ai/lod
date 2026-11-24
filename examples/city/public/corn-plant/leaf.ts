@@ -47,6 +47,37 @@ const size = 2048;
  * ones between each pair, slight puckering near the margins, cell-scale mottling.
  */
 function bladeTextures(palette: Palette): { color: THREE.DataTexture; normal: THREE.DataTexture } {
+  const { tone, normal } = (relief ??= bladeRelief());
+  const base = new THREE.Color(palette.base);
+  const body = new THREE.Color(palette.body);
+  const tip = new THREE.Color(palette.tip);
+  const rib = new THREE.Color(palette.rib);
+  const color = new Uint8Array(size * size * 4);
+  const c = new THREE.Color();
+  for (let y = 0; y < size; y++) {
+    const v = (y + 0.5) / size;
+    const along = v < 0.08 ? base.clone().lerp(body, v / 0.08) : v < 0.88 ? body : body.clone().lerp(tip, (v - 0.88) / 0.12);
+    for (let x = 0; x < size; x++) {
+      const i = (y * size + x) * 4;
+      const q = Math.abs((x + 0.5) / size - 0.5) * 2;
+      const mottle = valueNoise(x / 24, y / 160) - 0.5;
+      c.copy(along)
+        .lerp(rib, Math.min(1, tone[x] ?? 0))
+        .multiplyScalar(1 + 0.16 * mottle + 0.05 * (valueNoise(x * 0.7, y * 0.2) - 0.5) - 0.12 * smooth(0.9, 1, q));
+      color[i] = Math.round(THREE.MathUtils.clamp(c.r, 0, 1) * 255);
+      color[i + 1] = Math.round(THREE.MathUtils.clamp(c.g, 0, 1) * 255);
+      color[i + 2] = Math.round(THREE.MathUtils.clamp(c.b, 0, 1) * 255);
+      color[i + 3] = 255;
+    }
+  }
+  return { color: dataTexture(color, THREE.SRGBColorSpace), normal: dataTexture(normal, THREE.NoColorSpace) };
+}
+
+/** Every palette's blades share their relief: made once, by the first blade material. */
+let relief: { tone: Float32Array; normal: Uint8Array } | undefined;
+
+/** The blade's colour tone across it, toward the midrib's and veins' paler colour, and its normal map. */
+function bladeRelief(): { tone: Float32Array; normal: Uint8Array } {
   const r = seedrandom(String(11));
   const height = new Float32Array(size);
   const tone = new Float32Array(size);
@@ -71,15 +102,6 @@ function bladeTextures(palette: Palette): { color: THREE.DataTexture; normal: TH
     height[x] = h;
     tone[x] = t + 0.06 * smooth(0.975, 1, q);
   }
-
-  const base = new THREE.Color(palette.base);
-  const body = new THREE.Color(palette.body);
-  const tip = new THREE.Color(palette.tip);
-  const rib = new THREE.Color(palette.rib);
-  const color = new Uint8Array(size * size * 4);
-  const normal = new Uint8Array(size * size * 4);
-  const c = new THREE.Color();
-  const n = new THREE.Vector3();
   const relief = new Float32Array(size * size);
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
@@ -90,28 +112,18 @@ function bladeTextures(palette: Palette): { color: THREE.DataTexture; normal: TH
   }
   // wraps across u and clamps along v
   const at = (x: number, y: number) => relief[Math.min(size - 1, Math.max(0, y)) * size + ((x + size) % size)] ?? 0;
-  for (let y = 0; y < size; y++) {
-    const v = (y + 0.5) / size;
-    const along = v < 0.08 ? base.clone().lerp(body, v / 0.08) : v < 0.88 ? body : body.clone().lerp(tip, (v - 0.88) / 0.12);
+  const normal = new Uint8Array(size * size * 4);
+  const n = new THREE.Vector3();
+  for (let y = 0; y < size; y++)
     for (let x = 0; x < size; x++) {
       const i = (y * size + x) * 4;
-      const q = Math.abs((x + 0.5) / size - 0.5) * 2;
-      const mottle = valueNoise(x / 24, y / 160) - 0.5;
-      c.copy(along)
-        .lerp(rib, Math.min(1, tone[x] ?? 0))
-        .multiplyScalar(1 + 0.16 * mottle + 0.05 * (valueNoise(x * 0.7, y * 0.2) - 0.5) - 0.12 * smooth(0.9, 1, q));
-      color[i] = Math.round(THREE.MathUtils.clamp(c.r, 0, 1) * 255);
-      color[i + 1] = Math.round(THREE.MathUtils.clamp(c.g, 0, 1) * 255);
-      color[i + 2] = Math.round(THREE.MathUtils.clamp(c.b, 0, 1) * 255);
-      color[i + 3] = 255;
       n.set(-(at(x + 1, y) - at(x - 1, y)) * 1.6, -(at(x, y + 1) - at(x, y - 1)) * 1.6, 1).normalize();
       normal[i] = Math.round((n.x * 0.5 + 0.5) * 255);
       normal[i + 1] = Math.round((n.y * 0.5 + 0.5) * 255);
       normal[i + 2] = Math.round((n.z * 0.5 + 0.5) * 255);
       normal[i + 3] = 255;
     }
-  }
-  return { color: dataTexture(color, THREE.SRGBColorSpace), normal: dataTexture(normal, THREE.NoColorSpace) };
+  return { tone, normal };
 }
 
 function dataTexture(data: Uint8Array, colorSpace: THREE.ColorSpace): THREE.DataTexture {

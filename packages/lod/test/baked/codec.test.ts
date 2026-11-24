@@ -20,12 +20,13 @@ import {
 } from "three/webgpu";
 import { describe, expect, it } from "vitest";
 import { encodeBakedMeshAsync, decodeBakedMeshAsync } from "../../src/baked/codec.js";
-import { encodeLayer } from "../../src/ktx2/encode.js";
-import { mipmaps } from "../../src/source/sampler.js";
+import { adapterFormat } from "../../src/blocks/index.js";
+import { encodeBlocks } from "../../src/blocks/encode.js";
+import { bakeRenderer, render } from "../renderer.js";
+import { mipmaps } from "../../src/baked/mips.js";
 import { pack, unpack } from "../../src/codec/container.js";
 import { bakeMesh } from "../../src/baked/index.js";
 import { InteriorMappingMaterial } from "../../src/baked/interior/material.js";
-import { deviationOf, recordDeviation } from "../../src/levels/index.js";
 import { disposeRecursive } from "../../src/dispose.js";
 import { box } from "../box.js";
 import { house, interior } from "../house.js";
@@ -79,7 +80,6 @@ function fixture(rooms: boolean): Mesh {
   mesh.rotation.set(0.2, 0.4, -0.3);
   mesh.scale.set(2, 3, 4);
   mesh.castShadow = mesh.receiveShadow = true;
-  recordDeviation(mesh, 1 / 7);
   return mesh;
 }
 
@@ -92,16 +92,18 @@ async function contents(bytes: Uint8Array): Promise<{ header: object; files: Uin
   return { header, files };
 }
 
+/** The format the test browser's adapter samples, so that decoded maps can be drawn. */
+const format = await adapterFormat();
+
 describe("baked mesh codec", () => {
-  it("round-trips geometry, map settings, room arrays, placement and deviation without sharing resources", async () => {
+  it("round-trips geometry, map settings, room arrays and placement without sharing resources", async () => {
     for (const rooms of [false, true]) {
       const source = fixture(rooms);
-      const bytes = await encodeBakedMeshAsync(source);
+      const bytes = await encodeBakedMeshAsync(source, bakeRenderer, format);
       // A sliced file must not accidentally read beyond its view.
       const padded = new Uint8Array(bytes.length + 13);
       padded.set(bytes, 7);
       const decoded = await decodeBakedMeshAsync(padded.subarray(7, 7 + bytes.length));
-      expect(deviationOf(decoded)).toBe(deviationOf(source));
       const placement = (mesh: Mesh) => [...mesh.position.toArray(), ...mesh.quaternion.toArray(), ...mesh.scale.toArray(), mesh.castShadow, mesh.name];
       expect(placement(decoded)).toEqual(placement(source));
       expect(decoded.geometry.boundingSphere).toEqual(source.geometry.boundingSphere);
@@ -127,35 +129,35 @@ describe("baked mesh codec", () => {
     }
   });
 
-  it("stores each surface map as UASTC of its own mips, or of the chain the GPU would make", async () => {
+  it("stores each surface map as blocks of its own mips, or of the chain the GPU would make", async () => {
     const source = fixture(false);
     if (!(source.material instanceof MeshStandardNodeMaterial) || !(source.material.normalMap instanceof DataTexture)) throw new Error("expected maps");
-    const bytes = await encodeBakedMeshAsync(source);
+    const bytes = await encodeBakedMeshAsync(source, bakeRenderer, format);
     const { header, files } = await contents(bytes);
     const names: string[] = Reflect.get(header, "files");
-    const stored = (name: string) => files[names.indexOf(name)];
+    const stored = (name: string) => [0, 1, 2].map((m) => files[names.indexOf(`${name}/blocks${m}`)]);
     const given = [4, 2, 1].map((size) => new Uint8Array(size * size * 4).fill(size * 50));
-    expect(stored("map.ktx2")).toEqual(await encodeLayer({ levels: given, size: 4, srgb: true }));
+    expect(stored("map")).toEqual(await encodeBlocks(bakeRenderer, format, given, 4));
     const normal = source.material.normalMap.image;
     const chain = mipmaps({ data: Uint8ClampedArray.from(normal.data ?? []), width: 4, height: 4 }, false).map(({ data }) => Uint8Array.from(data));
-    expect(stored("normal.ktx2")).toEqual(await encodeLayer({ levels: chain, size: 4, srgb: false }));
+    expect(stored("normal")).toEqual(await encodeBlocks(bakeRenderer, format, chain, 4));
     disposeRecursive(source);
   });
 
   it("rejects non-baked/modified input and corrupt geometry, texture data, metadata or bytes", async () => {
-    await expect(encodeBakedMeshAsync(new Mesh())).rejects.toThrow(/bakeMesh result/);
+    await expect(encodeBakedMeshAsync(new Mesh(), bakeRenderer, format)).rejects.toThrow(/unsupported material/);
     const source = fixture(false);
     if (!(source.material instanceof MeshStandardNodeMaterial)) throw new Error("expected standard material");
     source.material.normalScale.setScalar(0.6);
-    await expect(encodeBakedMeshAsync(source)).rejects.toThrow(/normalScale/);
+    await expect(encodeBakedMeshAsync(source, bakeRenderer, format)).rejects.toThrow(/normalScale/);
     source.material.normalScale.setScalar(1);
     // Keys starting with "_" are three's own state, as listeners are: skipped, whatever they hold.
     source.material.addEventListener("dispose", () => {});
     Reflect.set(source.material, "_cache", new Map([[1, 2]]));
-    const bytes = await encodeBakedMeshAsync(source);
+    const bytes = await encodeBakedMeshAsync(source, bakeRenderer, format);
     const { header, files } = await contents(bytes);
     const names: string[] = Reflect.get(header, "files");
-    for (const name of ["index", "map.ktx2"]) {
+    for (const name of ["index", "map/blocks0"]) {
       const changed = files.map((file, i) => (names[i] === name ? new Uint8Array(1) : file));
       await expect(decodeBakedMeshAsync(await pack(header, changed))).rejects.toThrow(/Invalid baked mesh/);
     }
@@ -167,35 +169,30 @@ describe("baked mesh codec", () => {
     disposeRecursive(source);
   });
 
-  it.skipIf(typeof document === "undefined")(
-    "renders decoded real interior and cutout bakes as encoded",
-    async () => {
-      const { bakeRenderer, render } = await import("../renderer.js");
-      const rooms = interior();
-      const building = await bakeMesh(house().add(rooms), { low: box(), textureSize: 32, interior: rooms, renderer: bakeRenderer });
-      const alpha = texture();
-      const data: unknown = alpha.image.data;
-      if (!(data instanceof Uint8Array)) throw new Error("expected pixels");
-      for (let i = 3; i < data.length; i += 4) data[i] = i % 3 === 0 ? 0 : 255;
-      const plane = new Mesh(new PlaneGeometry(2, 2), new MeshStandardMaterial({ map: alpha, alphaTest: 0.5, side: DoubleSide }));
-      const cutout = await bakeMesh(plane, { low: plane, textureSize: 32 });
-      const camera = new PerspectiveCamera(35, 1, 0.1, 50);
-      camera.position.set(2, 0.5, 5);
-      camera.lookAt(0, 0, 0);
-      const scene = new Scene().add(new AmbientLight(0xffffff, 2));
-      for (const original of [building, cutout]) {
-        const restored = await decodeBakedMeshAsync(await encodeBakedMeshAsync(original));
-        scene.add(original);
-        const before = await render(scene, camera);
-        scene.remove(original).add(restored);
-        const after = await render(scene, camera);
-        scene.remove(restored);
-        // UASTC is lossy: within a level per channel on the building, a few levels on the cutout's alpha edges.
-        expect(psnr(after, before)).toBeGreaterThan(40);
-        disposeRecursive(original);
-        disposeRecursive(restored);
-      }
-    },
-    120_000,
-  );
+  it("renders decoded real interior and cutout bakes as encoded", async () => {
+    const rooms = interior();
+    const building = await bakeMesh(house().add(rooms), { low: box(), textureSize: 32, interior: rooms, renderer: bakeRenderer });
+    const alpha = texture();
+    const data: unknown = alpha.image.data;
+    if (!(data instanceof Uint8Array)) throw new Error("expected pixels");
+    for (let i = 3; i < data.length; i += 4) data[i] = i % 3 === 0 ? 0 : 255;
+    const plane = new Mesh(new PlaneGeometry(2, 2), new MeshStandardMaterial({ map: alpha, alphaTest: 0.5, side: DoubleSide }));
+    const cutout = await bakeMesh(plane, { renderer: bakeRenderer, low: plane, textureSize: 32 });
+    const camera = new PerspectiveCamera(35, 1, 0.1, 50);
+    camera.position.set(2, 0.5, 5);
+    camera.lookAt(0, 0, 0);
+    const scene = new Scene().add(new AmbientLight(0xffffff, 2));
+    for (const original of [building, cutout]) {
+      const restored = await decodeBakedMeshAsync(await encodeBakedMeshAsync(original, bakeRenderer, format));
+      scene.add(original);
+      const before = await render(scene, camera);
+      scene.remove(original).add(restored);
+      const after = await render(scene, camera);
+      scene.remove(restored);
+      // Blocks are lossy: within a level per channel on the building, a few levels on the cutout's alpha edges.
+      expect(psnr(after, before)).toBeGreaterThan(40);
+      disposeRecursive(original);
+      disposeRecursive(restored);
+    }
+  }, 120_000);
 });

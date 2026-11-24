@@ -203,7 +203,7 @@ export class Lod extends Object3D<LodEventMap> {
     const lists = new InstanceLists(listedOf(inputs));
     const drawing = { shape, lists, drawn: this.drawn };
     this.inputs = inputs;
-    if (inputs.length > 0) this.levels.push(...levelsFrom(inputs, 2 * shape.ownRadius, "Lod"));
+    if (inputs.length > 0) this.levels.push(...levelsFrom(inputs, "Lod"));
     const encoded = new EncodedLevels(this.levels, emptyLevels(inputs), "Lod");
     const drawFor = (renderer: unknown, camera: Camera) =>
       this.built.loads.guard(() => {

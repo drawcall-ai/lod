@@ -3,7 +3,7 @@ import { MAPS, PAD, boundingRadius, texelPixels, validateImpostor, type Impostor
 import { frameBasis, frameDirection, type Vec3 } from "../octahedral.js";
 import { checkBakeRenderer, inTurn } from "../../bake.js";
 import { boundingBox, showDetail } from "../../source/detail.js";
-import { ImpostorAtlasMip } from "./atlas.js";
+import { ImpostorAtlasMip, meanSpecular } from "./atlas.js";
 import { swapMaterials, type BakeSettings } from "./materials.js";
 import { bakeAtlas } from "./sheet.js";
 import { sourceForBake } from "./source.js";
@@ -40,8 +40,8 @@ export interface BakeImpostorOptions {
    */
   emissive?: boolean;
   /**
-   * renders per output pixel per axis, for smooth edges; default 2. Textures are read at
-   * the size of a top mip output pixel, as multisampling does.
+   * renders per output pixel per axis, for smooth edges: a power of two; default 2. Textures
+   * are read at the size of a top mip output pixel, as multisampling does.
    */
   supersample?: number;
 }
@@ -61,7 +61,7 @@ export interface BakeImpostorOptions {
  * one at a time.
  *
  * Each frame is an orthographic look at the bounding-box centre, rendered once at the top
- * mip level's size; each smaller level averages the one above. The object's materials are
+ * mip level's size; every smaller level averages the same samples. The object's materials are
  * rendered unlit into one target per map: base colour + coverage, object-space normal +
  * depth, occlusion/roughness/metalness and, if needed, emissive. A material that changes
  * three's default specular adds the object's mean specular (see `Impostor.specular`).
@@ -89,7 +89,7 @@ async function bakeSource(source: Object3D, renderer: Renderer, options: BakeImp
   const supersample = options.supersample ?? 2;
   if (!Number.isInteger(frames) || frames < 2) throw new Error("bakeImpostor: frames must be an integer >= 2");
   if (!Number.isFinite(resolution) || resolution < 4) throw new Error("bakeImpostor: resolution must be a number >= 4");
-  if (!Number.isInteger(supersample) || supersample < 1) throw new Error("bakeImpostor: supersample must be an integer >= 1");
+  if (!Number.isInteger(Math.log2(supersample))) throw new Error("bakeImpostor: supersample must be a power of two");
   if (options.maxPixels !== undefined && !(options.maxPixels > 0)) throw new Error("bakeImpostor: maxPixels must be > 0");
   const cell = 2 ** Math.floor(Math.log2(resolution));
 
@@ -123,8 +123,6 @@ async function bakeSource(source: Object3D, renderer: Renderer, options: BakeImp
   const emissive = options.emissive ?? swapped.emits;
   const maps: ImpostorMap[] = emissive ? [...MAPS] : ["base", "normalDepth", "orm"];
 
-  // Only the top mip level is rendered (see `bakeAtlas`).
-  const mips = Array.from({ length: Math.log2(cell) + 1 }, (_, m) => new ImpostorAtlasMip(maps, frames, cell >> m, swapped.specular));
   const scene = new Scene();
   scene.add(source);
   const camera = new OrthographicCamera(-halfSize, halfSize, halfSize, -halfSize, 0, 4 * radius + 1e-3);
@@ -152,14 +150,16 @@ async function bakeSource(source: Object3D, renderer: Renderer, options: BakeImp
       1,
     );
   });
+  let baked;
   try {
-    await bakeAtlas(mips, supersample, renderer, scene, camera, frameCameras);
+    baked = await bakeAtlas(maps, swapped.specular, frames, cell, supersample, renderer, scene, camera, frameCameras);
   } finally {
     for (const material of swapped.materials) material.dispose();
   }
+  const mips = baked.mips.map((mip, m) => new ImpostorAtlasMip(maps, frames, cell >> m, mip));
   if (!mips.some((mip) => mip.covered())) throw new Error("bakeImpostor: nothing visible was baked");
-  for (const mip of mips) mip.fillGutters();
-  const sum = (way: "own" | "turned") => mips.reduce((total, mip) => total + mip.agreement[way], 0);
+  const agreements = mips.map((mip) => mip.agreement());
+  const sum = (way: "own" | "turned") => agreements.reduce((total, agreement) => total + agreement[way], 0);
   if (sum("turned") > sum("own")) for (const mip of mips) mip.useTurned();
 
   const layers = maps.map((map, i) => ({
@@ -173,7 +173,7 @@ async function bakeSource(source: Object3D, renderer: Renderer, options: BakeImp
   const impostor: Impostor = { version: 4, layout, frames, size: cell * frames, box, halfSize, maps, layers };
   const [top] = mips;
   if (!top) throw new Error("bakeImpostor: no mip levels");
-  if (swapped.specular) impostor.specular = top.meanSpecular();
+  if (baked.specular) impostor.specular = meanSpecular(baked.specular, top);
   validateImpostor(impostor);
   return impostor;
 }

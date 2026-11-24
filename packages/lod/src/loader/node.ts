@@ -1,9 +1,10 @@
-import { createCanvas, type Canvas } from "@drawcall/webgpu";
+import { createCanvas, requestAdapter, type Canvas } from "@drawcall/webgpu";
 import type { GLTSLoader } from "@drawcall/glts";
 import { resolve as resolveImport } from "import-meta-resolve";
 import { Loader, LoadingManager, WebGPURenderer, type Object3D } from "three/webgpu";
 import { publicFile, publicURL, type Input } from "@drawcall/cache";
 import { createBakeRenderer, setUpBakeRenderer } from "../bake.js";
+import { adapterFormat, formatOf, type BlockFormat } from "../blocks/index.js";
 import type { LodLevel } from "../levels/index.js";
 import { CachedLodLoader as BrowserCachedLodLoader, type CachedLodLoaderOptions } from "./index.js";
 import type { LodRequest } from "./request.js";
@@ -17,10 +18,11 @@ import { loaderPathURL, placeholderOrigin } from "./url.js";
  * which its manager maps to @drawcall/cache's `publicURL` of the path; a load that requests any other URL through it,
  * or a .glts source that imports a module from a CDN, fails, since no stored level could be checked against it. `.glts`
  * sources load through a GLTSLoader of the load's own; bakes draw on a canvas of the process's document, as a glts host
- * has one, or else on a WebGPU device of @drawcall/webgpu. The manager only resolves the request's URL.
+ * has one, or else on a WebGPU device of @drawcall/webgpu, which every load running shares. The manager only resolves
+ * the request's URL.
  *
- * Each `loadAsync` loads and bakes with what it makes for itself, which it frees before resolving, so loads may run
- * concurrently. The levels it returns load their stored bytes as in browsers, and none holds the source: the source
+ * Each `loadAsync` loads with what it makes for itself, which it frees before resolving, so loads may run concurrently;
+ * their bakes take turns on the shared device, freed once the last load running resolves. The levels it returns load their stored bytes as in browsers, and none holds the source: the source
  * level, and a simplified level, which draws with the source's materials, load the source again when a camera needs
  * them, as the glts CLI's renders of a .glts script that draws a Lod do.
  */
@@ -88,20 +90,48 @@ class SessionLoader extends BrowserCachedLodLoader {
     return super.loadAsset(placeholderOrigin + url);
   }
 
-  protected override async newBakeRenderer(): Promise<WebGPURenderer> {
+  protected override newBakeRenderer(): Promise<WebGPURenderer> {
     // A process with a document, such as a glts host's, has WebGPU of its own: bake on a canvas of that document, as a
     // .glts script does. A second WebGPU runtime beside the host's would take over globals the host's images upload with.
     if (typeof document !== "undefined") return createBakeRenderer();
-    // Three's DOM canvas types exclude native canvases; its constructor checks the actual API.
-    const renderer: unknown = Reflect.construct(WebGPURenderer, [{ canvas: await canvas(), antialias: false }]);
-    if (!(renderer instanceof WebGPURenderer)) throw new Error("CachedLodLoader: three did not make a WebGPURenderer");
-    return setUpBakeRenderer(renderer);
+    return bakeRenderer();
+  }
+
+  /** The sessions' renderer is theirs to free (see `session`); a glts host's loader frees its own. */
+  protected override releaseBakeRenderer(renderer: WebGPURenderer): void {
+    if (typeof document !== "undefined") renderer.dispose();
+  }
+
+  protected override async adapterFormat(): Promise<BlockFormat> {
+    // As for bakes: a glts host's document has WebGPU of its own; else the adapter @drawcall/webgpu draws on.
+    if (typeof document !== "undefined") return adapterFormat();
+    const adapter = await requestAdapter({ powerPreference: "high-performance" });
+    if (!adapter) throw new Error("CachedLodLoader: @drawcall/webgpu found no adapter");
+    return formatOf(adapter);
   }
 
   protected override inputs(): Input[] {
     // three builds every level, whatever its source imports.
     return [...new Set(["three", ...this.scripts.packages])].sort().map((name) => ({ package: name }));
   }
+}
+
+let warnedFallback = false;
+
+/**
+ * Warn, once per process, when bakes draw on @drawcall/webgpu's CPU renderer, which it falls back to when Vulkan finds
+ * no GPU driver: the levels come out the same, many times slower.
+ */
+function warnOnFallback(renderer: WebGPURenderer): void {
+  if (warnedFallback) return;
+  // Three's backend types leave out its device, and @webgpu/types older than adapterInfo.
+  const device: unknown = Reflect.get(renderer.backend, "device");
+  const info: unknown = typeof device === "object" && device !== null ? Reflect.get(device, "adapterInfo") : undefined;
+  if (typeof info !== "object" || info === null || Reflect.get(info, "isFallbackAdapter") !== true) return;
+  warnedFallback = true;
+  console.warn(
+    `CachedLodLoader: baking on the CPU (${String(Reflect.get(info, "description"))}): WebGPU found no GPU. Install the GPU's Vulkan driver, or point the Vulkan loader at it (VK_ADD_DRIVER_FILES), for bakes on the GPU.`,
+  );
 }
 
 /**
@@ -154,7 +184,7 @@ class ScriptLoader extends Loader<Object3D> {
 }
 
 let users = 0;
-/** What sessions share while any runs: the canvas, once one bakes. */
+/** What sessions share while any runs: the canvas, once one loads or bakes, and the renderer, once one bakes. */
 let installed: Promise<Install> | undefined;
 /**
  * The disposal of the last sessions' canvas, which the next sessions wait for: @drawcall/webgpu saves and restores the
@@ -169,6 +199,11 @@ interface Install {
    * read stored levels install no WebGPU runtime.
    */
   canvas?: Promise<Canvas>;
+  /**
+   * The renderer every bake of the sessions draws with, on the canvas: one device whose pipelines every bake shares,
+   * its bakes one at a time (see `inTurn`).
+   */
+  renderer?: Promise<WebGPURenderer>;
 }
 
 /** The canvas of the sessions running. */
@@ -177,7 +212,20 @@ function canvas(): Promise<Canvas> {
   return (current.canvas ??= createCanvas(1, 1));
 }
 
-/** Run `run` in a session: sessions running together share one canvas, disposed once the last ends. */
+/** The bake renderer of the sessions running. */
+function bakeRenderer(): Promise<WebGPURenderer> {
+  if (!current) throw new Error("CachedLodLoader: baking outside loadAsync");
+  return (current.renderer ??= (async () => {
+    // Three's DOM canvas types exclude native canvases; its constructor checks the actual API.
+    const renderer: unknown = Reflect.construct(WebGPURenderer, [{ canvas: await canvas(), antialias: false, powerPreference: "high-performance" }]);
+    if (!(renderer instanceof WebGPURenderer)) throw new Error("CachedLodLoader: three did not make a WebGPURenderer");
+    await setUpBakeRenderer(renderer);
+    warnOnFallback(renderer);
+    return renderer;
+  })());
+}
+
+/** Run `run` in a session: sessions running together share one canvas and bake renderer, disposed once the last ends. */
 async function session<T>(run: () => Promise<T>): Promise<T> {
   users++;
   // A failed disposal failed the session that ran it.
@@ -188,10 +236,10 @@ async function session<T>(run: () => Promise<T>): Promise<T> {
   } finally {
     if (--users === 0) {
       installed = current = undefined;
-      restored = shared.then(async ({ canvas }) => {
-        // A canvas that failed to make failed the bake that made it.
-        const made = await canvas?.catch(() => undefined);
-        await made?.dispose();
+      restored = shared.then(async ({ canvas, renderer }) => {
+        // A renderer or canvas that failed to make failed the bake that made it.
+        (await renderer?.catch(() => undefined))?.dispose();
+        await (await canvas?.catch(() => undefined))?.dispose();
       });
       await restored;
     }

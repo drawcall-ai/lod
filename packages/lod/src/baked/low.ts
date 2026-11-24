@@ -1,8 +1,6 @@
 import { BufferAttribute, BufferGeometry, Mesh, type Object3D } from "three/webgpu";
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
-import { decimate } from "../simplify/index.js";
-import { measureDeviation } from "../source/deviation.js";
-import type { Source } from "../source/source.js";
+import { simplify } from "../simplify/index.js";
 import { merge, type Surface } from "../source/surface.js";
 import { rasterize, type Raster } from "./raster.js";
 import { unwrap } from "./unwrap.js";
@@ -11,17 +9,14 @@ import { unwrap } from "./unwrap.js";
 export interface Low extends Surface {
   uvs: Float32Array;
   raster: Raster;
-  /** How far the low surface is from the source's, in the source's units: see `measureDeviation`. */
-  deviation: number;
-  widest: number;
 }
 
 /** The source simplified to `ratio` of its triangles, welded first: seams and materials do not matter to a bake. */
-export function simplified(source: Source, ratio: number): Promise<Object3D> {
+export function simplified(source: Surface, ratio: number): Promise<Object3D> {
   const geometry = new BufferGeometry();
   geometry.setAttribute("position", new BufferAttribute(source.positions, 3));
   geometry.setIndex(new BufferAttribute(source.index, 1));
-  return decimate(new Mesh(mergeVertices(geometry)), ratio);
+  return simplify(new Mesh(mergeVertices(geometry)), { ratio });
 }
 
 /**
@@ -29,16 +24,15 @@ export function simplified(source: Source, ratio: number): Promise<Object3D> {
  * into: its own when they are usable — inside 0..1, no two triangles on one texel and a
  * texel of free border between charts — else a fresh xatlas atlas.
  */
-export async function layOut(object: Object3D, source: Source, size: number): Promise<Low> {
+export async function layOut(object: Object3D, size: number): Promise<Low> {
   const surface = merge(object, "bakeMesh");
-  const { deviation, widest } = measureDeviation(source, surface);
   const { uvs, index } = surface;
   if (surface.hasUvs && uvs.every((x) => x >= 0 && x <= 1)) {
     const raster = rasterize(uvs, index, size);
-    if (raster.overlaps === 0 && raster.covered > 0 && separated(raster, charts(uvs, index))) return { ...surface, raster, deviation, widest };
+    if (raster.overlaps === 0 && raster.covered > 0 && separated(raster, charts(uvs, index))) return { ...surface, raster };
   }
   const atlas = await unwrap(surface, size);
-  return { ...atlas, raster: rasterize(atlas.uvs, atlas.index, size), deviation, widest };
+  return { ...atlas, raster: rasterize(atlas.uvs, atlas.index, size) };
 }
 
 /** Per triangle, its chart: triangles that share a UV point are in one. */

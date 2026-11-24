@@ -33,8 +33,8 @@ it("builds and saves every level with the packages and, as the cache plugin warm
   const warm = () => warming.run({ files: [], modules: () => [] }, () => new CachedLodLoader().loadAsync(request));
   await warm();
   const entries = await saved();
-  // The shape and both levels.
-  expect(entries).toHaveLength(6);
+  // The shape, the simplified level, and the impostor once per block format, each a JSON and a binary file.
+  expect(entries).toHaveLength(8);
   for (const [name] of entries) {
     if (!String(name).endsWith(".json")) continue;
     const { inputs } = JSON.parse(await readFile(join(directory, String(name)), "utf8"));
@@ -50,7 +50,7 @@ it("builds and saves every level with the packages and, as the cache plugin warm
   vi.unstubAllGlobals();
 });
 
-it("runs loads on one loader concurrently, each with its own GLTSLoader and bake renderer", { timeout: 120_000 }, async () => {
+it("runs loads on one loader concurrently, each with its own GLTSLoader, baking in turn on one device", { timeout: 120_000 }, async () => {
   const loader = new CachedLodLoader();
   const ladders = await Promise.all([
     loader.loadAsync({ url: "/box.glts?size=3", levels: [{ type: "simplify", ratio: 0.5, maxPixels: 100 }] }),

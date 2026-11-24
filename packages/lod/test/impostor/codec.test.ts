@@ -1,5 +1,6 @@
 import { AmbientLight, DirectionalLight, IcosahedronGeometry, Mesh, MeshStandardMaterial, PerspectiveCamera, RGBAFormat, Scene } from "three/webgpu";
 import { describe, expect, it } from "vitest";
+import { BLOCK_FORMATS, adapterFormat, threeFormat } from "../../src/blocks/index.js";
 import { bakeImpostor } from "../../src/impostor/bake/index.js";
 import { decodeImpostorAsync, encodeImpostorAsync } from "../../src/impostor/codec.js";
 import type { Impostor, ImpostorMap } from "../../src/impostor/impostor.js";
@@ -27,26 +28,25 @@ function make(maps: ImpostorMap[], size = 64, frames = 8): Impostor {
 }
 
 describe("impostor codec", () => {
-  it("decodes the metadata as encoded and transcodes every map's baked levels to one GPU format", async () => {
+  it("decodes the metadata as encoded and every map's levels as the blocks of the format it was encoded in", async () => {
     const source = make(["base", "normalDepth", "orm", "emissive"]);
     source.specular = [0.03, 0.06, 0.08, 1];
     const { layers: _, ...meta } = source;
-    const file = await encodeImpostorAsync(source);
-    const padded = new Uint8Array(file.length + 17);
-    padded.set(file, 17);
-    const decoded = await decodeImpostorAsync(padded.subarray(17));
-    const { layers, ...decodedMeta } = decoded;
-    expect(decodedMeta).toEqual(meta);
-    expect(layers.map((layer) => layer.mipmaps.length)).toEqual([4, 4, 4, 4]);
-    // Every WebGPU device the tests run on takes BC, ASTC or ETC2 blocks.
-    expect(new Set(layers.map((layer) => layer.format)).size).toBe(1);
-    expect(layers[0]?.format).not.toBe(RGBAFormat);
-    // A decoded impostor holds blocks, which only a bake's texels encode from.
-    await expect(encodeImpostorAsync(decoded)).rejects.toThrow(/encode a baked impostor/);
+    for (const format of BLOCK_FORMATS) {
+      const file = await encodeImpostorAsync(source, bakeRenderer, format);
+      const padded = new Uint8Array(file.length + 17);
+      padded.set(file, 17);
+      const decoded = await decodeImpostorAsync(padded.subarray(17));
+      const { layers, ...decodedMeta } = decoded;
+      expect(decodedMeta).toEqual(meta);
+      expect(layers.map((layer) => [layer.format, layer.mipmaps.length])).toEqual(Array(4).fill([threeFormat(format), 4]));
+      // A decoded impostor holds blocks, which only a bake's texels encode from.
+      await expect(encodeImpostorAsync(decoded, bakeRenderer, format)).rejects.toThrow(/encode a baked impostor/);
+    }
   });
 
   it("rejects corrupt and truncated files", async () => {
-    const file = await encodeImpostorAsync(make(["base", "normalDepth", "orm"]));
+    const file = await encodeImpostorAsync(make(["base", "normalDepth", "orm"]), bakeRenderer, "bc7");
     const flipped = file.slice();
     flipped[file.length >> 1] = (flipped[file.length >> 1] ?? 0) ^ 0x10;
     await expect(decodeImpostorAsync(flipped)).rejects.toThrow(/Invalid impostor file: corrupt/);
@@ -57,7 +57,7 @@ describe("impostor codec", () => {
   it("lights a decoded impostor as its bake, compressed normals included", { timeout: GPU_TIMEOUT }, async () => {
     const source = new Mesh(new IcosahedronGeometry(1, 3), new MeshStandardMaterial({ color: 0xc08060, roughness: 0.4 }));
     const baked = await bakeImpostor(source, bakeRenderer, { frames: 8, resolution: 64 });
-    const decoded = await decodeImpostorAsync(await encodeImpostorAsync(baked));
+    const decoded = await decodeImpostorAsync(await encodeImpostorAsync(baked, bakeRenderer, await adapterFormat()));
     const camera = new PerspectiveCamera(35, 1, 0.1, 50);
     camera.position.set(2, 1.5, 4);
     camera.lookAt(0, 0, 0);
@@ -82,7 +82,7 @@ describe("impostor codec", () => {
       for (let c = 0; c < 3; c++) sum += Math.abs((a[i + c] ?? 0) - (b[i + c] ?? 0));
     }
     expect(covered).toBeGreaterThan(200);
-    // UASTC holds texels within a few levels; a wrong colour space or normal decode moves them by tens.
+    // Blocks hold texels within a few levels; a wrong colour space or normal decode moves them by tens.
     expect(sum / covered / 3).toBeLessThan(3);
   });
 });

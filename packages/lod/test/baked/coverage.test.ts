@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { preserveCoverage } from "../../src/baked/coverage.js";
-import type { Mip } from "../../src/source/sampler.js";
+import type { Mip } from "../../src/baked/mips.js";
 
 function mip(alphas: number[]): Mip {
   return { data: Uint8ClampedArray.from(alphas.flatMap((alpha) => [255, 255, 255, alpha])), width: alphas.length, height: 1 };

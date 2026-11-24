@@ -1,9 +1,7 @@
 import {
   Box3,
-  BoxGeometry,
   BufferAttribute,
   BufferGeometry,
-  CompressedTexture,
   DataTexture,
   Group,
   InstancedMesh,
@@ -12,11 +10,9 @@ import {
   MeshStandardMaterial,
   RGBAFormat,
   SphereGeometry,
-  Vector3,
   type Object3D,
 } from "three";
 import { describe, expect, it, vi } from "vitest";
-import { boundingBox } from "../../src/source/detail.js";
 import type { Impostor } from "../../src/impostor/impostor.js";
 import { ImpostorMesh } from "../../src/impostor/mesh/index.js";
 import { Lod } from "../../src/lod.js";
@@ -29,12 +25,8 @@ const triangles = (geometry: BufferGeometry) => (geometry.index?.count ?? 0) / 3
 const meshes = (root: Object3D) => root.children.filter(isMesh);
 const sphere = (material = new MeshStandardMaterial()) => new Mesh(new SphereGeometry(1, 64, 32), material);
 
-/** How far `copy` is from `source`, in `source`'s units, read back from the default maxPixels it gets in a Lod. */
-const deviation = (source: Object3D, copy: Object3D) =>
-  boundingBox(source).getSize(new Vector3()).length() / must(new Lod([{ object: source.clone() }, { object: copy }]).levels[1]).maxPixels;
-
 describe("simplify", () => {
-  it("reduces triangles, shares the materials and geometry the source shares, and measures its deviation in the source's units", async () => {
+  it("reduces triangles and shares the materials and geometry the source shares", async () => {
     const geometry = new SphereGeometry(1, 64, 32);
     const material = new MeshStandardMaterial();
     const scaled = new Mesh(geometry, material);
@@ -46,9 +38,6 @@ describe("simplify", () => {
     expect(triangles(must(a))).toBeLessThan(triangles(geometry) * 0.15);
     expect(triangles(must(a))).toBeGreaterThan(0);
     expect(meshes(copy).every((mesh) => mesh.material === material)).toBe(true);
-    // The scaled copy, most of the area, moved three times as far.
-    const single = new Mesh(geometry, material);
-    expect(deviation(source, copy) / (3 * deviation(single, await simplify(single, { ratio: 0.1 })))).toBeCloseTo(1, 1);
     await expect(simplify(source, { ratio: 0 })).rejects.toThrow(/ratio/);
   });
 
@@ -135,12 +124,5 @@ describe("simplify", () => {
     // A level must stay inside its source's bounds, though the cards at the edge grow too.
     const bounds = new Box3().setFromObject(source).expandByScalar(1e-6);
     for (const level of [copy, await simplify(source, { ratio: 0.5 })]) expect(bounds.containsBox(new Box3().setFromObject(level))).toBe(true);
-    expect(deviation(source, copy)).toBeGreaterThan(0);
-  });
-
-  it("measures a source whose cut-out textures the CPU cannot read, as opaque", async () => {
-    const leaves = new MeshStandardMaterial({ map: new CompressedTexture([], 4, 4), alphaTest: 0.5 });
-    const copy = await simplify(new Mesh(new BoxGeometry(1, 1, 1, 8, 8, 8), leaves), { ratio: 0.5 });
-    expect(isMesh(copy)).toBe(true);
   });
 });
