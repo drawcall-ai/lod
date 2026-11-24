@@ -48,8 +48,8 @@ async function plant(): Promise<Lod> {
       plants.loadAsync({
         url: "./source.glts?variant=0",
         levels: [
-          { type: "impostor", layout: "hemi", maxPixels: 1000, resolution: 256, frames: 8, draw: { parallax: 0 } },
-          { type: "impostor", layout: "hemi", maxPixels: 350, resolution: 64, frames: 8, draw: { parallax: 0 } },
+          { type: "impostor", layout: "hemi", maxPixels: 1000, resolution: 256, frames: 8, draw: { depth: "card", parallax: 0 } },
+          { type: "impostor", layout: "hemi", maxPixels: 350, resolution: 64, frames: 8, draw: { depth: "card", parallax: 0 } },
           { type: "empty", maxPixels: 215 },
         ],
       }),
@@ -57,8 +57,8 @@ async function plant(): Promise<Lod> {
       plants.loadAsync({
         url: "./source.glts?variant=1",
         levels: [
-          { type: "impostor", layout: "hemi", maxPixels: 1000, resolution: 256, frames: 8, draw: { parallax: 0 } },
-          { type: "impostor", layout: "hemi", maxPixels: 350, resolution: 64, frames: 8, draw: { parallax: 0 } },
+          { type: "impostor", layout: "hemi", maxPixels: 1000, resolution: 256, frames: 8, draw: { depth: "card", parallax: 0 } },
+          { type: "impostor", layout: "hemi", maxPixels: 350, resolution: 64, frames: 8, draw: { depth: "card", parallax: 0 } },
           { type: "empty", maxPixels: 215 },
         ],
       }),
@@ -66,8 +66,8 @@ async function plant(): Promise<Lod> {
       plants.loadAsync({
         url: "./source.glts?variant=2",
         levels: [
-          { type: "impostor", layout: "hemi", maxPixels: 1000, resolution: 256, frames: 8, draw: { parallax: 0 } },
-          { type: "impostor", layout: "hemi", maxPixels: 350, resolution: 64, frames: 8, draw: { parallax: 0 } },
+          { type: "impostor", layout: "hemi", maxPixels: 1000, resolution: 256, frames: 8, draw: { depth: "card", parallax: 0 } },
+          { type: "impostor", layout: "hemi", maxPixels: 350, resolution: 64, frames: 8, draw: { depth: "card", parallax: 0 } },
           { type: "empty", maxPixels: 215 },
         ],
       }),
@@ -75,8 +75,8 @@ async function plant(): Promise<Lod> {
       plants.loadAsync({
         url: "./source.glts?variant=3",
         levels: [
-          { type: "impostor", layout: "hemi", maxPixels: 1000, resolution: 256, frames: 8, draw: { parallax: 0 } },
-          { type: "impostor", layout: "hemi", maxPixels: 350, resolution: 64, frames: 8, draw: { parallax: 0 } },
+          { type: "impostor", layout: "hemi", maxPixels: 1000, resolution: 256, frames: 8, draw: { depth: "card", parallax: 0 } },
+          { type: "impostor", layout: "hemi", maxPixels: 350, resolution: 64, frames: 8, draw: { depth: "card", parallax: 0 } },
           { type: "empty", maxPixels: 215 },
         ],
       }),

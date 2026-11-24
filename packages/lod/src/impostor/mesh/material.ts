@@ -18,6 +18,7 @@ import { isImpostorMesh, isShadowPass } from "../../three.js";
 import { buildKey, isNodeOf } from "../../tsl.js";
 import { boundingRadius, boxCentre, boxExtent, type Impostor } from "../impostor.js";
 import { buildCard, card, type CardInputs } from "./card.js";
+import type { ImpostorShading } from "./index.js";
 import { buildSurface, cosine, type Lighting, type Surface, type SurfaceInputs } from "./surface.js";
 import { impostorTextures } from "./textures.js";
 
@@ -30,14 +31,6 @@ function instancesOf(object: Object3D): { matrix: Node<"mat4">; color: Node<"vec
   const matrix = instanceMatrixOf(object);
   if (!matrix || !isImpostorMesh(object)) throw new Error(`ImpostorMesh: "${object.name}" is drawn with an impostor's material but is no ImpostorMesh`);
   return { matrix, color: instanceColor };
-}
-
-/** How an ImpostorMesh draws: see `ImpostorMeshOptions`. */
-interface ImpostorShading {
-  cutoff: number;
-  parallax: number;
-  tolerance: number;
-  mipBias: number;
 }
 
 /**
@@ -131,6 +124,19 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
     this.metalnessNode = Fn((builder) => this.lit(builder).metalness)();
     this.aoNode = Fn((builder) => this.lit(builder).occlusion)();
     if (layer("emissive")) this.emissiveNode = Fn((builder) => this.lit(builder).emissive ?? vec3(0))();
+  }
+
+  override setupDepth(builder: NodeBuilder): void {
+    if (this.shading.depth === "reconstructed") return super.setupDepth(builder);
+    // Three copies depthNode to its shadow material. For the camera alone, let Three choose its ordinary mesh depth
+    // (including a host-supplied MRT depth or logarithmic depth). setupDepth builds the node stack synchronously.
+    const surface = this.depthNode;
+    this.depthNode = null;
+    try {
+      super.setupDepth(builder);
+    } finally {
+      this.depthNode = surface;
+    }
   }
 
   override setup(builder: NodeBuilder): void {

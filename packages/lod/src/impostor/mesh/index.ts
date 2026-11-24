@@ -20,6 +20,8 @@ import { ImpostorMaterial } from "./material.js";
 export interface ImpostorMeshOptions {
   /** coverage below which a pixel is empty, in (0, 1); default 0.5 */
   alphaTest?: number;
+  /** Camera depth for covered samples. Defaults to the reconstructed surface. Shadow maps use the reconstructed surface in either mode. */
+  depth?: "reconstructed" | "card";
   /** depth-parallax refinements per frame before blending (0 = off); default 2 */
   parallax?: number;
   /**
@@ -36,13 +38,16 @@ export interface ImpostorMeshOptions {
 
 /** The options with defaults, validated. */
 function shadingOf(options: ImpostorMeshOptions) {
-  const { alphaTest = 0.5, parallax = 2, tolerance = 0.03, mipBias = -0.5 } = options;
+  const { alphaTest = 0.5, depth = "reconstructed", parallax = 2, tolerance = 0.03, mipBias = -0.5 } = options;
   if (!(alphaTest > 0 && alphaTest < 1)) throw new Error(`ImpostorMesh: alphaTest must be in (0, 1), got ${alphaTest}`);
+  if (depth !== "reconstructed" && depth !== "card") throw new Error(`ImpostorMesh: unknown depth mode ${depth}`);
   if (!Number.isInteger(parallax) || parallax < 0) throw new Error(`ImpostorMesh: parallax must be an integer >= 0, got ${parallax}`);
   if (!(tolerance > 0)) throw new Error(`ImpostorMesh: tolerance must be > 0, got ${tolerance}`);
   if (!Number.isFinite(mipBias)) throw new Error(`ImpostorMesh: mipBias must be a number, got ${mipBias}`);
-  return { cutoff: alphaTest, parallax, tolerance, mipBias };
+  return { cutoff: alphaTest, depth, parallax, tolerance, mipBias };
 }
+
+export type ImpostorShading = ReturnType<typeof shadingOf>;
 
 const scratch = new Matrix4();
 const box = new Box3();

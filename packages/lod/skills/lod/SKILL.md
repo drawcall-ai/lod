@@ -186,6 +186,8 @@ Group nearby copies into spatial regions. Broad batches can lose useful culling,
 
 Avoid custom shadow nodes on lights that LOD objects should cast into. When shadow casting dominates, turn `castShadow` off in `onLevel` on the levels that matter least to the shadow, such as small plants.
 
-Judge impostors by covered screen area and overlap as well as triangle count. Compare individual cards with baked patches for dense cover, and inspect parallax and mip quality during transitions.
+Choose camera depth per impostor level. Keep the default `"reconstructed"` where another visible surface can pass between the card and the object it depicts, such as a fence crossing a trunk. Try `draw: { depth: "card" }` for layers of similar foliage where individual overlaps are hard to distinguish. It lets the GPU reject hidden fragments using the card plane. Check the nearest view of that level in motion, especially where it crosses distinct objects. Both modes test and write depth on covered samples and reconstruct shadow-map depth. For a separately sorted translucent effect, keep depth testing against the scene and disable depth writes on its material. Disabling the test itself makes the effect visible through foreground geometry. `parallax` controls atlas sampling independently.
+
+Judge the cost by covered screen area and overlap. Compare dense cards with baked patches, and check parallax and mip quality at the transition.
 
 Compare cold startup, warm startup and first traversal under the same camera movement, viewport, shadows, wind and thresholds. Leave expensive diagnostic overlays out of measurements. A warm repeat does not reveal first-use work, and fewer draws can still lose to worse culling, shading or memory costs.
