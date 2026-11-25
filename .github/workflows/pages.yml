@@ -1,0 +1,74 @@
+name: Pages
+
+# Builds the city example for https://drawcall-ai.github.io/lod/ and deploys it from main; pull requests that may
+# change the site only build it.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - .github/workflows/pages.yml
+      - examples/city/**
+      - packages/**
+      - pnpm-lock.yaml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The cache plugin bakes the levels in Node during the build, here on Mesa's software Vulkan.
+      - name: Install software GPU
+        run: sudo apt-get install -y mesa-vulkan-drivers
+      - run: pnpm --filter @drawcall/lod build
+      - name: Fetch the example's assets
+        run: pnpm --filter @drawcall/lod-example-city assets
+      # The levels of the last run: the build checks each entry's inputs and bakes only what changed.
+      - uses: actions/cache/restore@v4
+        with:
+          path: examples/city/public/_cache
+          key: city-cache-${{ github.run_id }}
+          restore-keys: city-cache-
+      - name: Build the example
+        timeout-minutes: 300
+        run: pnpm --filter @drawcall/lod-example-city build --base /lod/
+      # Saved after a timed-out build too, so the next run continues from the levels baked so far.
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: examples/city/public/_cache
+          key: city-cache-${{ github.run_id }}
+      - name: Report the site's size
+        run: du -sh examples/city/dist
+      - uses: actions/upload-pages-artifact@v4
+        if: github.event_name != 'pull_request'
+        with:
+          path: examples/city/dist
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
