@@ -192,7 +192,7 @@ while (loading) {
 
 Loaded levels stay until their Lod is disposed, which nothing does for you: in a world larger than memory, dispose the Lods the camera has left far behind.
 
-## Choose levels for trees and grass
+## Choose levels for trees, crops and grass
 
 For a tree viewed both up close and across a forest, try source → simplified whole tree → directional whole-tree impostor. This works with a single tree model, including one with foliage and wood combined. Set the simplified level's `maxPixels` so the simplifier can remove triangles inside tessellated leaf planes while keeping their borders. Then raise the **first impostor's** `maxPixels` to try switching earlier. For textured cut-outs the simplifier keeps fewer leaf planes and enlarges the survivors to compensate. Lowering `ratio` further can preserve total leaf area while opening holes between oversized leaves. Baking onto that thinned mesh still leaves the holes.
 
@@ -201,6 +201,8 @@ Test the largest impostor from the side as the camera passes. Doubled branches o
 If the forks still need geometry where the leaves become expensive, an authored canopy (the leafy crown) is an ordinary mesh level. Keep the visible wood and bake nearby leaf clusters onto crossed, alpha-tested planes merged per foliage material. Compare against the whole-tree ladder first. Independent cluster selection is worth testing where many clusters on the same tree need different detail or can be culled individually. Repeating even one directional cluster impostor in a single draw still shades overlapping quads throughout the crown. A stand impostor can replace a distant group of trees when its layout preserves their spacing and gaps and it actually suppresses their individual draws. Check the distant approach where it takes over. An interior forest view can remain dominated by nearby trees.
 
 For grass, start with source blades → simplified blades while their roots, lean and depth are visible → empty once the ground carries their colour and coverage. If a distant tuft reads as a silhouette, compare an ordinary textured plane. A fixed upright plane vanishes edge-on. A billboard rotating around the vertical axis preserves its width at grazing angles. Two crossed upright planes cover more horizontal directions with fixed geometry, but show a flat root line up close and lose area from above. A horizontal plane has the opposite viewing range. Test at the lowest **and** highest camera elevations in use. Authored single or crossed planes fit a mesh level (`{ object: mesh }` when assembling levels directly).
+
+For rows of tall plants with gaps between their leaves, compare a `baked` middle mesh with a whole-plant impostor from inside the row. Many overlapping impostor quads can shade the same gaps even when all plants share a draw call. A low-poly mesh can skip that work. Compare its thinnest leaves and seed heads with the detailed source as the camera moves through the switch.
 
 ## Tune the complete scene
 
