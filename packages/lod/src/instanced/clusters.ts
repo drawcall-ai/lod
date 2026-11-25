@@ -135,17 +135,8 @@ export class ClusterView {
       const heights = heightsIn(box, low, high * grow, shape, camera);
       this.heights.push(heights);
       if (box && !frustum.intersectsBox(box)) return;
-      // A one-instance range with a CPU matrix has a known height even when its cluster box is loose.
-      if (size === 1 && measured && grow === 1) {
-        single.fromArray(lod.instanceMatrix.array, start * 16);
-        const scale = single.getMaxScaleOnAxis();
-        // Bound roundoff in the GPU's matrix × centre and subtraction of its f32 eye, including at large world coordinates.
-        const roundoff =
-          2 ** -20 * (centre.setFromMatrixPosition(single).manhattanLength() + scale * shape.source.center.manhattanLength() + camera.eye.manhattanLength());
-        centre.copy(shape.source.center).applyMatrix4(single);
-        centreBox.set(centre, centre).expandByScalar(roundoff);
-        this.seen.push(heightsIn(centreBox, scale, scale, shape, camera));
-      } else this.seen.push(heights);
+      // A one-instance range with a CPU matrix has a known height, however loose its cluster's box.
+      this.seen.push(size === 1 && measured && grow === 1 ? instanceHeights(lod, start, shape, camera) : heights);
       this.ranges.push(start, size, liveCount?.index ?? NO_LIVE_COUNT);
       if (liveCount) this.liveCounts = liveCount.attribute;
       this.instances += size;
@@ -178,6 +169,17 @@ function heightsIn(box: Box3 | null, low: number, high: number, { source }: Inst
   if (!box) return [0, Infinity];
   const near = Math.max(box.distanceToPoint(eye), 1e-6);
   return [(diameter * low) / farthest(box, eye), (diameter * high) / near];
+}
+
+/** The heights instance `start` of `lod`, read from its CPU matrix, can have as the GPU measures it. */
+function instanceHeights(lod: ClusterSource, start: number, shape: InstanceShape, camera: LocalCamera): [number, number] {
+  single.fromArray(lod.instanceMatrix.array, start * 16);
+  const scale = single.getMaxScaleOnAxis();
+  // Bound the roundoff of the GPU's f32 matrix × centre and of subtracting its f32 eye, at large world coordinates too.
+  const roundoff =
+    2 ** -20 * (centre.setFromMatrixPosition(single).manhattanLength() + scale * shape.source.center.manhattanLength() + camera.eye.manhattanLength());
+  centre.copy(shape.source.center).applyMatrix4(single);
+  return heightsIn(centreBox.set(centre, centre).expandByScalar(roundoff), scale, scale, shape, camera);
 }
 
 /** The distance from `point` to the farthest point of `box`. */
