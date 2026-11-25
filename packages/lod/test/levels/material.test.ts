@@ -1,5 +1,5 @@
 import { Mesh, MeshBasicNodeMaterial, MeshStandardMaterial, OrthographicCamera, PlaneGeometry, Scene } from "three/webgpu";
-import { uniform } from "three/tsl";
+import { uniform, vec3 } from "three/tsl";
 import { describe, expect, it } from "vitest";
 import { levelMaterial, originalOf } from "../../src/levels/material.js";
 import { GPU_TIMEOUT, render } from "../renderer.js";
@@ -17,6 +17,25 @@ describe("levelMaterial", { timeout: GPU_TIMEOUT }, () => {
     expect(originalOf(swaying)).toBe(material);
     expect(copy.uuid).not.toBe(material.uuid);
     expect(Reflect.get(copy, "roughness")).toBe(0.4);
+  });
+
+  it("shares default shader nodes across originals while keeping custom camera and shadow positions", () => {
+    const a = new MeshBasicNodeMaterial();
+    const b = new MeshBasicNodeMaterial();
+    const still = levelMaterial(a);
+    const windy = levelMaterial(b, true);
+    expect(still.maskNode).toBe(windy.maskNode);
+    expect(still.outputNode).toBe(windy.outputNode);
+    expect(still.positionNode).toBe(levelMaterial(b).positionNode);
+    expect(still.castShadowPositionNode).toBe(levelMaterial(b).castShadowPositionNode);
+    expect(windy.positionNode).toBe(levelMaterial(a, true).positionNode);
+    expect(still.positionNode).not.toBe(windy.positionNode);
+    const custom = new MeshBasicNodeMaterial({ castShadowPositionNode: vec3(1) });
+    expect(levelMaterial(custom).positionNode).toBe(still.positionNode);
+    expect(levelMaterial(custom).castShadowPositionNode).not.toBe(still.castShadowPositionNode);
+    const displaced = new MeshBasicNodeMaterial({ positionNode: vec3(2) });
+    expect(levelMaterial(displaced).castShadowPositionNode).not.toBe(still.castShadowPositionNode);
+    for (const material of [a, b, custom, displaced]) material.dispose();
   });
 
   it("preserves a node material's own mask and alpha test, and is freed with the original", async () => {

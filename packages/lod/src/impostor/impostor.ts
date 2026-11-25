@@ -85,7 +85,7 @@ export const PAD = 0.06;
 
 /**
  * `texelPixels` of any impostor baked at `resolution`, at least: a frame fitted to the source's bounding sphere, the
- * widest it can be. The default `maxPixels` of an impostor level a loader describes before building it.
+ * widest it can be. The default `maxPixels` of an impostor level a loader describes before its bake.
  */
 export const framePixels = (resolution = 128): number => 2 ** Math.floor(Math.log2(resolution)) / (2 * (1 + PAD));
 
@@ -93,9 +93,7 @@ export const framePixels = (resolution = 128): number => 2 ** Math.floor(Math.lo
  * On-screen height of the object at which two atlas texels span one pixel: the default
  * `LodLevel.maxPixels` of an impostor. An impostor blends filtered reads of several
  * views, so it keeps the source's colour detail only down to about two texels per pixel.
- * A CachedLodLoader describes its levels before baking them, so its impostor levels default to
- * `framePixels` instead: this height for a frame fitted to the bounding sphere, up to about
- * 1.5 times lower than for the frame the bake fits.
+ * The default `maxPixels` of an impostor level a loader describes after its bake (see `LodLevelRequest`).
  */
 export function texelPixels(impostor: Pick<Impostor, "size" | "frames" | "box" | "halfSize">): number {
   const cell = impostor.size / impostor.frames;

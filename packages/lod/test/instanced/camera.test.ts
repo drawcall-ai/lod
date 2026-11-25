@@ -1,4 +1,4 @@
-import { Group, Matrix4, OrthographicCamera, PerspectiveCamera, Scene } from "three/webgpu";
+import { Box3, Vector3, Group, Matrix4, OrthographicCamera, PerspectiveCamera, Scene } from "three/webgpu";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Lod } from "../../src/lod.js";
 import { GPU_TIMEOUT, render, renderer } from "../renderer.js";
@@ -72,6 +72,33 @@ describe("a Lod's cameras", { timeout: GPU_TIMEOUT }, () => {
         await render(scene, camera, SIZE);
         expect(await shown(), `${pixels} px`).toEqual(visible);
       }
+    } finally {
+      lod.dispose();
+    }
+  });
+
+  it("omits empty level draws for a single CPU instance in a loose cluster", async () => {
+    const { lod, camera } = boxesAtHeights([25]);
+    try {
+      lod.clusters = [{ start: 0, count: 1, boundingBox: new Box3(new Vector3(-100, -100, -100), new Vector3(100, 100, 100)) }];
+      await renderSorted(lod, camera);
+      expect(drawnMeshes(lod).map((mesh) => mesh.visible)).toEqual([false, true, false]);
+    } finally {
+      lod.dispose();
+    }
+  });
+
+  it("keeps the level selected by f32 coordinates for a distant instance near its camera", async () => {
+    const { lod, camera } = boxesAtHeights([52]);
+    const far = 1e8;
+    lod.setMatrixAt(0, new Matrix4().makeTranslation(far, far, -distanceAt(52)));
+    lod.instanceMatrix.needsUpdate = true;
+    lod.clusters = [{ start: 0, count: 1, boundingBox: new Box3(new Vector3(far - 20, far - 20, -20), new Vector3(far + 20, far + 20, 0)) }];
+    camera.position.set(far + 3.9, far + 3.9, 0); // Both offsets round away in the GPU eye uniform.
+    camera.lookAt(far, far, -distanceAt(52));
+    try {
+      await renderSorted(lod, camera);
+      expect(drawnMeshes(lod)[0]?.visible).toBe(true);
     } finally {
       lod.dispose();
     }

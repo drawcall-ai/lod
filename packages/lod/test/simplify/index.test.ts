@@ -8,6 +8,7 @@ import {
   Matrix4,
   Mesh,
   MeshStandardMaterial,
+  PlaneGeometry,
   RGBAFormat,
   SphereGeometry,
   type Object3D,
@@ -75,6 +76,15 @@ describe("simplify", () => {
       clone.mockRestore();
       lod.dispose();
     }
+  });
+
+  it("removes the interior triangles of a remaining foliage card, keeping its outline", async () => {
+    const material = new MeshStandardMaterial({ map: new DataTexture(), alphaTest: 0.5 });
+    const source = new Mesh(new PlaneGeometry(2, 2, 12, 12), material);
+    const simplified = await simplify(source, { ratio: 0.5 });
+    if (!isMesh(simplified)) throw new Error("expected a mesh");
+    expect(triangles(simplified.geometry)).toBeLessThan(triangles(source.geometry) / 2);
+    expect(new Box3().setFromObject(simplified)).toEqual(new Box3().setFromObject(source));
   });
 
   it("thins alpha-tested cards whole, spread evenly, preserving their coverage", async () => {

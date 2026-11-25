@@ -22,18 +22,18 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
     loader.loadAsync({
       url: "./pine_sapling_small_a.glb",
       levels: [
-        { type: "impostor", layout: "hemi", maxPixels: 300 },
-        { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
-        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 16, frames: 8 },
+        { type: "impostor", layout: "hemi", maxPixels: 300, draw: { depth: "card", parallax: 0 } },
+        { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8, draw: { depth: "card", parallax: 0 } },
+        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 16, frames: 8, draw: { depth: "card", parallax: 0 } },
       ],
     }),
   b: () =>
     loader.loadAsync({
       url: "./pine_sapling_small_b.glb",
       levels: [
-        { type: "impostor", layout: "hemi", maxPixels: 300 },
-        { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
-        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 16, frames: 8 },
+        { type: "impostor", layout: "hemi", maxPixels: 300, draw: { depth: "card", parallax: 0 } },
+        { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8, draw: { depth: "card", parallax: 0 } },
+        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 16, frames: 8, draw: { depth: "card", parallax: 0 } },
       ],
     }),
 };

@@ -21,6 +21,8 @@ type Kind = Derived["type"];
 export interface Shape {
   box: Box3;
   matrix: Matrix4;
+  /** Screen heights inferred from baked impostors, in request order. */
+  texels?: number[];
 }
 
 export function shapeOf(source: Object3D): Shape {
@@ -33,12 +35,19 @@ export const encodeShape = (shape: Shape): Uint8Array => new TextEncoder().encod
 
 export const readShape = (bytes: Uint8Array): Shape => parseShape(object(JSON.parse(new TextDecoder().decode(bytes))));
 
-const shapeFields = ({ box, matrix }: Shape) => ({ box: [...box.min.toArray(), ...box.max.toArray()], placement: matrix.toArray() });
+const shapeFields = ({ box, matrix, texels }: Shape) => ({
+  ...(texels && { texels }),
+  box: [...box.min.toArray(), ...box.max.toArray()],
+  placement: matrix.toArray(),
+});
 
 function parseShape(meta: Record<string, unknown>): Shape {
   const box = new Box3().setFromArray(numbers(meta.box, 6));
   if (box.isEmpty()) fail("empty source box");
-  return { box, matrix: new Matrix4().fromArray(numbers(meta.placement, 16)) };
+  const texels = meta.texels;
+  if (texels !== undefined && (!Array.isArray(texels) || texels.some((n) => typeof n !== "number" || !Number.isFinite(n) || n <= 0)))
+    fail("invalid impostor heights");
+  return { box, matrix: new Matrix4().fromArray(numbers(meta.placement, 16)), texels };
 }
 
 /** The bounds every drawable level declares, in the space of the Lod that holds it. */

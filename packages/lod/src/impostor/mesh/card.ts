@@ -21,7 +21,7 @@ import {
   vec4,
 } from "three/tsl";
 import { affine, column, isOrthographic } from "../../tsl.js";
-import type { ImpostorLayout } from "../impostor.js";
+import { PAD, type ImpostorLayout } from "../impostor.js";
 import { basisNode, encodeNode } from "../octahedral.js";
 
 // The impostor's card: a quad built in the vertex stage facing the camera (or the light,
@@ -36,8 +36,6 @@ export interface CardInputs {
   /** bounding box centre and half its edges, in the object's space */
   centre: Node<"vec3">;
   extent: Node<"vec3">;
-  /** bounding sphere radius: the depth channel's unit */
-  radius: Node<"float">;
   /** half the edge of every frame */
   halfSize: Node<"float">;
   /** frames per atlas side */
@@ -89,7 +87,7 @@ export type Card = typeof card;
  * stage builds the position: it writes the varyings `card` reads.
  */
 export function buildCard(inputs: CardInputs, instance: Node<"mat4">, deform: Node<"mat4"> | null): Node<"vec3"> {
-  const { layout, centre, extent, radius, halfSize, frames, placement } = inputs;
+  const { layout, centre, extent, halfSize, frames, placement } = inputs;
   const local = (deform ? instance.mul(deform) : instance).mul(placement).toVar();
   const model = modelWorldMatrix.mul(local).toVar();
   const toWorld = affine(model);
@@ -102,12 +100,13 @@ export function buildCard(inputs: CardInputs, instance: Node<"mat4">, deform: No
   const distance = length(toEye);
   const toCamera = select(ortho, normalize(toWorld.solve(back)), toEye.div(distance)).toVar();
   // Up close, perspective spreads the near side of the object past the ortho frame.
-  const grow = select(ortho, float(1), min(distance.div(max(distance.sub(radius), 1e-4)), 4));
+  const nearExtent = dot(toCamera.abs(), extent);
+  const grow = select(ortho, float(1), min(distance.div(max(distance.sub(nearExtent), 1e-4)), 4));
   const { tangent, bitangent } = basisNode(toCamera);
   // The card covers the box as seen from here, plus the frame's empty border (the bake's
   // PAD) for the filtered edge, and no more than the frame: every pixel of it runs the
   // whole surface, and a square frame is mostly empty for a tall plant.
-  const box = vec2(dot(tangent.abs(), extent), dot(bitangent.abs(), extent)).add(halfSize.mul(0.06));
+  const box = vec2(dot(tangent.abs(), extent), dot(bitangent.abs(), extent)).add(halfSize.mul(PAD));
   const size = min(box, vec2(halfSize, halfSize)).mul(grow.mul(2));
   const point = centre
     .add(tangent.mul(positionGeometry.x.mul(size.x)))

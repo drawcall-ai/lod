@@ -1,4 +1,13 @@
-import { Box3, Sphere, Vector3, type Frustum, type StorageBufferAttribute, type StorageInstancedBufferAttribute } from "three/webgpu";
+import {
+  Box3,
+  Matrix4,
+  type InstancedBufferAttribute,
+  Sphere,
+  Vector3,
+  type Frustum,
+  type StorageBufferAttribute,
+  type StorageInstancedBufferAttribute,
+} from "three/webgpu";
 import { at } from "../at.js";
 import { isBox3, isStorageBuffer, isStorageInstanced } from "../three.js";
 import type { LocalCamera } from "./camera.js";
@@ -52,6 +61,9 @@ interface Area {
 const area: Area = { start: 0, size: 0, box: null, low: 0, high: 0, liveCount: undefined };
 const grownBox = new Box3();
 const measuredScratch = new Box3();
+const single = new Matrix4();
+const centre = new Vector3();
+const centreBox = new Box3();
 const size3 = new Vector3();
 
 /**
@@ -123,7 +135,8 @@ export class ClusterView {
       const heights = heightsIn(box, low, high * grow, shape, camera);
       this.heights.push(heights);
       if (box && !frustum.intersectsBox(box)) return;
-      this.seen.push(heights);
+      // A one-instance range with a CPU matrix has a known height, however loose its cluster's box.
+      this.seen.push(size === 1 && measured && grow === 1 ? instanceHeights(lod, start, shape, camera) : heights);
       this.ranges.push(start, size, liveCount?.index ?? NO_LIVE_COUNT);
       if (liveCount) this.liveCounts = liveCount.attribute;
       this.instances += size;
@@ -134,6 +147,7 @@ export class ClusterView {
 
 /** What clusters a Lod's instances: the InstancedMesh-shaped fields of a Lod. */
 export interface ClusterSource {
+  readonly instanceMatrix: InstancedBufferAttribute;
   readonly count: number;
   readonly boundingBox: Box3 | null;
   readonly clusters: readonly LodCluster[] | undefined;
@@ -155,6 +169,17 @@ function heightsIn(box: Box3 | null, low: number, high: number, { source }: Inst
   if (!box) return [0, Infinity];
   const near = Math.max(box.distanceToPoint(eye), 1e-6);
   return [(diameter * low) / farthest(box, eye), (diameter * high) / near];
+}
+
+/** The heights instance `start` of `lod`, read from its CPU matrix, can have as the GPU measures it. */
+function instanceHeights(lod: ClusterSource, start: number, shape: InstanceShape, camera: LocalCamera): [number, number] {
+  single.fromArray(lod.instanceMatrix.array, start * 16);
+  const scale = single.getMaxScaleOnAxis();
+  // Bound the roundoff of the GPU's f32 matrix × centre and of subtracting its f32 eye, at large world coordinates too.
+  const roundoff =
+    2 ** -20 * (centre.setFromMatrixPosition(single).manhattanLength() + scale * shape.source.center.manhattanLength() + camera.eye.manhattanLength());
+  centre.copy(shape.source.center).applyMatrix4(single);
+  return heightsIn(centreBox.set(centre, centre).expandByScalar(roundoff), scale, scale, shape, camera);
 }
 
 /** The distance from `point` to the farthest point of `box`. */
@@ -189,7 +214,8 @@ export function checkClusters(clusters: readonly LodCluster[], capacity: number,
     if (!Number.isInteger(start) || !Number.isInteger(count) || start < 0 || count < 0 || start + count > capacity)
       throw new RangeError(`Lod: cluster ${i}, ${count} instances from ${start}, passes the ${capacity} of its instanceMatrix`);
     if (!isBox3(boundingBox)) throw new TypeError(`Lod: cluster ${i} has no boundingBox`);
-    if (minScale !== undefined && !(minScale >= 0 && Number.isFinite(minScale))) throw new RangeError(`Lod: cluster ${i}'s minScale must be finite and >= 0, not ${minScale}`);
+    if (minScale !== undefined && !(minScale >= 0 && Number.isFinite(minScale)))
+      throw new RangeError(`Lod: cluster ${i}'s minScale must be finite and >= 0, not ${minScale}`);
     if (maxScale !== undefined && !(maxScale >= (minScale ?? 0) && Number.isFinite(maxScale)))
       throw new RangeError(`Lod: cluster ${i}'s maxScale must be finite and >= its minScale, not ${maxScale}`);
     if (liveCount) shared = checkLiveCount(liveCount, i, shared);

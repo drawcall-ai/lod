@@ -24,6 +24,7 @@ import { cosine } from "../../../src/impostor/mesh/surface.js";
 import { readBytes } from "../../../src/bake.js";
 import { GPU_TIMEOUT, bakeRenderer, render, renderer } from "../../renderer.js";
 import { lodOf } from "../../instances.js";
+import { must } from "../../must.js";
 
 function atlas(normalDepth = [128, 128, 255, 128]): Impostor {
   return {
@@ -133,13 +134,15 @@ it("glares in a low sun ahead only where a texel's normals agree", { timeout: GP
   expect(grass).toBeLessThan(flat / 2);
 });
 
-it.each([false, true])("occludes at its reconstructed surface (reversed depth: %s)", { timeout: GPU_TIMEOUT }, async (reversedDepthBuffer) => {
+it.each([false, true])("occludes at the chosen surface or card depth (reversed depth: %s)", { timeout: GPU_TIMEOUT }, async (reversedDepthBuffer) => {
   const drawing = new WebGPURenderer({ reversedDepthBuffer });
   await drawing.init();
   const target = new RenderTarget(64, 64);
   const source = new Mesh(new BoxGeometry(2, 2, 2), new MeshStandardMaterial({ color: 0xe04020 }));
   const impostor = new ImpostorMesh(await bakeImpostor(source, bakeRenderer, { frames: 4, resolution: 32 }));
   const instanced = lodOf([{ object: impostor }], 1);
+  const card = new ImpostorMesh(impostor.impostor, 1, { depth: "card" });
+  const instancedCard = lodOf([{ object: card }], 1);
   const wall = new Mesh(new PlaneGeometry(4, 4), new MeshStandardMaterial({ color: 0x2040e0 }));
   const camera = new PerspectiveCamera(40, 1, 0.1, 20);
   camera.position.z = 6;
@@ -159,17 +162,24 @@ it.each([false, true])("occludes at its reconstructed surface (reversed depth: %
   };
   try {
     // Its first render tells the Lod its renderer, and draws nothing of it.
-    drawing.render(new Scene().add(instanced), camera);
-    for (const z of [0.5, 1.5]) {
+    drawing.render(new Scene().add(instanced, instancedCard), camera);
+    for (const z of [-0.5, 0.5, 1.5]) {
       wall.position.z = z;
       const real = await redAtCentre(source);
       const proxy = await redAtCentre(impostor);
-      // A card at z=0 is hidden by both walls; the box's front at z=1 is hidden only by the second.
       expect(real).toBe(z < 1);
       expect(proxy).toBe(z < 1);
       expect(await redAtCentre(instanced)).toBe(z < 1);
+      expect(await redAtCentre(card)).toBe(z < 0);
+      expect(await redAtCentre(instancedCard)).toBe(z < 0);
     }
+    // Writing the rasterized depth explicitly gives the same image but costs early rejection on overlapping cards.
+    const { fragmentShader } = await drawing.debug.getShaderAsync(new Scene().add(card), camera, card);
+    expect(fragmentShader).toBeTypeOf("string");
+    expect(fragmentShader).not.toContain("frag_depth");
   } finally {
+    instancedCard.dispose();
+    card.dispose();
     instanced.dispose();
     impostor.dispose();
     source.geometry.dispose();
@@ -178,5 +188,42 @@ it.each([false, true])("occludes at its reconstructed surface (reversed depth: %
     wall.material.dispose();
     target.dispose();
     drawing.dispose();
+  }
+});
+
+it("casts at reconstructed depth when the camera draws card depth", { timeout: GPU_TIMEOUT }, async () => {
+  const source = new Mesh(new BoxGeometry(2, 2, 2), new MeshStandardMaterial());
+  const card = new ImpostorMesh(await bakeImpostor(source, bakeRenderer, { frames: 4, resolution: 32 }), 1, { depth: "card" });
+  card.castShadow = true;
+  card.layers.set(1);
+  const wall = new Mesh(new PlaneGeometry(4, 4), new MeshStandardMaterial());
+  wall.receiveShadow = true;
+  const sun = new DirectionalLight(0xffffff, 3);
+  sun.position.set(0, 0, 6);
+  sun.castShadow = true;
+  sun.shadow.camera.layers.enable(1);
+  const camera = new PerspectiveCamera(40, 1, 0.1, 20);
+  camera.position.z = 6;
+  const scene = new Scene().add(card, wall, sun, sun.target);
+  const shadows = renderer.shadowMap.enabled;
+  renderer.shadowMap.enabled = true;
+  try {
+    // The receiver at 0.5 is in front of the card plane but behind the box face at 1.
+    const brightness = async (z: number) => {
+      wall.position.z = z;
+      const pixels = await render(scene, camera, 64);
+      return must(pixels[(32 * 64 + 32) * 4]);
+    };
+    const lit = await brightness(1.5);
+    expect(lit).toBeGreaterThan(100);
+    expect(await brightness(0.5)).toBeLessThan(lit * 0.5);
+  } finally {
+    renderer.shadowMap.enabled = shadows;
+    sun.shadow.dispose();
+    card.dispose();
+    wall.geometry.dispose();
+    wall.material.dispose();
+    source.geometry.dispose();
+    source.material.dispose();
   }
 });

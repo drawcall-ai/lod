@@ -4,7 +4,8 @@ import type { CacheEntry, CacheEntryOptions, Input } from "@drawcall/cache";
 import { at } from "../at.js";
 import { createBakeRenderer } from "../bake.js";
 import { disposeRecursive } from "../dispose.js";
-import { framePixels } from "../impostor/impostor.js";
+import { decodeImpostorAsync } from "../impostor/codec.js";
+import { framePixels, texelPixels } from "../impostor/impostor.js";
 import { BLOCK_FORMATS, adapterFormat, type BlockFormat } from "../blocks/index.js";
 import { resolveThresholds, type LodLevel } from "../levels/index.js";
 import { meshoptDecoder } from "../meshopt.js";
@@ -12,7 +13,7 @@ import { isMesh, isObject3D, rejectSkinned } from "../three.js";
 import { LodLoadContext } from "./context.js";
 import { entryOf } from "./entry.js";
 import { decodeLevel, encodeLevel, encodeShape, placedBox, readLevel, readShape, shapeOf, type Shape } from "./level.js";
-import { derived, normalize, type Ladder, type LodRequest } from "./request.js";
+import { derived, inferredImpostor, normalize, type Ladder, type LodRequest, type LodSource } from "./request.js";
 import { assetPath, publicPath, sourceRelativeURL } from "./url.js";
 
 // The loader: it describes a ladder of levels from a source, builds each level when first loaded and stores it.
@@ -78,10 +79,14 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
    */
   override async loadAsync(request: LodRequest): Promise<LodLevel[]> {
     const ladder = normalize(request, this.path, (url) => this.publicPath(this.manager.resolveURL(url)));
+    return this.loadLadder(ladder);
+  }
+
+  protected async loadLadder(ladder: Ladder): Promise<LodLevel[]> {
     const { url, levels: requests } = ladder;
     this.ladders++;
     const context = new LodLoadContext(
-      () => this.loadAsset(url),
+      () => this.source(ladder),
       this.options.onLevel,
       () => {
         if (--this.ladders === 0) void this.freeRenderer();
@@ -90,9 +95,7 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
     this.manager.itemStart(url);
     try {
       const last = requests.length;
-      if (this.buildsAll) {
-        for (const [position, level] of requests.entries()) if (level.type !== "empty") await this.store(ladder, position + 1, () => context.source());
-      } else if (last > 0 && requests[last - 1]?.type !== "empty")
+      if (!this.buildsAll && last > 0 && requests[last - 1]?.type !== "empty")
         // A ladder that ends drawn draws its last level at any distance, and nothing before that level loads, so a
         // browser reads it alongside the ladder's; a ladder ending empty may never draw. A failed read misses, and its
         // load reads again.
@@ -102,7 +105,7 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
             .then((format) => entryOf(ladder, last, this.options, format).load())
             .catch(() => undefined),
         );
-      const shape = await this.shape(ladder, async () => shapeOf(await context.source()));
+      const shape = await this.describe(ladder, () => context.source());
       const box = placedBox(shape);
       if (box.isEmpty()) throw new Error("CachedLodLoader: the source has no visible geometry to measure");
       // Building every level, the loader frees what it loaded with as loadAsync resolves (see the Node loader): no
@@ -111,15 +114,17 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
         const spare = context.take();
         if (spare) disposeRecursive(spare);
       }
-      const thresholds = resolveThresholds(
-        [{}, ...requests.map((level) => ({ maxPixels: level.maxPixels, texels: level.type === "impostor" ? framePixels(level.resolution) : undefined }))],
-        "CachedLodLoader",
-      );
+      let fit = 0;
+      const defaults = requests.map((level) => {
+        if (!inferredImpostor(level)) return { maxPixels: level.maxPixels };
+        return { texels: shape.texels ? at(shape.texels, fit++) : framePixels(level.resolution) };
+      });
+      const thresholds = resolveThresholds([{}, ...defaults], "CachedLodLoader");
       const { hold } = context;
       // Every load runs once however often it is asked for: every Lod made from the levels and the levels reading the
       // source's materials share one object. The source's starts synchronously, so it takes the spare before a coarser
       // level demanded in the same tick.
-      const loadSource = once(async () => context.arrive(context.take() ?? (await this.loadAsset(url)), 0, { materials: true }));
+      const loadSource = once(async () => context.arrive(context.take() ?? (await this.source(ladder)), 0, { materials: true }));
       const materials = async (): Promise<Material[]> => {
         const { object } = at(levels, 0);
         return materialsOf(object ?? (await loadSource()));
@@ -151,14 +156,27 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
     }
   }
 
-  /** The stored shape of the ladder's source, else what `measure` finds, saved. */
-  private async shape(ladder: Ladder, measure: () => Promise<Shape>): Promise<Shape> {
+  /**
+   * The stored shape of the ladder, else what its source measures, saved. Building every level first, it also holds the
+   * `texelPixels` of the impostors without `maxPixels`, so a browser describes them without reading their atlases.
+   */
+  private async describe(ladder: Ladder, source: () => Promise<Object3D>): Promise<Shape> {
     const entry = entryOf(ladder, "shape", this.options);
     const stored = await entry.load();
+    const texels: number[] = [];
+    if (this.buildsAll) {
+      for (const [position, level] of ladder.levels.entries()) {
+        if (level.type === "empty") continue;
+        const bytes = await this.store(ladder, position + 1, source);
+        if (!stored && inferredImpostor(level)) texels.push(texelPixels(await decodeImpostorAsync(readLevel(bytes).payload)));
+      }
+    }
     if (stored) return readShape(stored);
-    const bytes = encodeShape(await measure());
-    await entry.save(bytes, { dependencies: this.inputs() });
-    return readShape(bytes);
+    // Loading the source also records the inputs of a new shape when every derived level hit the cache.
+    const shape = shapeOf(await source());
+    if (texels.length) shape.texels = texels;
+    await entry.save(encodeShape(shape), { dependencies: this.inputs() });
+    return shape;
   }
 
   /** The block format of derived level `index`'s maps that this page draws: none for a simplified level, which has none. */
@@ -175,12 +193,12 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
    * Store derived level `index` in every block format a page may draw, built from `source` unless each is stored: what
    * Node does for every level, as it builds them for every page.
    */
-  private async store(ladder: Ladder, index: number, source: () => Promise<Object3D>): Promise<void> {
+  private async store(ladder: Ladder, index: number, source: () => Promise<Object3D>): Promise<Uint8Array> {
     const formats = derived(ladder.levels, index).type === "simplify" ? [null] : BLOCK_FORMATS;
     const entries = formats.map((format) => ({ format, entry: entryOf(ladder, index, this.options, format) }));
     const stored = await Promise.all(entries.map(({ entry }) => entry.load()));
-    if (stored.every((bytes) => bytes !== undefined)) return;
-    await this.build(ladder, index, await source(), entries);
+    if (stored.every((bytes) => bytes !== undefined)) return at(stored, 0);
+    return at(await this.build(ladder, index, await source(), entries), 0);
   }
 
   /**
@@ -214,7 +232,7 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
       if (spare) disposeRecursive(spare);
       return bytes;
     }
-    const source = spare ?? (await this.loadAsset(ladder.url));
+    const source = spare ?? (await this.source(ladder));
     try {
       return at(await this.build(ladder, index, source, [{ format, entry }]), 0);
     } finally {
@@ -290,6 +308,16 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
     // A renderer that failed to initialise failed the bake that made it.
     const made = await renderer?.catch(() => undefined);
     if (made) this.releaseBakeRenderer(made);
+  }
+
+  private source(ladder: Ladder): Promise<Object3D> {
+    return ladder.source ? this.makeSource(ladder.source) : this.loadAsset(ladder.url);
+  }
+
+  protected async makeSource(make: LodSource): Promise<Object3D> {
+    const source = await make({ loader: this, manager: this.manager });
+    if (!isObject3D(source)) throw new TypeError("CachedLodLoader: source must return an Object3D");
+    return source;
   }
 
   protected async loadAsset(url: string): Promise<Object3D> {

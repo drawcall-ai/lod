@@ -7,6 +7,12 @@ import { cardMaterials, decimateCards } from "./cards.js";
 
 // The simplified level: a copy of a source with its geometry decimated, drawn with the source's materials.
 
+/**
+ * The error, relative to a mesh's size, to which the inside of the foliage cards that remain simplifies: about a pixel
+ * for a simplified level drawn up to a thousand pixels tall.
+ */
+const CARD_ERROR = 1e-3;
+
 export interface SimplifyOptions {
   /** share of each mesh's triangles that remains, in (0, 1]; default 0.5 */
   ratio?: number;
@@ -25,7 +31,9 @@ export interface SimplifyOptions {
  * lets seams collapse, and as a last resort ignores topology (meshopt's sloppy mode).
  * A group drawn with an alpha-tested texture (foliage cards) is decimated card by card
  * instead: about `ratio` of its cards remain, whole, spread evenly and enlarged to cover
- * what all covered (see `decimateCards`).
+ * what all covered (see `decimateCards`), and the tessellation inside them simplifies to
+ * `CARD_ERROR` below a `ratio` of 1, their outlines kept, unless the geometry has attributes beyond position,
+ * normal and uv.
  */
 export async function simplify(object: Object3D, { ratio = 0.5 }: SimplifyOptions = {}): Promise<Object3D> {
   if (!(ratio > 0 && ratio <= 1)) throw new Error(`simplify: ratio must be in (0, 1], got ${ratio}`);
@@ -64,6 +72,8 @@ function simplifyGeometry(source: BufferGeometry, ratio: number, cards: boolean[
   const { attributes, stride, weights } = simplifierAttributes(geometry);
   const groups = geometry.groups.length > 0 ? geometry.groups : [{ start: 0, count: index.count, materialIndex: 0 }];
 
+  // The error measures only these attributes: cards carrying others keep their tessellation.
+  const measured = Object.keys(geometry.attributes).every((name) => ["position", "normal", "uv"].includes(name));
   const parts: Array<{ indices: Uint32Array; materialIndex: number }> = [];
   let decimatedCards = false;
   for (const group of groups) {
@@ -73,9 +83,14 @@ function simplifyGeometry(source: BufferGeometry, ratio: number, cards: boolean[
     // A single material draws every group.
     const card = (cards.length === 1 ? cards[0] : cards[materialIndex]) ?? false;
     if (card) decimatedCards = true;
-    const simplified = card
+    let simplified = card
       ? decimateCards(indices, positions, ratio)
       : simplifyIndices(indices, positions, attributes, stride, weights, Math.floor((indices.length / 3) * ratio) * 3)[0];
+    if (card && measured && ratio < 1) {
+      // Outlines locked, so each card keeps its silhouette.
+      const [inside] = MeshoptSimplifier.simplifyWithAttributes(simplified, positions, 3, attributes, stride, weights, null, 0, CARD_ERROR, ["LockBorder"]);
+      if (inside.length > 0) simplified = inside;
+    }
     parts.push({ indices: simplified, materialIndex });
   }
 

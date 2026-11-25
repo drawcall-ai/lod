@@ -1,3 +1,5 @@
+import type { LoadingManager, Object3D } from "three/webgpu";
+import type { CachedLodLoader } from "./index.js";
 import type { ImpostorMeshOptions } from "../impostor/mesh/index.js";
 import type { BakeImpostorOptions } from "../impostor/bake/index.js";
 import type { SimplifyOptions } from "../simplify/index.js";
@@ -9,10 +11,8 @@ import { loaderPathURL } from "./url.js";
 /**
  * Levels derived from the source, finest first. In browsers each derived level is built when it first loads; in Node
  * every level is built with the ladder. A level without `maxPixels` gets the default `LodLevel.maxPixels` describes;
- * an impostor's is `framePixels` of its resolution: the threshold of a frame fitted to the source's bounding sphere, so
- * the level before it draws smaller than it needs to. The frame the bake fits to the source is up to about 1.5 times tighter; give `maxPixels` to
- * switch to the impostor sooner. Changing `maxPixels` or an impostor's `draw` reuses them, except an impostor's
- * `maxPixels`, which also sizes its bake.
+ * an impostor's is `texelPixels` of its bake when Node described the ladder, which bakes it first, else `framePixels`
+ * of its resolution. An impostor's `maxPixels` also sizes its bake.
  */
 export type LodLevelRequest =
   | ({ type: "simplify"; maxPixels?: number } & SimplifyOptions)
@@ -33,21 +33,33 @@ export type LodLevelRequest =
   | ({ type: "impostor"; draw?: ImpostorMeshOptions } & BakeImpostorOptions)
   | { type: "empty"; maxPixels: number };
 
-/** A .glb, .gltf or .glts asset URL. Source and simplified levels load the original asset on demand. */
-export type LodRequest = string | { url: string; levels?: readonly LodLevelRequest[] };
+/** An impostor whose fitted atlas supplies the missing threshold. */
+export function inferredImpostor(level: LodLevelRequest): level is Extract<LodLevelRequest, { type: "impostor" }> {
+  return level.type === "impostor" && level.maxPixels === undefined;
+}
+
+/** Make a fresh source, including resources the loader can dispose, each time the ladder needs one. */
+export type LodSource = (context: { loader: CachedLodLoader; manager: LoadingManager }) => Object3D | Promise<Object3D>;
+
+/**
+ * A .glb, .gltf or .glts asset URL, or an inline function that builds the model. Source and simplified levels load or
+ * build the source on demand.
+ */
+export type LodRequest = string | (({ url: string; source?: never } | { source: LodSource; url?: never }) & { levels?: readonly LodLevelRequest[] });
 const DEFAULT_LEVELS: readonly LodLevelRequest[] = [{ type: "impostor" }];
 
 /** A normalized request. */
 export type Ladder = ReturnType<typeof normalize>;
 
 /**
- * `request` with its source URL resolved against `path`, which loads it, and `key` of that, which its levels are stored
- * under. A baked level's low and interior URLs stay relative to the source.
+ * `request` with its source URL resolved against `path`, which loads it, and `publicPath` of that, which its levels are
+ * stored under. An inline source stands for a source in the loader's directory, or the page's without a path. A baked
+ * level's low and interior URLs stay relative to the source.
  */
-export function normalize(request: LodRequest, path: string, key: (url: string) => string) {
+export function normalize(request: LodRequest, path: string, publicPath: (url: string) => string) {
   const input = typeof request === "string" ? { url: request } : request;
-  const url = loaderPathURL(input.url, path);
-  return { url, key: key(url), levels: structuredClone(input.levels ?? DEFAULT_LEVELS) };
+  const url = input.source ? path || "./" : loaderPathURL(input.url, path);
+  return { url, key: publicPath(url), source: input.source, levels: structuredClone(input.levels ?? DEFAULT_LEVELS) };
 }
 
 /** The request of ladder level `index`, which must be a derived level. */

@@ -10,7 +10,6 @@ import { screenScale } from "../screen.ts";
 import type { Plan } from "../plan.ts";
 import { blocks, type Block } from "./blocks.ts";
 import { cut, FieldTiles, heroSpot } from "./field.ts";
-import { cutoff, setCutoff } from "./levels.ts";
 import { BLOCK, DESIGNS, layout, VARIANTS } from "../../../public/corn-plant/layout.ts";
 import { TOP } from "../../../public/corn-plant/block/shapes.ts";
 
@@ -30,8 +29,10 @@ const eye = new THREE.Vector3();
 export class Corn extends THREE.Object3D {
   private squeeze = 1;
   private fadeFrom = 0;
-  /** The plants' Lods and the hero's, which plants dither out of together. */
-  private readonly cut: readonly Lod[];
+  /** The plants and the hero fade out together as their field blocks rise. */
+  private readonly empty: { maxPixels: number }[];
+  private readonly plantPixels: number;
+  private readonly maxSqueeze: number;
   private constructor(
     readonly blocks: Block[],
     readonly plants: NearTiles,
@@ -44,7 +45,10 @@ export class Corn extends THREE.Object3D {
     scatter: Scatter,
   ) {
     super();
-    this.cut = [...plantLods, lodOf(hero)];
+    const { middle, empty } = plantLevels(lodOf(hero));
+    this.empty = [empty, ...plantLods.map((lod) => plantLevels(lod).empty)];
+    this.plantPixels = empty.maxPixels;
+    this.maxSqueeze = (middle.maxPixels * (1 - Lod.fade)) / this.plantPixels;
     this.add(scatter, plants, hero, ladybird);
   }
 
@@ -109,12 +113,12 @@ export class Corn extends THREE.Object3D {
    */
   update(camera: THREE.Camera, height: number): void {
     const scale = screenScale(camera, height, Lod.quality);
-    const gone = cutoff(this.squeeze);
+    const gone = this.plantPixels * this.squeeze;
     this.fadeFrom = (this.plantSize * scale) / gone;
     this.plants.update(eye.setFromMatrixPosition(camera.matrixWorld));
     const over = this.plants.wanted / ROOM;
-    this.squeeze = over > 1 ? Math.min(this.squeeze * Math.max(1.02, Math.sqrt(over)), 4) : Math.max(1, this.squeeze / 1.02);
-    for (const lod of this.cut) setCutoff(lod.levels, gone);
+    this.squeeze = over > 1 ? Math.min(this.squeeze * Math.max(1.02, Math.sqrt(over)), this.maxSqueeze) : Math.max(1, this.squeeze / 1.02);
+    for (const level of this.empty) level.maxPixels = gone;
     const risen = Math.max(this.fadeFrom - LEAD, RAMP);
     for (const { kind, lod, rises, diameter } of this.blocks) {
       rises.set(risen - RAMP, risen);
@@ -133,4 +137,10 @@ export class Corn extends THREE.Object3D {
       flat.maxPixels = Math.min(FLAT_PIXELS, ridged.maxPixels * (1 - Lod.fade));
     }
   }
+}
+
+function plantLevels(lod: Lod) {
+  const [, middle, empty] = lod.levels;
+  if (lod.levels.length !== 3 || !middle || !empty) throw new Error("Corn needs a source, a middle level and an empty level");
+  return { middle, empty };
 }
