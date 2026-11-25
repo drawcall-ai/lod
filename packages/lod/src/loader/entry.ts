@@ -1,5 +1,6 @@
 import { CacheEntry, type CacheEntryOptions, type Value } from "@drawcall/cache";
 import type { BlockFormat } from "../blocks/index.js";
+import { cardError } from "../simplify/options.js";
 import type { Derived } from "./level.js";
 import { derived, inferredImpostor, type Ladder } from "./request.js";
 
@@ -37,7 +38,8 @@ function parameters(level: Derived): Value {
       return {
         type: level.type,
         ratio: level.ratio ?? null,
-        ...(level.maxPixels !== undefined && Number.isFinite(level.maxPixels) && level.ratio !== 1 && { maxPixels: level.maxPixels }),
+        // Switch heights apply at decode, except where they simplify foliage cards.
+        ...(cardError(level) > 0 && { maxPixels: level.maxPixels ?? null }),
       };
     case "baked":
       return {

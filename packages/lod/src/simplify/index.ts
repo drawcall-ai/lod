@@ -4,15 +4,11 @@ import { MeshoptSimplifier } from "meshoptimizer";
 import { detailed } from "../source/detail.js";
 import { isImpostorMesh, isLod, isMesh, isSkinnedMesh } from "../three.js";
 import { cardMaterials, decimateCards } from "./cards.js";
+import { cardError, type SimplifyOptions } from "./options.js";
 
 // The simplified level: a copy of a source with its geometry decimated, drawn with the source's materials.
 
-export interface SimplifyOptions {
-  /** share of each mesh's triangles that remains, in (0, 1]; default 0.5 */
-  ratio?: number;
-  /** Largest screen height of this level, in CSS pixels. A foliage card can shed interior triangles at this scale. */
-  maxPixels?: number;
-}
+export type { SimplifyOptions };
 
 /**
  * A copy of `object` with the geometry of every mesh drawn at full detail decimated by
@@ -27,9 +23,10 @@ export interface SimplifyOptions {
  * lets seams collapse, and as a last resort ignores topology (meshopt's sloppy mode).
  * A group drawn with an alpha-tested texture (foliage cards) is decimated card by card
  * instead: about `ratio` of its cards remain, whole, spread evenly and enlarged to cover
- * what all covered (see `decimateCards`). At a finite `maxPixels`, their interior tessellation can simplify with the border locked.
+ * what all covered (see `decimateCards`), their insides simplified to `cardError`.
  */
-export async function simplify(object: Object3D, { ratio = 0.5, maxPixels = Infinity }: SimplifyOptions = {}): Promise<Object3D> {
+export async function simplify(object: Object3D, options: SimplifyOptions = {}): Promise<Object3D> {
+  const { ratio = 0.5, maxPixels = Infinity } = options;
   if (!(ratio > 0 && ratio <= 1)) throw new Error(`simplify: ratio must be in (0, 1], got ${ratio}`);
   if (!(maxPixels > 0)) throw new Error(`simplify: maxPixels must be > 0, got ${maxPixels}`);
   await MeshoptSimplifier.ready;
@@ -40,7 +37,7 @@ export async function simplify(object: Object3D, { ratio = 0.5, maxPixels = Infi
     if (isSkinnedMesh(node)) throw new Error(`simplify: skinned meshes are not supported ("${node.name}")`);
   });
   const copy = object.clone(true);
-  decimateTree(copy, ratio, Math.min(1, 1 / maxPixels), new Map());
+  decimateTree(copy, ratio, cardError(options), new Map());
   return copy;
 }
 
@@ -67,8 +64,8 @@ function simplifyGeometry(source: BufferGeometry, ratio: number, cards: boolean[
   const { attributes, stride, weights } = simplifierAttributes(geometry);
   const groups = geometry.groups.length > 0 ? geometry.groups : [{ start: 0, count: index.count, materialIndex: 0 }];
 
-  // Only these attributes participate in the error metric. Additional channels can carry arbitrary effects.
-  const reduceCards = ratio < 1 && error > 0 && Object.keys(geometry.attributes).every((name) => ["position", "normal", "uv"].includes(name));
+  // The error measures only these attributes; others can carry anything.
+  const reduceCards = error > 0 && Object.keys(geometry.attributes).every((name) => ["position", "normal", "uv"].includes(name));
   const parts: Array<{ indices: Uint32Array; materialIndex: number }> = [];
   let decimatedCards = false;
   for (const group of groups) {
