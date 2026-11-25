@@ -1,6 +1,6 @@
 ---
 name: lod
-description: Use @drawcall/lod for cached, progressively loaded levels of detail in three.js WebGPURenderer scenes. Covers model and procedural assets, LODs inside .glts assets, mesh simplification, baked meshes, impostors, instanced copies, wind, interior mapping, choosing tree and grass representations, diagnosing frame cost and capturing fully loaded frames; not WebGLRenderer or skinned animation.
+description: Use @drawcall/lod for cached, progressively loaded levels of detail in three.js WebGPURenderer scenes. Covers model and procedural assets, LODs inside .glts assets, mesh simplification, baked meshes, impostors, instanced copies, wind, interior mapping, choosing levels for plants, asset preparation and capturing fully loaded frames; not WebGLRenderer or skinned animation.
 ---
 
 # Level of detail with @drawcall/lod
@@ -23,7 +23,7 @@ const levels = await new CachedLodLoader(manager).loadAsync({
 
 A `Lod` needs no renderer to be made, and neither does `CachedLodLoader`. It draws with the first `WebGPURenderer` that renders it, on WebGPU only: on the WebGL2 fallback it reports an error and draws nothing. Another renderer drawing it is its error, so a second renderer, such as a minimap's, needs Lods of its own.
 
-`loadAsync` resolves with the ladder before its levels load; each level loads when a camera first needs it. A level the cache lacks is built when it first loads, so a far camera builds only the coarse levels it needs. Choose `maxPixels` for simplified and baked levels by looking at the transition. The default of half the finer neighbour's height does not measure visual error. A prebuilt impostor already derives its threshold from its fitted atlas. A simplified level also loads the source for its original materials; a source-only ladder loads its source eagerly. Prefer baked or impostor middle levels for an expensive `.glts`: a simplified level brings the script run forward to that viewing range.
+`loadAsync` resolves with the ladder before its levels load; each level loads when a camera first needs it. A level the cache lacks is built when it first loads, so a far camera builds only the coarse levels it needs. Choose `maxPixels` for simplified and baked levels by looking at the transition. The default of half the finer neighbour's height does not measure visual error. An impostor's default is the largest height at which its atlas stays sharp. A simplified level also loads the source for its original materials; a source-only ladder loads its source eagerly. Prefer baked or impostor middle levels for an expensive `.glts`: a simplified level brings the script run forward to that viewing range.
 
 Choose levels by the silhouette and materials that must survive the switch. Hard-surface props often suit source → simplified → impostor. Buildings with windows can use a baked shell with an interior. Alpha-tested foliage can go straight to an impostor once its branches or blades stop reading individually. If many copies still draw full geometry at that distance, try a simplified middle level. Add an empty final level when the object should disappear.
 
@@ -94,7 +94,7 @@ Load an asset once and build a `Lod` per spatial region from its levels, each wi
 
 Use the loader's `onLevel` option for application effects and shadow settings, `castShadow` and `shadowSide` included. Put source generation and its materials in the asset so that the same URL also loads correctly outside the LOD host.
 
-For repeated placements, one `Lod(levels, count)` batches across those copies. Each eligible mesh or material group in a level still has its own indirect draw per pass. Separate Lods that share levels also submit separately. GLTS forwarding the host's instances, reusing a material, and packing textures into one atlas all preserve those draw boundaries. When submission dominates, merge compatible static parts that always switch together into one mesh with one material at the source.
+Each mesh and material group of a level is a draw of its own in every pass, however many copies draw it: where submission dominates, merge the static parts that switch together into one mesh with one material in the source.
 
 Levels draw with copies of the source's materials, made once through three's `clone`. A custom material class must carry its own state in `copy`, and changes meant to reach drawn levels belong in shared TSL uniforms rather than in properties set on the original afterwards.
 
@@ -192,28 +192,16 @@ while (loading) {
 
 Loaded levels stay until their Lod is disposed, which nothing does for you: in a world larger than memory, dispose the Lods the camera has left far behind.
 
-## Choose levels for trees, crops and grass
+## Choose levels for plants
 
-For a tree viewed both up close and across a forest, try source → simplified whole tree → directional whole-tree impostor. This works with a single tree model, including one with foliage and wood combined. Set the simplified level's `maxPixels` so the simplifier can remove triangles inside tessellated leaf planes while keeping their borders. Then raise the **first impostor's** `maxPixels` to try switching earlier. For textured cut-outs the simplifier keeps fewer leaf planes and enlarges the survivors to compensate. Lowering `ratio` further can preserve total leaf area while opening holes between oversized leaves. Baking onto that thinned mesh still leaves the holes.
+For a tree seen both up close and across a forest, try source → simplified whole tree → whole-tree impostor. Give the simplified level a `maxPixels`: `simplify` then also removes the triangles inside the leaf cards it keeps, outlines kept. A whole-tree impostor without parallax may show doubled branches or a flattened crown between its baked views as the camera passes; one parallax step usually fixes that.
 
-Test the largest impostor from the side as the camera passes. Doubled branches or a flattened crown between baked views are reasons to try one parallax step. A softer but correctly placed leaf edge is a reason to try more texels per view (`resolution`). Increase `frames` for finer angular sampling. It counts views **per side** of the atlas, so doubling either setting alone roughly quadruples the texel count. Use `layout: "hemi"` for upright assets seen from the horizon up. A smaller, zero-parallax impostor farther out can save both first-view bytes and shading. A larger near atlas trades transfer and residency for detail, even when the warm frame gets faster.
-
-If the forks still need geometry where the leaves become expensive, an authored canopy (the leafy crown) is an ordinary mesh level. Keep the visible wood and bake nearby leaf clusters onto crossed, alpha-tested planes merged per foliage material. Compare against the whole-tree ladder first. Independent cluster selection is worth testing where many clusters on the same tree need different detail or can be culled individually. Repeating even one directional cluster impostor in a single draw still shades overlapping quads throughout the crown. A stand impostor can replace a distant group of trees when its layout preserves their spacing and gaps and it actually suppresses their individual draws. Check the distant approach where it takes over. An interior forest view can remain dominated by nearby trees.
-
-For grass, start with source blades → simplified blades while their roots, lean and depth are visible → empty once the ground carries their colour and coverage. If a distant tuft reads as a silhouette, compare an ordinary textured plane. A fixed upright plane vanishes edge-on. A billboard rotating around the vertical axis preserves its width at grazing angles. Two crossed upright planes cover more horizontal directions with fixed geometry, but show a flat root line up close and lose area from above. A horizontal plane has the opposite viewing range. Test at the lowest **and** highest camera elevations in use. Authored single or crossed planes fit a mesh level (`{ object: mesh }` when assembling levels directly).
-
-For rows of tall plants with gaps between their leaves, compare a `baked` middle mesh with a whole-plant impostor from inside the row. Many overlapping impostor quads can shade the same gaps even when all plants share a draw call. A low-poly mesh can skip that work. Compare its thinnest leaves and seed heads with the detailed source as the camera moves through the switch.
+For rows of tall plants with gaps between their leaves, such as corn, compare a `baked` middle mesh with a whole-plant impostor from inside the row: the overlapping impostor cards all shade the gaps, which a low-poly mesh does not draw.
 
 ## Tune the complete scene
 
 Tune transitions in the intended viewport with `Lod.debug` and use `Lod.quality` for a scene-wide adjustment. At the nearest intended view of each level, use `lod.forceLevel` to compare it with the detailed source at the same pose, light and wind time. Check silhouette area **and where the gaps fall**, shadows, colour and fine detail. Release the override and move through the fade, toward the sun as well as away.
 
-A directional impostor draws a camera-facing quad and blends three neighbouring baked views. Its camera depth and its parallax solve different problems:
-
-- Keep the default `draw: { depth: "reconstructed" }` when distinct surfaces interleave, such as a fence crossing a trunk. The fragment shader uses baked surface depth to place each covered pixel in the depth buffer. Overlapping quads can then require shading before the GPU knows which surface wins.
-- Try `draw: { depth: "card" }` when overlaps are hard to distinguish, such as similar plants in a field. The quad supplies ordinary raster depth, allowing early rejection of hidden fragments. The image still comes from the directional atlas. Check foreground crossings in motion for incorrect occlusion. Both modes test and write depth on covered samples and reconstruct depth in shadow maps. For a separately sorted translucent effect, keep its material's depth test and disable depth writes when it should blend with surfaces behind it.
-- `draw.parallax` refines where each baked view is sampled using depth. Each extra step adds atlas reads. Try zero when motion within the silhouette is imperceptible at the largest intended size. Card depth can retain parallax, and zero parallax can retain reconstructed depth.
+An impostor's `depth: "reconstructed"` places each pixel at its baked surface, so interleaved surfaces such as a fence crossing a trunk stay correct, but every overlapping card shades before depth decides. `depth: "card"` lets the GPU reject hidden pixels early, which pays off in fields of similar plants; check foreground crossings in motion. Each `parallax` step adds atlas reads: try zero where motion within the silhouette is imperceptible at the largest intended size.
 
 Avoid custom shadow nodes on lights that LOD objects should cast into. Each shadow camera selects its own levels. If a cascade dominates, inspect its actual casters. Use `onLevel` to turn off `castShadow` where losing that shadow is acceptable.
-
-For a flythrough that misses its frame budget, isolate the slow camera positions and separate CPU submission, camera shading, shadow rendering and first-use stalls. The [LOD profiling guide](references/profiling.md) gives matched controls for each.
