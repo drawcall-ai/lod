@@ -94,7 +94,7 @@ async function interiorItem(textures: Textures, load: Load, variant: number): Pr
  */
 async function interiorPlanItem(textures: Textures, variant: number): Promise<Content> {
   const p = houseParams(variant);
-  const materials = new Materials(textures.manager, new URL("/suburban-house/", location.href));
+  const materials = new Materials(textures.manager, new URL(textures.manager.resolveURL("/suburban-house/"), location.href));
   const group = new THREE.Group();
   // each storey is moved down to y = 0, where the cut keeps 0.3 m below its floor to 1.6 m above
   const cut = [new THREE.Plane(new THREE.Vector3(0, -1, 0), 1.6), new THREE.Plane(new THREE.Vector3(0, 1, 0), 0.3)];

@@ -5,17 +5,17 @@ import * as THREE from "three/webgpu";
 import { mrt, normalView, output, packNormalToRGB, pass, pow, sample, unpackRGBToNormal, vec3, vec4 } from "three/tsl";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { ao } from "three/addons/tsl/display/GTAONode.js";
-import { GLTSLoader } from "@drawcall/glts";
+import { manager, scripts } from "../loading.ts";
 import { Textures } from "../render/materials.ts";
 import { buildItem, type Item, itemNames } from "./items.ts";
 import { Stage } from "./stage.ts";
 
 type View = "close" | "medium";
 
-// Texture loads go through the default manager; `idle` resolves once nothing is loading.
+// Loads go through the page's manager; `idle` resolves once nothing is loading.
 let idle: Promise<void> = Promise.resolve();
-THREE.DefaultLoadingManager.onStart = () => {
-  idle = new Promise((resolve) => (THREE.DefaultLoadingManager.onLoad = resolve));
+manager.onStart = () => {
+  idle = new Promise((resolve) => (manager.onLoad = resolve));
 };
 
 const params = new URLSearchParams(location.search);
@@ -37,8 +37,7 @@ const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.01, 2
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 
-const scripts = new GLTSLoader(THREE.DefaultLoadingManager);
-const stage = new Stage(new Textures(THREE.DefaultLoadingManager));
+const stage = new Stage(new Textures(manager));
 await stage.loadSky(renderer);
 
 // ambient occlusion (GTAO) supplies the contact darkening that image-based light lacks

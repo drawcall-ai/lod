@@ -68,13 +68,15 @@ it("fails a load that fetches what it cannot record", { timeout: 120_000 }, asyn
   });
 });
 
-it("stores a load at a public file's file: URL, as a headless .glts script's manager resolves it, under its served path", { timeout: 120_000 }, async () => {
+it("stores a load under its served path, from a headless .glts script's file: URL or for an app below a prefix", { timeout: 120_000 }, async () => {
   const request = (url: string): LodRequest => ({ url, levels: [{ type: "simplify", ratio: 0.5, maxPixels: 100 }] });
   await new CachedLodLoader().loadAsync(request("/box.glts?size=5"));
   const entries = await saved();
   const manager = new LoadingManager();
   manager.setURLModifier((url) => new URL(url, pathToFileURL(join(root, "public/"))).href);
   await new CachedLodLoader(manager).loadAsync(request("./box.glts?size=5"));
+  expect(await saved()).toEqual(entries);
+  await new CachedLodLoader(undefined, { basePath: "/app/_cache/" }).loadAsync(request("/box.glts?size=5"));
   expect(await saved()).toEqual(entries);
 });
 

@@ -14,11 +14,16 @@ import { LodLoadContext } from "./context.js";
 import { entryOf } from "./entry.js";
 import { decodeLevel, encodeLevel, encodeShape, placedBox, readLevel, readShape, shapeOf, type Shape } from "./level.js";
 import { derived, inferredImpostor, normalize, type Ladder, type LodRequest, type LodSource } from "./request.js";
-import { assetPath, publicPath, sourceRelativeURL } from "./url.js";
+import { appBase, assetPath, publicPath, sourceRelativeURL } from "./url.js";
 
 // The loader: it describes a ladder of levels from a source, builds each level when first loaded and stores it.
 
-export interface CachedLodLoaderOptions extends Pick<CacheEntryOptions, "basePath" | "root"> {
+export interface CachedLodLoaderOptions extends Pick<CacheEntryOptions, "root"> {
+  /**
+   * Browsers: the URL the app serves its cache at. Defaults to `/_cache/` as the manager resolves it, so a URL modifier
+   * that serves the app's root-absolute URLs below a prefix, such as `/app/`, serves the cache there too.
+   */
+  basePath?: string;
   /**
    * Apply runtime effects when a level arrives, before draws compile. Does not change built content or bounds.
    * `index` is the returned ladder's: 0 is the source, and `levels[i]` arrives as `i + 1`. Set `castShadow` and
@@ -102,7 +107,7 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
         context.setDescribed(
           last,
           this.drawnFormat(ladder, last)
-            .then((format) => entryOf(ladder, last, this.options, format).load())
+            .then((format) => entryOf(ladder, last, this.cacheOptions(), format).load())
             .catch(() => undefined),
         );
       const shape = await this.describe(ladder, () => context.source());
@@ -161,7 +166,7 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
    * `texelPixels` of the impostors without `maxPixels`, so a browser describes them without reading their atlases.
    */
   private async describe(ladder: Ladder, source: () => Promise<Object3D>): Promise<Shape> {
-    const entry = entryOf(ladder, "shape", this.options);
+    const entry = entryOf(ladder, "shape", this.cacheOptions());
     const stored = await entry.load();
     const texels: number[] = [];
     if (this.buildsAll) {
@@ -195,7 +200,7 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
    */
   private async store(ladder: Ladder, index: number, source: () => Promise<Object3D>): Promise<Uint8Array> {
     const formats = derived(ladder.levels, index).type === "simplify" ? [null] : BLOCK_FORMATS;
-    const entries = formats.map((format) => ({ format, entry: entryOf(ladder, index, this.options, format) }));
+    const entries = formats.map((format) => ({ format, entry: entryOf(ladder, index, this.cacheOptions(), format) }));
     const stored = await Promise.all(entries.map(({ entry }) => entry.load()));
     if (stored.every((bytes) => bytes !== undefined)) return at(stored, 0);
     return at(await this.build(ladder, index, await source(), entries), 0);
@@ -207,7 +212,12 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
    * script.
    */
   protected publicPath(url: string): string {
-    return publicPath(url, this.options.basePath ?? "/_cache/");
+    return publicPath(url, appBase(this.cacheOptions().basePath));
+  }
+
+  /** Where its levels' entries are: at `basePath`, else at `/_cache/` as the manager resolves the app's URLs. */
+  protected cacheOptions(): { basePath: string; root: string | undefined } {
+    return { basePath: this.options.basePath ?? this.manager.resolveURL("/_cache/"), root: this.options.root };
   }
 
   /** The files and packages what this loader built so far was built from: none in browsers, which do not save. */
@@ -226,7 +236,7 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
     described: Promise<Uint8Array | undefined> | undefined,
   ): Promise<Uint8Array> {
     const format = await this.drawnFormat(ladder, index);
-    const entry = entryOf(ladder, index, this.options, format);
+    const entry = entryOf(ladder, index, this.cacheOptions(), format);
     const bytes = (await described) ?? (await entry.load());
     if (bytes) {
       if (spare) disposeRecursive(spare);

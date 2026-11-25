@@ -346,6 +346,20 @@ describe("CachedLodLoader", () => {
     expect([coldImpostor, warmImpostor].map((object) => (object instanceof ImpostorMesh ? object.options.parallax : undefined))).toEqual([1, 0]);
   });
 
+  it("stores levels below the prefix its manager serves the app at, keyed as at the root", async () => {
+    const request: LodRequest = { url: "/prefix.glb", levels: [{ type: "simplify", ratio: 0.5, maxPixels: 100 }] };
+    const source = () => new Mesh(new BoxGeometry(), new MeshStandardMaterial());
+    const prefixed = sourceFixture(source, /\.glb$/).manager;
+    prefixed.setURLModifier((url) => (url.startsWith("/") ? `/app${url}` : url));
+    const cold = await new CachedLodLoader(prefixed).loadAsync(request);
+    await cold[1]?.load?.();
+    expect(cache.saved.map(({ options }) => options.basePath)).toEqual(["/app/_cache/", "/app/_cache/"]);
+    cache.loaded.length = 0;
+    const root = await new CachedLodLoader(sourceFixture(source, /\.glb$/).manager).loadAsync(request);
+    await root[1]?.load?.();
+    expect(cache.loaded).toEqual([true, true]);
+  });
+
   it("builds a deferred level again when the cache skips saving", async () => {
     const save = vi.spyOn(CacheEntry.prototype, "save").mockResolvedValue();
     try {
