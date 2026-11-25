@@ -115,8 +115,7 @@ export function compileMesh(renderer: Renderer, mesh: Mesh, { context, overrideM
   try {
     renderer.setRenderTarget(context.target, context.cubeFace, context.mipLevel);
     renderer.setMRT(context.mrt);
-    // Stock r186 restores the override before building. A patched renderer captures its own draw state.
-    scene.overrideMaterial = overrideMaterial && !("_getCompilationMaterial" in renderer) ? keepingDrawState(overrideMaterial) : overrideMaterial;
+    scene.overrideMaterial = overrideMaterial && keepingDrawState(overrideMaterial);
     // Demanded levels can still be hidden or outside the last camera's frustum.
     mesh.frustumCulled = false;
     mesh.visible = true;

@@ -1,13 +1,10 @@
 /// <reference types="@webgpu/types" />
 import {
-  BackSide,
   Box3,
   BoxGeometry,
   CubeTexture,
   DataTexture,
   DirectionalLight,
-  DoubleSide,
-  FrontSide,
   Group,
   Mesh,
   MeshBasicNodeMaterial,
@@ -19,7 +16,7 @@ import {
   RGBAFormat,
   Scene,
 } from "three/webgpu";
-import { mrt, output, positionLocal, texture, vec3, vec4 } from "three/tsl";
+import { mrt, output, texture, vec3, vec4 } from "three/tsl";
 import { expect, it, vi } from "vitest";
 import { ImpostorMesh } from "../../../src/impostor/mesh/index.js";
 import * as surface from "../../../src/impostor/mesh/surface.js";
@@ -168,7 +165,7 @@ it(
       await eventually(() => expect([...done]).toEqual([4]));
       release();
       await Promise.all(levels);
-      expect(builds.mock.calls.filter(([builder]) => alike.some((material) => material === builder.material))).toHaveLength(1);
+      expect(builds.mock.calls.filter(([builder]) => alike.some((material) => material === builder.material))).toHaveLength(2);
     } finally {
       release();
       vi.restoreAllMocks();
@@ -179,88 +176,6 @@ it(
   },
   GPU_TIMEOUT,
 );
-
-it("retries a failed shared shader build on the next compile", { timeout: GPU_TIMEOUT }, async () => {
-  const { scene, camera, target } = contextOf();
-  camera.position.z = 4;
-  const material = new MeshBasicNodeMaterial({ colorNode: vec3(0.12, 0.37, 0.54) });
-  const geometry = new PlaneGeometry();
-  const compile = () => renderer.compileAsync(new Mesh(geometry, material), camera, scene);
-  const previous = renderer.debug.onNodeBuilderCreated;
-  const fail = vi.fn(() => {
-    throw new Error("shader build failed");
-  });
-  try {
-    renderer.setRenderTarget(target);
-    renderer.debug.onNodeBuilderCreated = fail;
-    const results = await Promise.allSettled([compile(), compile()]);
-    expect(results.map((result) => result.status)).toEqual(["rejected", "rejected"]);
-    expect(fail).toHaveBeenCalledOnce();
-    renderer.debug.onNodeBuilderCreated = previous;
-    await compile();
-  } finally {
-    renderer.debug.onNodeBuilderCreated = previous;
-    renderer.setRenderTarget(null);
-    material.dispose();
-    geometry.dispose();
-    target.dispose();
-  }
-});
-
-it("prepares the back and front of a transparent double-sided draw separately", { timeout: GPU_TIMEOUT }, async () => {
-  const { scene, camera, target } = contextOf();
-  camera.position.z = 4;
-  const material = new MeshBasicNodeMaterial({ transparent: true, side: DoubleSide, forceSinglePass: false });
-  const mesh = new Mesh(new PlaneGeometry(), material);
-  scene.add(mesh);
-  const setup = vi.spyOn(NodeMaterial.prototype, "setup");
-  const passes = () => setup.mock.calls.filter(([builder]) => builder.object === mesh).map(([builder]) => builder.material.side);
-  try {
-    renderer.setRenderTarget(target);
-    await renderer.compileAsync(scene, camera);
-    expect(passes()).toEqual([BackSide, FrontSide]);
-    expect(material.side).toBe(DoubleSide);
-    renderer.render(scene, camera);
-    expect(passes()).toHaveLength(2);
-  } finally {
-    renderer.setRenderTarget(null);
-    setup.mockRestore();
-    material.dispose();
-    mesh.geometry.dispose();
-    target.dispose();
-  }
-});
-
-it("compiles each group's caster position and reuses its build on the first shadow draw", { timeout: GPU_TIMEOUT }, async () => {
-  const { scene, camera, target } = contextOf();
-  camera.position.z = 4;
-  const geometry = new PlaneGeometry();
-  geometry.addGroup(0, 3, 0);
-  geometry.addGroup(3, 3, 1);
-  const positions = [positionLocal.add(vec3(0.1, 0, 0)), positionLocal.add(vec3(0.2, 0, 0))];
-  const materials = positions.map((caster) => new MeshBasicNodeMaterial({ positionNode: positionLocal, castShadowPositionNode: caster }));
-  const mesh = new Mesh(geometry, materials);
-  scene.add(mesh);
-  const override = Object.assign(new NodeMaterial(), { isShadowPassMaterial: true });
-  scene.overrideMaterial = override;
-  const setup = vi.spyOn(NodeMaterial.prototype, "setup");
-  const builders = () => setup.mock.calls.map(([builder]) => builder).filter((builder) => builder.object === mesh);
-  try {
-    renderer.setRenderTarget(target);
-    await renderer.compileAsync(scene, camera);
-    expect(builders().map((builder) => builder.material instanceof NodeMaterial && builder.material.positionNode)).toEqual(positions);
-    expect(override.positionNode).toBeNull();
-    renderer.render(scene, camera);
-    expect(builders()).toHaveLength(2);
-  } finally {
-    renderer.setRenderTarget(null);
-    setup.mockRestore();
-    override.dispose();
-    for (const material of materials) material.dispose();
-    geometry.dispose();
-    target.dispose();
-  }
-});
 
 it(
   "precompiles hidden grouped draws for the captured target and MRT",

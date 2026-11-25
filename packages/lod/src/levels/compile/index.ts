@@ -29,6 +29,13 @@ export class Compiler {
   private uploaded = 0;
   /** The last upload: uploads run in turn. */
   private uploads = Promise.resolve();
+  /**
+   * The last draw compiled for each shader build: material, attributes, target, shadow map and nesting. three starts a
+   * build for each draw that misses its cache, even one another draw is building, so a draw that builds alike waits
+   * for the last one and finds its build cached.
+   */
+  private readonly builds = new Map<string, Promise<void>>();
+
   constructor(private readonly renderer: Renderer) {
     sharePipelines(renderer);
   }
@@ -89,15 +96,38 @@ export class Compiler {
 
   /** Compile the draw of `mesh`'s groups `part` for `target`. */
   private compileDraw(mesh: Mesh, target: CompileTarget, part: Group[], isDisposed: CompileFor["isDisposed"]): Promise<void> {
-    const drawn = target.context.target;
-    if (drawn && isDisposed(drawn)) return Promise.resolve();
-    const groups = mesh.geometry.groups;
-    try {
-      mesh.geometry.groups = part;
-      return compileMesh(this.renderer, mesh, target);
-    } finally {
-      mesh.geometry.groups = groups;
-    }
+    const { builds } = this;
+    const material = Array.isArray(mesh.material) ? mesh.material[part[0]?.materialIndex ?? 0] : mesh.material;
+    const key = [
+      material ? material.uuid : "none",
+      Object.keys(mesh.geometry.attributes).sort().join(),
+      target.context.target ? target.context.target.texture.id : "canvas",
+      target.overrideMaterial ? target.overrideMaterial.uuid : "camera",
+      target.context.depth,
+    ].join(" ");
+    const start = () => {
+      // Uploads and alike builds may have taken frames: a target disposed meanwhile stays disposed.
+      const drawn = target.context.target;
+      if (drawn && isDisposed(drawn)) return Promise.resolve();
+      const groups = mesh.geometry.groups;
+      try {
+        mesh.geometry.groups = part;
+        return compileMesh(this.renderer, mesh, target);
+      } finally {
+        mesh.geometry.groups = groups;
+      }
+    };
+    const alike = builds.get(key);
+    const own = alike ? alike.then(start) : start();
+    const settled = own.then(
+      () => {},
+      () => {},
+    );
+    builds.set(key, settled);
+    void settled.then(() => {
+      if (builds.get(key) === settled) builds.delete(key);
+    });
+    return own;
   }
 }
 

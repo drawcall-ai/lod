@@ -14,6 +14,7 @@ import {
   Scene,
   StorageBufferAttribute,
   type Camera,
+  type Material,
 } from "three/webgpu";
 import { CSMShadowNode } from "three/addons/csm/CSMShadowNode.js";
 import { expect, it, vi } from "vitest";
@@ -170,7 +171,10 @@ it("shares shadow shader builds while each Lod holds its own matrix and fade buf
   eye.lookAt(0, 0, 0);
   const scene = new Scene().add(left, right, ground, sun, sun.target, new AmbientLight(0xffffff, 0.2));
   const shadow = vi.spyOn(NodeMaterial.prototype, "setup");
-  const builds = () => shadow.mock.calls.filter(([builder]) => builder.material.name === "ShadowMaterial" && builder.object instanceof ImpostorMesh);
+  // The shadow maps' own builds: compileAsync prepares a level's draws with copies of the shadow material (see compile/).
+  const copy = (material: Material) => Object.getOwnPropertyDescriptor(material, "side")?.get !== undefined;
+  const builds = () =>
+    shadow.mock.calls.filter(([builder]) => builder.material.name === "ShadowMaterial" && !copy(builder.material) && builder.object instanceof ImpostorMesh);
   const enabled = renderer.shadowMap.enabled;
   renderer.shadowMap.enabled = true;
   try {
