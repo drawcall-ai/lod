@@ -2,8 +2,11 @@ import { isPreview, loadingManager, onDispose, scene } from "@drawcall/glts";
 import { CachedLodLoader, foliageLevels, foliageModel, ImpostorMesh, Lod } from "@drawcall/lod";
 import * as THREE from "three/webgpu";
 
-// Keep the forked branches in geometry on the closest trees. The first whole-tree impostor
-// uses one parallax step to keep the trunk aligned across views as the camera passes.
+// Poly Haven's small broadleaf tree at levels of detail: the scan nearby, simplified to 10 % of its leaf cards to
+// 900 px, keeping the forked branches in geometry, then hemispherical impostors drawn at card depth: 256 px from 640 px
+// with one parallax step, which keeps the trunk aligned across views as the camera passes, 128 px from 160 px and 16 px
+// from 20 px. Its leaves are foliage. Every level casts and receives shadows, both sides of its faces. Its scanned bark
+// is dark brown: painted, it is a lichened trunk's pale grey-brown.
 /** How light passes through its leaves. */
 const FOLIAGE = { translucency: 0.6 };
 /** What its bark's colour is multiplied by. */
