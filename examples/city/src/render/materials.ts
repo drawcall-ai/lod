@@ -15,7 +15,7 @@ export class Textures {
 
   /** One map of a texture set, tiled to its real-world size. */
   get(id: TextureSet, map: "diff" | "nor" | "arm"): THREE.Texture {
-    const url = new URL(`/assets/textures/${id}/${map}.webp`, location.href).href;
+    const url = `/assets/textures/${id}/${map}.webp`;
     const loaded = this.#loaded.get(url);
     if (loaded) return loaded;
     const texture = new THREE.Texture();
