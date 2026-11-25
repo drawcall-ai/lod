@@ -2,7 +2,7 @@ import type { LoadingManager, Object3D } from "three/webgpu";
 import type { CachedLodLoader } from "./index.js";
 import type { ImpostorMeshOptions } from "../impostor/mesh/index.js";
 import type { BakeImpostorOptions } from "../impostor/bake/index.js";
-import type { SimplifyOptions } from "../simplify/options.js";
+import type { SimplifyOptions } from "../simplify/index.js";
 import type { Derived } from "./level.js";
 import { loaderPathURL } from "./url.js";
 
@@ -15,7 +15,7 @@ import { loaderPathURL } from "./url.js";
  * of its resolution. An impostor's `maxPixels` also sizes its bake.
  */
 export type LodLevelRequest =
-  | ({ type: "simplify" } & SimplifyOptions)
+  | ({ type: "simplify"; maxPixels?: number } & SimplifyOptions)
   | ({
       type: "baked";
       maxPixels?: number;

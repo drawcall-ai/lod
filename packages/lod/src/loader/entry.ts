@@ -1,6 +1,5 @@
 import { CacheEntry, type CacheEntryOptions, type Value } from "@drawcall/cache";
 import type { BlockFormat } from "../blocks/index.js";
-import { cardError } from "../simplify/options.js";
 import type { Derived } from "./level.js";
 import { derived, inferredImpostor, type Ladder } from "./request.js";
 
@@ -30,15 +29,13 @@ export function entryOf(
 
 /**
  * What derives a level's content, by its role rather than its ladder position, so adding or removing another level
- * keeps this one's entry. Switch heights and impostor draw options apply at decode, so changing one reuses it, unless
- * it also shapes the content: an impostor's `maxPixels` sizes its bake, a simplified level's sets its `cardError`.
+ * keeps this one's entry. Switch thresholds and impostor draw options apply at decode, so changing one reuses it,
+ * except an impostor's `maxPixels`, which sizes its bake.
  */
 function parameters(level: Derived): Value {
   switch (level.type) {
-    case "simplify": {
-      const error = cardError(level);
-      return { type: level.type, ratio: level.ratio ?? null, ...(error > 0 && { error }) };
-    }
+    case "simplify":
+      return { type: level.type, ratio: level.ratio ?? null };
     case "baked":
       return {
         type: level.type,

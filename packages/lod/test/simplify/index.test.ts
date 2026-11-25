@@ -78,14 +78,13 @@ describe("simplify", () => {
     }
   });
 
-  it("removes interior triangles of a retained foliage card at its specified screen size", async () => {
+  it("removes the interior triangles of a remaining foliage card, keeping its outline", async () => {
     const material = new MeshStandardMaterial({ map: new DataTexture(), alphaTest: 0.5 });
     const source = new Mesh(new PlaneGeometry(2, 2, 12, 12), material);
-    const original = await simplify(source, { ratio: 0.5 });
-    const fitted = await simplify(source, { ratio: 0.5, maxPixels: 900 });
-    if (!isMesh(original) || !isMesh(fitted)) throw new Error("expected meshes");
-    expect(triangles(fitted.geometry)).toBeLessThan(triangles(original.geometry) / 2);
-    expect(new Box3().setFromObject(fitted)).toEqual(new Box3().setFromObject(original));
+    const simplified = await simplify(source, { ratio: 0.5 });
+    if (!isMesh(simplified)) throw new Error("expected a mesh");
+    expect(triangles(simplified.geometry)).toBeLessThan(triangles(source.geometry) / 2);
+    expect(new Box3().setFromObject(simplified)).toEqual(new Box3().setFromObject(source));
   });
 
   it("thins alpha-tested cards whole, spread evenly, preserving their coverage", async () => {

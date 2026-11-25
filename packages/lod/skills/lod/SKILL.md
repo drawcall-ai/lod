@@ -194,7 +194,7 @@ Loaded levels stay until their Lod is disposed, which nothing does for you: in a
 
 ## Choose levels for plants
 
-For a tree seen both up close and across a forest, try source → simplified whole tree → whole-tree impostor. Give the simplified level a `maxPixels`: `simplify` then also removes the triangles inside the leaf cards it keeps, outlines kept. A whole-tree impostor without parallax may show doubled branches or a flattened crown between its baked views as the camera passes; one parallax step usually fixes that.
+For a tree seen both up close and across a forest, try source → simplified whole tree → whole-tree impostor, with the simplified level switching at no more than about a thousand pixels: `simplify` also removes the triangles inside the leaf cards it keeps, to about a pixel's error at that height, outlines kept. A whole-tree impostor without parallax may show doubled branches or a flattened crown between its baked views as the camera passes; one parallax step usually fixes that.
 
 For rows of tall plants with gaps between their leaves, such as corn, compare a `baked` middle mesh with a whole-plant impostor from inside the row: the overlapping impostor cards all shade the gaps, which a low-poly mesh does not draw.
 
