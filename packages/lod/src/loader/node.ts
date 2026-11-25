@@ -34,9 +34,9 @@ export class CachedLodLoader extends BrowserCachedLodLoader {
   override loadAsync(request: LodRequest): Promise<LodLevel[]> {
     const ladder = normalize(request, this.path, (url) => this.publicPath(this.manager.resolveURL(url)));
     return session(async () => {
-      const loader = new SessionLoader(this.options, ladder.factory ? ladder.publicURL : undefined);
+      const loader = new SessionLoader(this.options, ladder);
       try {
-        return await loader.loadPublic(ladder);
+        return await loader.loadLevels();
       } finally {
         await loader.dispose();
       }
@@ -55,36 +55,34 @@ export class CachedLodLoader extends BrowserCachedLodLoader {
   }
 }
 
-/** One `loadAsync` of the Node loader: builds every level, with a GLTSLoader and bake renderer of its own. */
+/** One `loadAsync` of the Node loader: builds every level of `ladder`, with a GLTSLoader and bake renderer of its own. */
 class SessionLoader extends BrowserCachedLodLoader {
   protected override readonly buildsAll = true;
   private readonly scripts: ScriptLoader;
   /** Set once `loadAsync` has resolved, after which a level loads the source in a session of its own. */
   private disposed = false;
 
-  constructor(options: CachedLodLoaderOptions, path: string | undefined) {
-    super(publicManager(path), options);
-    if (path) this.setPath(path);
-    // GLTS resolves resources against each script before mapping their absolute URLs to public files.
-    this.scripts = new ScriptLoader(path ? publicManager() : this.manager);
+  constructor(
+    options: CachedLodLoaderOptions,
+    private readonly ladder: Ladder,
+  ) {
+    // An inline source's relative URLs resolve as on a page at the app's root.
+    super(publicManager(`${placeholderOrigin}/`), options);
+    // The loader an inline source is given resolves requests against the loader's path, served (see `loadAsync`).
+    if (ladder.source) this.setPath(ladder.key);
+    // A .glts script resolves its own URLs against itself, after the manager's modifier has seen them as written.
+    this.scripts = new ScriptLoader(publicManager());
     this.manager.addHandler(/\.glts$/i, this.scripts);
   }
 
-  loadPublic(ladder: Ladder): Promise<LodLevel[]> {
-    return this.loadLadder({ ...ladder, url: ladder.publicURL });
+  /** The ladder's levels, loaded from its served path. */
+  loadLevels(): Promise<LodLevel[]> {
+    return this.loadLadder({ ...this.ladder, url: this.ladder.key });
   }
 
-  /** A load started by a source gets its own session and keys on public paths before they become fetchable data URLs. */
+  /** A load an inline source starts gets its own session, keyed on served paths rather than the files they map to. */
   override loadAsync(request: LodRequest): Promise<LodLevel[]> {
     return new CachedLodLoader(undefined, this.options).setPath(this.path).loadAsync(request);
-  }
-
-  protected override makeSource(factory: LodSource): Promise<Object3D> {
-    const make = async () => {
-      if (typeof document === "undefined") await canvas();
-      return super.makeSource(factory);
-    };
-    return this.disposed ? session(make) : make();
   }
 
   override async dispose(): Promise<void> {
@@ -93,19 +91,28 @@ class SessionLoader extends BrowserCachedLodLoader {
     await this.scripts.dispose();
   }
 
-  /** Load `url`, a served path; once `loadAsync` has resolved, in a session of its own. */
-  protected override loadAsset(url: string): Promise<Object3D> {
-    return this.disposed ? session(() => this.loadServed(url)) : this.loadServed(url);
+  protected override makeSource(make: LodSource): Promise<Object3D> {
+    return this.inSession(() => super.makeSource(make));
   }
 
   /**
-   * Load `url` at the placeholder origin, which gives a .glts source a URL its relative imports and resources resolve
-   * against. In a process without a document, on the canvas's platform: three's loaders report progress with
-   * ProgressEvent and decode images, which Node has not.
+   * Load `url`, a served path, at the placeholder origin, which gives a .glts source a URL its relative imports and
+   * resources resolve against.
    */
-  private async loadServed(url: string): Promise<Object3D> {
-    if (typeof document === "undefined") await canvas();
-    return super.loadAsset(placeholderOrigin + url);
+  protected override loadAsset(url: string): Promise<Object3D> {
+    return this.inSession(() => super.loadAsset(placeholderOrigin + url));
+  }
+
+  /**
+   * Run `load`, once `loadAsync` has resolved in a session of its own; in a process without a document, on the canvas's
+   * platform: three's loaders report progress with ProgressEvent and decode images, which Node has not.
+   */
+  private inSession(load: () => Promise<Object3D>): Promise<Object3D> {
+    const run = async () => {
+      if (typeof document === "undefined") await canvas();
+      return load();
+    };
+    return this.disposed ? session(run) : run();
   }
 
   protected override newBakeRenderer(): Promise<WebGPURenderer> {
@@ -154,13 +161,12 @@ function warnOnFallback(renderer: WebGPURenderer): void {
 
 /**
  * A manager that maps URLs at the placeholder origin to @drawcall/cache's `publicURL` of their path, which reads the public
- * file, and fails any other http(s) URL.
+ * file, and fails any other http(s) URL. Given `base`, it first resolves URLs against it.
  */
-function publicManager(path?: string): LoadingManager {
+function publicManager(base?: string): LoadingManager {
   const manager = new LoadingManager();
-  const base = path ? new URL(path, placeholderOrigin) : undefined;
-  manager.setURLModifier((value) => {
-    const url = base ? new URL(value, base).href : value;
+  manager.setURLModifier((written) => {
+    const url = base ? new URL(written, base).href : written;
     if (url.startsWith(`${placeholderOrigin}/`)) return publicURL(url.slice(placeholderOrigin.length));
     if (/^https?:/i.test(url)) throw new Error(`CachedLodLoader: cannot precompute a load that fetches ${url}, which a stored level cannot be checked against`);
     return url;

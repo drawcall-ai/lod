@@ -225,7 +225,7 @@ describe("CachedLodLoader", () => {
     const request: LodRequest = { url: "/shell.glb", levels: [{ type: "baked", low: "?part=low", textureSize: 32, maxPixels: 100 }] };
     const baked = (await new CachedLodLoader(manager).loadAsync(request))[1];
     await expect(baked?.load?.()).rejects.toThrow("extends beyond the source's bounds");
-    expect(cache.saved.map(({ options }) => options.dependencies?.level)).toEqual([{ value: { url: "/shell.glb", level: { type: "shape" } } }]);
+    expect(cache.saved.map(({ options }) => options.dependencies?.level)).toEqual([{ value: { url: "/shell.glb", level: { type: "shape", impostors: [] } } }]);
   });
 
   it("disposes the source measured for the shape once no level is left to build from it", async () => {

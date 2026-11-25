@@ -11,9 +11,8 @@ import { loaderPathURL } from "./url.js";
 /**
  * Levels derived from the source, finest first. In browsers each derived level is built when it first loads; in Node
  * every level is built with the ladder. A level without `maxPixels` gets the default `LodLevel.maxPixels` describes;
- * a prebuilt impostor uses the sharpness of its fitted atlas. Without that measurement the loader estimates it from the bounding sphere.
- * A simplified level uses an explicit finite `maxPixels` to simplify the interiors of foliage cards. An impostor's
- * `maxPixels` sizes its bake.
+ * an impostor's is `texelPixels` of its bake when Node described the ladder, which bakes it first, else `framePixels`
+ * of its resolution. An impostor's `maxPixels` also sizes its bake.
  */
 export type LodLevelRequest =
   | ({ type: "simplify" } & SimplifyOptions)
@@ -42,25 +41,22 @@ export function inferredImpostor(level: LodLevelRequest): level is Extract<LodLe
 /** Make a fresh source, including resources the loader can dispose, each time the ladder needs one. */
 export type LodSource = (context: { loader: CachedLodLoader; manager: LoadingManager }) => Object3D | Promise<Object3D>;
 
-/** A model URL or an inline function that builds the model. */
-export type LodRequest = string | (({ url: string; source?: never } | { source: string | LodSource; url?: never }) & { levels?: readonly LodLevelRequest[] });
+/** A model URL, or an inline function that builds the model. */
+export type LodRequest = string | (({ url: string; source?: never } | { source: LodSource; url?: never }) & { levels?: readonly LodLevelRequest[] });
 const DEFAULT_LEVELS: readonly LodLevelRequest[] = [{ type: "impostor" }];
 
 /** A normalized request. */
 export type Ladder = ReturnType<typeof normalize>;
 
 /**
- * `request` with its source URL resolved against `path`, which loads it, and `key` of that, which its levels are stored
- * under. A baked level's low and interior URLs stay relative to the source.
+ * `request` with its source URL resolved against `path`, which loads it, and `publicPath` of that, which its levels are
+ * stored under. An inline source stands for a source in the loader's directory, the app's root without a path. A baked
+ * level's low and interior URLs stay relative to the source.
  */
-export function normalize(request: LodRequest, path: string, key: (url: string) => string) {
+export function normalize(request: LodRequest, path: string, publicPath: (url: string) => string) {
   const input = typeof request === "string" ? { url: request } : request;
-  const source = input.source ?? input.url;
-  const factory = typeof source === "function" ? source : undefined;
-  const url = typeof source === "string" ? loaderPathURL(source, path) : path || "/";
-  // An inline source in an application module has the same identity at every deployment base.
-  const publicURL = factory && !path ? "/" : key(url);
-  return { url, publicURL, factory, key: factory ? { source: factory, path: publicURL } : publicURL, levels: structuredClone(input.levels ?? DEFAULT_LEVELS) };
+  const url = input.source ? path || "./" : loaderPathURL(input.url, path);
+  return { url, key: publicPath(url), source: input.source, levels: structuredClone(input.levels ?? DEFAULT_LEVELS) };
 }
 
 /** The request of ladder level `index`, which must be a derived level. */

@@ -156,10 +156,13 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
     }
   }
 
-  /** Describe the ladder without reading its atlases in the browser. Older caches have only the source shape. */
+  /**
+   * The stored shape of the ladder, else what its source measures, saved. Building every level first, it also holds the
+   * `texelPixels` of the impostors without `maxPixels`, so a browser describes them without reading their atlases.
+   */
   private async describe(ladder: Ladder, source: () => Promise<Object3D>): Promise<Shape> {
-    let entry = entryOf(ladder, "ladder", this.options);
-    let stored = await entry.load();
+    const entry = entryOf(ladder, "shape", this.options);
+    const stored = await entry.load();
     const texels: number[] = [];
     if (this.buildsAll) {
       for (const [position, level] of ladder.levels.entries()) {
@@ -167,12 +170,9 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
         const bytes = await this.store(ladder, position + 1, source);
         if (!stored && inferredImpostor(level)) texels.push(texelPixels(await decodeImpostorAsync(readLevel(bytes).payload)));
       }
-    } else if (!stored && ladder.levels.some(inferredImpostor)) {
-      entry = entryOf(ladder, "shape", this.options);
-      stored = await entry.load();
     }
     if (stored) return readShape(stored);
-    // Loading the source also records the inputs of a new description when every derived level hit the cache.
+    // Loading the source also records the inputs of a new shape when every derived level hit the cache.
     const shape = shapeOf(await source());
     if (texels.length) shape.texels = texels;
     await entry.save(encodeShape(shape), { dependencies: this.inputs() });
@@ -311,11 +311,11 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
   }
 
   private source(ladder: Ladder): Promise<Object3D> {
-    return ladder.factory ? this.makeSource(ladder.factory) : this.loadAsset(ladder.url);
+    return ladder.source ? this.makeSource(ladder.source) : this.loadAsset(ladder.url);
   }
 
-  protected async makeSource(factory: LodSource): Promise<Object3D> {
-    const source = await factory({ loader: this, manager: this.manager });
+  protected async makeSource(make: LodSource): Promise<Object3D> {
+    const source = await make({ loader: this, manager: this.manager });
     if (!isObject3D(source)) throw new TypeError("CachedLodLoader: source must return an Object3D");
     return source;
   }

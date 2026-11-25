@@ -9,27 +9,22 @@ import { derived, inferredImpostor, type Ladder } from "./request.js";
  * What builds and lays out a stored level, and so what identifies it beside its request: bump it with any change to
  * the bytes a level or shape entry holds.
  */
-const version = "lod-level@28";
+const version = "lod-level@29";
 
 /**
- * The entry of derived level `of` of `ladder` with its maps in `format`, or of its source's shape, keyed by the request
- * alone. A level with maps is stored once per block format; a simplified level, which has none, once.
+ * The entry of derived level `of` of `ladder` with its maps in `format`, or of its shape, keyed by the request alone. A
+ * level with maps is stored once per block format; a simplified level, which has none, once. A shape holds the
+ * `texelPixels` of the impostors without `maxPixels`, so their requests key it too.
  */
 export function entryOf(
   ladder: Ladder,
-  of: number | "shape" | "ladder",
+  of: number | "shape",
   { basePath, root }: Pick<CacheEntryOptions, "basePath" | "root">,
   format: BlockFormat | null = null,
 ): CacheEntry {
-  const level = typeof of === "number" ? parameters(derived(ladder.levels, of)) : { type: "shape" };
-  // Only inferred impostors need a ladder-specific shape. The others share the source shape.
-  const fits = of === "ladder" ? ladder.levels.filter(inferredImpostor).map(parameters) : [];
-  return new CacheEntry({
-    basePath,
-    root,
-    version,
-    dependencies: { level: { value: { url: ladder.key, level, ...(fits.length > 0 && { fits }), ...(format && { format }) } } },
-  });
+  const level = of === "shape" ? { type: of, impostors: ladder.levels.filter(inferredImpostor).map(parameters) } : parameters(derived(ladder.levels, of));
+  const value = { url: ladder.key, ...(ladder.source && { source: ladder.source }), level, ...(format && { format }) };
+  return new CacheEntry({ basePath, root, version, dependencies: { level: { value } } });
 }
 
 /**
