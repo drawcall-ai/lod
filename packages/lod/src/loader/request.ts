@@ -41,7 +41,10 @@ export function inferredImpostor(level: LodLevelRequest): level is Extract<LodLe
 /** Make a fresh source, including resources the loader can dispose, each time the ladder needs one. */
 export type LodSource = (context: { loader: CachedLodLoader; manager: LoadingManager }) => Object3D | Promise<Object3D>;
 
-/** A model URL, or an inline function that builds the model. */
+/**
+ * A .glb, .gltf or .glts asset URL, or an inline function that builds the model. Source and simplified levels load or
+ * build the source on demand.
+ */
 export type LodRequest = string | (({ url: string; source?: never } | { source: LodSource; url?: never }) & { levels?: readonly LodLevelRequest[] });
 const DEFAULT_LEVELS: readonly LodLevelRequest[] = [{ type: "impostor" }];
 
@@ -50,7 +53,7 @@ export type Ladder = ReturnType<typeof normalize>;
 
 /**
  * `request` with its source URL resolved against `path`, which loads it, and `publicPath` of that, which its levels are
- * stored under. An inline source stands for a source in the loader's directory, the app's root without a path. A baked
+ * stored under. An inline source stands for a source in the loader's directory, or the page's without a path. A baked
  * level's low and interior URLs stay relative to the source.
  */
 export function normalize(request: LodRequest, path: string, publicPath: (url: string) => string) {
