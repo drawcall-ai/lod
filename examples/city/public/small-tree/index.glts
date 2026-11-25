@@ -2,10 +2,8 @@ import { isPreview, loadingManager, onDispose, scene } from "@drawcall/glts";
 import { CachedLodLoader, foliageLevels, foliageModel, ImpostorMesh, Lod } from "@drawcall/lod";
 import * as THREE from "three/webgpu";
 
-// Poly Haven's small broadleaf tree at levels of detail: the scan with its full leaf geometry nearby, simplified to
-// 15 % of its leaf cards to 900 px, a 256 px hemispherical impostor, a 64 px one from 60 px, then a 16 px one from
-// 20 px. Its leaves are foliage. Every level casts and receives shadows, both sides of its faces. Its scanned bark
-// is dark brown: painted, it is a lichened trunk's pale grey-brown.
+// Keep the forked branches in geometry on the closest trees. The first whole-tree impostor
+// uses one parallax step to keep the trunk aligned across views as the camera passes.
 /** How light passes through its leaves. */
 const FOLIAGE = { translucency: 0.6 };
 /** What its bark's colour is multiplied by. */
@@ -26,10 +24,10 @@ const loader = new CachedLodLoader(loadingManager, {
 const levels = await loader.loadAsync({
   url: "./tree_small_02_LOD0.glb",
   levels: [
-    { type: "simplify", ratio: 0.15, maxPixels: 900 },
-    { type: "impostor", layout: "hemi", resolution: 256, frames: 10 },
-    { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
-    { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 16, frames: 8 },
+    { type: "simplify", ratio: 0.1, maxPixels: 900 },
+    { type: "impostor", layout: "hemi", maxPixels: 640, resolution: 256, frames: 16, draw: { depth: "card", parallax: 1 } },
+    { type: "impostor", layout: "hemi", maxPixels: 160, resolution: 128, frames: 8, draw: { depth: "card", parallax: 0 } },
+    { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 16, frames: 8, draw: { depth: "card", parallax: 0 } },
   ],
 });
 const lod = new Lod(levels, 1, { manager: loadingManager });

@@ -29,6 +29,40 @@ vi.mock("@drawcall/cache", async () => ({ CacheEntry: (await import("./fixture.j
 vi.mock("../../src/impostor/bake/index.js", async () => ({ bakeImpostor: (await import("./fixture.js")).bakeImpostor }));
 
 describe("CachedLodLoader", () => {
+  it("builds from an inline source on a miss and loads it lazily on a cache hit", async () => {
+    const manager = new LoadingManager();
+    const loader = new CachedLodLoader(manager);
+    const make = vi.fn(() => box());
+    const request: LodRequest = {
+      source: (context) => {
+        expect(context.manager).toBe(manager);
+        expect(context.loader).toBe(loader);
+        return make();
+      },
+      levels: [
+        { type: "simplify", ratio: 0.5, maxPixels: 73 },
+        { type: "empty", maxPixels: 1 },
+      ],
+    };
+    const cold = await loader.loadAsync(request);
+    expect(make).toHaveBeenCalledTimes(1);
+    await cold[1]?.load?.();
+    new Lod(cold).dispose();
+    make.mockClear();
+
+    const warm = await loader.loadAsync(request);
+    expect(make).not.toHaveBeenCalled();
+    const [source, simplified] = await Promise.all([warm[0]?.load?.(), warm[1]?.load?.()]);
+    expect(source?.isObject3D && simplified?.isObject3D).toBe(true);
+    expect(make).toHaveBeenCalledTimes(1);
+    new Lod(warm).dispose();
+
+    // The shape is cached, but a different simplification still needs a fresh source to build.
+    const changed = await loader.loadAsync({ source: request.source, levels: [{ type: "simplify", ratio: 1, maxPixels: 73 }] });
+    expect((await changed[1]?.load?.())?.isObject3D).toBe(true);
+    new Lod(changed).dispose();
+  });
+
   it("describes a prebuilt impostor at its measured sharpness before loading it", { timeout: GPU_TIMEOUT }, async () => {
     class BuildLoader extends CachedLodLoader {
       protected override readonly buildsAll = true;

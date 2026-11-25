@@ -13,7 +13,7 @@ import { isMesh, isObject3D, rejectSkinned } from "../three.js";
 import { LodLoadContext } from "./context.js";
 import { entryOf } from "./entry.js";
 import { decodeLevel, encodeLevel, encodeShape, placedBox, readLevel, readShape, shapeOf, type Shape } from "./level.js";
-import { derived, inferredImpostor, normalize, type Ladder, type LodRequest } from "./request.js";
+import { derived, inferredImpostor, normalize, type Ladder, type LodRequest, type LodSource } from "./request.js";
 import { assetPath, publicPath, sourceRelativeURL } from "./url.js";
 
 // The loader: it describes a ladder of levels from a source, builds each level when first loaded and stores it.
@@ -79,10 +79,14 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
    */
   override async loadAsync(request: LodRequest): Promise<LodLevel[]> {
     const ladder = normalize(request, this.path, (url) => this.publicPath(this.manager.resolveURL(url)));
+    return this.loadLadder(ladder);
+  }
+
+  protected async loadLadder(ladder: Ladder): Promise<LodLevel[]> {
     const { url, levels: requests } = ladder;
     this.ladders++;
     const context = new LodLoadContext(
-      () => this.loadAsset(url),
+      () => this.source(ladder),
       this.options.onLevel,
       () => {
         if (--this.ladders === 0) void this.freeRenderer();
@@ -120,7 +124,7 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
       // Every load runs once however often it is asked for: every Lod made from the levels and the levels reading the
       // source's materials share one object. The source's starts synchronously, so it takes the spare before a coarser
       // level demanded in the same tick.
-      const loadSource = once(async () => context.arrive(context.take() ?? (await this.loadAsset(url)), 0, { materials: true }));
+      const loadSource = once(async () => context.arrive(context.take() ?? (await this.source(ladder)), 0, { materials: true }));
       const materials = async (): Promise<Material[]> => {
         const { object } = at(levels, 0);
         return materialsOf(object ?? (await loadSource()));
@@ -228,7 +232,7 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
       if (spare) disposeRecursive(spare);
       return bytes;
     }
-    const source = spare ?? (await this.loadAsset(ladder.url));
+    const source = spare ?? (await this.source(ladder));
     try {
       return at(await this.build(ladder, index, source, [{ format, entry }]), 0);
     } finally {
@@ -304,6 +308,16 @@ export class CachedLodLoader extends Loader<LodLevel[], LodRequest> {
     // A renderer that failed to initialise failed the bake that made it.
     const made = await renderer?.catch(() => undefined);
     if (made) this.releaseBakeRenderer(made);
+  }
+
+  private source(ladder: Ladder): Promise<Object3D> {
+    return ladder.factory ? this.makeSource(ladder.factory) : this.loadAsset(ladder.url);
+  }
+
+  protected async makeSource(factory: LodSource): Promise<Object3D> {
+    const source = await factory({ loader: this, manager: this.manager });
+    if (!isObject3D(source)) throw new TypeError("CachedLodLoader: source must return an Object3D");
+    return source;
   }
 
   protected async loadAsset(url: string): Promise<Object3D> {

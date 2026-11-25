@@ -7,8 +7,8 @@ import { createBakeRenderer, setUpBakeRenderer } from "../bake.js";
 import { adapterFormat, formatOf, type BlockFormat } from "../blocks/index.js";
 import type { LodLevel } from "../levels/index.js";
 import { CachedLodLoader as BrowserCachedLodLoader, type CachedLodLoaderOptions } from "./index.js";
-import type { LodRequest } from "./request.js";
-import { loaderPathURL, placeholderOrigin } from "./url.js";
+import { normalize, type Ladder, type LodRequest, type LodSource } from "./request.js";
+import { placeholderOrigin } from "./url.js";
 
 /**
  * CachedLodLoader in Node, as the cache plugin and the glts CLI run it: `loadAsync` builds and saves every level of
@@ -32,12 +32,11 @@ export class CachedLodLoader extends BrowserCachedLodLoader {
   }
 
   override loadAsync(request: LodRequest): Promise<LodLevel[]> {
-    const input = typeof request === "string" ? { url: request } : request;
-    const url = this.publicPath(this.manager.resolveURL(loaderPathURL(input.url, this.path)));
+    const ladder = normalize(request, this.path, (url) => this.publicPath(this.manager.resolveURL(url)));
     return session(async () => {
-      const loader = new SessionLoader(this.options);
+      const loader = new SessionLoader(this.options, ladder.factory ? ladder.publicURL : undefined);
       try {
-        return await loader.loadAsync({ ...input, url });
+        return await loader.loadPublic(ladder);
       } finally {
         await loader.dispose();
       }
@@ -63,10 +62,29 @@ class SessionLoader extends BrowserCachedLodLoader {
   /** Set once `loadAsync` has resolved, after which a level loads the source in a session of its own. */
   private disposed = false;
 
-  constructor(options: CachedLodLoaderOptions) {
-    super(publicManager(), options);
-    this.scripts = new ScriptLoader(this.manager);
+  constructor(options: CachedLodLoaderOptions, path: string | undefined) {
+    super(publicManager(path), options);
+    if (path) this.setPath(path);
+    // GLTS resolves resources against each script before mapping their absolute URLs to public files.
+    this.scripts = new ScriptLoader(path ? publicManager() : this.manager);
     this.manager.addHandler(/\.glts$/i, this.scripts);
+  }
+
+  loadPublic(ladder: Ladder): Promise<LodLevel[]> {
+    return this.loadLadder({ ...ladder, url: ladder.publicURL });
+  }
+
+  /** A load started by a source gets its own session and keys on public paths before they become fetchable data URLs. */
+  override loadAsync(request: LodRequest): Promise<LodLevel[]> {
+    return new CachedLodLoader(undefined, this.options).setPath(this.path).loadAsync(request);
+  }
+
+  protected override makeSource(factory: LodSource): Promise<Object3D> {
+    const make = async () => {
+      if (typeof document === "undefined") await canvas();
+      return super.makeSource(factory);
+    };
+    return this.disposed ? session(make) : make();
   }
 
   override async dispose(): Promise<void> {
@@ -138,12 +156,13 @@ function warnOnFallback(renderer: WebGPURenderer): void {
  * A manager that maps URLs at the placeholder origin to @drawcall/cache's `publicURL` of their path, which reads the public
  * file, and fails any other http(s) URL.
  */
-function publicManager(): LoadingManager {
+function publicManager(path?: string): LoadingManager {
   const manager = new LoadingManager();
-  manager.setURLModifier((url) => {
+  const base = path ? new URL(path, placeholderOrigin) : undefined;
+  manager.setURLModifier((value) => {
+    const url = base ? new URL(value, base).href : value;
     if (url.startsWith(`${placeholderOrigin}/`)) return publicURL(url.slice(placeholderOrigin.length));
-    if (/^https?:/i.test(url))
-      throw new Error(`CachedLodLoader: cannot precompute a load that fetches ${url}, which a stored level cannot be checked against`);
+    if (/^https?:/i.test(url)) throw new Error(`CachedLodLoader: cannot precompute a load that fetches ${url}, which a stored level cannot be checked against`);
     return url;
   });
   return manager;

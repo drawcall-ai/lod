@@ -24,8 +24,8 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
     loader.loadAsync({
       url: "./shrub_02_a.glb",
       levels: [
-        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
-        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 16, frames: 8 },
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8, draw: { depth: "card", parallax: 0 } },
+        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 16, frames: 8, draw: { depth: "card", parallax: 0 } },
         { type: "empty", maxPixels: 2 },
       ],
     }),
@@ -33,8 +33,8 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
     loader.loadAsync({
       url: "./shrub_02_b.glb",
       levels: [
-        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
-        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 16, frames: 8 },
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8, draw: { depth: "card", parallax: 0 } },
+        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 16, frames: 8, draw: { depth: "card", parallax: 0 } },
         { type: "empty", maxPixels: 2 },
       ],
     }),
@@ -42,8 +42,8 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
     loader.loadAsync({
       url: "./shrub_02_c.glb",
       levels: [
-        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
-        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 16, frames: 8 },
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8, draw: { depth: "card", parallax: 0 } },
+        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 16, frames: 8, draw: { depth: "card", parallax: 0 } },
         { type: "empty", maxPixels: 2 },
       ],
     }),
@@ -51,8 +51,8 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
     loader.loadAsync({
       url: "./shrub_02_d.glb",
       levels: [
-        { type: "impostor", layout: "hemi", resolution: 128, frames: 8 },
-        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 16, frames: 8 },
+        { type: "impostor", layout: "hemi", resolution: 128, frames: 8, draw: { depth: "card", parallax: 0 } },
+        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 16, frames: 8, draw: { depth: "card", parallax: 0 } },
         { type: "empty", maxPixels: 2 },
       ],
     }),

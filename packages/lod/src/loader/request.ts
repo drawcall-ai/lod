@@ -1,3 +1,5 @@
+import type { LoadingManager, Object3D } from "three/webgpu";
+import type { CachedLodLoader } from "./index.js";
 import type { ImpostorMeshOptions } from "../impostor/mesh/index.js";
 import type { BakeImpostorOptions } from "../impostor/bake/index.js";
 import type { SimplifyOptions } from "../simplify/index.js";
@@ -37,8 +39,11 @@ export function inferredImpostor(level: LodLevelRequest): level is Extract<LodLe
   return level.type === "impostor" && level.maxPixels === undefined;
 }
 
-/** A .glb, .gltf or .glts asset URL. Source and simplified levels load the original asset on demand. */
-export type LodRequest = string | { url: string; levels?: readonly LodLevelRequest[] };
+/** Make a fresh source, including resources the loader can dispose, each time the ladder needs one. */
+export type LodSource = (context: { loader: CachedLodLoader; manager: LoadingManager }) => Object3D | Promise<Object3D>;
+
+/** A model URL or an inline function that builds the model. */
+export type LodRequest = string | (({ url: string; source?: never } | { source: string | LodSource; url?: never }) & { levels?: readonly LodLevelRequest[] });
 const DEFAULT_LEVELS: readonly LodLevelRequest[] = [{ type: "impostor" }];
 
 /** A normalized request. */
@@ -50,8 +55,12 @@ export type Ladder = ReturnType<typeof normalize>;
  */
 export function normalize(request: LodRequest, path: string, key: (url: string) => string) {
   const input = typeof request === "string" ? { url: request } : request;
-  const url = loaderPathURL(input.url, path);
-  return { url, key: key(url), levels: structuredClone(input.levels ?? DEFAULT_LEVELS) };
+  const source = input.source ?? input.url;
+  const factory = typeof source === "function" ? source : undefined;
+  const url = typeof source === "string" ? loaderPathURL(source, path) : path || "/";
+  // An inline source in an application module has the same identity at every deployment base.
+  const publicURL = factory && !path ? "/" : key(url);
+  return { url, publicURL, factory, key: factory ? { source: factory, path: publicURL } : publicURL, levels: structuredClone(input.levels ?? DEFAULT_LEVELS) };
 }
 
 /** The request of ladder level `index`, which must be a derived level. */

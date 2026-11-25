@@ -22,18 +22,18 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
     loader.loadAsync({
       url: "./searsia_lucida_a_LOD0.glb",
       levels: [
-        { type: "impostor", layout: "hemi", maxPixels: 300 },
-        { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
-        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 16, frames: 8 },
+        { type: "impostor", layout: "hemi", maxPixels: 300, draw: { depth: "card", parallax: 0 } },
+        { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8, draw: { depth: "card", parallax: 0 } },
+        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 16, frames: 8, draw: { depth: "card", parallax: 0 } },
       ],
     }),
   e: () =>
     loader.loadAsync({
       url: "./searsia_lucida_e_LOD0.glb",
       levels: [
-        { type: "impostor", layout: "hemi", maxPixels: 300 },
-        { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8 },
-        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 16, frames: 8 },
+        { type: "impostor", layout: "hemi", maxPixels: 300, draw: { depth: "card", parallax: 0 } },
+        { type: "impostor", layout: "hemi", maxPixels: 60, resolution: 64, frames: 8, draw: { depth: "card", parallax: 0 } },
+        { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 16, frames: 8, draw: { depth: "card", parallax: 0 } },
       ],
     }),
 };
