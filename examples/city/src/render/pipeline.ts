@@ -1,11 +1,6 @@
 import * as THREE from "three/webgpu";
 import { texture } from "three/tsl";
 
-/** Whether `material` cuts pixels out (alpha test or alpha to coverage). */
-function isCutout(material: THREE.Material | null): boolean {
-  return material !== null && (material.alphaTest > 0 || material.alphaToCoverage);
-}
-
 /**
  * The renderer and its frame: the scene is drawn into a multisampled half-float target
  * with a float depth buffer and reversed depth (near 1, far 0), which keeps depth
@@ -61,16 +56,6 @@ export class Pipeline {
     // Neutral (Khronos PBR Neutral) keeps hues closest to a photograph here; see viewer/main.ts
     renderer.toneMapping = THREE.NeutralToneMapping;
     renderer.toneMappingExposure = 0.8;
-    // Three's opaque order (group, render order, near to far), except that opaque surfaces go before cutouts of the
-    // same render order: houses and trunks write depth first, so leaves and grass behind them shade no pixels.
-    renderer.setOpaqueSort(
-      (a, b) =>
-        Number(a.groupOrder) - Number(b.groupOrder) ||
-        Number(a.renderOrder) - Number(b.renderOrder) ||
-        Number(isCutout(a.material)) - Number(isCutout(b.material)) ||
-        Number(a.z) - Number(b.z) ||
-        Number(a.id) - Number(b.id),
-    );
     return new Pipeline(renderer, scene, camera);
   }
 
