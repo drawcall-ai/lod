@@ -68,7 +68,7 @@ class SessionLoader extends BrowserCachedLodLoader {
   ) {
     // An inline source's relative URLs resolve as on a page at the app's root.
     super(publicManager(`${placeholderOrigin}/`), options);
-    // The loader an inline source is given resolves requests against the loader's path, served (see `loadAsync`).
+    // An inline source's own loadAsync calls resolve against the served path of the loader it was given.
     if (ladder.source) this.setPath(ladder.key);
     // A .glts script resolves its own URLs against itself, after the manager's modifier has seen them as written.
     this.scripts = new ScriptLoader(publicManager());

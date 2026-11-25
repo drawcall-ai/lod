@@ -30,18 +30,15 @@ export function entryOf(
 
 /**
  * What derives a level's content, by its role rather than its ladder position, so adding or removing another level
- * keeps this one's entry. Switch heights and impostor draw options apply at decode, so changing one reuses it, except
- * the heights noted below.
+ * keeps this one's entry. Switch heights and impostor draw options apply at decode, so changing one reuses it, unless
+ * it also shapes the content: an impostor's `maxPixels` sizes its bake, a simplified level's sets its `cardError`.
  */
 function parameters(level: Derived): Value {
   switch (level.type) {
-    case "simplify":
-      return {
-        type: level.type,
-        ratio: level.ratio ?? null,
-        // A height that simplifies foliage cards.
-        ...(cardError(level) > 0 && { maxPixels: level.maxPixels ?? null }),
-      };
+    case "simplify": {
+      const error = cardError(level);
+      return { type: level.type, ratio: level.ratio ?? null, ...(error > 0 && { error }) };
+    }
     case "baked":
       return {
         type: level.type,
