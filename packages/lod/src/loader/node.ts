@@ -8,7 +8,7 @@ import { adapterFormat, formatOf, type BlockFormat } from "../blocks/index.js";
 import type { LodLevel } from "../levels/index.js";
 import { CachedLodLoader as BrowserCachedLodLoader, type CachedLodLoaderOptions } from "./index.js";
 import { normalize, type Ladder, type LodRequest, type LodSource } from "./request.js";
-import { placeholderOrigin } from "./url.js";
+import { placeholderOrigin, publicPath } from "./url.js";
 
 /**
  * CachedLodLoader in Node, as the cache plugin and the glts CLI run it: `loadAsync` builds and saves every level of
@@ -46,9 +46,12 @@ export class CachedLodLoader extends BrowserCachedLodLoader {
   /** Nothing to free: each load frees what it made. */
   override async dispose(): Promise<void> {}
 
-  /** A `file:` URL in the public directory as its served path; others as in browsers. */
+  /**
+   * A `file:` URL in the public directory as its served path; others as in browsers, from an app served at the root:
+   * paths here, as written or as the cache plugin's `setPath` gives them, leave out the base `basePath` holds.
+   */
   protected override publicPath(url: string): string {
-    if (!url.startsWith("file:")) return super.publicPath(url);
+    if (!url.startsWith("file:")) return publicPath(url, "/");
     const base = publicFile("/");
     if (!url.startsWith(base)) throw new Error(`CachedLodLoader: cannot precompute "${url}", which lies outside the public directory ${base}`);
     return `/${url.slice(base.length)}`;
@@ -78,6 +81,11 @@ class SessionLoader extends BrowserCachedLodLoader {
   /** The ladder's levels, loaded from its served path. */
   loadLevels(): Promise<LodLevel[]> {
     return this.loadLadder({ ...this.ladder, url: this.ladder.key });
+  }
+
+  /** Entries on disk: the cache's URL, which only browsers read, is not resolved through the manager, which maps to files. */
+  protected override cacheOptions(): { basePath: string; root: string | undefined } {
+    return { basePath: "/_cache/", root: this.options.root };
   }
 
   /** A load an inline source starts gets its own session, keyed on served paths rather than the files they map to. */
