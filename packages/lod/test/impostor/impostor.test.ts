@@ -40,6 +40,8 @@ describe("validateImpostor", () => {
     ["a box whose min exceeds its max", { box: [1, 0, -1, -1, 2, 1] }, /box min/],
     ["a zero halfSize", { halfSize: 0 }, /halfSize/],
     ["a string halfSize", { halfSize: "1.5" }, /halfSize/],
+    ["a missing blend cell", { rects: [0, 0, 1, 1] }, /four edges per blend cell/],
+    ["an inverted card rectangle", { rects: Array.from({ length: 9 }, () => [0, 1, 1, 0]).flat() }, /ordered edges/],
     ["maps out of order", { maps: ["base", "orm", "normalDepth"] }, /maps must be/],
     ["an unknown map", { maps: ["base", "normalDepth", "height"] }, /maps must be/],
     ["names joined into one map", { maps: ["base", "normalDepth,orm", "emissive"] }, /maps must be/],

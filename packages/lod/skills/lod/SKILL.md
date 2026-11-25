@@ -157,7 +157,7 @@ Custom shading on an impostor has little room: an impostor uses close to WebGPU'
 
 Match a low shell to the source's occupied shape and fit it within the source's bounds: `CachedLodLoader` rejects a level that reaches beyond them. Preserve important silhouette features and remove faces that will never be seen. Generate shell and source from the same parameters when possible. Author rooms separately, with their boundaries just behind windows and furnishings near visible walls; include rooms in the detailed source when they should appear up close too.
 
-For dense cover, combine near individuals with a baked distant patch. Jitter position and rotation to avoid aligned gaps, preserve continuity across tile borders, and use side walls only on exposed boundaries. An empty far level can stop drawing individuals once the patch carries their appearance.
+Where distant ground cover needs to follow the terrain, combine nearby plants with a ground-aligned baked patch. Jitter position and rotation to avoid aligned gaps, preserve continuity across tile borders, and use side walls only on exposed boundaries. An empty far level can stop drawing individuals once the patch carries their appearance.
 
 ## Wait for a complete frame before a screenshot
 
@@ -196,7 +196,7 @@ Loaded levels stay until their Lod is disposed, which nothing does for you: in a
 
 For a tree seen both up close and across a forest, try source → simplified whole tree → whole-tree impostor, with the simplified level switching at no more than about a thousand pixels: `simplify` also removes the triangles inside the leaf cards it keeps, to about a pixel's error at that height, outlines kept. A whole-tree impostor without parallax may show doubled branches or a flattened crown between its baked views as the camera passes; one parallax step usually fixes that.
 
-For rows of tall plants with gaps between their leaves, such as corn, compare a `baked` middle mesh with a whole-plant impostor from inside the row: the overlapping impostor cards all shade the gaps, which a low-poly mesh does not draw.
+For overlapping grass patches, try a whole-patch impostor with `parallax: 0` once the patch reads well as a flat image. Its fitted rectangle can trim empty space around the patch. Gaps inside it still cost pixels. For tall plants such as corn, compare a `baked` middle mesh with a whole-plant impostor from inside the row.
 
 ## Tune the complete scene
 

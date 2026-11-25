@@ -8,6 +8,7 @@ import { swapMaterials, type BakeSettings } from "./materials.js";
 import { bakeAtlas } from "./sheet.js";
 import { sourceForBake } from "./source.js";
 import { fittedHalfSize } from "./fit.js";
+import { fittedRects } from "./rects.js";
 
 export interface BakeImpostorOptions {
   /**
@@ -174,6 +175,8 @@ async function bakeSource(source: Object3D, renderer: Renderer, options: BakeImp
   const [top] = mips;
   if (!top) throw new Error("bakeImpostor: no mip levels");
   if (baked.specular) impostor.specular = meanSpecular(baked.specular, top);
+  const rects = await fittedRects(impostor, renderer);
+  if (rects) impostor.rects = rects;
   validateImpostor(impostor);
   return impostor;
 }

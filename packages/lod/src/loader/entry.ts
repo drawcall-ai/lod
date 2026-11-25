@@ -5,11 +5,8 @@ import { derived, inferredImpostor, type Ladder } from "./request.js";
 
 // What a level is stored under.
 
-/**
- * What builds and lays out a stored level, and so what identifies it beside its request: bump it with any change to
- * the bytes a level or shape entry holds.
- */
-const version = "lod-level@29";
+/** Bump the version of the entry whose stored bytes change. */
+const versions = { simplify: 29, baked: 29, impostor: 30, shape: 29 };
 
 /**
  * The entry of derived level `of` of `ladder` with its maps in `format`, or of its shape, keyed by the request alone. A
@@ -22,7 +19,9 @@ export function entryOf(
   { basePath, root }: Pick<CacheEntryOptions, "basePath" | "root">,
   format: BlockFormat | null = null,
 ): CacheEntry {
-  const level = of === "shape" ? { type: of, impostors: ladder.levels.filter(inferredImpostor).map(parameters) } : parameters(derived(ladder.levels, of));
+  const request = of === "shape" ? null : derived(ladder.levels, of);
+  const level = request ? parameters(request) : { type: "shape", impostors: ladder.levels.filter(inferredImpostor).map(parameters) };
+  const version = `lod-level@${versions[request?.type ?? "shape"]}`;
   const value = { url: ladder.key, ...(ladder.source && { source: ladder.source }), level, ...(format && { format }) };
   return new CacheEntry({ basePath, root, version, dependencies: { level: { value } } });
 }

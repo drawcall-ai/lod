@@ -47,6 +47,8 @@ export interface Impostor {
   box: [number, number, number, number, number, number];
   /** half the edge of every frame's orthographic view, in source units, centred on the box centre */
   halfSize: number;
+  /** Card edges (min x, min y, max x, max y) per blend cell, bottom row first, normalized to the full card (each axis spans -1 to 1). Omitted when every card uses its full extent. */
+  rects?: number[];
   /** `base`, `normalDepth`, `orm`, then `emissive` if it was baked */
   maps: ImpostorMap[];
   /**
@@ -83,6 +85,9 @@ export function boundingRadius(b: Impostor["box"]): number {
  */
 export const PAD = 0.06;
 
+/** Side of a coverage reference view used to fit a card, in pixels. */
+export const RECT_PIXELS = 64;
+
 /**
  * `texelPixels` of any impostor baked at `resolution`, at least: a frame fitted to the source's bounding sphere, the
  * widest it can be. The default `maxPixels` of an impostor level a loader describes before its bake.
@@ -111,7 +116,7 @@ export function validateImpostor(value: unknown): asserts value is Impostor {
   }
   if (typeof value !== "object" || value === null) fail("not an object");
   const fields: Partial<Record<keyof Impostor, unknown>> = value;
-  const { version, layout, frames, size, box, halfSize, maps, specular, layers } = fields;
+  const { version, layout, frames, size, box, halfSize, rects, maps, specular, layers } = fields;
   if (version !== 4) fail(`unsupported version ${String(version)}; bake it again`);
   if (layout !== "hemi" && layout !== "full") fail(`unknown layout "${String(layout)}"`);
   if (!isNumber(frames) || !Number.isInteger(frames) || frames < 2) fail("frames must be an integer >= 2");
@@ -120,6 +125,12 @@ export function validateImpostor(value: unknown): asserts value is Impostor {
   if (!isBox(box)) fail("box must be 6 finite numbers");
   if (box[0] > box[3] || box[1] > box[4] || box[2] > box[5]) fail("box min must not exceed max");
   if (!isNumber(halfSize) || halfSize <= 0) fail("halfSize must be a positive number");
+  if (rects !== undefined) {
+    if (!Array.isArray(rects) || rects.length !== (frames - 1) ** 2 * 4) fail("rects must hold four edges per blend cell");
+    for (const [i, edge] of rects.entries()) {
+      if (!isNumber(edge) || edge < -1 || edge > 1 || (i % 4 >= 2 && edge < rects[i - 2])) fail("rects must have ordered edges in [-1, 1]");
+    }
+  }
   if (!Array.isArray(maps) || maps.length < 3 || !maps.every((map, i) => map === MAPS[i]))
     fail(`maps must be base, normalDepth, orm, optionally followed by emissive; got ${String(maps)}`);
   if (specular !== undefined && !(Array.isArray(specular) && specular.length === 4 && specular.every((v) => isNumber(v) && v >= 0 && v <= 1)))

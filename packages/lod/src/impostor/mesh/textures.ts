@@ -1,4 +1,4 @@
-import { LinearFilter, LinearMipmapLinearFilter, NoColorSpace, SRGBColorSpace, type Texture } from "three/webgpu";
+import { DataTexture, FloatType, RGBAFormat, LinearFilter, LinearMipmapLinearFilter, NoColorSpace, SRGBColorSpace, type Texture } from "three/webgpu";
 import { levelsTexture } from "../../blocks/index.js";
 import type { Impostor } from "../impostor.js";
 
@@ -15,4 +15,13 @@ export function impostorTextures(impostor: Impostor): Texture[] {
     texture.needsUpdate = true;
     return texture;
   });
+}
+
+/** One texel per blend cell, read by the vertices that face the camera. */
+export function rectTexture({ rects, frames }: Impostor): Texture | null {
+  if (!rects) return null;
+  const side = frames - 1;
+  const texture = new DataTexture(new Float32Array(rects), side, side, RGBAFormat, FloatType);
+  texture.needsUpdate = true;
+  return texture;
 }

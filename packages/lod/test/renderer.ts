@@ -35,8 +35,8 @@ export const GPU_TIMEOUT = 120_000;
 export const eventually = <T>(check: () => T | Promise<T>, interval = 50): Promise<T> => vi.waitFor(check, { timeout: GPU_TIMEOUT, interval });
 
 /** `scene` from `camera` on a `size` px square target, cleared transparent: RGBA bytes, rows bottom-up. */
-export async function render(scene: Scene, camera: Camera, size = 64): Promise<Uint8Array> {
-  const target = new RenderTarget(size, size);
+export async function render(scene: Scene, camera: Camera, size = 64, samples = 0): Promise<Uint8Array> {
+  const target = new RenderTarget(size, size, { samples });
   renderer.setRenderTarget(target);
   renderer.render(scene, camera);
   renderer.setRenderTarget(null);

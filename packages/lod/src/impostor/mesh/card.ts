@@ -1,4 +1,4 @@
-import type { Node } from "three/webgpu";
+import type { Node, Texture } from "three/webgpu";
 import {
   cameraPosition,
   cameraProjectionMatrix,
@@ -6,6 +6,10 @@ import {
   cameraWorldMatrix,
   clamp,
   dot,
+  ivec2,
+  mix,
+  textureLoad,
+  viewportSize,
   float,
   floor,
   length,
@@ -21,7 +25,7 @@ import {
   vec4,
 } from "three/tsl";
 import { affine, column, isOrthographic } from "../../tsl.js";
-import { PAD, type ImpostorLayout } from "../impostor.js";
+import { PAD, RECT_PIXELS, type ImpostorLayout } from "../impostor.js";
 import { basisNode, encodeNode } from "../octahedral.js";
 
 // The impostor's card: a quad built in the vertex stage facing the camera (or the light,
@@ -32,6 +36,7 @@ import { basisNode, encodeNode } from "../octahedral.js";
 
 /** What every card of one impostor reads. */
 export interface CardInputs {
+  mipBias: Node<"float">;
   layout: ImpostorLayout;
   /** bounding box centre and half its edges, in the object's space */
   centre: Node<"vec3">;
@@ -86,7 +91,7 @@ export type Card = typeof card;
  * placed by `instance`, `deform` (wind) applied in its space. Call it while the vertex
  * stage builds the position: it writes the varyings `card` reads.
  */
-export function buildCard(inputs: CardInputs, instance: Node<"mat4">, deform: Node<"mat4"> | null): Node<"vec3"> {
+export function buildCard(inputs: CardInputs, instance: Node<"mat4">, deform: Node<"mat4"> | null, rects: Texture | null): Node<"vec3"> {
   const { layout, centre, extent, halfSize, frames, placement } = inputs;
   const local = (deform ? instance.mul(deform) : instance).mul(placement).toVar();
   const model = modelWorldMatrix.mul(local).toVar();
@@ -107,17 +112,44 @@ export function buildCard(inputs: CardInputs, instance: Node<"mat4">, deform: No
   // PAD) for the filtered edge, and no more than the frame: every pixel of it runs the
   // whole surface, and a square frame is mostly empty for a tall plant.
   const box = vec2(dot(tangent.abs(), extent), dot(bitangent.abs(), extent)).add(halfSize.mul(PAD));
-  const size = min(box, vec2(halfSize, halfSize)).mul(grow.mul(2));
-  const point = centre
-    .add(tangent.mul(positionGeometry.x.mul(size.x)))
-    .add(bitangent.mul(positionGeometry.y.mul(size.y)))
-    .toVar();
-
+  const half = min(box, vec2(halfSize)).mul(grow);
+  const corner = positionGeometry.xy.mul(2);
   const last = frames.sub(1);
   // Clamped: rounding can put a horizon direction a hair outside the grid.
   const grid = clamp(encodeNode(layout, toCamera).mul(last), vec2(0, 0), vec2(last, last));
   const cell = min(floor(grid), vec2(last.sub(1), last.sub(1)));
   const f = grid.sub(cell);
+  let offset = corner.mul(half);
+  if (rects) {
+    const rect = textureLoad(rects, ivec2(cell));
+    const edge = mix(rect.xy, rect.zw, positionGeometry.xy.add(0.5)).mul(corner);
+    // The projected full card axes, in viewport pixels at its centre. Their altitudes give the
+    // distance between opposite edges even when a non-uniformly scaled instance skews the card.
+    const clip = cameraProjectionMatrix.mul(cameraViewMatrix).mul(model);
+    const c = clip.mul(vec4(centre, 1));
+    const axis = (v: Node<"vec3">) => {
+      const d = clip.mul(vec4(v, 0));
+      return d.xy.sub(c.xy.mul(d.w.div(c.w))).mul(viewportSize.div(c.w));
+    };
+    const x = axis(tangent.mul(half.x));
+    const y = axis(bitangent.mul(half.y));
+    const lengths = vec2(x.length(), y.length());
+    const area = x.x.mul(y.y).sub(x.y.mul(y.x)).abs();
+    // The atlas uses the coarser of its two gradients for both axes. A squashed card can
+    // therefore filter across several screen pixels along its longer axis.
+    const footprint = max(half.x.mul(lengths.y), half.y.mul(lengths.x)).mul(2).div(max(area, 1e-6));
+    const pixel = footprint.div(half);
+    // Leave a pixel for filtered edges. Return to full coverage as perspective spreads the
+    // silhouette or a reference pixel is magnified enough to reveal finer details.
+    const near = select(ortho, float(0), halfSize.mul(Math.SQRT2).div(distance));
+    const zoom = max(lengths.x, lengths.y).div(RECT_PIXELS);
+    const fitted = min(vec2(1), edge.add(pixel).add(near.mul(2)));
+    const safeEdge = mix(fitted, vec2(1), clamp(zoom.sub(1), 0, 1));
+    let use = near.lessThan(0.25).and(inputs.mipBias.equal(-0.5));
+    if (layout === "hemi") use = use.and(toCamera.y.greaterThanEqual(0));
+    offset = select(use, corner.mul(half).mul(safeEdge), offset);
+  }
+  const point = centre.add(tangent.mul(offset.x)).add(bitangent.mul(offset.y)).toVar();
   const ray = select(ortho, toCamera.negate(), point.sub(eye));
 
   // Every vertex of a card holds the same frames and weights, so they interpolate to themselves.

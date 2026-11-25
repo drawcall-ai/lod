@@ -20,7 +20,7 @@ import { boundingRadius, boxCentre, boxExtent, type Impostor } from "../impostor
 import { buildCard, card, type CardInputs } from "./card.js";
 import type { ImpostorShading } from "./index.js";
 import { buildSurface, cosine, type Lighting, type Surface, type SurfaceInputs } from "./surface.js";
-import { impostorTextures } from "./textures.js";
+import { impostorTextures, rectTexture } from "./textures.js";
 
 const placement = uniform(new Matrix4()).onObjectUpdate(({ object }, self) =>
   object && isImpostorMesh(object) ? self.value.copy(object.placement) : self.value.identity(),
@@ -61,6 +61,7 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
   /** The impostor's atlases, one per map: the material's own, freed with it. */
   readonly textures: readonly Texture[];
 
+  private readonly rects: Texture | null;
   private readonly inputs: CardInputs & SurfaceInputs;
   private readonly specular: Node<"vec4">;
   /**
@@ -83,6 +84,7 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
     this.name = "impostor";
     const textures = impostorTextures(impostor);
     this.textures = textures;
+    this.rects = shading.parallax === 0 && shading.cutoff === 0.5 ? rectTexture(impostor) : null;
     this.mipBias = uniform(shading.mipBias);
     this.specular = uniform(new Vector4().fromArray(impostor.specular ?? [0.04, 0.04, 0.04, 1]));
     const layer = (map: Impostor["maps"][number]) => textures[impostor.maps.indexOf(map)] ?? null;
@@ -162,6 +164,7 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
     this.disposed = true;
     super.dispose();
     for (const texture of this.textures) texture.dispose();
+    this.rects?.dispose();
   }
 
   /** The card's vertex as `builder` draws it, in the vertex stage. */
@@ -170,7 +173,7 @@ export class ImpostorMaterial extends MeshStandardNodeMaterial {
     // vInstanceColor, which only its InstancedMesh writes: white here, as the colour node
     // applies them (the same way for every clone sharing this material).
     if (isImpostorMesh(builder.object) && builder.object.instanceColor) varyingProperty("vec3", "vInstanceColor").assign(vec3(1, 1, 1));
-    return buildCard(this.inputs, instancesOf(builder.object).matrix, this.deformNode);
+    return buildCard(this.inputs, instancesOf(builder.object).matrix, this.deformNode, isShadowPass(builder.material) ? null : this.rects);
   }
 
   /**

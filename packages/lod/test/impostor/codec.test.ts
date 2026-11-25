@@ -31,6 +31,7 @@ describe("impostor codec", () => {
   it("decodes the metadata as encoded and every map's levels as the blocks of the format it was encoded in", async () => {
     const source = make(["base", "normalDepth", "orm", "emissive"]);
     source.specular = [0.03, 0.06, 0.08, 1];
+    source.rects = Array.from({ length: (source.frames - 1) ** 2 }, () => [0, 0.25, 0.75, 1]).flat();
     const { layers: _, ...meta } = source;
     for (const format of BLOCK_FORMATS) {
       const file = await encodeImpostorAsync(source, bakeRenderer, format);
