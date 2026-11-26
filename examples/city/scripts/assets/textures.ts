@@ -1,5 +1,4 @@
-import { copyFile, mkdir, readFile, stat } from "node:fs/promises";
-import { unzipSync } from "fflate";
+import { copyFile, mkdir, stat } from "node:fs/promises";
 import sharp from "sharp";
 import type { Manifest } from "./manifest.ts";
 import { cache, download } from "./files.ts";
@@ -13,7 +12,7 @@ const keys = { diff: "Diffuse", nor: "nor_gl", arm: "arm" } as const;
 /** Where set `id`'s map is encoded. */
 const encoded = (id: string, map: MapName) => `${cache}${id}/${map}.webp`;
 
-/** Copies set `id`, encoded by `textureSet` or `ambientSet`, into `folder` as textures/<id>/{diff,nor,arm}.webp. */
+/** Copies set `id`, encoded by `textureSet`, into `folder` as textures/<id>/{diff,nor,arm}.webp. */
 export async function placeSet(id: string, folder: string): Promise<void> {
   await mkdir(`${folder}textures/${id}`, { recursive: true });
   for (const map of maps) await copyFile(encoded(id, map), `${folder}textures/${id}/${map}.webp`);
@@ -40,33 +39,6 @@ export async function textureSet(id: string): Promise<Manifest["textures"][strin
   const size = await bytes(id);
   console.log(`${id.padEnd(28)} ${(w / 1000).toFixed(2)} × ${(h / 1000).toFixed(2)} m  ${(size / 1e6).toFixed(1).padStart(5)} MB`);
   return { bytes: size, credit: credit(id, info) };
-}
-
-/** An ambientCG 1K set: colour and GL normal as they are, AO and roughness packed into arm like Poly Haven's. */
-export async function ambientSet(id: string): Promise<Manifest["textures"][string]> {
-  const zip = await download({ url: `https://ambientcg.com/get?file=${id}_1K-JPG.zip` }, `${cache}${id}/${id}_1K-JPG.zip`);
-  const files = unzipSync(new Uint8Array(await readFile(zip)));
-  const part = (suffix: string) => {
-    const data = files[`${id}_1K-JPG_${suffix}.jpg`];
-    if (!data) throw new Error(`${id}: zip has no ${suffix} map`);
-    return Buffer.from(data);
-  };
-  await sharp(part("Color")).webp({ quality: 86 }).toFile(encoded(id, "diff"));
-  await sharp(part("NormalGL")).webp({ quality: 92 }).toFile(encoded(id, "nor"));
-  const { width, height } = await sharp(part("Color")).metadata();
-  const grey = (b: Buffer) => sharp(b).resize(width, height).toColourspace("b-w").raw().toBuffer();
-  const raw = { width, height, channels: 1 } as const;
-  const metal = Buffer.alloc(width * height);
-  await sharp(await grey(part("AmbientOcclusion")), { raw })
-    .joinChannel([await grey(part("Roughness")), metal], { raw })
-    .webp({ quality: 90 })
-    .toFile(encoded(id, "arm"));
-  const size = await bytes(id);
-  console.log(`${id.padEnd(28)} ${(size / 1e6).toFixed(1).padStart(5)} MB`);
-  return {
-    bytes: size,
-    credit: { name: id, authors: ["ambientCG"], license: "CC0-1.0", source: `https://ambientcg.com/view?id=${id}` },
-  };
 }
 
 export async function environment(id: string, folder: string): Promise<Manifest["hdri"]> {

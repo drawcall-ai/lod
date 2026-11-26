@@ -4,6 +4,7 @@ import {
   DirectionalLight,
   Mesh,
   MeshStandardMaterial,
+  OrthographicCamera,
   PerspectiveCamera,
   PlaneGeometry,
   RenderTarget,
@@ -45,6 +46,30 @@ function atlas(normalDepth = [128, 128, 255, 128]): Impostor {
     })),
   };
 }
+
+it("samples the selected frames when the requested mip exceeds the atlas chain", { timeout: GPU_TIMEOUT }, async () => {
+  const data = atlas();
+  const last = must(must(data.layers[0]).mipmaps.at(-1));
+  // From +Z the full atlas blends the middle pair on the horizon. Surround them with red.
+  for (let i = 0; i < 16; i++) last.set(i === 13 || i === 14 ? [0, 255, 0, 255] : [255, 0, 0, 255], i * 4);
+  const mesh = new ImpostorMesh(data, 1, { mipBias: 16, parallax: 0 });
+  const scene = new Scene().add(mesh, new AmbientLight(0xffffff, 3));
+  const camera = new PerspectiveCamera(50, 1, 0.1, 100);
+  camera.position.z = 6;
+  const target = new RenderTarget(64, 64);
+  try {
+    renderer.setRenderTarget(target);
+    renderer.render(scene, camera);
+    const pixels = await readBytes(renderer, target, 0);
+    const center = (32 * 64 + 32) * 4;
+    expect(pixels[center + 1]).toBeGreaterThan(100);
+    expect(pixels[center]).toBeLessThan(10);
+  } finally {
+    renderer.setRenderTarget(null);
+    target.dispose();
+    mesh.dispose();
+  }
+});
 
 it.each([
   { parallax: 0, samples: 0 },
@@ -134,62 +159,72 @@ it("glares in a low sun ahead only where a texel's normals agree", { timeout: GP
   expect(grass).toBeLessThan(flat / 2);
 });
 
-it.each([false, true])("occludes at the chosen surface or card depth (reversed depth: %s)", { timeout: GPU_TIMEOUT }, async (reversedDepthBuffer) => {
-  const drawing = new WebGPURenderer({ reversedDepthBuffer });
-  await drawing.init();
-  const target = new RenderTarget(64, 64);
-  const source = new Mesh(new BoxGeometry(2, 2, 2), new MeshStandardMaterial({ color: 0xe04020 }));
-  const impostor = new ImpostorMesh(await bakeImpostor(source, bakeRenderer, { frames: 4, resolution: 32 }));
-  const instanced = lodOf([{ object: impostor }], 1);
-  const card = new ImpostorMesh(impostor.impostor, 1, { depth: "card" });
-  const instancedCard = lodOf([{ object: card }], 1);
-  const wall = new Mesh(new PlaneGeometry(4, 4), new MeshStandardMaterial({ color: 0x2040e0 }));
-  const camera = new PerspectiveCamera(40, 1, 0.1, 20);
-  camera.position.z = 6;
-  const light = new AmbientLight(0xffffff, Math.PI);
-  const scene = new Scene();
-  const redAtCentre = async (object: Object3D) => {
-    scene.clear().add(object, wall, light);
-    drawing.setRenderTarget(target);
-    drawing.render(scene, camera);
-    const pixels = await readBytes(drawing, target, 0);
-    drawing.setRenderTarget(null);
-    const offset = (32 * 64 + 32) * 4;
-    const red = pixels[offset],
-      blue = pixels[offset + 2];
-    if (red === undefined || blue === undefined) throw new Error("Missing centre pixel");
-    return red > blue;
-  };
-  try {
-    // Its first render tells the Lod its renderer, and draws nothing of it.
-    drawing.render(new Scene().add(instanced, instancedCard), camera);
-    for (const z of [-0.5, 0.5, 1.5]) {
-      wall.position.z = z;
-      const real = await redAtCentre(source);
-      const proxy = await redAtCentre(impostor);
-      expect(real).toBe(z < 1);
-      expect(proxy).toBe(z < 1);
-      expect(await redAtCentre(instanced)).toBe(z < 1);
-      expect(await redAtCentre(card)).toBe(z < 0);
-      expect(await redAtCentre(instancedCard)).toBe(z < 0);
+it.each([
+  { reversedDepthBuffer: false, orthographic: false },
+  { reversedDepthBuffer: true, orthographic: false },
+  { reversedDepthBuffer: true, orthographic: true },
+])(
+  "occludes at the chosen depth (reversed: $reversedDepthBuffer, orthographic: $orthographic)",
+  { timeout: GPU_TIMEOUT },
+  async ({ reversedDepthBuffer, orthographic }) => {
+    const drawing = new WebGPURenderer({ reversedDepthBuffer });
+    await drawing.init();
+    const target = new RenderTarget(64, 64);
+    const source = new Mesh(new BoxGeometry(2, 2, 2), new MeshStandardMaterial({ color: 0xe04020 }));
+    const impostor = new ImpostorMesh(await bakeImpostor(source, bakeRenderer, { frames: 4, resolution: 32 }));
+    const instanced = lodOf([{ object: impostor }], 1);
+    const card = new ImpostorMesh(impostor.impostor, 1, { depth: "card" });
+    const instancedCard = lodOf([{ object: card }], 1);
+    const wall = new Mesh(new PlaneGeometry(4, 4), new MeshStandardMaterial({ color: 0x2040e0 }));
+    const camera = orthographic ? new OrthographicCamera(-2, 2, 2, -2, 0.1, 20) : new PerspectiveCamera(40, 1, 0.1, 20);
+    camera.position.z = 6;
+    // A world-space unit along the ray has a different length in the bake's frame.
+    for (const object of [source, impostor, card, instanced, instancedCard]) object.scale.set(1, 0.75, 2);
+    const light = new AmbientLight(0xffffff, Math.PI);
+    const scene = new Scene();
+    const redAtCentre = async (object: Object3D) => {
+      scene.clear().add(object, wall, light);
+      drawing.setRenderTarget(target);
+      drawing.render(scene, camera);
+      const pixels = await readBytes(drawing, target, 0);
+      drawing.setRenderTarget(null);
+      const offset = (32 * 64 + 32) * 4;
+      const red = pixels[offset],
+        blue = pixels[offset + 2];
+      if (red === undefined || blue === undefined) throw new Error("Missing centre pixel");
+      return red > blue;
+    };
+    try {
+      // Its first render tells the Lod its renderer, and draws nothing of it.
+      drawing.render(new Scene().add(instanced, instancedCard), camera);
+      for (const z of [-0.5, 1.5, 2.5]) {
+        wall.position.z = z;
+        const real = await redAtCentre(source);
+        const proxy = await redAtCentre(impostor);
+        expect(real).toBe(z < 2);
+        expect(proxy).toBe(z < 2);
+        expect(await redAtCentre(instanced)).toBe(z < 2);
+        expect(await redAtCentre(card)).toBe(z < 0);
+        expect(await redAtCentre(instancedCard)).toBe(z < 0);
+      }
+      // Writing the rasterized depth explicitly gives the same image but costs early rejection on overlapping cards.
+      const { fragmentShader } = await drawing.debug.getShaderAsync(new Scene().add(card), camera, card);
+      expect(fragmentShader).toBeTypeOf("string");
+      expect(fragmentShader).not.toContain("frag_depth");
+    } finally {
+      instancedCard.dispose();
+      card.dispose();
+      instanced.dispose();
+      impostor.dispose();
+      source.geometry.dispose();
+      source.material.dispose();
+      wall.geometry.dispose();
+      wall.material.dispose();
+      target.dispose();
+      drawing.dispose();
     }
-    // Writing the rasterized depth explicitly gives the same image but costs early rejection on overlapping cards.
-    const { fragmentShader } = await drawing.debug.getShaderAsync(new Scene().add(card), camera, card);
-    expect(fragmentShader).toBeTypeOf("string");
-    expect(fragmentShader).not.toContain("frag_depth");
-  } finally {
-    instancedCard.dispose();
-    card.dispose();
-    instanced.dispose();
-    impostor.dispose();
-    source.geometry.dispose();
-    source.material.dispose();
-    wall.geometry.dispose();
-    wall.material.dispose();
-    target.dispose();
-    drawing.dispose();
-  }
-});
+  },
+);
 
 it("casts at reconstructed depth when the camera draws card depth", { timeout: GPU_TIMEOUT }, async () => {
   const source = new Mesh(new BoxGeometry(2, 2, 2), new MeshStandardMaterial());

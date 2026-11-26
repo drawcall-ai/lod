@@ -10,7 +10,6 @@ import { ceiling } from "../../public/suburban-house/finishes.ts";
 import { Materials } from "../../public/suburban-house/materials.ts";
 import { seatMatrix } from "../world/corn/seat.ts";
 import { foliageModel } from "@drawcall/lod";
-import { terrain } from "../render/ground/material.ts";
 import { surface, Textures } from "../render/materials.ts";
 
 /** Something the viewer can show: the object, an optional close-up target, and the ground under it. */
@@ -20,7 +19,7 @@ export interface Item {
   focus?: THREE.Box3;
   /** What the medium view frames; the whole object when absent. */
   overview?: THREE.Box3;
-  ground: THREE.Material;
+  ground?: THREE.Material;
   /** Direction from the framed box toward the camera; front right and a little above when absent. */
   from?: THREE.Vector3;
   dispose(): void;
@@ -57,10 +56,10 @@ async function model(textures: Textures, url: string): Promise<Content> {
     o.castShadow = o.receiveShadow = true;
   });
   foliageModel(scene, { translucency: 0.6 });
-  return { object: scene, ground: terrain(textures) };
+  return { object: scene };
 }
 
-async function houseItem(textures: Textures, load: Load, variant: number, file: "source" | "low"): Promise<Content> {
+async function houseItem(load: Load, variant: number, file: "source" | "low"): Promise<Content> {
   const p = houseParams(variant);
   const object = await load(`suburban-house/${file}.glts?variant=${variant}`);
   // close-up: the front eave corner, where tiles, gutter, downpipe, fascia and a window meet
@@ -69,14 +68,14 @@ async function houseItem(textures: Textures, load: Load, variant: number, file: 
     new THREE.Vector3(p.width / 2 - 2.6, eave - 2.2, p.depth / 2 - 0.5),
     new THREE.Vector3(p.width / 2 + 0.5, eave + 1.2, p.depth / 2 + 1),
   );
-  return { object, focus, ground: terrain(textures) };
+  return { object, focus };
 }
 
 /**
  * A house with its rooms behind see-through glass: close, the view through a ground-floor
  * front window into the room; medium, the whole house.
  */
-async function interiorItem(textures: Textures, load: Load, variant: number): Promise<Content> {
+async function interiorItem(load: Load, variant: number): Promise<Content> {
   const p = houseParams(variant);
   const group = await load(`suburban-house/source.glts?variant=${variant}`);
   const front = facades(p)[0];
@@ -84,7 +83,7 @@ async function interiorItem(textures: Textures, load: Load, variant: number): Pr
   if (!front || !opening) throw new Error("the house has no ground-floor front window");
   const centre = new THREE.Vector3(opening.x, opening.y + opening.h / 2, 0).applyMatrix4(front.frame);
   const focus = new THREE.Box3(centre.clone().add(new THREE.Vector3(-1.2, -1, -2.5)), centre.clone().add(new THREE.Vector3(1.2, 1, 0.3)));
-  return { object: group, focus, ground: terrain(textures) };
+  return { object: group, focus };
 }
 
 /**
@@ -112,15 +111,15 @@ async function interiorPlanItem(textures: Textures, variant: number): Promise<Co
     group.add(storey);
   }
   await materials.ready();
-  return { object: group, ground: terrain(textures), from: new THREE.Vector3(0, 1, 0.12) };
+  return { object: group, from: new THREE.Vector3(0, 1, 0.12) };
 }
 
 /** The hero ladybird and its actual plant, framed tight around the beetle. */
-async function ladybirdItem(textures: Textures, load: Load): Promise<Content> {
+async function ladybirdItem(load: Load): Promise<Content> {
   const [plant, ladybird] = await Promise.all([load(`corn-plant/source.glts?variant=${HERO_VARIANT}&hero=1`), load("ladybird/source.glts")]);
   ladybird.applyMatrix4(seatMatrix());
   const object = new THREE.Group().add(plant, ladybird);
-  return { object, focus: new THREE.Box3().setFromObject(ladybird), ground: terrain(textures) };
+  return { object, focus: new THREE.Box3().setFromObject(ladybird) };
 }
 
 /** A corn plant turned so its leaf plane faces the viewer, as the classic side-on silhouette. */
@@ -170,11 +169,11 @@ async function cornFieldItem(textures: Textures, load: Load): Promise<Content> {
 }
 
 /** The ground itself, with one house for scale: close is ~150 m across, medium ~2 km. */
-async function terrainItem(textures: Textures, load: Load): Promise<Content> {
+async function terrainItem(load: Load): Promise<Content> {
   const object = await load("suburban-house/source.glts?variant=0");
   const focus = new THREE.Box3(new THREE.Vector3(-60, 0, -60), new THREE.Vector3(60, 10, 60));
   const overview = new THREE.Box3(new THREE.Vector3(-500, 0, -500), new THREE.Vector3(500, 50, 500));
-  return { object, focus, overview, ground: terrain(textures) };
+  return { object, focus, overview };
 }
 
 type Build = (textures: Textures, load: Load) => Promise<Content> | Content;
@@ -188,27 +187,26 @@ function planVariant(): number {
 
 /** Every viewable item by name; procedural ones first, then the scanned models. */
 function builds(): Map<string, Build> {
-  const houses = Array.from({ length: HOUSE_VARIANTS }, (_, i): [string, Build] => [`house-${i}`, (textures, load) => houseItem(textures, load, i, "source")]);
+  const houses = Array.from({ length: HOUSE_VARIANTS }, (_, i): [string, Build] => [`house-${i}`, (_, load) => houseItem(load, i, "source")]);
   const corn = Array.from({ length: VARIANTS }, (_, variant): [string, Build] => [`corn-${variant}`, (textures, load) => cornItem(textures, load, variant)]);
   return new Map<string, Build>([
     ...houses,
-    ["house-low-0", (textures, load) => houseItem(textures, load, 0, "low")],
-    ["interior", (textures, load) => interiorItem(textures, load, 1)],
+    ["house-low-0", (_, load) => houseItem(load, 0, "low")],
+    ["interior", (_, load) => interiorItem(load, 1)],
     ["interior-plan", (textures) => interiorPlanItem(textures, planVariant())],
     ...corn,
     ["corn-row", (textures, load) => cornRowItem(textures, load)],
     ["corn-field", (textures, load) => cornFieldItem(textures, load)],
-    ["fence", async (textures, load) => ({ object: await load("picket-fence/source.glts?length=7.2"), ground: terrain(textures) })],
+    ["fence", async (_, load) => ({ object: await load("picket-fence/source.glts?length=7.2") })],
     [
       "street-sign",
-      async (textures, load) => ({
+      async (_, load) => ({
         object: await load("street-sign/source.glts?text=Maple%20St"),
         focus: new THREE.Box3(new THREE.Vector3(-0.5, 2.3, -0.3), new THREE.Vector3(0.5, 2.9, 0.3)),
-        ground: terrain(textures),
       }),
     ],
-    ["ladybird", (textures, load) => ladybirdItem(textures, load)],
-    ["terrain", (textures, load) => terrainItem(textures, load)],
+    ["ladybird", (_, load) => ladybirdItem(load)],
+    ["terrain", (_, load) => terrainItem(load)],
     ...Object.entries(MODELS).map(([id, url]): [string, Build] => [id, (textures) => model(textures, url)]),
   ]);
 }
@@ -235,7 +233,7 @@ export async function buildItem(scripts: GLTSLoader, name: string): Promise<Item
     if (!shown) return;
     disposeRecursive(shown.object);
     // The ground's material and textures, freed as a mesh's are.
-    disposeRecursive(new THREE.Mesh(undefined, shown.ground));
+    if (shown.ground) disposeRecursive(new THREE.Mesh(undefined, shown.ground));
   };
   const load: Load = async (path) => {
     const scene = await scripts.loadAsync(`/${path}`);

@@ -351,6 +351,22 @@ describe("Wind", { timeout: GPU_TIMEOUT }, () => {
     lod.dispose();
   });
 
+  it.each(["mesh", "impostor"])("lets the %s sway on camera while casting its rest pose", async (kind) => {
+    const caster = kind === "mesh" ? plant() : new ImpostorMesh(await baked());
+    const wind = new Wind({ animateShadows: false });
+    wind.apply(caster, { amplitude: 0.9, baseY: 0, height: 3 });
+    const light = new DirectionalLight(0xffffff, 3);
+    light.position.set(4, 6, 3);
+    const atRest = await render(caster);
+    wind.time = 1;
+    expect(overlap(atRest, await render(caster))).toBeLessThan(0.95);
+    const shadow = await shadowOf(caster, light);
+    wind.strength = 0;
+    expect(overlap(shadow, await shadowOf(caster, light))).toBe(1);
+    if (caster instanceof ImpostorMesh) caster.dispose();
+    light.shadow.dispose();
+  });
+
   it("casts the swayed shape into directional and point-light shadow maps", async () => {
     const reference = plant();
     reference.traverse((node) => {

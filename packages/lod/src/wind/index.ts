@@ -2,7 +2,7 @@ import { Box3, Matrix4, ObjectSpaceNormalMap, Vector2, type Mesh, type Object3D 
 import { levelBox } from "../levels/bounds.js";
 import { boundingBox } from "../source/detail.js";
 import { fadeSourceOf } from "../levels/fade.js";
-import { levelMaterial } from "../levels/material.js";
+import { drawMaterial } from "../levels/material.js";
 import { isBatchedMesh, isImpostorMesh, isLod, isInstancedMesh, isLOD, isMesh, isSkinnedMesh, isStorageInstanced } from "../three.js";
 import { WIND, type WindTarget } from "./hooks.js";
 import { windBounds } from "./bounds.js";
@@ -13,6 +13,8 @@ export interface WindOptions {
   direction?: readonly [number, number];
   /** Oscillations per second; default 0.25. */
   speed?: number;
+  /** Apply wind to shadow casters. Set false to cast from the rest pose. Default true. */
+  animateShadows?: boolean;
 }
 
 export interface SwayOptions {
@@ -34,8 +36,8 @@ const impostorSway = swayMatrix();
 /**
  * A shared GPU breeze: an affine sway, fixed at the base and linear with height.
  * Bake/build levels first, apply once to the completed Lod, mesh or
- * mesh group, then set time once before rendering each frame. All levels and shadow
- * passes share the motion. Simplified and baked meshes need no special preparation.
+ * mesh group, then set time once before rendering each frame. All levels share the motion.
+ * Shadow casters sway by default. Simplified and baked meshes need no special preparation.
  *
  * Instances derive their phase from the undeformed root's world position, so slot
  * sorting never changes it. The breeze follows the root's horizontal plane; upright
@@ -52,9 +54,10 @@ const impostorSway = swayMatrix();
  * object-space normal maps are not.
  */
 export class Wind {
-  private readonly breeze: Breeze = { time: 0, speed: 0.25, strength: 1, direction: new Vector2(1, 0) };
+  private readonly breeze: Breeze;
 
-  constructor({ direction = [1, 0], speed = 0.25 }: WindOptions = {}) {
+  constructor({ direction = [1, 0], speed = 0.25, animateShadows = true }: WindOptions = {}) {
+    this.breeze = { time: 0, speed, strength: 1, direction: new Vector2(), animateShadows };
     this.direction = direction;
     this.speed = speed;
   }
@@ -151,6 +154,7 @@ export class Wind {
     const shape = new Vector2(amplitude / size, base);
     const padding = (amplitude * Math.max(Math.abs(box.min.y - base), Math.abs(box.max.y - base))) / size;
     if (isWindTarget(root) && !refreshing) root[WIND](padding, amplitude / size, base);
+    const kind = isLod(root) ? "swayingLevel" : "swayingMesh";
     for (const { mesh, placement } of placed) {
       if (!isLod(root)) windBounds(mesh, placement, amplitude, base, size);
       setSway(mesh, { breeze: this.breeze, shape, placement, fromRoot: placement.clone().invert() });
@@ -159,7 +163,7 @@ export class Wind {
           mesh.material.deformNode = impostorSway;
           mesh.material.needsUpdate = true;
         }
-      } else mesh.material = Array.isArray(mesh.material) ? mesh.material.map((m) => levelMaterial(m, true)) : levelMaterial(mesh.material, true);
+      } else mesh.material = Array.isArray(mesh.material) ? mesh.material.map((m) => drawMaterial(m, kind)) : drawMaterial(mesh.material, kind);
     }
     const options = { amplitude, baseY: base, height: size };
     bindings.set(root, { wind: this, options, refresh: (next) => this.attach(root, options, true, next, box) });

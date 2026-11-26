@@ -1,18 +1,24 @@
 import { gltsLoader, isPreview, loadingManager, onDispose, scene } from "@drawcall/glts";
 import { CachedLodLoader, Lod, type LodLevel } from "@drawcall/lod";
 import * as THREE from "three/webgpu";
+import { float, normalMap, texture } from "three/tsl";
 import { HOUSE_VARIANTS } from "./params.ts";
 
-// A house, ?variant=0 to 9, or with ?variant=church the church, at levels of detail: source.glts, then its windows
-// and walls baked onto its authored low shell (low.glts) with its rooms (interior.glts) behind the windows, then an
-// impostor, then far away the shell baked small without rooms, which are subpixel there. Every level casts with both
-// sides of its faces; the derived ones cast and receive shadows.
+// A house, ?variant=0 to 9 or ?variant=church. The detailed model supplies the bake. Nearby, the low shell
+// carries the walls and windows with rooms behind them. Farther away, a smaller bake on the same
+// shell preserves the window pattern and omits the rooms.
 loadingManager.addHandler(/\.glts$/i, gltsLoader);
 const loader = new CachedLodLoader(loadingManager, {
   onLevel: (object, index) => {
     if (index > 0) object.castShadow = object.receiveShadow = true;
     object.traverse((node) => {
-      if (node instanceof THREE.Mesh) for (const material of [node.material].flat()) material.shadowSide = THREE.DoubleSide;
+      if (!(node instanceof THREE.Mesh)) return;
+      for (const material of [node.material].flat()) {
+        material.shadowSide = THREE.DoubleSide;
+        // The tile ridges flash under grazing light once several fit in a pixel. Filter their baked relief over a wider footprint.
+        if (index > 0 && material instanceof THREE.MeshStandardNodeMaterial && material.normalMap)
+          material.normalNode = normalMap(texture(material.normalMap).bias(float(2)));
+      }
     });
   },
 });
@@ -21,99 +27,88 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
     loader.loadAsync({
       url: "./source.glts?variant=0",
       levels: [
-        { type: "baked", low: "./low.glts?variant=0", interior: "./interior.glts?variant=0", textureSize: 512, maxPixels: 350 },
-        { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 90 },
-        { type: "baked", low: "./low.glts?variant=0", textureSize: 64, maxPixels: 24 },
+        { type: "baked", low: "./low.glts?variant=0", interior: "./interior.glts?variant=0", textureSize: 512 },
+        { type: "baked", low: "./low.glts?variant=0", textureSize: 256, maxPixels: 72 },
       ],
     }),
   "1": () =>
     loader.loadAsync({
       url: "./source.glts?variant=1",
       levels: [
-        { type: "baked", low: "./low.glts?variant=1", interior: "./interior.glts?variant=1", textureSize: 512, maxPixels: 350 },
-        { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 90 },
-        { type: "baked", low: "./low.glts?variant=1", textureSize: 64, maxPixels: 24 },
+        { type: "baked", low: "./low.glts?variant=1", interior: "./interior.glts?variant=1", textureSize: 512 },
+        { type: "baked", low: "./low.glts?variant=1", textureSize: 256, maxPixels: 72 },
       ],
     }),
   "2": () =>
     loader.loadAsync({
       url: "./source.glts?variant=2",
       levels: [
-        { type: "baked", low: "./low.glts?variant=2", interior: "./interior.glts?variant=2", textureSize: 512, maxPixels: 350 },
-        { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 90 },
-        { type: "baked", low: "./low.glts?variant=2", textureSize: 64, maxPixels: 24 },
+        { type: "baked", low: "./low.glts?variant=2", interior: "./interior.glts?variant=2", textureSize: 512 },
+        { type: "baked", low: "./low.glts?variant=2", textureSize: 256, maxPixels: 72 },
       ],
     }),
   "3": () =>
     loader.loadAsync({
       url: "./source.glts?variant=3",
       levels: [
-        { type: "baked", low: "./low.glts?variant=3", interior: "./interior.glts?variant=3", textureSize: 512, maxPixels: 350 },
-        { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 90 },
-        { type: "baked", low: "./low.glts?variant=3", textureSize: 64, maxPixels: 24 },
+        { type: "baked", low: "./low.glts?variant=3", interior: "./interior.glts?variant=3", textureSize: 512 },
+        { type: "baked", low: "./low.glts?variant=3", textureSize: 256, maxPixels: 72 },
       ],
     }),
   "4": () =>
     loader.loadAsync({
       url: "./source.glts?variant=4",
       levels: [
-        { type: "baked", low: "./low.glts?variant=4", interior: "./interior.glts?variant=4", textureSize: 512, maxPixels: 350 },
-        { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 90 },
-        { type: "baked", low: "./low.glts?variant=4", textureSize: 64, maxPixels: 24 },
+        { type: "baked", low: "./low.glts?variant=4", interior: "./interior.glts?variant=4", textureSize: 512 },
+        { type: "baked", low: "./low.glts?variant=4", textureSize: 256, maxPixels: 72 },
       ],
     }),
   "5": () =>
     loader.loadAsync({
       url: "./source.glts?variant=5",
       levels: [
-        { type: "baked", low: "./low.glts?variant=5", interior: "./interior.glts?variant=5", textureSize: 512, maxPixels: 350 },
-        { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 90 },
-        { type: "baked", low: "./low.glts?variant=5", textureSize: 64, maxPixels: 24 },
+        { type: "baked", low: "./low.glts?variant=5", interior: "./interior.glts?variant=5", textureSize: 512 },
+        { type: "baked", low: "./low.glts?variant=5", textureSize: 256, maxPixels: 72 },
       ],
     }),
   "6": () =>
     loader.loadAsync({
       url: "./source.glts?variant=6",
       levels: [
-        { type: "baked", low: "./low.glts?variant=6", interior: "./interior.glts?variant=6", textureSize: 512, maxPixels: 350 },
-        { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 90 },
-        { type: "baked", low: "./low.glts?variant=6", textureSize: 64, maxPixels: 24 },
+        { type: "baked", low: "./low.glts?variant=6", interior: "./interior.glts?variant=6", textureSize: 512 },
+        { type: "baked", low: "./low.glts?variant=6", textureSize: 256, maxPixels: 72 },
       ],
     }),
   "7": () =>
     loader.loadAsync({
       url: "./source.glts?variant=7",
       levels: [
-        { type: "baked", low: "./low.glts?variant=7", interior: "./interior.glts?variant=7", textureSize: 512, maxPixels: 350 },
-        { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 90 },
-        { type: "baked", low: "./low.glts?variant=7", textureSize: 64, maxPixels: 24 },
+        { type: "baked", low: "./low.glts?variant=7", interior: "./interior.glts?variant=7", textureSize: 512 },
+        { type: "baked", low: "./low.glts?variant=7", textureSize: 256, maxPixels: 72 },
       ],
     }),
   "8": () =>
     loader.loadAsync({
       url: "./source.glts?variant=8",
       levels: [
-        { type: "baked", low: "./low.glts?variant=8", interior: "./interior.glts?variant=8", textureSize: 512, maxPixels: 350 },
-        { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 90 },
-        { type: "baked", low: "./low.glts?variant=8", textureSize: 64, maxPixels: 24 },
+        { type: "baked", low: "./low.glts?variant=8", interior: "./interior.glts?variant=8", textureSize: 512 },
+        { type: "baked", low: "./low.glts?variant=8", textureSize: 256, maxPixels: 72 },
       ],
     }),
   "9": () =>
     loader.loadAsync({
       url: "./source.glts?variant=9",
       levels: [
-        { type: "baked", low: "./low.glts?variant=9", interior: "./interior.glts?variant=9", textureSize: 512, maxPixels: 350 },
-        { type: "impostor", layout: "hemi", frames: 8, resolution: 64, maxPixels: 90 },
-        { type: "baked", low: "./low.glts?variant=9", textureSize: 64, maxPixels: 24 },
+        { type: "baked", low: "./low.glts?variant=9", interior: "./interior.glts?variant=9", textureSize: 512 },
+        { type: "baked", low: "./low.glts?variant=9", textureSize: 256, maxPixels: 72 },
       ],
     }),
   church: () =>
     loader.loadAsync({
       url: "./source.glts?variant=church",
       levels: [
-        { type: "baked", low: "./low.glts?variant=church", interior: "./interior.glts?variant=church", textureSize: 1024, maxPixels: 560 },
-        { type: "impostor", layout: "hemi", frames: 8, resolution: 128, maxPixels: 144 },
-        { type: "baked", low: "./low.glts?variant=church", textureSize: 128, maxPixels: 40 },
+        { type: "baked", low: "./low.glts?variant=church", interior: "./interior.glts?variant=church", textureSize: 1024 },
+        { type: "baked", low: "./low.glts?variant=church", textureSize: 512, maxPixels: 120 },
       ],
     }),
 };
@@ -121,7 +116,11 @@ if (Object.keys(LADDERS).length !== HOUSE_VARIANTS + 1) throw new Error(`house: 
 const variant = new URL(import.meta.url).searchParams.get("variant") ?? "0";
 const load = LADDERS[variant];
 if (!load) throw new Error(`house: variant must be a whole number below ${HOUSE_VARIANTS} or church, not ${variant}`);
-const lod = new Lod(await load(), 1, { manager: loadingManager });
+const levels = await load();
+const exterior = levels[1];
+if (!exterior) throw new Error("house: missing baked exterior");
+exterior.maxPixels = Infinity;
+const lod = new Lod(levels, 1, { manager: loadingManager });
 scene.add(lod);
 onDispose(() => lod.dispose());
 

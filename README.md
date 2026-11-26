@@ -22,3 +22,5 @@ Add the [@drawcall/cache](https://github.com/drawcall-ai/cache) Vite plugin to t
 Choose derived levels to suit your assets. The [LOD skill](https://github.com/drawcall-ai/lod/blob/main/packages/lod/skills/lod/SKILL.md) covers asset choices, caching, lazy loading, wind, and scene integration. It also ships with the package at `skills/lod/SKILL.md`.
 
 The [city example](https://github.com/drawcall-ai/lod/tree/main/examples/city) demonstrates a large scene with buildings, vegetation, and small props, its ground cover scattered around the camera by a compute pass of its own.
+
+The city renders at native device pixel ratio and starts playback once the opening view is ready. Higher-detail levels load as the camera approaches. Use `?timing` to measure GPU time.

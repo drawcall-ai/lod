@@ -15,11 +15,14 @@ export const Use = {
 export type Use = (typeof Use)[keyof typeof Use];
 const USES: readonly Use[] = [Use.Lawn, Use.Paved, Use.Field, Use.Forest, Use.Crop, Use.Water];
 
-/** What a farmland parcel holds; the terrain shader colours each. */
+/** What grows on a farmland parcel. */
 export const Crop = { None: 0, Pasture: 1, Wheat: 2, Rapeseed: 3, Ploughed: 4, Stubble: 5 } as const;
 export type Crop = (typeof Crop)[keyof typeof Crop];
 
 const RESOLUTION = 2;
+export const LAWN_COLOR = 0x495537;
+// Albedo in sRGB, indexed by the parcel's crop.
+const crops = [LAWN_COLOR, 0x50683a, 0xa58b4e, 0x9ba33c, 0x70533c, 0x99835a] as const;
 
 /**
  * A raster of `Use` over the detailed square, 2 m per cell, lawn where nothing was painted;
@@ -27,12 +30,12 @@ const RESOLUTION = 2;
  */
 export class Land {
   readonly size = Math.round((2 * EXTENT) / RESOLUTION);
-  /** Per cell: crop, the parcel's tint (0–255), the parcel's row direction (0–255 over half a turn), the parcel id's low byte. */
+  /** Per cell: crop, the parcel's tint (0–255), the parcel id's low byte. */
   constructor(
     readonly cells: Uint8Array = new Uint8Array(this.size * this.size),
-    readonly parcels: Uint8Array = new Uint8Array(this.size * this.size * 4),
+    readonly parcels: Uint8Array = new Uint8Array(this.size * this.size * 3),
   ) {
-    if (cells.length !== this.size * this.size || parcels.length !== cells.length * 4 || cells.some((cell) => USES[cell] === undefined))
+    if (cells.length !== this.size * this.size || parcels.length !== cells.length * 3 || cells.some((cell) => USES[cell] === undefined))
       throw new Error("Invalid land raster");
   }
 
@@ -63,25 +66,40 @@ export class Land {
     return use;
   }
 
-  /** Put cell `k` in a parcel: its crop, tint, row direction (radians) and id. */
-  sow(k: number, crop: Crop, tint: number, angle: number, id: number): void {
+  /** Put cell `k` in a parcel: its crop, tint and id. */
+  sow(k: number, crop: Crop, tint: number, id: number): void {
     if (crop !== Crop.None && crop !== Crop.Pasture) this.cells[k] = Use.Crop;
-    this.parcels.set([crop, Math.round(tint * 255), Math.round(((angle / Math.PI) % 1) * 255), id & 255], k * 4);
+    this.parcels.set([crop, Math.round(tint * 255), id & 255], k * 3);
   }
 
   /** The parcel id's low byte at cell `k` (0 where no parcel was sown). */
   parcelOf(k: number): number {
-    return this.parcels[k * 4 + 3] ?? 0;
+    return this.parcels[k * 3 + 2] ?? 0;
   }
 
-  /** The parcels as a texture over the detailed square: RGBA = crop, tint, row direction, use. */
-  texture(): THREE.DataTexture {
-    const data = new Uint8Array(this.parcels);
-    for (let k = 0; k < this.cells.length; k++) data[k * 4 + 3] = this.cells[k] ?? 0;
-    const t = new THREE.DataTexture(data, this.size, this.size, THREE.RGBAFormat);
-    t.magFilter = t.minFilter = THREE.NearestFilter;
-    t.needsUpdate = true;
-    return t;
+  /** Filter the land colors across cell boundaries and into the distance. */
+  colorMap(): THREE.DataTexture {
+    const rgba = new Uint8Array(this.cells.length * 4);
+    for (let k = 0; k < this.cells.length; k++) {
+      const use = this.cells[k];
+      const crop = this.parcels[k * 3] ?? 0;
+      const color = use === Use.Forest ? 0x383427 : use === Use.Field ? 0x614b33 : crops[crop];
+      if (color === undefined) throw new Error(`Unknown crop ${crop}`);
+      const tint = crop === Crop.None ? 1 : 0.9 + (this.parcels[k * 3 + 1] ?? 0) * (0.2 / 255);
+      rgba[k * 4] = (color >> 16) * tint;
+      rgba[k * 4 + 1] = ((color >> 8) & 255) * tint;
+      rgba[k * 4 + 2] = (color & 255) * tint;
+      // The alpha channel blends grass into exposed soil at the land-use boundaries.
+      rgba[k * 4 + 3] = use === Use.Field || use === Use.Forest || crop === Crop.Ploughed || crop === Crop.Stubble ? 255 : 0;
+    }
+    const map = new THREE.DataTexture(rgba, this.size, this.size);
+    map.colorSpace = THREE.SRGBColorSpace;
+    map.wrapS = map.wrapT = THREE.MirroredRepeatWrapping;
+    map.generateMipmaps = true;
+    map.minFilter = THREE.LinearMipmapLinearFilter;
+    map.magFilter = THREE.LinearFilter;
+    map.needsUpdate = true;
+    return map;
   }
 
   /** Paint every cell whose centre lies in the box and passes `inside` (world x, z). */

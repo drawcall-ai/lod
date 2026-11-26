@@ -5,6 +5,7 @@ import {
   cameraViewMatrix,
   ceil,
   clamp,
+  Discard,
   dFdx,
   dFdy,
   dot,
@@ -31,8 +32,6 @@ import {
   vec4,
 } from "three/tsl";
 import { dither, keepsPixel } from "../../levels/fade.js";
-import type { ImpostorLayout } from "../impostor.js";
-import { basisNode, decodeNode } from "../octahedral.js";
 import type { Card } from "./card.js";
 
 // The impostor's surface: where the view ray meets the object, blended from the three
@@ -40,8 +39,6 @@ import type { Card } from "./card.js";
 
 /** What the surface of one impostor reads besides its card. */
 export interface SurfaceInputs {
-  layout: ImpostorLayout;
-  centre: Node<"vec3">;
   radius: Node<"float">;
   halfSize: Node<"float">;
   frames: Node<"float">;
@@ -93,40 +90,31 @@ export interface Lighting {
 }
 
 export function buildSurface(inputs: SurfaceInputs, card: Card, pass: Pass): Surface {
-  const { layout, centre, radius, halfSize, frames, cell, maps, cutoff, tolerance, mipBias } = inputs;
-  const ray = normalize(card.ray).toVar();
-
-  // Where the view ray meets frame (col, row)'s plane: uv there, the uv shift per unit of
-  // height above the plane, the distance along the ray to the plane and the ray's slope.
-  const plane = (frame: Node<"vec2">) => {
-    const n = decodeNode(layout, frame.div(frames.sub(1)));
-    const { tangent, bitangent } = basisNode(n);
-    const along: Node<"float"> = min(dot(ray, n), -1e-3).toVar();
-    const t: Node<"float"> = dot(centre.sub(card.point), n).div(along).toVar();
-    const hit = card.point.add(ray.mul(t)).sub(centre);
-    const uv = vec2(dot(hit, tangent), dot(hit, bitangent)).div(halfSize.mul(2)).add(0.5).toVar();
-    const slope = vec2(dot(ray, tangent), dot(ray, bitangent)).div(along).div(halfSize.mul(2));
-    return { uv, slope, t, along };
+  const { radius, halfSize, frames, cell, maps, cutoff, tolerance, mipBias } = inputs;
+  const [a, b, c] = card.views;
+  // The bake frame is orthonormal, so every view has the same ray length. Keep the
+  // intersection in units of the original ray for both perspective and orthographic depth.
+  const rayLength = length(a.ray.xyz).toVar();
+  const plane = ({ origin, ray, frame, weight }: Card["views"][number]) => {
+    const along = min(ray.z, rayLength.mul(-1e-3)).toVar();
+    const t = origin.z.negate().div(along).toVar();
+    const uv = origin.xy.add(ray.xy.mul(t)).div(halfSize.mul(2)).add(0.5).toVar();
+    const slope = ray.xy.div(along.mul(halfSize.mul(2)));
+    return { frame, weight, uv, slope, t, along };
   };
-  const planes = card.frames.map(plane);
-  const first = planes[0];
-  if (!first) throw new Error("ImpostorMesh: no frames");
+  const first = plane(a);
 
-  // Atlas texels per screen pixel and the gradients every atlas read uses. They come from
-  // the flat (pre-parallax) projection: parallax makes uv jump at depth edges, and the
-  // hardware gradients there would pick a far too coarse mip.
+  // All maps use the same isotropic mip from the flat projection. Parallax shifts UVs
+  // across depth edges, where their derivatives would select too coarse a mip.
   const dx = dFdx(first.uv);
   const dy = dFdy(first.uv);
   const texels = max(length(dx), length(dy)).mul(cell).toVar();
-  const bias = exp2(mipBias).toVar();
-  const gradX = dx.div(frames).mul(bias).toVar();
-  const gradY = dy.div(frames).mul(bias).toVar();
-  // Half a texel of the mip being read, in frame uv: reads stay that far inside their
-  // frame so filtering never reaches the neighbouring frame.
-  const inset = exp2(ceil(log2(max(texels.mul(bias), 1))))
+  const mip = min(log2(max(texels.mul(exp2(mipBias)), 1)), Math.log2(cell)).toVar();
+  // Half a texel of the coarser mip in the trilinear blend keeps every read inside its frame.
+  const inset = exp2(ceil(mip))
     .mul(0.5 / cell)
     .toVar();
-  const read = (map: Texture, uv: Node<"vec2">) => texture(map, uv).grad(gradX, gradY);
+  const read = (map: Texture, uv: Node<"vec2">) => texture(map, uv).level(mip);
   const atlas = (frame: Node<"vec2">, uv: Node<"vec2">) => frame.add(clamp(uv, inset, inset.oneMinus())).div(frames);
   const inside = (uv: Node<"vec2">) => step(0, uv.x).mul(step(0, uv.y)).mul(step(uv.x, 1)).mul(step(uv.y, 1));
 
@@ -134,41 +122,41 @@ export function buildSurface(inputs: SurfaceInputs, card: Card, pass: Pass): Sur
   // there, and "run", the distance along the ray to it. "trust" falls toward 0 when the
   // depth walk did not settle: the frame's surface there is not on this ray (the frame
   // sees something the camera does not), and blending it in would ghost.
-  const resolved = card.frames.map((frame, i) => {
-    const p = planes[i];
-    if (!p) throw new Error("ImpostorMesh: no plane for a frame");
+  const resolveFrame = (p: ReturnType<typeof plane>) => {
+    const { frame } = p;
     let uv: Node<"vec2"> = p.uv;
-    let texel: Node<"vec4"> | undefined;
-    let trust: Node<"float"> = float(1);
-    if (pass.parallax > 0) {
-      texel = read(maps.normalDepth, atlas(frame, uv)).toVar();
-      let depth: Node<"float"> = texel.a;
-      let previous = depth;
-      for (let k = 0; k < pass.parallax; k++) {
-        previous = depth;
-        uv = p.uv.add(p.slope.mul(depth.sub(0.5).mul(radius.mul(2)))).toVar();
-        texel = read(maps.normalDepth, atlas(frame, uv)).toVar();
-        depth = texel.a;
-      }
-      const miss = abs(depth.sub(previous)).div(tolerance);
-      trust = float(1).div(miss.mul(miss).add(1));
+    let previous: Node<"float"> | undefined;
+    for (let k = 0; k < pass.parallax; k++) {
+      previous = read(maps.normalDepth, atlas(frame, uv)).a.toVar();
+      uv = p.uv.add(p.slope.mul(previous.sub(0.5).mul(radius.mul(2)))).toVar();
     }
     const at = atlas(frame, uv).toVar();
-    // Without parallax, coverage needs only base alpha. Keep these reads out of
-    // the mask's stack so rejected pixels never fetch normals or depth.
+    let texel: Node<"vec4"> | undefined;
     const sample = () => (texel ??= read(maps.normalDepth, at).toVar());
+    const trust = () => {
+      if (!previous) return float(1);
+      const miss = abs(sample().a.sub(previous)).div(tolerance);
+      return float(1).div(miss.mul(miss).add(1));
+    };
     const run = () => p.t.add(sample().a.sub(0.5).mul(radius.mul(2)).div(p.along));
-    return { at, sample, trust, run, inside: inside(uv) };
-  });
-  const [r0, r1, r2] = resolved;
-  if (!r0 || !r1 || !r2) throw new Error("ImpostorMesh: three frames expected");
+    return { at, sample, trust, run, inside: inside(uv), weight: p.weight };
+  };
+  const r0 = resolveFrame(first);
+  const r1 = resolveFrame(plane(b));
+  const r2 = resolveFrame(plane(c));
 
   // Every layer is weighted by barycentric weight × trust × that frame's coverage, so a
   // frame that does not cover this pixel cannot bleed its colour, normal or depth into it.
   const c0 = read(maps.base, r0.at).toVar();
   const c1 = read(maps.base, r1.at).toVar();
   const c2 = read(maps.base, r2.at).toVar();
-  const trusted = card.weights.mul(vec3(r0.trust, r1.trust, r2.trust));
+  const minified = clamp(texels.sub(1), 0, 1);
+  const grain = dither(screenCoordinate.xy.add(17));
+  const threshold = mix(float(cutoff), grain, minified);
+  // The final coverage is a weighted average of the three alphas. Even their
+  // maximum cannot pass here, so skip the last depth read in each parallax walk.
+  if (pass.lit && !pass.multisampled && pass.parallax > 0) Discard(max(c0.a, max(c1.a, c2.a)).add(1e-6).lessThan(threshold));
+  const trusted = vec3(r0.weight.mul(r0.trust()), r1.weight.mul(r1.trust()), r2.weight.mul(r2.trust()));
   const covered = trusted
     .mul(vec3(r0.inside, r1.inside, r2.inside))
     .mul(vec3(c0.a, c1.a, c2.a))
@@ -183,8 +171,6 @@ export function buildSurface(inputs: SurfaceInputs, card: Card, pass: Pass): Sur
   // worth of supersampled coverage, so it is kept and dithered: both alpha-to-coverage and
   // a plain cutoff round fractional coverage away, erasing branches, wires and sparse
   // foliage in the distance.
-  const minified = clamp(texels.sub(1), 0, 1);
-  const grain = dither(screenCoordinate.xy.add(17));
   let alpha: Node<"float">;
   let covers: Node<"bool">;
   if (pass.multisampled) {
@@ -214,15 +200,13 @@ export function buildSurface(inputs: SurfaceInputs, card: Card, pass: Pass): Sur
     covers = alpha.greaterThan(0);
   } else {
     alpha = float(1);
-    covers = cover.greaterThanEqual(mix(float(cutoff), grain, minified));
+    covers = cover.greaterThanEqual(threshold);
   }
 
   let point: ReturnType<Surface["resolve"]> | undefined;
   const resolve = () => {
     if (point) return point;
-    const s = dot(vec3(r0.run(), r1.run(), r2.run()), w)
-      .div(length(card.ray))
-      .toVar();
+    const s = dot(vec3(r0.run(), r1.run(), r2.run()), w).toVar();
     const clip = cameraProjectionMatrix.mul(cameraViewMatrix).mul(vec4(card.worldPoint.add(card.worldRay.mul(s)), 1));
     // Stop short toward the camera by a texel and depth step: the light's and the camera's frames
     // resolve slightly different surfaces, otherwise the receiver shades itself.
@@ -230,7 +214,7 @@ export function buildSurface(inputs: SurfaceInputs, card: Card, pass: Pass): Sur
       halfSize
         .mul(2 / cell)
         .add(radius.mul(2 / 255))
-        .div(length(card.ray)),
+        .div(rayLength),
     );
     point = { depth: clip.z.div(clip.w), shadowPosition: card.worldPoint.add(card.worldRay.mul(short)) };
     return point;

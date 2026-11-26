@@ -5,7 +5,6 @@ import { fileURLToPath } from "node:url";
 export const cache = fileURLToPath(new URL("../../.cache/assets/", import.meta.url));
 const headers = { "User-Agent": "drawcall-lod-city/0.1" };
 
-/** Known sizes are checked; ambientCG does not publish them. */
 export type FileRef = { url: string; size?: number };
 
 /** Downloads into the cache unless the file is already there (with the expected size, when known). */

@@ -1,8 +1,12 @@
+import { opaqueSort } from "@drawcall/lod";
 import * as THREE from "three/webgpu";
 import { texture } from "three/tsl";
 
+const query = new URLSearchParams(location.search);
+const timing = query.has("timing") || query.has("shot");
+
 /**
- * The renderer and its frame: the scene is drawn into a multisampled half-float target
+ * The renderer and its frame: the scene is drawn into a half-float target
  * with a float depth buffer and reversed depth (near 1, far 0), which keeps depth
  * precise from half a millimetre to forty kilometres in one view: a ladybird's legs on
  * a leaf and a house at the horizon, no z-fighting at either end. Tone mapping and sRGB
@@ -20,21 +24,21 @@ export class Pipeline {
   private reading: Promise<number | null> | null = null;
   private readonly output: THREE.RenderPipeline;
   private readonly target = new THREE.RenderTarget(1, 1, {
+    // Thin leaves and distant crowns use alpha to coverage as the camera moves.
     samples: 4,
     type: THREE.HalfFloatType,
     depthTexture: new THREE.DepthTexture(1, 1, THREE.FloatType),
   });
-  private readonly timed: boolean;
+  /** Whether this session collects GPU pass timings. */
+  readonly timed: boolean;
 
   private constructor(
     readonly renderer: THREE.WebGPURenderer,
     private readonly scene: THREE.Scene,
     private readonly camera: THREE.Camera,
   ) {
-    // 4 samples: WebGPU offers 1 or 4. They keep thin twigs and grass blades whole in
-    // motion (without, they break into crawling dashes).
     this.output = new THREE.RenderPipeline(renderer, texture(this.target.texture));
-    this.timed = renderer.hasFeature("timestamp-query");
+    this.timed = renderer.hasFeature("timestamp-query") && timing;
     // counted over the whole frame: three counts each render call on its own otherwise
     renderer.info.autoReset = false;
   }
@@ -47,9 +51,10 @@ export class Pipeline {
       alpha: false,
       reversedDepthBuffer: true,
       powerPreference: "high-performance",
-      trackTimestamp: true,
+      trackTimestamp: timing,
     });
     await renderer.init();
+    renderer.setOpaqueSort(opaqueSort);
     renderer.setPixelRatio(pixelRatio);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFShadowMap;

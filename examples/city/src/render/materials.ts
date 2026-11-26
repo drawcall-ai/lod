@@ -1,8 +1,8 @@
 import * as THREE from "three/webgpu";
 import { Fn, clamp, materialColor, max, mix, mx_noise_float, positionGeometry, smoothstep, vec3, vec4 } from "three/tsl";
 
-/** Metres one repeat of each texture set the page draws covers: Poly Haven's measures, ambientCG's Grass001 chosen. */
-const TILE = { Grass001: 1.2, aerial_grass_rock: 15, asphalt_02: 3, brushed_concrete_04: 2, cobblestone_floor_04: 1.5, farm_soil: 2, gravel_road: 2 };
+/** Metres one repeat of each texture set covers, as measured by Poly Haven. */
+const TILE = { leafy_grass: 2, aerial_grass_rock: 15, asphalt_02: 3, brushed_concrete_04: 2, cobblestone_floor_04: 1.5, farm_soil: 2, gravel_road: 2 };
 
 type TextureSet = keyof typeof TILE;
 

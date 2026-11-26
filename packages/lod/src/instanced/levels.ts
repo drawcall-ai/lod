@@ -8,6 +8,7 @@ import type { DrawnInstances } from "../levels/fade.js";
 import type { PreparedLevel } from "../levels/manager.js";
 import { refreshWind } from "../wind/index.js";
 import type { InstanceLists } from "./lists.js";
+import { levelOrder } from "./opaque-sort.js";
 import { freeMesh, levelMeshes, partsOf, type LevelMeshes, type Part } from "./meshes.js";
 import type { InstanceShape } from "./shape.js";
 
@@ -80,7 +81,7 @@ export class MeshesByLevel {
   /** The meshes drawing `parts` of level `level` for the cameras of the lists. */
   private meshesOf(parts: readonly Part[], level: number): LevelMeshes {
     const { lists, drawn, shape } = this.drawing;
-    return levelMeshes(parts, at(this.tints, level), {
+    const made = levelMeshes(parts, at(this.tints, level), {
       instances: drawn,
       bounds: this.bounds.sphere,
       box: this.bounds.box,
@@ -92,6 +93,10 @@ export class MeshesByLevel {
         return lists.slots(camera)?.args ?? null;
       },
     });
+    // Keep the whole ladder between its owner's integer ID and the next object's ID, regardless of load order.
+    const order = this.parent.id + (level + 1) / (this.levels.length + 1);
+    for (const mesh of made.meshes) Object.assign(mesh, { [levelOrder]: order });
+    return made;
   }
 
   /** Level meshes of `loaded`, level `index`'s object, staged for wind and compiling. */

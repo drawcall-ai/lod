@@ -13,13 +13,13 @@ it("never loads the source of a ladder whose first level draws at any height, wi
   const built = sourceFixture(() => gltsScene(new Mesh(new BoxGeometry(), new MeshStandardMaterial())), /\.glts$/);
   const request: LodRequest = {
     url: "/far.glts",
-    levels: [
-      { type: "impostor", maxPixels: Infinity },
-      { type: "empty", maxPixels: 2 },
-    ],
+    levels: [{ type: "impostor" }, { type: "empty", maxPixels: 2 }],
   };
   await (await new CachedLodLoader(built.manager).loadAsync(request))[1]?.load?.();
   const levels = await new CachedLodLoader(new LoadingManager()).loadAsync(request);
+  const nearest = levels[1];
+  if (!nearest) throw new Error("Expected an impostor level");
+  nearest.maxPixels = Infinity;
   expect(levels.map((level) => level.maxPixels)).toEqual([Infinity, Infinity, 2]);
   const camera = new PerspectiveCamera(60, 1, 0.1, 100);
   const lods = [1, 3].map((count) => new Lod(levels, count));

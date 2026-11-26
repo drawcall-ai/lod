@@ -30,6 +30,7 @@ import { ARRIVAL_MS } from "../src/levels/manager.js";
 import { checkRenderer } from "../src/levels/renderer.js";
 import { Lod } from "../src/lod.js";
 import { Wind } from "../src/wind/index.js";
+import { opaqueSort } from "../src/index.js";
 import { ImpostorMesh } from "../src/impostor/mesh/index.js";
 import type { Impostor } from "../src/impostor/impostor.js";
 import { GPU_TIMEOUT, eventually, render, renderer, nextLevel, renderLod } from "./renderer.js";
@@ -462,6 +463,42 @@ describe("a Lod's instances", { timeout: GPU_TIMEOUT }, () => {
 });
 
 describe("a Lod's level loads", { timeout: GPU_TIMEOUT }, () => {
+  it("sorts a later-arriving fine level before its coarse impostor at equal depth", async () => {
+    const coarse = new ImpostorMesh(impostor());
+    coarse.name = "coarse";
+    const lod = lodOf(
+      [
+        { load: async () => box("fine"), box: new Box3(new Vector3(-1, -1, -1), new Vector3(1, 1, 1)) },
+        { object: coarse, maxPixels: 12 },
+      ],
+      onAxis([4, 80]),
+    );
+    const scene = new Scene().add(lod);
+    const camera = new PerspectiveCamera(60, 1, 0.1, 200);
+    renderer.setOpaqueSort(opaqueSort);
+    try {
+      await nextLevel(lod, camera);
+      const [first, later] = drawnMeshes(lod);
+      const far = must(first);
+      const fine = must(later);
+      expect([far.name, fine.name]).toEqual(["coarse", "fine"]);
+      expect(far.geometry.boundingSphere).toBe(fine.geometry.boundingSphere);
+      const draws: string[] = [];
+      far.onAfterRender = () => draws.push(far.name);
+      fine.onAfterRender = () => draws.push(fine.name);
+      await render(scene, camera);
+      expect(draws).toEqual(["fine", "coarse"]);
+      draws.length = 0;
+      far.renderOrder = -1;
+      await render(scene, camera);
+      expect(draws).toEqual(["coarse", "fine"]);
+    } finally {
+      renderer.setOpaqueSort(null);
+      lod.dispose();
+      coarse.dispose();
+    }
+  });
+
   it("loads shared decoded detail only in Lods near enough to draw it", async () => {
     // Memoized, as a load shared across Lods is to share one object.
     const make = vi.fn(async () => box());

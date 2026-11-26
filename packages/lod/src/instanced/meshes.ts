@@ -1,6 +1,17 @@
-import { type Box3, BufferGeometry, type Camera, type Color, IndirectStorageBufferAttribute, type Layers, Matrix4, Mesh, type Object3D, type Sphere } from "three/webgpu";
+import {
+  type Box3,
+  BufferGeometry,
+  type Camera,
+  type Color,
+  IndirectStorageBufferAttribute,
+  type Layers,
+  Matrix4,
+  Mesh,
+  type Object3D,
+  type Sphere,
+} from "three/webgpu";
 import { setFadeSource, type DrawnInstances, type InstanceSlots } from "../levels/fade.js";
-import { levelMaterial } from "../levels/material.js";
+import { drawMaterial } from "../levels/material.js";
 import { impostorInstances, type ImpostorMesh } from "../impostor/mesh/index.js";
 import { isImpostorMesh, isInstancedMesh, isLOD, isLine, isMesh, isPoints, isSprite, rejectSkinned } from "../three.js";
 import { DRAW_BYTES, type IndirectDraw } from "./rows.js";
@@ -128,7 +139,8 @@ function levelMesh({ template, placement, group }: Part, offset: () => number | 
   mesh.receiveShadow = template.receiveShadow;
   mesh.layers = layers;
   mesh.raycast = () => {};
-  if (!isImpostorMesh(mesh)) mesh.geometry.boundingSphere = bounds;
+  // Three sorts by the geometry's sphere, including for instanced impostors.
+  mesh.geometry.boundingSphere = bounds;
   mesh.geometry.boundingBox = box;
   const previous = mesh.onBeforeRender;
   // Each camera draws the instances in its own lists. A level compiling to join draws nothing yet: its pipelines do not
@@ -172,11 +184,11 @@ function card(template: ImpostorMesh, placement: Matrix4, { instances, bounds }:
 
 /** The level material of `mesh`'s material group `group`. */
 function groupMaterial(mesh: Mesh, group: number) {
-  if (!Array.isArray(mesh.material)) return levelMaterial(mesh.material);
+  if (!Array.isArray(mesh.material)) return drawMaterial(mesh.material);
   const index = mesh.geometry.groups[group]?.materialIndex ?? 0;
   const material = mesh.material[index];
   if (!material) throw new Error(`Lod: "${mesh.name}" has no material ${index}`);
-  return levelMaterial(material);
+  return drawMaterial(material);
 }
 
 /**

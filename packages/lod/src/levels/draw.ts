@@ -130,7 +130,8 @@ const settled = tgpu.fn(
     chosen = levelForHeight(height, levels);
     if (levels.fades === 1 && chosen > 0) {
       const top = maxPixelsOf(levels, chosen);
-      fade = std.smoothstep(top * (1 - FADE), top, height);
+      // An unlimited level has no transition back to its finer neighbour, even for an unbounded cluster.
+      if (top < ANY_HEIGHT) fade = std.smoothstep(top * (1 - FADE), top, height);
     }
   }
   const level = loadedOrCoarser(chosen, levels, loaded);

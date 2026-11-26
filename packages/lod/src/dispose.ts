@@ -36,8 +36,8 @@ export function disposeRecursive(node: Object3D, { materials }: DisposeOptions =
 }
 
 /**
- * Free `mesh`'s materials and their textures: the originals of level copies, which free their copies (see
- * `levelMaterial`). Images stay open: another object, or three's Cache, may share them and upload them again.
+ * Free the mesh's materials and textures. Disposing an original material also frees its copies.
+ * Images stay open because another object or three's Cache may share them and upload them again.
  */
 function disposeMaterials(mesh: Mesh): void {
   for (const material of new Set([mesh.material].flat().map(originalOf))) {

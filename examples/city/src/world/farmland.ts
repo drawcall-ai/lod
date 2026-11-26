@@ -2,7 +2,7 @@ import * as THREE from "three/webgpu";
 import seedrandom from "seedrandom";
 import { Crop, type Land, Use } from "./land.ts";
 import { inForest, type Road, type Spot, spot } from "./plan.ts";
-import type { Forest } from "./zones.ts";
+import type { Forest } from "./forest.ts";
 import { EXTENT, type Terrain } from "./terrain.ts";
 
 /** Mean size of the regions fields are laid out in (m). */
@@ -53,7 +53,7 @@ export function farmland(
     return { x, z, id: i, angle: roadAngle(segments, x, z), width: 60 + 90 * r(), length: 160 + 260 * r() };
   });
   // What each parcel draws from its own seed, the same for every cell of it.
-  const parcels = new Map<number, { crop: Crop; tint: number; across: boolean }>();
+  const parcels = new Map<number, { crop: Crop; tint: number }>();
   for (let k = 0; k < land.size * land.size; k++) {
     if (land.useOf(k) !== Use.Lawn) continue;
     const { x, z } = land.centre(k);
@@ -85,10 +85,10 @@ export function farmland(
     let parcel = parcels.get(id);
     if (!parcel) {
       const draw = seedrandom(String(id));
-      parcel = { crop: pick(draw), tint: draw(), across: draw() < 0.2 };
+      parcel = { crop: pick(draw), tint: draw() };
       parcels.set(id, parcel);
     }
-    land.sow(k, parcel.crop, parcel.tint, region.angle + (parcel.across ? Math.PI / 2 : 0), id);
+    land.sow(k, parcel.crop, parcel.tint, id);
   }
   hedgerows(land, terrain, r, add);
   avenues(roads, land, terrain, town, r, add);

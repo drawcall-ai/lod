@@ -2,11 +2,8 @@ import { isPreview, loadingManager, onDispose, scene } from "@drawcall/glts";
 import { CachedLodLoader, foliageLevels, foliageModel, ImpostorMesh, Lod } from "@drawcall/lod";
 import * as THREE from "three/webgpu";
 
-// Poly Haven's small broadleaf tree at levels of detail: the scan nearby, simplified to 10 % of its leaf cards to
-// 900 px, keeping the forked branches in geometry, then hemispherical impostors drawn at card depth: 256 px from 640 px
-// with one parallax step, which keeps the trunk aligned across views as the camera passes, 128 px from 160 px and 16 px
-// from 20 px. Its leaves are foliage. Every level casts and receives shadows, both sides of its faces. Its scanned bark
-// is dark brown: painted, it is a lichened trunk's pale grey-brown.
+// The broadleaf scan, then two simplified meshes that keep its forks and leaf silhouettes in geometry.
+// Farther away, three hemispherical impostors use card depth. The nearest uses one parallax step for the trunk.
 /** How light passes through its leaves. */
 const FOLIAGE = { translucency: 0.6 };
 /** What its bark's colour is multiplied by. */
@@ -27,10 +24,11 @@ const loader = new CachedLodLoader(loadingManager, {
 const levels = await loader.loadAsync({
   url: "./tree_small_02_LOD0.glb",
   levels: [
-    { type: "simplify", ratio: 0.1, maxPixels: 900 },
-    { type: "impostor", layout: "hemi", maxPixels: 640, resolution: 256, frames: 16, draw: { depth: "card", parallax: 1 } },
-    { type: "impostor", layout: "hemi", maxPixels: 160, resolution: 128, frames: 8, draw: { depth: "card", parallax: 0 } },
-    { type: "impostor", layout: "hemi", maxPixels: 20, resolution: 16, frames: 8, draw: { depth: "card", parallax: 0 } },
+    { type: "simplify", ratio: 0.25, maxPixels: 1600 },
+    { type: "simplify", ratio: 0.1, maxPixels: 723 },
+    { type: "impostor", layout: "hemi", maxPixels: 277, resolution: 256, frames: 16, draw: { depth: "card", parallax: 1 } },
+    { type: "impostor", layout: "hemi", maxPixels: 107, resolution: 128, frames: 8, draw: { depth: "card", parallax: 0 } },
+    { type: "impostor", layout: "hemi", maxPixels: 13, resolution: 16, frames: 8, draw: { depth: "card", parallax: 0 } },
   ],
 });
 const lod = new Lod(levels, 1, { manager: loadingManager });

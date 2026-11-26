@@ -6,6 +6,45 @@ import { NearTiles, tileAt, tileKey, tilesAround } from "../../src/world/near-ti
 
 const TILE = 6;
 
+test("a fully covered forest skips tile searches until the camera leaves its reach", () => {
+  let searches = 0;
+  const filled: number[] = [];
+  const tiles = new NearTiles({
+    allWithin: (eye) => eye.y < TILE,
+    near: (eye) => {
+      searches++;
+      return eye.y < TILE
+        ? [
+            { tile: 0, distance: 0 },
+            { tile: 1, distance: TILE },
+          ]
+        : [];
+    },
+    fill: (tile) => {
+      filled.push(tile);
+      return [];
+    },
+    room: 2,
+    perFrame: 1,
+  });
+  const eye = new Vector3();
+  tiles.update(eye);
+  assert.ok(!tiles.settled);
+  tiles.update(eye);
+  tiles.update(eye);
+  assert.equal(searches, 2);
+  assert.equal(tiles.wanted, 2);
+  assert.ok(tiles.settled);
+  eye.y = TILE;
+  tiles.update(eye);
+  assert.equal(tiles.wanted, 0);
+  assert.ok(tiles.settled);
+  eye.y = 0;
+  tiles.update(eye);
+  tiles.update(eye);
+  assert.deepEqual(filled, [0, 1, 0, 1]);
+});
+
 test("tiles near the camera fill a budget per update, nearest first, each in a slot, and leave once out of reach", () => {
   const clusters: LodCluster[] = [];
   const radius = 2 * TILE;

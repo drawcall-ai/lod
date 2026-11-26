@@ -64,7 +64,7 @@ export interface LodOptions {
  *
  * Which levels load and which level meshes draw for a camera follow from the instances' bounds: per cluster, its box
  * and scales; without clusters, `boundingBox` around the first `count` instances, else what the CPU measures of a CPU
- * instanceMatrix. With clusters, only their instances draw. A storage instanceMatrix with neither loads every level
+ * instanceMatrix. With clusters, only their instances draw. A storage instanceMatrix with neither loads levels for every screen size
  * (it warns once). Each camera draws only the instances in its frustum, and each shadow map is a camera of its own: it
  * draws the casters in its frustum, each at the level its texels resolve, as an orthographic camera would (an instance
  * smaller than a texel casts nothing). Thresholds, fades and loading follow `LodLevel`; `cullDistance` thins the
@@ -331,7 +331,9 @@ export class Lod extends Object3D<LodEventMap> {
     view.see(this, this.instances.measured, shape, frustumIn(found, camera, this.matrixWorld), local, cull);
     if (view.unbounded && !this.warned) {
       this.warned = true;
-      console.warn(`Lod ${this.uuid}: nothing bounds its storage instanceMatrix, so every level loads and the CPU culls nothing; set boundingBox or clusters`);
+      console.warn(
+        `Lod ${this.uuid}: nothing bounds its storage instanceMatrix, so it loads levels for every screen size and the CPU culls nothing; set boundingBox or clusters`,
+      );
     }
     const { levels } = local;
     // A shadow map draws from the levels its scene's cameras loaded.

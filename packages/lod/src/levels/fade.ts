@@ -1,6 +1,7 @@
 import {
   type Camera,
   Color,
+  Vector4,
   type IndirectStorageBufferAttribute,
   Matrix4,
   StorageBufferAttribute,
@@ -14,10 +15,13 @@ import {
   NodeUpdateType,
   bool,
   cameraProjectionMatrix,
+  cameraViewMatrix,
+  clamp,
   dot,
   float,
   fract,
   instanceIndex,
+  max,
   modelWorldMatrix,
   normalLocal,
   positionLocal,
@@ -25,6 +29,7 @@ import {
   varyingProperty,
   screenCoordinate,
   screenSize,
+  renderGroup,
   select,
   storage,
   uniform,
@@ -184,18 +189,30 @@ export function placeInstances(builder: NodeBuilder): void {
   varyingProperty("vec3", "vInstanceColor").assign(instanceColor);
 }
 
-/** This draw's signed fade. */
-export const fade = Fn((builder): Node<"float"> => {
-  if (isImpostorMesh(builder.object)) return varying(fades.element(instanceIndex.mul(slotted))).setInterpolation("flat");
-  if (!sources.get(builder.object)?.slots) return float(0);
-  // Constant across the primitive: keep compute-written slots out of fragment bindings.
-  return varying(fades.element(instanceIndex)).setInterpolation("flat");
-});
+// A shared uniform keeps the viewport in the same shader layout across materials.
+const viewport = uniform(new Vector4())
+  .setGroup(renderGroup)
+  .onRenderUpdate(({ renderer }, self) => {
+    if (!renderer) throw new Error("Lod: a fade needs its renderer");
+    const target = renderer.getRenderTarget();
+    return target ? self.value.copy(target.viewport) : renderer.getViewport(self.value).multiplyScalar(renderer.getPixelRatio());
+  });
 
-/** Whether this pixel is this draw's, by its fade: false on the other level's pixels. */
-export const keepsPixel = Fn((): Node<"bool"> => {
-  const f = fade();
-  const d = dither(screenCoordinate.xy);
+/** The levels share a screen-space mask anchored to the instance pivot, so a pan carries it with the object. */
+export const keepsPixel = Fn((builder): Node<"bool"> => {
+  const card = isImpostorMesh(builder.object);
+  if (!card && !of(builder.object)?.slots) return bool(true);
+  const slot = card ? instanceIndex.mul(slotted) : instanceIndex;
+  const pivot = cameraProjectionMatrix
+    .mul(cameraViewMatrix)
+    .mul(modelWorldMatrix)
+    .mul(column(matrices.element(instance()), 3));
+  // Bound the offset for meshes whose pivot crosses the eye or lies far outside the viewport.
+  const ndc = clamp(pivot.xy.div(max(pivot.w, 1e-4)), -2, 2);
+  const offset = ndc.mul(vec2(0.5, -0.5)).mul(viewport.zw).round();
+  const mask = varying(vec3(offset, fades.element(slot)), "vLodFade").setInterpolation("flat");
+  const f = mask.z;
+  const d = dither(screenCoordinate.xy.sub(mask.xy));
   return select(f.greaterThanEqual(0), d.greaterThanEqual(f), d.lessThan(f.negate()));
 });
 

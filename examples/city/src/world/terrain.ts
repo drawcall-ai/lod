@@ -4,7 +4,7 @@ import seedrandom from "seedrandom";
 /** Half the edge of the detailed square of ground; the world's content lies within it. */
 export const EXTENT = 2400;
 /** Grid spacing of the detailed ground (m). */
-export const CELL = 8;
+export const CELL = 16;
 /** How far the coarse ring of ground reaches, to the haze. */
 const HORIZON = 40000;
 const meshes = new WeakMap<Terrain, THREE.BufferGeometry>();
@@ -102,9 +102,7 @@ export class Terrain {
   }
 
   /**
-   * The ground as one mesh with UVs in metres: the detailed square, then rings of cells
-   * growing outward to the horizon. Grid lines are shared, so the ring meets the square
-   * without cracks.
+   * The detailed square and its flat extension to the horizon share one grid.
    */
   mesh(material: THREE.Material): THREE.Mesh {
     let geometry = meshes.get(this);
@@ -116,13 +114,9 @@ export class Terrain {
   }
 
   private geometry(): THREE.BufferGeometry {
-    const lines = [-EXTENT];
-    for (let i = 1; i <= this.cells; i++) lines.push(-EXTENT + i * CELL);
-    let step = CELL * 4;
-    const outer: number[] = [];
-    for (let at = EXTENT + step; at < HORIZON; at += step, step *= 1.25) outer.push(at);
-    outer.push(HORIZON);
-    const axis = [...outer.map((a) => -a).reverse(), ...lines, ...outer];
+    const axis = [-HORIZON];
+    for (let i = 0; i <= this.cells; i++) axis.push(-EXTENT + i * CELL);
+    axis.push(HORIZON);
     const n = axis.length;
     const position = new Float32Array(n * n * 3);
     const uv = new Float32Array(n * n * 2);

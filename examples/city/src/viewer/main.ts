@@ -6,7 +6,6 @@ import { mrt, normalView, output, packNormalToRGB, pass, pow, sample, unpackRGBT
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { ao } from "three/addons/tsl/display/GTAONode.js";
 import { manager, scripts } from "../loading.ts";
-import { Textures } from "../render/materials.ts";
 import { buildItem, type Item, itemNames } from "./items.ts";
 import { Stage } from "./stage.ts";
 
@@ -37,11 +36,11 @@ const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.01, 2
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 
-const stage = new Stage(new Textures(manager));
+const stage = new Stage(manager);
 await stage.loadSky(renderer);
 
-// ambient occlusion (GTAO) supplies the contact darkening that image-based light lacks
-const scene = pass(stage.scene, camera, { samples: 4 });
+// GTAO gathers neighbouring depths from a single-sample texture.
+const scene = pass(stage.scene, camera, { samples: 0 });
 scene.setMRT(mrt({ output, normal: packNormalToRGB(normalView) }));
 const normals = scene.getTextureNode("normal");
 const occlusion = ao(
