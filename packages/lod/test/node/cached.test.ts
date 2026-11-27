@@ -32,11 +32,12 @@ it("builds and saves every level with the packages and, as the cache plugin warm
   const warm = () => warming.run({ files: [], modules: () => [] }, () => new CachedLodLoader().loadAsync(request));
   await warm();
   const entries = await saved();
-  // The shape, the simplified level, and the impostor once per block format, each a JSON and a binary file.
-  expect(entries).toHaveLength(8);
+  // The shape, the simplified level, and the impostor once per block format, each one entry file.
+  expect(entries).toHaveLength(4);
   for (const [name] of entries) {
-    if (!String(name).endsWith(".json")) continue;
-    const { inputs } = JSON.parse(await readFile(join(directory, String(name)), "utf8"));
+    // An entry file starts with its header's length as a little-endian u32, then the header as JSON.
+    const file = await readFile(join(directory, String(name)));
+    const { inputs } = JSON.parse(file.subarray(4, 4 + file.readUInt32LE(0)).toString("utf8"));
     expect(inputs.map(({ dependency }: { dependency: unknown }) => dependency)).toEqual([
       { path: "public/box.glts" },
       { path: "public/box.ts" },

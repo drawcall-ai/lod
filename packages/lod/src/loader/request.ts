@@ -12,7 +12,8 @@ import { loaderPathURL } from "./url.js";
  * Levels derived from the source, finest first. In browsers each derived level is built when it first loads; in Node
  * every level is built with the ladder. A level without `maxPixels` gets the default `LodLevel.maxPixels` describes;
  * an impostor's is `texelPixels` of its bake when Node described the ladder, which bakes it first, else `framePixels`
- * of its resolution. An impostor's `maxPixels` also sizes its bake.
+ * of its resolution. An impostor's `maxPixels` also sizes its bake. `maxPixels: Infinity` on the first level, unless it
+ * is an impostor, draws it at any height in place of the source, so a cached level draws without fetching the source.
  */
 export type LodLevelRequest =
   | ({ type: "simplify"; maxPixels?: number } & SimplifyOptions)
@@ -59,7 +60,13 @@ export type Ladder = ReturnType<typeof normalize>;
 export function normalize(request: LodRequest, path: string, publicPath: (url: string) => string) {
   const input = typeof request === "string" ? { url: request } : request;
   const url = input.source ? path || "./" : loaderPathURL(input.url, path);
-  return { url, key: publicPath(url), source: input.source, levels: structuredClone(input.levels ?? DEFAULT_LEVELS) };
+  const levels = structuredClone(input.levels ?? DEFAULT_LEVELS);
+  levels.forEach((level, position) => {
+    if (level.maxPixels !== Infinity) return;
+    if (position > 0) throw new Error(`CachedLodLoader: only the first level can have maxPixels Infinity, not level ${position + 1}`);
+    if (level.type === "impostor") throw new Error("CachedLodLoader: an impostor's maxPixels sizes its bake, so it cannot be Infinity");
+  });
+  return { url, key: publicPath(url), source: input.source, levels };
 }
 
 /** The request of ladder level `index`, which must be a derived level. */

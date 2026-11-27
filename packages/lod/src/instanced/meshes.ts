@@ -11,7 +11,7 @@ import {
   type Sphere,
 } from "three/webgpu";
 import { setFadeSource, type DrawnInstances, type InstanceSlots } from "../levels/fade.js";
-import { drawMaterial } from "../levels/material.js";
+import { levelMaterial } from "../levels/material.js";
 import { impostorInstances, type ImpostorMesh } from "../impostor/mesh/index.js";
 import { isImpostorMesh, isInstancedMesh, isLOD, isLine, isMesh, isPoints, isSprite, rejectSkinned } from "../three.js";
 import { DRAW_BYTES, type IndirectDraw } from "./rows.js";
@@ -142,25 +142,27 @@ function levelMesh({ template, placement, group }: Part, offset: () => number | 
   // Three sorts by the geometry's sphere, including for instanced impostors.
   mesh.geometry.boundingSphere = bounds;
   mesh.geometry.boundingBox = box;
-  // Three can draw this same mesh into a shadow map between onBeforeRender and the camera's GPU draw.
-  const active: (InstanceSlots["args"] | null)[] = [];
-  const bind = (args: InstanceSlots["args"] | null, start: number) => mesh.geometry.setIndirect(args?.attribute ?? NOTHING, args ? args.offset + start : 0);
-  const previous = mesh.onBeforeRender;
+  // Three can draw this same mesh into a shadow map between onBeforeRender and the camera's GPU draw, so each render
+  // pushes what it bound, null for nothing, and the end of a nested one binds the outer render's draw again.
+  type Bound = { args: InstanceSlots["args"] | null; start: number };
+  const active: (Bound | null)[] = [];
+  const bind = ({ args, start }: Bound) => mesh.geometry.setIndirect(args?.attribute ?? NOTHING, args ? args.offset + start : 0);
+  const before = mesh.onBeforeRender;
+  const after = mesh.onAfterRender;
   // Each camera draws the instances in its own lists. A level compiling to join draws nothing yet: its pipelines do not
   // depend on the indirect draw.
   mesh.onBeforeRender = (renderer, scene, camera, geometry, material, drawn) => {
-    previous.call(mesh, renderer, scene, camera, geometry, material, drawn);
+    before.call(mesh, renderer, scene, camera, geometry, material, drawn);
     const start = offset();
-    if (start === null) return;
-    const args = drawFor(renderer, camera);
-    active.push(args);
-    bind(args, start);
+    const bound = start === null ? null : { args: drawFor(renderer, camera), start };
+    active.push(bound);
+    if (bound) bind(bound);
   };
-  mesh.onAfterRender = () => {
+  mesh.onAfterRender = (renderer, scene, camera, geometry, material, drawn) => {
+    after.call(mesh, renderer, scene, camera, geometry, material, drawn);
     active.pop();
     const outer = active.at(-1);
-    const start = offset();
-    if (outer !== undefined && start !== null) bind(outer, start);
+    if (outer) bind(outer);
   };
   return mesh;
 }
@@ -193,11 +195,11 @@ function card(template: ImpostorMesh, placement: Matrix4, { instances, bounds }:
 
 /** The level material of `mesh`'s material group `group`. */
 function groupMaterial(mesh: Mesh, group: number) {
-  if (!Array.isArray(mesh.material)) return drawMaterial(mesh.material);
+  if (!Array.isArray(mesh.material)) return levelMaterial(mesh.material);
   const index = mesh.geometry.groups[group]?.materialIndex ?? 0;
   const material = mesh.material[index];
   if (!material) throw new Error(`Lod: "${mesh.name}" has no material ${index}`);
-  return drawMaterial(material);
+  return levelMaterial(material);
 }
 
 /**

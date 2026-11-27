@@ -2,9 +2,6 @@ import { opaqueSort } from "@drawcall/lod";
 import * as THREE from "three/webgpu";
 import { texture } from "three/tsl";
 
-const query = new URLSearchParams(location.search);
-const timing = query.has("timing") || query.has("shot");
-
 /**
  * The renderer and its frame: the scene is drawn into a half-float target
  * with a float depth buffer and reversed depth (near 1, far 0), which keeps depth
@@ -36,6 +33,7 @@ export class Pipeline {
     readonly renderer: THREE.WebGPURenderer,
     private readonly scene: THREE.Scene,
     private readonly camera: THREE.Camera,
+    timing: boolean,
   ) {
     this.output = new THREE.RenderPipeline(renderer, texture(this.target.texture));
     this.timed = renderer.hasFeature("timestamp-query") && timing;
@@ -43,8 +41,8 @@ export class Pipeline {
     renderer.info.autoReset = false;
   }
 
-  /** A renderer drawing `scene` from `camera`, initialised. */
-  static async create(scene: THREE.Scene, camera: THREE.Camera, pixelRatio: number): Promise<Pipeline> {
+  /** A renderer drawing `scene` from `camera`, initialised, collecting GPU pass timings given `timing`. */
+  static async create(scene: THREE.Scene, camera: THREE.Camera, pixelRatio: number, timing: boolean): Promise<Pipeline> {
     const renderer = new THREE.WebGPURenderer({
       // Impostors leave fractional alpha (alpha to coverage) in the frame, which an alpha
       // canvas would let the page show through.
@@ -61,7 +59,7 @@ export class Pipeline {
     // Neutral (Khronos PBR Neutral) keeps hues closest to a photograph here; see viewer/main.ts
     renderer.toneMapping = THREE.NeutralToneMapping;
     renderer.toneMappingExposure = 0.8;
-    return new Pipeline(renderer, scene, camera);
+    return new Pipeline(renderer, scene, camera, timing);
   }
 
   get canvas(): HTMLCanvasElement {

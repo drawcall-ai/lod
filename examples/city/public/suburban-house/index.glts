@@ -27,7 +27,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
     loader.loadAsync({
       url: "./source.glts?variant=0",
       levels: [
-        { type: "baked", low: "./low.glts?variant=0", interior: "./interior.glts?variant=0", textureSize: 512 },
+        { type: "baked", low: "./low.glts?variant=0", interior: "./interior.glts?variant=0", textureSize: 512, maxPixels: Infinity },
         { type: "baked", low: "./low.glts?variant=0", textureSize: 256, maxPixels: 72 },
       ],
     }),
@@ -35,7 +35,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
     loader.loadAsync({
       url: "./source.glts?variant=1",
       levels: [
-        { type: "baked", low: "./low.glts?variant=1", interior: "./interior.glts?variant=1", textureSize: 512 },
+        { type: "baked", low: "./low.glts?variant=1", interior: "./interior.glts?variant=1", textureSize: 512, maxPixels: Infinity },
         { type: "baked", low: "./low.glts?variant=1", textureSize: 256, maxPixels: 72 },
       ],
     }),
@@ -43,7 +43,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
     loader.loadAsync({
       url: "./source.glts?variant=2",
       levels: [
-        { type: "baked", low: "./low.glts?variant=2", interior: "./interior.glts?variant=2", textureSize: 512 },
+        { type: "baked", low: "./low.glts?variant=2", interior: "./interior.glts?variant=2", textureSize: 512, maxPixels: Infinity },
         { type: "baked", low: "./low.glts?variant=2", textureSize: 256, maxPixels: 72 },
       ],
     }),
@@ -51,7 +51,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
     loader.loadAsync({
       url: "./source.glts?variant=3",
       levels: [
-        { type: "baked", low: "./low.glts?variant=3", interior: "./interior.glts?variant=3", textureSize: 512 },
+        { type: "baked", low: "./low.glts?variant=3", interior: "./interior.glts?variant=3", textureSize: 512, maxPixels: Infinity },
         { type: "baked", low: "./low.glts?variant=3", textureSize: 256, maxPixels: 72 },
       ],
     }),
@@ -59,7 +59,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
     loader.loadAsync({
       url: "./source.glts?variant=4",
       levels: [
-        { type: "baked", low: "./low.glts?variant=4", interior: "./interior.glts?variant=4", textureSize: 512 },
+        { type: "baked", low: "./low.glts?variant=4", interior: "./interior.glts?variant=4", textureSize: 512, maxPixels: Infinity },
         { type: "baked", low: "./low.glts?variant=4", textureSize: 256, maxPixels: 72 },
       ],
     }),
@@ -67,7 +67,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
     loader.loadAsync({
       url: "./source.glts?variant=5",
       levels: [
-        { type: "baked", low: "./low.glts?variant=5", interior: "./interior.glts?variant=5", textureSize: 512 },
+        { type: "baked", low: "./low.glts?variant=5", interior: "./interior.glts?variant=5", textureSize: 512, maxPixels: Infinity },
         { type: "baked", low: "./low.glts?variant=5", textureSize: 256, maxPixels: 72 },
       ],
     }),
@@ -75,7 +75,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
     loader.loadAsync({
       url: "./source.glts?variant=6",
       levels: [
-        { type: "baked", low: "./low.glts?variant=6", interior: "./interior.glts?variant=6", textureSize: 512 },
+        { type: "baked", low: "./low.glts?variant=6", interior: "./interior.glts?variant=6", textureSize: 512, maxPixels: Infinity },
         { type: "baked", low: "./low.glts?variant=6", textureSize: 256, maxPixels: 72 },
       ],
     }),
@@ -83,7 +83,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
     loader.loadAsync({
       url: "./source.glts?variant=7",
       levels: [
-        { type: "baked", low: "./low.glts?variant=7", interior: "./interior.glts?variant=7", textureSize: 512 },
+        { type: "baked", low: "./low.glts?variant=7", interior: "./interior.glts?variant=7", textureSize: 512, maxPixels: Infinity },
         { type: "baked", low: "./low.glts?variant=7", textureSize: 256, maxPixels: 72 },
       ],
     }),
@@ -91,7 +91,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
     loader.loadAsync({
       url: "./source.glts?variant=8",
       levels: [
-        { type: "baked", low: "./low.glts?variant=8", interior: "./interior.glts?variant=8", textureSize: 512 },
+        { type: "baked", low: "./low.glts?variant=8", interior: "./interior.glts?variant=8", textureSize: 512, maxPixels: Infinity },
         { type: "baked", low: "./low.glts?variant=8", textureSize: 256, maxPixels: 72 },
       ],
     }),
@@ -99,7 +99,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
     loader.loadAsync({
       url: "./source.glts?variant=9",
       levels: [
-        { type: "baked", low: "./low.glts?variant=9", interior: "./interior.glts?variant=9", textureSize: 512 },
+        { type: "baked", low: "./low.glts?variant=9", interior: "./interior.glts?variant=9", textureSize: 512, maxPixels: Infinity },
         { type: "baked", low: "./low.glts?variant=9", textureSize: 256, maxPixels: 72 },
       ],
     }),
@@ -107,7 +107,7 @@ const LADDERS: Record<string, () => Promise<LodLevel[]>> = {
     loader.loadAsync({
       url: "./source.glts?variant=church",
       levels: [
-        { type: "baked", low: "./low.glts?variant=church", interior: "./interior.glts?variant=church", textureSize: 1024 },
+        { type: "baked", low: "./low.glts?variant=church", interior: "./interior.glts?variant=church", textureSize: 1024, maxPixels: Infinity },
         { type: "baked", low: "./low.glts?variant=church", textureSize: 512, maxPixels: 120 },
       ],
     }),
@@ -117,9 +117,6 @@ const variant = new URL(import.meta.url).searchParams.get("variant") ?? "0";
 const load = LADDERS[variant];
 if (!load) throw new Error(`house: variant must be a whole number below ${HOUSE_VARIANTS} or church, not ${variant}`);
 const levels = await load();
-const exterior = levels[1];
-if (!exterior) throw new Error("house: missing baked exterior");
-exterior.maxPixels = Infinity;
 const lod = new Lod(levels, 1, { manager: loadingManager });
 scene.add(lod);
 onDispose(() => lod.dispose());

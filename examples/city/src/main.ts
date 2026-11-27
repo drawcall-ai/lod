@@ -4,7 +4,7 @@
 // levels and ?quality=<q> sets Lod.quality from the start; ?terrain=0 leaves the ground
 // mesh out (everything still stands where the ground would be; roads and the creek stay).
 // ?ratio=<n> overrides the native device pixel ratio.
-// ?timing enables GPU timings in the overlay.
+// ?timing enables GPU timings in the overlay; ?shot enables them too, for scripts/tour.ts.
 // ?wind=0 builds vegetation without wind, for a static performance baseline.
 // Forests and ground cover are planted on the GPU in the tiles near the camera (world/near-tiles.ts, world/planting.ts).
 // window.city exposes the tour and frame measurements to scripts/tour.ts.
@@ -69,7 +69,7 @@ const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.5, 60
 const scene = new THREE.Scene();
 const ratio = Number(params.get("ratio") ?? devicePixelRatio);
 if (!Number.isFinite(ratio) || ratio <= 0) throw new Error("ratio must be a positive finite number");
-const pipeline = await Pipeline.create(scene, camera, ratio);
+const pipeline = await Pipeline.create(scene, camera, ratio, shot || params.has("timing"));
 loaded("renderer");
 // hidden until the world is built: an empty canvas would sit over the page meanwhile
 pipeline.canvas.style.visibility = "hidden";

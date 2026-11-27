@@ -25,7 +25,7 @@ A `Lod` needs no renderer to be made, and neither does `CachedLodLoader`. It dra
 
 `loadAsync` resolves with the ladder before its levels load; each level loads when a camera first needs it. A level the cache lacks is built when it first loads, so a far camera builds only the coarse levels it needs. Choose `maxPixels` for simplified and baked levels by looking at the transition. The default of half the finer neighbour's height does not measure visual error. An impostor's default is the largest height at which its atlas stays sharp. A source-only ladder loads its source eagerly.
 
-**The original never has to draw.** If the first derived level holds up at the closest reachable view, set `levels[1].maxPixels = Infinity` on the returned ladder before constructing the `Lod`. Keeping this assignment outside the loader request lets the cache plugin read the request as JSON. A cached bake or impostor can then draw without fetching the original. A cache miss needs the source to build it, and a simplified mesh still loads the source for its materials. Use `forceLevel = 0` for a visual comparison.
+**The original never has to draw.** If the first derived level holds up at the closest reachable view, give it `maxPixels: Infinity` in the request; an impostor cannot take it, as its `maxPixels` sizes its bake. A cached bake can then draw without fetching the original. A cache miss needs the source to build it, and a simplified mesh still loads the source for its materials. Use `forceLevel = 0` for a visual comparison.
 
 Choose each level for the detail the camera can still resolve. Keep the source where the viewer can see detail a cheaper representation loses. Simplify when fewer triangles preserve the silhouette and the source materials still suit it. Bake when a simple mesh holds the shape and textures can carry the surface detail, optionally with an interior behind windows. Try an impostor when a complex silhouette still matters but changes in perspective within it are small. Use an empty level once the object can disappear. Compare neighboring levels in motion at the intended size and density before adding a transition.
 
@@ -71,13 +71,10 @@ loadingManager.addHandler(/\.glts$/i, gltsLoader);
 const levels = await new CachedLodLoader(loadingManager).loadAsync({
   url: "./model.glts",
   levels: [
-    { type: "baked", low: "./exterior.glts", interior: "./rooms.glts", textureSize: 512 },
+    { type: "baked", low: "./exterior.glts", interior: "./rooms.glts", textureSize: 512, maxPixels: Infinity },
     { type: "baked", low: "./exterior.glts", textureSize: 64, maxPixels: 24 },
   ],
 });
-const exterior = levels[1];
-if (!exterior) throw new Error("Expected a baked exterior");
-exterior.maxPixels = Infinity;
 const lod = new Lod(levels, 1, { manager: loadingManager });
 scene.add(lod);
 onDispose(() => lod.dispose());
@@ -168,7 +165,7 @@ For dense cover, combine near individuals with a baked distant patch. Jitter pos
 
 ## Wait for a complete frame before a screenshot
 
-Levels load as the camera comes to need them, so a frame drawn soon after loading can lack them. Give the Lods a `manager` of their own, so that it tracks only them: each holds an item there while the levels its cameras need load, compile or fade in, and ends it once they are complete. Render the `Scene` that holds them each frame, since a Lod loads nothing before such a render.
+Levels load as the camera comes to need them, so a frame drawn soon after loading can lack them. Give the Lods a `manager` of their own, so that it tracks only them: each holds an item there while the levels its cameras need load, compile or fade in, and ends it once they are complete. Render the `Scene` that holds them each frame, since a Lod loads nothing before such a render. A Lod holds no item until a render draws it, so render after adding Lods before trusting a quiet manager. A failed load ends its item, reporting it to the manager's `onError`, rather than holding it: check `lod.error` before treating quiet as complete.
 
 To capture one frame, even with nothing cached, place the camera and render, then wait a frame; while the manager is loading, compile with `renderer.compileAsync(scene, camera)`, render again and wait a frame; capture after a quiet frame, one in which no item started or ended. After moving the camera, wait again. In this example `levels` and `treeLevels` are ladders from `CachedLodLoader`, `instanceMatrix` an attribute of tree matrices, and `viewpoint` the camera position to capture.
 
@@ -181,6 +178,7 @@ const lod = new Lod(levels, 1, { manager });
 const trees = new Lod(treeLevels, instanceMatrix.count, { manager });
 trees.instanceMatrix = instanceMatrix;
 scene.add(lod, trees);
+const lods = [lod, trees];
 
 camera.position.copy(viewpoint);
 let loading = false;
@@ -194,6 +192,8 @@ while (loading) {
   renderer.render(scene, camera);
   await frame();
 }
+const failed = lods.find((lod) => lod.error);
+if (failed) throw failed.error;
 // The last render drew the complete frame: capture it.
 ```
 
@@ -201,7 +201,7 @@ Loaded levels stay until their Lod is disposed, which nothing does for you: in a
 
 ## Choose levels for plants
 
-For a dense crown, try a simplified whole tree while its branches still read individually, then a whole-tree impostor once its silhouette dominates. Look for doubled branches as the camera moves between baked views. Add parallax only if it improves that transition.
+For a dense crown, try a simplified whole tree while its branches still read individually, then a whole-tree impostor once its silhouette dominates. `simplify` also removes the triangles inside the leaf cards it keeps, outlines kept, to about a pixel's error at a thousand pixels tall, so let the simplified level switch in at no more than about that height. Look for doubled branches as the camera moves between baked views. Add parallax only if it improves that transition.
 
 For sparse blades or leaves with large gaps, a cheap mesh can beat an impostor. The mesh follows the blades, while overlapping impostor rectangles sample the atlas across those gaps. Compare the source or a low mesh against the impostor at the same density, distance and render resolution. Pan slowly at the shipping sample count to check for shimmer on thin foliage. Alpha to coverage needs a multisampled scene target. Include a view from inside the planting.
 
@@ -211,7 +211,7 @@ Replay the same short movement at the target viewport and pixel ratio, after the
 
 Tune transitions in the intended viewport with `Lod.debug` and use `Lod.quality` for a scene-wide adjustment. At the nearest intended view of each level, use `lod.forceLevel` to compare it with the detailed source at the same pose, light and wind time. Check silhouette area **and where the gaps fall**, shadows, colour and fine detail. Release the override and move through the fade, toward the sun as well as away.
 
-If a baked surface shimmers at a grazing angle, hold its level fixed and replay the motion with the normal map disabled. If that removes the shimmer, try a positive mip bias on the normal map alone. Check that the relief still reads at the closest view.
+If a baked surface shimmers at a grazing angle, hold its level fixed and replay the motion with the normal map disabled. If that removes the shimmer, try a positive mip bias on the normal map alone, set on the derived levels' materials in the loader's `onLevel`, such as `normalMap(texture(material.normalMap).bias(float(2)))` as their `normalNode`. Check that the relief still reads at the closest view.
 
 An impostor's `depth: "reconstructed"` places each pixel at its baked surface, so interleaved surfaces such as a fence crossing a trunk stay correct, but every overlapping card shades before depth decides. `depth: "card"` lets the GPU reject hidden pixels early, which pays off in fields of similar plants; check foreground crossings in motion. Each `parallax` step adds atlas reads: try zero where motion within the silhouette is imperceptible at the largest intended size.
 

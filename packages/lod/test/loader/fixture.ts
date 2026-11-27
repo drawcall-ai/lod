@@ -16,7 +16,11 @@ export class CacheEntry {
   private readonly key: string;
   private loaded = false;
   constructor(private readonly options: CacheEntryOptions) {
-    this.key = JSON.stringify([options.version, options.dependencies]);
+    // Strict, as @drawcall/cache is: a non-finite number in a declaration throws.
+    this.key = JSON.stringify([options.version, options.dependencies], (_, value: unknown) => {
+      if (typeof value === "number" && !Number.isFinite(value)) throw new Error(`CacheEntry: ${value} in a declaration`);
+      return value;
+    });
   }
   async load() {
     this.loaded = true;

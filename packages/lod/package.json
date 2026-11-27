@@ -43,14 +43,14 @@
     "meshoptimizer": "^1.3.0"
   },
   "peerDependencies": {
-    "@drawcall/cache": "^0.8.2",
+    "@drawcall/cache": "^0.9.1",
     "@drawcall/glts": "^7.0.0",
     "three": ">=0.186.0 <0.187.0",
     "typegpu": "^0.12.9"
   },
   "devDependencies": {
     "@babel/core": "^7.29.13",
-    "@drawcall/cache": "^0.8.2",
+    "@drawcall/cache": "^0.9.1",
     "@drawcall/glts": "^7.0.0",
     "@drawcall/lod": "link:",
     "@typegpu/gl": "^0.12.9",

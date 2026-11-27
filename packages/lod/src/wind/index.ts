@@ -1,8 +1,8 @@
-import { Box3, Matrix4, ObjectSpaceNormalMap, Vector2, type Mesh, type Object3D } from "three/webgpu";
+import { Box3, Matrix4, ObjectSpaceNormalMap, Vector2, type Material, type Mesh, type Object3D } from "three/webgpu";
 import { levelBox } from "../levels/bounds.js";
 import { boundingBox } from "../source/detail.js";
 import { fadeSourceOf } from "../levels/fade.js";
-import { drawMaterial } from "../levels/material.js";
+import { levelMaterial, swayMaterial } from "../levels/material.js";
 import { isBatchedMesh, isImpostorMesh, isLod, isInstancedMesh, isLOD, isMesh, isSkinnedMesh, isStorageInstanced } from "../three.js";
 import { WIND, type WindTarget } from "./hooks.js";
 import { windBounds } from "./bounds.js";
@@ -154,7 +154,7 @@ export class Wind {
     const shape = new Vector2(amplitude / size, base);
     const padding = (amplitude * Math.max(Math.abs(box.min.y - base), Math.abs(box.max.y - base))) / size;
     if (isWindTarget(root) && !refreshing) root[WIND](padding, amplitude / size, base);
-    const kind = isLod(root) ? "swayingLevel" : "swayingMesh";
+    const copy = isLod(root) ? (material: Material) => levelMaterial(material, true) : swayMaterial;
     for (const { mesh, placement } of placed) {
       if (!isLod(root)) windBounds(mesh, placement, amplitude, base, size);
       setSway(mesh, { breeze: this.breeze, shape, placement, fromRoot: placement.clone().invert() });
@@ -163,7 +163,7 @@ export class Wind {
           mesh.material.deformNode = impostorSway;
           mesh.material.needsUpdate = true;
         }
-      } else mesh.material = Array.isArray(mesh.material) ? mesh.material.map((m) => drawMaterial(m, kind)) : drawMaterial(mesh.material, kind);
+      } else mesh.material = Array.isArray(mesh.material) ? mesh.material.map(copy) : copy(mesh.material);
     }
     const options = { amplitude, baseY: base, height: size };
     bindings.set(root, { wind: this, options, refresh: (next) => this.attach(root, options, true, next, box) });
