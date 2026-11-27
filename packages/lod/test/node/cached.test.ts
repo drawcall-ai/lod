@@ -64,7 +64,7 @@ it("runs loads on one loader concurrently, each with its own GLTSLoader, baking 
 
 it("fails a load that fetches what it cannot record", { timeout: 120_000 }, async () => {
   // GLTS reports the script's failure, caused by the refused fetch.
-  await expect(new CachedLodLoader().loadAsync("/fetch.glts")).rejects.toMatchObject({
+  await expect(new CachedLodLoader().loadAsync({ url: "/fetch.glts", levels: [] })).rejects.toMatchObject({
     cause: { message: expect.stringMatching(/cannot precompute/) },
   });
 });

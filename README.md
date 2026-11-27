@@ -5,7 +5,7 @@ Level of detail for Three.js. Build simplified meshes, baked low-poly meshes, an
 Requires Three.js `WebGPURenderer` (`three/webgpu`).
 
 ```sh
-npm install @drawcall/lod three typegpu
+npm install @drawcall/lod three
 ```
 
 Load a model into an existing Three.js scene. Each level loads once the camera needs it, finer ones as the camera approaches. A `Lod` is driven like an `InstancedMesh`: `new Lod(levels)` is one object, `new Lod(levels, count)` draws `count` copies placed with `setMatrixAt`. It draws with the first renderer that renders it:
@@ -13,7 +13,14 @@ Load a model into an existing Three.js scene. Each level loads once the camera n
 ```ts
 import { CachedLodLoader, Lod } from "@drawcall/lod";
 
-const levels = await new CachedLodLoader().loadAsync("/models/tree.glb");
+const levels = await new CachedLodLoader().loadAsync({
+  url: "/models/tree.glb",
+  levels: [
+    { type: "simplify", ratio: 0.25, maxPixels: 400 },
+    { type: "impostor", maxPixels: 120 },
+    { type: "empty", maxPixels: 4 },
+  ],
+});
 scene.add(new Lod(levels));
 ```
 

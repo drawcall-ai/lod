@@ -43,11 +43,10 @@ export function inferredImpostor(level: LodLevelRequest): level is Extract<LodLe
 export type LodSource = (context: { loader: CachedLodLoader; manager: LoadingManager }) => Object3D | Promise<Object3D>;
 
 /**
- * A .glb, .gltf or .glts asset URL, or an inline function that builds the model. Source and simplified levels load or
- * build the source on demand.
+ * A .glb, .gltf or .glts asset URL, or an inline function that builds the model, and the levels derived from it. Source
+ * and simplified levels load or build the source on demand; with no levels, the source is the whole ladder.
  */
-export type LodRequest = string | (({ url: string; source?: never } | { source: LodSource; url?: never }) & { levels?: readonly LodLevelRequest[] });
-const DEFAULT_LEVELS: readonly LodLevelRequest[] = [{ type: "impostor" }];
+export type LodRequest = ({ url: string; source?: never } | { source: LodSource; url?: never }) & { levels: readonly LodLevelRequest[] };
 
 /** A normalized request. */
 export type Ladder = ReturnType<typeof normalize>;
@@ -58,15 +57,14 @@ export type Ladder = ReturnType<typeof normalize>;
  * level's low and interior URLs stay relative to the source.
  */
 export function normalize(request: LodRequest, path: string, publicPath: (url: string) => string) {
-  const input = typeof request === "string" ? { url: request } : request;
-  const url = input.source ? path || "./" : loaderPathURL(input.url, path);
-  const levels = structuredClone(input.levels ?? DEFAULT_LEVELS);
+  const url = request.source ? path || "./" : loaderPathURL(request.url, path);
+  const levels = structuredClone(request.levels);
   levels.forEach((level, position) => {
     if (level.maxPixels !== Infinity) return;
     if (position > 0) throw new Error(`CachedLodLoader: only the first level can have maxPixels Infinity, not level ${position + 1}`);
     if (level.type === "impostor") throw new Error("CachedLodLoader: an impostor's maxPixels sizes its bake, so it cannot be Infinity");
   });
-  return { url, key: publicPath(url), source: input.source, levels };
+  return { url, key: publicPath(url), source: request.source, levels };
 }
 
 /** The request of ladder level `index`, which must be a derived level. */
