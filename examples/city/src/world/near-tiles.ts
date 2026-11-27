@@ -20,6 +20,8 @@ export interface NearTilesOptions {
   fill: (tile: number, slot: number) => TileCluster[];
   /** The most tiles filled in one update. */
   perFrame: number;
+  /** True when every possible tile fits in the slots and is in reach. */
+  allWithin?: (eye: THREE.Vector3) => boolean;
   /** The most tiles held at once, the nearest, each in a slot of its own. */
   room: number;
 }
@@ -57,6 +59,10 @@ export class NearTiles extends THREE.Group {
   /** Call once before rendering a frame, with the camera's position. */
   update(eye: THREE.Vector3): void {
     const { near, fill, perFrame, room } = this.options;
+    if (this.held.size === room && this.options.allWithin?.(eye)) {
+      this.wanted = room;
+      return;
+    }
     const tiles = near(eye);
     this.wanted = tiles.length;
     this.nearest = new Set(tiles.slice(0, room).map(({ tile }) => tile));

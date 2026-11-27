@@ -1,4 +1,15 @@
-import { type Box3, BufferGeometry, type Camera, type Color, IndirectStorageBufferAttribute, type Layers, Matrix4, Mesh, type Object3D, type Sphere } from "three/webgpu";
+import {
+  type Box3,
+  BufferGeometry,
+  type Camera,
+  type Color,
+  IndirectStorageBufferAttribute,
+  type Layers,
+  Matrix4,
+  Mesh,
+  type Object3D,
+  type Sphere,
+} from "three/webgpu";
 import { setFadeSource, type DrawnInstances, type InstanceSlots } from "../levels/fade.js";
 import { levelMaterial } from "../levels/material.js";
 import { impostorInstances, type ImpostorMesh } from "../impostor/mesh/index.js";
@@ -128,18 +139,30 @@ function levelMesh({ template, placement, group }: Part, offset: () => number | 
   mesh.receiveShadow = template.receiveShadow;
   mesh.layers = layers;
   mesh.raycast = () => {};
-  if (!isImpostorMesh(mesh)) mesh.geometry.boundingSphere = bounds;
+  // Three sorts by the geometry's sphere, including for instanced impostors.
+  mesh.geometry.boundingSphere = bounds;
   mesh.geometry.boundingBox = box;
-  const previous = mesh.onBeforeRender;
+  // Three can draw this same mesh into a shadow map between onBeforeRender and the camera's GPU draw, so each render
+  // pushes what it bound, null for nothing, and the end of a nested one binds the outer render's draw again.
+  type Bound = { args: InstanceSlots["args"] | null; start: number };
+  const active: (Bound | null)[] = [];
+  const bind = ({ args, start }: Bound) => mesh.geometry.setIndirect(args?.attribute ?? NOTHING, args ? args.offset + start : 0);
+  const before = mesh.onBeforeRender;
+  const after = mesh.onAfterRender;
   // Each camera draws the instances in its own lists. A level compiling to join draws nothing yet: its pipelines do not
   // depend on the indirect draw.
   mesh.onBeforeRender = (renderer, scene, camera, geometry, material, drawn) => {
-    previous.call(mesh, renderer, scene, camera, geometry, material, drawn);
+    before.call(mesh, renderer, scene, camera, geometry, material, drawn);
     const start = offset();
-    if (start === null) return;
-    const args = drawFor(renderer, camera);
-    if (args) mesh.geometry.setIndirect(args.attribute, args.offset + start);
-    else mesh.geometry.setIndirect(NOTHING, 0);
+    const bound = start === null ? null : { args: drawFor(renderer, camera), start };
+    active.push(bound);
+    if (bound) bind(bound);
+  };
+  mesh.onAfterRender = (renderer, scene, camera, geometry, material, drawn) => {
+    after.call(mesh, renderer, scene, camera, geometry, material, drawn);
+    active.pop();
+    const outer = active.at(-1);
+    if (outer) bind(outer);
   };
   return mesh;
 }

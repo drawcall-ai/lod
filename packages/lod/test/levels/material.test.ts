@@ -1,7 +1,7 @@
 import { Mesh, MeshBasicNodeMaterial, MeshStandardMaterial, OrthographicCamera, PlaneGeometry, Scene } from "three/webgpu";
 import { uniform, vec3 } from "three/tsl";
 import { describe, expect, it } from "vitest";
-import { levelMaterial, originalOf } from "../../src/levels/material.js";
+import { levelMaterial, originalOf, swayMaterial } from "../../src/levels/material.js";
 import { GPU_TIMEOUT, render } from "../renderer.js";
 
 describe("levelMaterial", { timeout: GPU_TIMEOUT }, () => {
@@ -30,6 +30,11 @@ describe("levelMaterial", { timeout: GPU_TIMEOUT }, () => {
     expect(still.castShadowPositionNode).toBe(levelMaterial(b).castShadowPositionNode);
     expect(windy.positionNode).toBe(levelMaterial(a, true).positionNode);
     expect(still.positionNode).not.toBe(windy.positionNode);
+    const standalone = swayMaterial(a);
+    expect(swayMaterial(standalone)).toBe(standalone);
+    expect(originalOf(standalone)).toBe(a);
+    expect(standalone.positionNode).not.toBe(windy.positionNode);
+    expect(standalone.maskNode).toBe(a.maskNode);
     const custom = new MeshBasicNodeMaterial({ castShadowPositionNode: vec3(1) });
     expect(levelMaterial(custom).positionNode).toBe(still.positionNode);
     expect(levelMaterial(custom).castShadowPositionNode).not.toBe(still.castShadowPositionNode);

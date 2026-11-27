@@ -24,6 +24,8 @@ test("far shadows retain coverage between scheduled updates and redraw after a j
     shadow.needsUpdate = false;
     cascade.update(camera, 100, 500, slope, frame, fromSun, fromSun.clone().invert());
     assert.equal(shadow.needsUpdate, redraw);
+    // Three subtracts bias from the receiver reference under reversed depth. A coplanar caster must pass.
+    assert.ok(shadow.bias < 0);
     if (!redraw) assert.deepEqual(cascade.light.target.position, target);
     shadow.updateMatrices(cascade.light);
     for (const distance of [100, 500])

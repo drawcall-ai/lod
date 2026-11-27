@@ -210,6 +210,13 @@ export function planter(plan: Plan, scatter: Scatter, renderer: THREE.Renderer) 
     };
 
     const tiles = new NearTiles({
+      allWithin:
+        room === holding.size
+          ? (eye) => {
+              const above = Math.max(0, eye.y - plan.terrain.height(eye.x, eye.z));
+              return Math.hypot(Math.abs(eye.x) + EXTENT, above, Math.abs(eye.z) + EXTENT) <= radius;
+            }
+          : undefined,
       near: (eye) => tilesAround(eye, Math.max(0, eye.y - plan.terrain.height(eye.x, eye.z)), { radius, tile, holds: (key) => holding.has(key) }),
       fill: (key, at) => {
         const [i, j] = tileAt(key);

@@ -47,7 +47,8 @@ export interface Faces {
  * Render each room of `interior` (placed in the source's space by `placement`) from its
  * box's centre, six square `size`-pixel images, with the exterior hidden and the other
  * rooms shown, seen through doorways: once in white ambient light and once in none. The difference is how the room
- * responds to light, which the baked material scales by the light reaching its windows;
+ * responds to light, which the baked material scales by the ambient and probe light at its windows plus the
+ * environment at each wall;
  * what shows without light is the room's glow. Layer room × 6 + face of each result,
  * sRGB, rows bottom-up: (u, v) = (0.5, 0.5) + 0.5 × (x, y) / (z × span), with x, y and z
  * along the face's right, up and forward. Each image reaches a texel past its edges, so

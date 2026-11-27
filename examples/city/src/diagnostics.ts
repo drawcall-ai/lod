@@ -75,6 +75,7 @@ export function diagnostics(app: App) {
     },
     async measure(frames: number, runs: number, move = 0) {
       if (!pipeline.renderer.hasFeature("timestamp-query")) throw new Error("measure needs the GPU's timestamp-query feature");
+      if (!pipeline.timed) throw new Error("Open the city with ?timing or ?shot to measure GPU time");
       await settle();
       const start = playback.time;
       const breeze = wind?.time ?? 0;

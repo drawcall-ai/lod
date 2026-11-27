@@ -106,6 +106,39 @@ describe("casters smaller than a shadow texel", { timeout: GPU_TIMEOUT }, () => 
 });
 
 describe("instance fades", { timeout: GPU_TIMEOUT }, () => {
+  it("carries the transition pattern with an instance during a camera pan", async () => {
+    const camera = new PerspectiveCamera(60, 1, 0.1, 100);
+    const fine = box();
+    fine.material.color.set("red");
+    const coarse = box();
+    coarse.material.color.set("green");
+    // A 38-pixel bounding sphere lies halfway through the 40-pixel transition.
+    const distance = (Math.sqrt(3) * 64) / (Math.tan(Math.PI / 6) * 38);
+    const lod = lodOf([{ object: fine }, { object: coarse, maxPixels: 40 }], [new Matrix4().makeTranslation(0, 0, -distance)]);
+    const scene = new Scene().add(lod);
+    try {
+      await render(scene, camera);
+      const before = await render(scene, camera);
+      camera.setViewOffset(64, 64, 3, 0, 64, 64);
+      const after = await render(scene, camera);
+      const colors = new Set<number>();
+      for (let y = 27; y < 37; y++) {
+        const start = (y * 64 + 27) * 4;
+        const row = before.subarray(start, start + 10 * 4);
+        const shifted = start - 3 * 4;
+        expect(after.subarray(shifted, shifted + row.length)).toEqual(row);
+        for (let i = 0; i < row.length; i += 4) colors.add(row[i] ?? 0);
+      }
+      expect(colors.size).toBe(2);
+    } finally {
+      lod.dispose();
+      fine.geometry.dispose();
+      fine.material.dispose();
+      coarse.geometry.dispose();
+      coarse.material.dispose();
+    }
+  });
+
   it("preserves coverage and instance colors when neighbouring levels split the pixels", async () => {
     const camera = new PerspectiveCamera(60, 1, 0.1, 100);
     const distance = (2 * Math.sqrt(3) * 64) / (2 * Math.tan(Math.PI / 6) * 38);

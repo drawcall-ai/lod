@@ -1,7 +1,7 @@
 import * as THREE from "three/webgpu";
 import { HOUSE_VARIANTS, houseParams, type HouseParams } from "../../public/suburban-house/params.ts";
 import seedrandom from "seedrandom";
-import { type Forest, forestClearings, forestEdge } from "./zones.ts";
+import { type Forest, forestClearings, forestEdge } from "./forest.ts";
 import { country, crossRoad } from "./country.ts";
 import { banks, CREEK, crossings } from "./creek.ts";
 import { farmland } from "./farmland.ts";
@@ -67,7 +67,7 @@ export interface Plan {
   models: Map<string, Spot[]>;
 }
 
-/** The world's x/z axes of a rect: its own +x and +z. Same convention as the terrain shader's fields. */
+/** The world's x/z axes of a rect: its own +x and +z. */
 export function axes(angle: number): { x: THREE.Vector2; z: THREE.Vector2 } {
   return { x: new THREE.Vector2(Math.cos(angle), Math.sin(angle)), z: new THREE.Vector2(-Math.sin(angle), Math.cos(angle)) };
 }

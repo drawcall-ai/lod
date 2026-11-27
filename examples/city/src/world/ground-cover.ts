@@ -1,12 +1,10 @@
 import * as THREE from "three/webgpu";
-import { float, vec3 } from "three/tsl";
+import { vec3 } from "three/tsl";
 import { Lod, type Wind } from "@drawcall/lod";
 import { sourceBox } from "./bounds.ts";
 import { planter, type Stand } from "./planting.ts";
 import { scripts } from "../loading.ts";
-import type { Textures } from "../render/materials.ts";
-import type { Zones } from "./zones.ts";
-import { groundShading } from "../render/ground/shading.ts";
+import { groundColor } from "../render/ground.ts";
 import { Use } from "./land.ts";
 import { reachFor } from "./screen.ts";
 import { type Plan, TOWN } from "./plan.ts";
@@ -89,18 +87,9 @@ const GROUND_COVER: GroundKind[] = [
  * Ground cover, planted on the GPU by `renderer` in the tiles near `camera` (`update` them before each frame), its
  * assets drawn apart from the gardens' and casting no shadows. Grass takes the colour of the ground under it.
  */
-export async function groundCover(
-  textures: Textures,
-  plan: Plan,
-  zones: Zones,
-  camera: THREE.Camera,
-  renderer: THREE.Renderer,
-  wind?: Wind,
-): Promise<THREE.Group> {
-  // Sampled in a compute pass, where pixel derivatives are unavailable: near, where grass grows.
-  const ground = groundShading(textures, zones, float(0));
+export async function groundCover(plan: Plan, land: THREE.Texture, camera: THREE.Camera, renderer: THREE.Renderer, wind?: Wind): Promise<THREE.Group> {
   // Grass takes the ground's colour in place of the green its asset draws with on its own.
-  const grassColor = (xz: THREE.Node<"vec2">) => ground(xz, float(0)).div(vec3(...GREEN));
+  const grassColor = (xz: THREE.Node<"vec2">) => groundColor(land, xz).rgb.div(vec3(...GREEN));
   const scatter = new Scatter(scripts);
   const root = new THREE.Group();
   root.name = "ground cover";

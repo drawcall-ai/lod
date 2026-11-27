@@ -43,7 +43,7 @@ export const isSkinnedMesh = (node: Object3D): node is SkinnedMesh => flag(node,
 export const isInstancedMesh = (node: Object3D): node is InstancedMesh => flag(node, "isInstancedMesh");
 export const isBatchedMesh = (node: Object3D): node is BatchedMesh => flag(node, "isBatchedMesh");
 export const isLight = (node: Object3D): boolean => flag(node, "isLight");
-export const isScene = (node: Object3D): node is Scene => flag(node, "isScene");
+export const isScene = (node: unknown): node is Scene => flag(node, "isScene");
 export const isLine = (node: Object3D): boolean => flag(node, "isLine");
 export const isPoints = (node: Object3D): boolean => flag(node, "isPoints");
 export const isSprite = (node: Object3D): boolean => flag(node, "isSprite");

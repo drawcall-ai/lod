@@ -9,12 +9,12 @@ import type { LodRequest } from "../../src/loader/request.js";
 vi.mock("@drawcall/cache", async () => ({ CacheEntry: (await import("./fixture.js")).CacheEntry }));
 vi.mock("../../src/impostor/bake/index.js", async () => ({ bakeImpostor: (await import("./fixture.js")).bakeImpostor }));
 
-it("never loads the source of a ladder whose first level draws at any height, with the camera inside it too", { timeout: GPU_TIMEOUT }, async () => {
+it("never loads the source of a ladder whose first level has maxPixels Infinity, with the camera inside it too", { timeout: GPU_TIMEOUT }, async () => {
   const built = sourceFixture(() => gltsScene(new Mesh(new BoxGeometry(), new MeshStandardMaterial())), /\.glts$/);
   const request: LodRequest = {
     url: "/far.glts",
     levels: [
-      { type: "impostor", maxPixels: Infinity },
+      { type: "baked", ratio: 1, textureSize: 32, maxPixels: Infinity },
       { type: "empty", maxPixels: 2 },
     ],
   };
@@ -34,4 +34,21 @@ it("never loads the source of a ladder whose first level draws at any height, wi
   } finally {
     for (const lod of lods) lod.dispose();
   }
+});
+
+it("defaults the level after one drawn at any height as after the source", async () => {
+  const { manager } = sourceFixture(() => gltsScene(new Mesh(new BoxGeometry(), new MeshStandardMaterial())), /\.glts$/);
+  const levels = await new CachedLodLoader(manager).loadAsync({
+    url: "/defaults.glts",
+    levels: [{ type: "simplify", maxPixels: Infinity }, { type: "simplify" }],
+  });
+  expect(levels.map((level) => level.maxPixels)).toEqual([Infinity, Infinity, 512]);
+});
+
+it("rejects maxPixels Infinity on a later level or an impostor", async () => {
+  const loader = new CachedLodLoader(new LoadingManager());
+  await expect(loader.loadAsync({ url: "/far.glts", levels: [{ type: "simplify" }, { type: "simplify", maxPixels: Infinity }] })).rejects.toThrow(
+    "only the first level",
+  );
+  await expect(loader.loadAsync({ url: "/far.glts", levels: [{ type: "impostor", maxPixels: Infinity }] })).rejects.toThrow("cannot be Infinity");
 });

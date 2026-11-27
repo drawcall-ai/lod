@@ -11,16 +11,12 @@ interface Setting {
 }
 
 /**
- * Finest first. The near map follows the camera every frame; the others take turns
- * while their cached coverage holds. A coverage miss redraws a map sooner, so a frame
- * can draw all three. The farther maps cover hundreds of metres to kilometres, where a
- * frame's lag does not show. The farthest map's texels are metres wide whatever its
- * size, and a smaller map is cheaper to look up.
+ * Both maps follow the view and update early when their cached coverage runs out.
+ * Stagger their normal updates so the two shadow passes rarely land on the same frame.
  */
 const SETTINGS: Setting[] = [
-  { size: 2048, every: 1, phase: 0 },
-  { size: 2048, every: 2, phase: 0 },
-  { size: 1024, every: 2, phase: 1 },
+  { size: 512, every: 12, phase: 0 },
+  { size: 1024, every: 24, phase: 6 },
 ];
 /**
  * How far beyond the nearest possible surface the slices reach (m). Each map covers the
@@ -150,7 +146,7 @@ export class Cascade {
     const holds = this.sphere.center.distanceTo(centre) + reach <= this.sphere.radius;
     if (!due && holds) return;
 
-    const radius = 2 ** (Math.ceil(Math.log2(reach) * 8) / 8);
+    const radius = 2 ** (Math.ceil(Math.log2(reach * 1.06) * 8) / 8);
     const texel = (2 * radius) / this.setting.size;
     // the centre snapped to the texel grid in the sun's frame
     centre.applyMatrix4(toSun);
@@ -177,7 +173,7 @@ export class Cascade {
     // thin leaves under a low sun need a few texels of normal offset to stay free of acne
     this.offset.value = texel * 1.5;
     // casters draw both sides (see Casters): a texel of depth keeps lit faces off themselves
-    shadow.bias = texel / cam.far;
+    shadow.bias = -texel / cam.far;
     shadow.needsUpdate = true;
   }
 }

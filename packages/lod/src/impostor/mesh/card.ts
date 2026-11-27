@@ -14,6 +14,7 @@ import {
   modelWorldMatrix,
   normalize,
   positionGeometry,
+  positionWorld,
   select,
   varyingProperty,
   vec2,
@@ -22,7 +23,7 @@ import {
 } from "three/tsl";
 import { affine, column, isOrthographic } from "../../tsl.js";
 import { PAD, type ImpostorLayout } from "../impostor.js";
-import { basisNode, encodeNode } from "../octahedral.js";
+import { basisNode, decodeNode, encodeNode } from "../octahedral.js";
 
 // The impostor's card: a quad built in the vertex stage facing the camera (or the light,
 // in shadow passes), in the object's own space. three's model, view and projection
@@ -44,38 +45,23 @@ export interface CardInputs {
   placement: Node<"mat4">;
 }
 
-// What the surface reads of the card, interpolated across it: varyings the vertex stage
-// writes (see `buildCard`). They are named once, so every stage and context that reads
-// them shares them, whichever stage three builds first.
-const written = {
-  /** the first frame, and which neighbour (1: along x) the second is */
-  frames: varyingProperty("vec3", "vImpostorFrames"),
-  weights: varyingProperty("vec3", "vImpostorWeights"),
-  point: varyingProperty("vec3", "vImpostorPoint"),
-  ray: varyingProperty("vec3", "vImpostorRay"),
-  worldPoint: varyingProperty("vec3", "vImpostorWorldPoint"),
-  worldRay: varyingProperty("vec3", "vImpostorWorldRay"),
-  normals: [varyingProperty("vec3", "vImpostorNormal0"), varyingProperty("vec3", "vImpostorNormal1"), varyingProperty("vec3", "vImpostorNormal2")] as const,
-};
+// Each frame carries a ray in the bake camera's coordinates. Its atlas cell and blend
+// weight share the fourth lanes to fit all three views in nine interpolators.
+function view(i: number) {
+  const origin = varyingProperty("vec4", `vImpostorOrigin${i}`);
+  const ray = varyingProperty("vec4", `vImpostorRay${i}`);
+  const normal = varyingProperty("vec4", `vImpostorNormal${i}`);
+  return { origin, ray, normal, frame: vec2(origin.w, ray.w), weight: normal.w };
+}
+const views = [view(0), view(1), view(2)] as const;
 
-const first = written.frames.xy;
-const neighbour = written.frames.z;
-
-/** The card as the surface reads it. */
 export const card = {
-  /** the three frames around the direction to the camera and their barycentric weights */
-  frames: [first, first.add(vec2(neighbour, neighbour.oneMinus())), first.add(1)],
-  weights: written.weights,
-  /** the camera's ray through the fragment, in the object's space: from `point`, along `ray` */
-  point: written.point,
-  ray: written.ray,
-  /** the same ray in world space: `ray` × s in object space is `worldRay` × s in the world */
-  worldPoint: written.worldPoint,
-  worldRay: written.worldRay,
-  /** an object-space normal in view space, as three's normal matrix turns a mesh's */
+  views,
+  worldPoint: positionWorld,
+  worldRay: select(isOrthographic(cameraProjectionMatrix), column(cameraWorldMatrix, 2).xyz.negate(), positionWorld.sub(cameraPosition)),
   toView(normal: Node<"vec3">): Node<"vec3"> {
-    const [n0, n1, n2] = written.normals;
-    return normalize(cameraViewMatrix.mul(vec4(n0.mul(normal.x).add(n1.mul(normal.y)).add(n2.mul(normal.z)), 0)).xyz);
+    const [a, b, c] = views;
+    return normalize(cameraViewMatrix.mul(vec4(a.normal.xyz.mul(normal.x).add(b.normal.xyz.mul(normal.y)).add(c.normal.xyz.mul(normal.z)), 0)).xyz);
   },
 } as const;
 
@@ -95,10 +81,10 @@ export function buildCard(inputs: CardInputs, instance: Node<"mat4">, deform: No
   // Orthographic, read off the projection: shadow passes of directional lights land
   // here too, and the card faces the light.
   const ortho = isOrthographic(cameraProjectionMatrix);
-  const back = column(cameraWorldMatrix, 2).xyz;
+  const back = toWorld.solve(column(cameraWorldMatrix, 2).xyz);
   const toEye = eye.sub(centre);
   const distance = length(toEye);
-  const toCamera = select(ortho, normalize(toWorld.solve(back)), toEye.div(distance)).toVar();
+  const toCamera = select(ortho, normalize(back), toEye.div(distance)).toVar();
   // Up close, perspective spreads the near side of the object past the ortho frame.
   const nearExtent = dot(toCamera.abs(), extent);
   const grow = select(ortho, float(1), min(distance.div(max(distance.sub(nearExtent), 1e-4)), 4));
@@ -118,15 +104,20 @@ export function buildCard(inputs: CardInputs, instance: Node<"mat4">, deform: No
   const grid = clamp(encodeNode(layout, toCamera).mul(last), vec2(0, 0), vec2(last, last));
   const cell = min(floor(grid), vec2(last.sub(1), last.sub(1)));
   const f = grid.sub(cell);
-  const ray = select(ortho, toCamera.negate(), point.sub(eye));
-
-  // Every vertex of a card holds the same frames and weights, so they interpolate to themselves.
-  written.frames.assign(vec3(cell, select(f.x.greaterThan(f.y), float(1), float(0))));
-  written.weights.assign(vec3(min(f.x.oneMinus(), f.y.oneMinus()), f.x.sub(f.y).abs(), min(f.x, f.y)));
-  written.point.assign(point);
-  written.ray.assign(ray);
-  written.worldPoint.assign(model.mul(vec4(point, 1)).xyz);
-  written.worldRay.assign(toWorld.apply(ray));
-  toWorld.normalColumns.forEach((n, i) => written.normals[i]?.assign(n));
+  const ray = select(ortho, back.negate(), point.sub(eye));
+  const offset = point.sub(centre);
+  const middle = select(f.x.greaterThan(f.y), vec2(1, 0), vec2(0, 1));
+  const projectFrame = (i: 0 | 1 | 2, frame: Node<"vec2">, weight: Node<"float">) => {
+    const view = views[i];
+    const n = decodeNode(layout, frame.div(last));
+    const { tangent, bitangent } = basisNode(n);
+    const project = (v: Node<"vec3">) => vec3(dot(v, tangent), dot(v, bitangent), dot(v, n));
+    view.origin.assign(vec4(project(offset), frame.x));
+    view.ray.assign(vec4(project(ray), frame.y));
+    view.normal.assign(vec4(toWorld.normalColumns[i], weight));
+  };
+  projectFrame(0, cell, min(f.x.oneMinus(), f.y.oneMinus()));
+  projectFrame(1, cell.add(middle), f.x.sub(f.y).abs());
+  projectFrame(2, cell.add(1), min(f.x, f.y));
   return local.mul(vec4(point, 1)).xyz;
 }

@@ -1,6 +1,7 @@
 import { Matrix4, Vector2, type Node, type Object3D } from "three/webgpu";
 import { Fn, dot, length, mat4, max, modelWorldMatrix, normalLocal, sin, uniform, vec2, vec3, vec4 } from "three/tsl";
 import { instanceMatrixOf } from "../levels/fade.js";
+import { isShadowPass } from "../three.js";
 import { affine, column } from "../tsl.js";
 
 // The breeze in the shaders: an affine sway, fixed at a base height and growing linearly
@@ -15,6 +16,7 @@ export interface Breeze {
   speed: number;
   /** amplitude multiplier in [0, 1] */
   strength: number;
+  animateShadows: boolean;
   /** horizontal world direction, unit */
   direction: Vector2;
 }
@@ -43,7 +45,10 @@ const still = new Vector2();
 const of = (object: Object3D | null) => (object ? sways.get(object) : undefined);
 const time = uniform(0).onObjectUpdate(({ object }) => of(object)?.breeze.time ?? 0);
 const speed = uniform(0).onObjectUpdate(({ object }) => of(object)?.breeze.speed ?? 0);
-const strength = uniform(0).onObjectUpdate(({ object }) => of(object)?.breeze.strength ?? 0);
+const strength = uniform(0).onObjectUpdate(({ object, material }) => {
+  const breeze = of(object)?.breeze;
+  return breeze && (breeze.animateShadows || !isShadowPass(material)) ? breeze.strength : 0;
+});
 const direction = uniform(new Vector2(1, 0)).onObjectUpdate(({ object }) => of(object)?.breeze.direction);
 const shape = uniform(new Vector2()).onObjectUpdate(({ object }) => of(object)?.shape ?? still);
 const placement = uniform(new Matrix4()).onObjectUpdate(({ object }) => of(object)?.placement ?? identity);

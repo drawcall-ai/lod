@@ -23,11 +23,13 @@ const levels = await new CachedLodLoader(manager).loadAsync({
 
 A `Lod` needs no renderer to be made, and neither does `CachedLodLoader`. It draws with the first `WebGPURenderer` that renders it, on WebGPU only: on the WebGL2 fallback it reports an error and draws nothing. Another renderer drawing it is its error, so a second renderer, such as a minimap's, needs Lods of its own.
 
-`loadAsync` resolves with the ladder before its levels load; each level loads when a camera first needs it. A level the cache lacks is built when it first loads, so a far camera builds only the coarse levels it needs. Choose `maxPixels` for simplified and baked levels by looking at the transition. The default of half the finer neighbour's height does not measure visual error. An impostor's default is the largest height at which its atlas stays sharp. A simplified level also loads the source for its original materials; a source-only ladder loads its source eagerly. Prefer baked or impostor middle levels for an expensive `.glts`: a simplified level brings the script run forward to that viewing range.
+`loadAsync` resolves with the ladder before its levels load; each level loads when a camera first needs it. A level the cache lacks is built when it first loads, so a far camera builds only the coarse levels it needs. Choose `maxPixels` for simplified and baked levels by looking at the transition. The default of half the finer neighbour's height does not measure visual error. An impostor's default is the largest height at which its atlas stays sharp. A source-only ladder, with `levels: []`, loads its source eagerly.
 
-Choose levels by the silhouette and materials that must survive the switch. Hard-surface props often suit source → simplified → impostor. Buildings with windows can use a baked shell with an interior. Alpha-tested foliage can go straight to an impostor once its branches or blades stop reading individually. If many copies still draw full geometry at that distance, try a simplified middle level. Add an empty final level when the object should disappear.
+**The original never has to draw.** If the first derived level holds up at the closest reachable view, give it `maxPixels: Infinity` in the request; an impostor cannot take it, as its `maxPixels` sizes its bake. A cached bake can then draw without fetching the original. A cache miss needs the source to build it, and a simplified mesh still loads the source for its materials. Use `forceLevel = 0` for a visual comparison.
 
-Nothing draws until the coarsest level that draws has loaded, near views included, so its bytes decide how soon any view appears. For a fast first view, end the drawn ladder with a level sized for the few pixels a far object covers, such as a 16-pixel impostor or a baked shell with a 64² texture. At that size boxy objects such as buildings read better, in fewer bytes, as a baked shell than as an impostor; foliage, whose silhouette no shell carries, stays an impostor.
+Choose each level for the detail the camera can still resolve. Keep the source where the viewer can see detail a cheaper representation loses. Simplify when fewer triangles preserve the silhouette and the source materials still suit it. Bake when a simple mesh holds the shape and textures can carry the surface detail, optionally with an interior behind windows. Try an impostor when a complex silhouette still matters but changes in perspective within it are small. Use an empty level once the object can disappear. Compare neighboring levels in motion at the intended size and density before adding a transition.
+
+Nothing draws until the coarsest level that draws has loaded, near views included, so its bytes decide how soon any view appears. For a fast first view, end the drawn ladder with a level sized for the few pixels a far object covers, such as a 16-pixel impostor or a baked shell with a 64² texture. Size the texture for the largest view that level serves. A boxy building can keep the same shell to the horizon, dropping the mapped rooms once the windows need only their baked appearance. An impostor can retain the silhouette of a leafy crown.
 
 Register the source loaders on the page's loading manager before loading: a `GLTSLoader` for `.glts` URLs, and a `GLTFLoader` with the decoders for models compressed with Draco or KTX2. Follow the [GLTS skill](https://github.com/drawcall-ai/glts/blob/main/packages/glts/skills/glts/SKILL.md) for script authoring and resource lifetimes. The package carries its own workers and WebAssembly; it needs no Vite configuration beyond the cache plugin.
 
@@ -55,11 +57,11 @@ trees.instanceMatrix.needsUpdate = true;
 scene.add(trees);
 ```
 
-Supply authored low shells and baking interiors as asset URLs on a baked level; both resolve relative to the source asset as ordinary URLs, so a query-only value replaces the source's whole query. For a variant of the same script, repeat the source's generation parameters, for example the source URL plus `&part=low`. The source asset should be complete at full detail; a baking interior supplies room structure for the distant windows. Author all three in the same coordinate system.
+Supply authored low shells and baking interiors as asset URLs on a baked level; both resolve relative to the source asset as ordinary URLs, so a query-only value replaces the source's whole query. For a variant of the same script, repeat the source's generation parameters, for example the source URL plus `&part=low`. Use a baked shell when you need to transfer the source’s surface detail onto simpler geometry. If an authored exterior already has the materials and silhouette you want up close, it can be the source itself. A baking interior supplies room structure behind the windows. Author the shell, source and interior in the same coordinate system.
 
 ## Give a .glts asset its own levels
 
-A `.glts` script can draw its asset at levels of detail, so that every glts host gets them without knowing of lod. Keep the detailed asset in a script of its own, here `./model.glts` beside the wrapping script; load its ladder with the wrapping script's `loadingManager`, which resolves URLs relative to the script, after giving that manager the script's `gltsLoader` for `.glts` sources. Add a `Lod` of it to the script's scene, tracked by the same manager, so that a host waiting on its loads, such as the glts CLI rendering the script, waits for the levels its cameras need:
+A `.glts` script can draw its asset at levels of detail, so that every glts host gets them without knowing of lod. Keep the detailed asset in a script of its own, here `./model.glts` beside the wrapping script; load its ladder with the wrapping script's `loadingManager`, which resolves URLs relative to the script, after giving that manager the script's `gltsLoader` for `.glts` sources. Add a `Lod` of it to the script's scene, tracked by the same manager, so that a host waiting on its loads, such as the glts CLI rendering the script, waits for the levels its cameras need. Here the camera stays outside a building, where its baked exterior suffices even up close. The distant level reuses that shape with a small texture once the rooms are too small to see.
 
 ```ts
 import { gltsLoader, loadingManager, onDispose, scene } from "@drawcall/glts";
@@ -69,8 +71,8 @@ loadingManager.addHandler(/\.glts$/i, gltsLoader);
 const levels = await new CachedLodLoader(loadingManager).loadAsync({
   url: "./model.glts",
   levels: [
-    { type: "impostor", maxPixels: 120 },
-    { type: "empty", maxPixels: 4 },
+    { type: "baked", low: "./exterior.glts", interior: "./rooms.glts", textureSize: 512, maxPixels: Infinity },
+    { type: "baked", low: "./exterior.glts", textureSize: 64, maxPixels: 24 },
   ],
 });
 const lod = new Lod(levels, 1, { manager: loadingManager });
@@ -96,9 +98,11 @@ Use the loader's `onLevel` option for application effects and shadow settings, `
 
 Each mesh and material group of a level is a draw of its own in every pass, however many copies draw it: where submission dominates, merge the static parts that switch together into one mesh with one material in the source.
 
+When nearby instances hide coarser instances of the same `Lod`, try `renderer.setOpaqueSort(opaqueSort)` with `opaqueSort` from `@drawcall/lod`. It draws finer levels first when group order, render order and depth tie. Measure where the levels overlap.
+
 Levels draw with copies of the source's materials, made once through three's `clone`. A custom material class must carry its own state in `copy`, and changes meant to reach drawn levels belong in shared TSL uniforms rather than in properties set on the original afterwards.
 
-Apply a shared `Wind` after assembling a LOD and before its first render; arriving levels inherit the effect. A `Lod` that has rendered refuses wind: its shaders would build in a frame.
+Apply a shared `Wind` after assembling a LOD and before its first render; arriving levels inherit the effect. A `Lod` that has rendered refuses wind: its shaders would build in a frame. When shadow maps refresh too slowly to follow the sway smoothly, use `new Wind({ animateShadows: false })` to cast from the rest pose. Keep the default when the shadow needs to follow the visible silhouette.
 
 Levels are chosen by on-screen size in CSS pixels on the actual render target, so a lower renderer pixel ratio saves shading, not geometry. Compile the initial scene with the actual camera and renderer before revealing it. Render every frame while finer levels load: they upload and compile only inside renders.
 
@@ -106,9 +110,9 @@ Levels are chosen by on-screen size in CSS pixels on the actual render target, s
 
 Edit instances as on an `InstancedMesh`: `setMatrixAt` and `setColorAt`, then set the attribute's `needsUpdate`; with `addUpdateRange`, only those ranges upload. Assigning a new `instanceMatrix` or `instanceColor` takes effect at the next render; `count` draws the first `count` instances. A matrix of scale 0 draws nothing, but prefer `count` and smaller Lods over parking many instances at scale 0.
 
-Each camera loads the levels, and shows the level meshes, that the instances' bounds can need. Without `clusters`, the bounds are `boundingBox` if set, else what the CPU measures of the matrices; reaching from the camera to the horizon, they load every level. Give a Lod that spans a large area `clusters`: disjoint ranges of instances, each with a `boundingBox` in the Lod's space and, where known, `minScale` and `maxScale`. Each cluster is culled and chooses levels on its own, and only instances inside a cluster draw. Clusters narrow the work for the existing ladder. They contain no replacement geometry for the group.
+Each camera loads the levels, and shows the level meshes, that the instances' bounds can need. Without `clusters`, the bounds are `boundingBox` if set, else what the CPU measures of the matrices; broad bounds can load levels for the full range of screen sizes. Give a Lod that spans a large area `clusters`: disjoint ranges of instances, each with a `boundingBox` in the Lod's space and, where known, `minScale` and `maxScale`. Each cluster is culled and chooses levels on its own, and only instances inside a cluster draw. Clusters narrow the work for the existing ladder. They contain no replacement geometry for the group.
 
-When a compute pass of yours writes the instances, assign a `StorageInstancedBufferAttribute` (`instancedArray(n, "mat4")`'s value) as `instanceMatrix`, and a four-float one as `instanceColor`. The Lod reads them in place every frame; no `needsUpdate` is needed. The CPU cannot read them, so set `boundingBox` or `clusters` yourself: without either, every level loads and the Lod warns once. When your pass also decides how many of a cluster's instances are live, from its start, set the cluster's `liveCount` to `{ attribute, index }`, the u32 your pass writes into a storage attribute, such as `instancedArray(n, "uint")`'s value, that all of the Lod's clusters share, so that only those are sorted and drawn. `count` remains the most the range holds. `computeBoundingBox`, `getLevelAt` and `raycast` work on CPU matrices only.
+When a compute pass of yours writes the instances, assign a `StorageInstancedBufferAttribute` (`instancedArray(n, "mat4")`'s value) as `instanceMatrix`, and a four-float one as `instanceColor`. The Lod reads them in place every frame; no `needsUpdate` is needed. The CPU cannot read them, so set `boundingBox` or `clusters` yourself: without either, the Lod assumes every screen size is possible and warns once. When your pass also decides how many of a cluster's instances are live, from its start, set the cluster's `liveCount` to `{ attribute, index }`, the u32 your pass writes into a storage attribute, such as `instancedArray(n, "uint")`'s value, that all of the Lod's clusters share, so that only those are sorted and drawn. `count` remains the most the range holds. `computeBoundingBox`, `getLevelAt` and `raycast` work on CPU matrices only.
 
 A Lod's `instanceMatrix` must fit one storage binding of the device: split large instance sets across Lods, or raise `maxStorageBufferBindingSize` in the renderer's `requiredLimits`.
 
@@ -161,7 +165,7 @@ For dense cover, combine near individuals with a baked distant patch. Jitter pos
 
 ## Wait for a complete frame before a screenshot
 
-Levels load as the camera comes to need them, so a frame drawn soon after loading can lack them. Give the Lods a `manager` of their own, so that it tracks only them: each holds an item there while the levels its cameras need load, compile or fade in, and ends it once they are complete. Render the `Scene` that holds them each frame, since a Lod loads nothing before such a render.
+Levels load as the camera comes to need them, so a frame drawn soon after loading can lack them. Give the Lods a `manager` of their own, so that it tracks only them: each holds an item there while the levels its cameras need load, compile or fade in, and ends it once they are complete. Render the `Scene` that holds them each frame, since a Lod loads nothing before such a render. A Lod holds no item until a render draws it, so render after adding Lods before trusting a quiet manager. A failed load ends its item, reporting it to the manager's `onError`, rather than holding it: check `lod.error` before treating quiet as complete.
 
 To capture one frame, even with nothing cached, place the camera and render, then wait a frame; while the manager is loading, compile with `renderer.compileAsync(scene, camera)`, render again and wait a frame; capture after a quiet frame, one in which no item started or ended. After moving the camera, wait again. In this example `levels` and `treeLevels` are ladders from `CachedLodLoader`, `instanceMatrix` an attribute of tree matrices, and `viewpoint` the camera position to capture.
 
@@ -174,6 +178,7 @@ const lod = new Lod(levels, 1, { manager });
 const trees = new Lod(treeLevels, instanceMatrix.count, { manager });
 trees.instanceMatrix = instanceMatrix;
 scene.add(lod, trees);
+const lods = [lod, trees];
 
 camera.position.copy(viewpoint);
 let loading = false;
@@ -187,6 +192,8 @@ while (loading) {
   renderer.render(scene, camera);
   await frame();
 }
+const failed = lods.find((lod) => lod.error);
+if (failed) throw failed.error;
 // The last render drew the complete frame: capture it.
 ```
 
@@ -194,13 +201,17 @@ Loaded levels stay until their Lod is disposed, which nothing does for you: in a
 
 ## Choose levels for plants
 
-For a tree seen both up close and across a forest, try source → simplified whole tree → whole-tree impostor, with the simplified level switching at no more than about a thousand pixels: `simplify` also removes the triangles inside the leaf cards it keeps, to about a pixel's error at that height, outlines kept. A whole-tree impostor without parallax may show doubled branches or a flattened crown between its baked views as the camera passes; one parallax step usually fixes that.
+For a dense crown, try a simplified whole tree while its branches still read individually, then a whole-tree impostor once its silhouette dominates. `simplify` also removes the triangles inside the leaf cards it keeps, outlines kept, to about a pixel's error at a thousand pixels tall, so let the simplified level switch in at no more than about that height. Look for doubled branches as the camera moves between baked views. Add parallax only if it improves that transition.
 
-For rows of tall plants with gaps between their leaves, such as corn, compare a `baked` middle mesh with a whole-plant impostor from inside the row: the overlapping impostor cards all shade the gaps, which a low-poly mesh does not draw.
+For sparse blades or leaves with large gaps, a cheap mesh can beat an impostor. The mesh follows the blades, while overlapping impostor rectangles sample the atlas across those gaps. Compare the source or a low mesh against the impostor at the same density, distance and render resolution. Pan slowly at the shipping sample count to check for shimmer on thin foliage. Alpha to coverage needs a multisampled scene target. Include a view from inside the planting.
 
 ## Tune the complete scene
 
+Replay the same short movement at the target viewport and pixel ratio, after the required levels have loaded. Time GPU-completed frames with only the LOD objects, then with the complete scene. Hiding foliage exposes the surfaces behind it and changes which fragments pass the depth test. To isolate an expensive background material, keep its geometry and depth behavior and substitute a plain material. If that wins, simplify the background before sacrificing detail on the focal objects. Confirm the saving with the full scene in motion.
+
 Tune transitions in the intended viewport with `Lod.debug` and use `Lod.quality` for a scene-wide adjustment. At the nearest intended view of each level, use `lod.forceLevel` to compare it with the detailed source at the same pose, light and wind time. Check silhouette area **and where the gaps fall**, shadows, colour and fine detail. Release the override and move through the fade, toward the sun as well as away.
+
+If a baked surface shimmers at a grazing angle, hold its level fixed and replay the motion with the normal map disabled. If that removes the shimmer, try a positive mip bias on the normal map alone, set on the derived levels' materials in the loader's `onLevel`, such as `normalMap(texture(material.normalMap).bias(float(2)))` as their `normalNode`. Check that the relief still reads at the closest view.
 
 An impostor's `depth: "reconstructed"` places each pixel at its baked surface, so interleaved surfaces such as a fence crossing a trunk stay correct, but every overlapping card shades before depth decides. `depth: "card"` lets the GPU reject hidden pixels early, which pays off in fields of similar plants; check foreground crossings in motion. Each `parallax` step adds atlas reads: try zero where motion within the silhouette is imperceptible at the largest intended size.
 

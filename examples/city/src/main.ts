@@ -3,13 +3,15 @@
 // ?shot hides the overlay (scripts/tour.ts); ?seed=<n> changes the world; ?debug tints
 // levels and ?quality=<q> sets Lod.quality from the start; ?terrain=0 leaves the ground
 // mesh out (everything still stands where the ground would be; roads and the creek stay).
+// ?ratio=<n> overrides the native device pixel ratio.
+// ?timing enables GPU timings in the overlay; ?shot enables them too, for scripts/tour.ts.
 // ?wind=0 builds vegetation without wind, for a static performance baseline.
 // Forests and ground cover are planted on the GPU in the tiles near the camera (world/near-tiles.ts, world/planting.ts).
 // window.city exposes the tour and frame measurements to scripts/tour.ts.
 import * as THREE from "three/webgpu";
 import { Lod, Wind } from "@drawcall/lod";
 import { Textures } from "./render/materials.ts";
-import { terrainMaterial } from "./render/ground/material.ts";
+import { terrain } from "./render/ground.ts";
 import { Fly } from "./flight/fly.ts";
 import { route } from "./flight/route.ts";
 import { Tour } from "./flight/tour.ts";
@@ -25,9 +27,8 @@ import { water } from "./world/creek.ts";
 import { houses } from "./world/houses.ts";
 import { NearTiles } from "./world/near-tiles.ts";
 import { CachedPlanLoader } from "./world/plan/loader.ts";
-import { plan, TOWN } from "./world/plan.ts";
+import { plan } from "./world/plan.ts";
 import { manager } from "./loading.ts";
-import { EXTENT } from "./world/terrain.ts";
 import { props } from "./world/props.ts";
 import { roads } from "./world/roads.ts";
 import { trees } from "./world/trees.ts";
@@ -37,9 +38,9 @@ const loadPlan = async (seed: number) => (seed === 7 ? new CachedPlanLoader().lo
 
 const params = new URLSearchParams(location.search);
 const shot = params.has("shot");
-const terrain = params.get("terrain") !== "0";
+const drawTerrain = params.get("terrain") !== "0";
 Lod.debug = params.has("debug");
-const quality = params.get("quality") ?? "1";
+const quality = params.get("quality") ?? "0.4";
 if (!(/^\d+(\.\d+)?$/.test(quality) && Number(quality) >= 0.01 && Number(quality) <= 100)) throw new Error(`quality must be in [0.01, 100], not ${quality}`);
 Lod.quality = Number(quality);
 const seed = params.get("seed") ?? "7";
@@ -59,14 +60,16 @@ const lodManager = new THREE.LoadingManager();
 let loading = false;
 lodManager.onStart = () => (loading = true);
 lodManager.onLoad = () => (loading = false);
-manager.onProgress = (url, loaded, total) => {
-  ui.progress(`Loading ${url.split("/").pop()} (${loaded}/${total})`, (0.85 * loaded) / total);
+manager.onProgress = (_url, loaded, total) => {
+  ui.progress(`Loading scene assets (${loaded}/${total})`, (0.85 * loaded) / total);
 };
 
 const textures = new Textures(manager);
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.5, 60000);
 const scene = new THREE.Scene();
-const pipeline = await Pipeline.create(scene, camera, Math.min(devicePixelRatio, 2));
+const ratio = Number(params.get("ratio") ?? devicePixelRatio);
+if (!Number.isFinite(ratio) || ratio <= 0) throw new Error("ratio must be a positive finite number");
+const pipeline = await Pipeline.create(scene, camera, ratio, shot || params.has("timing"));
 loaded("renderer");
 // hidden until the world is built: an empty canvas would sit over the page meanwhile
 pipeline.canvas.style.visibility = "hidden";
@@ -92,21 +95,20 @@ scene.fogNode = haze(
   new THREE.Color(1, 0.86, 0.66).multiplyScalar(sky.horizon.r + sky.horizon.g + sky.horizon.b),
 );
 
-const zones = { fields: world.fields, forests: world.forests, parcels: { texture: world.land.texture(), extent: EXTENT }, town: TOWN };
-const wind = params.get("wind") === "0" ? undefined : new Wind({ direction: [1, 0.35], speed: 0.22 });
+const land = world.land.colorMap();
+const wind = params.get("wind") === "0" ? undefined : new Wind({ direction: [1, 0.35], speed: 0.22, animateShadows: false });
 const content = Promise.all([
   houses(world),
   trees(world, pipeline.renderer, wind),
   props(world),
   Corn.build(world),
-  groundCover(textures, world, zones, camera, pipeline.renderer, wind),
+  groundCover(world, land, camera, pipeline.renderer, wind),
 ]);
 // Let cache discovery start before constructing the ground on this thread.
 await new Promise<void>((resolve) => setTimeout(resolve, 0));
-if (terrain) {
-  const ground = world.terrain.mesh(terrainMaterial(textures, zones));
-  // the ground's shader is the costliest per pixel and much of it ends up under corn, grass
-  // and houses: drawn last of the opaque objects, depth testing skips what they cover
+if (drawTerrain) {
+  const ground = world.terrain.mesh(terrain(textures, land));
+  // Opaque foliage and buildings can occlude the ground.
   ground.renderOrder = 1;
   scene.add(ground);
 }
@@ -209,12 +211,14 @@ await textures.ready();
 loaded("textures");
 await pipeline.compile();
 loaded("compiled");
-// Render the first view until its levels and shadows have arrived, and while the viewport changes meanwhile.
+// Show the opening view once its visible levels, shadows and planting have settled.
 for (;;) {
   const version = viewportVersion;
   await pipeline.step(() => frame(0));
   await pipeline.wait();
-  if (version === viewportVersion && !loading) break;
+  const failed = lods.find((lod) => lod.error !== undefined);
+  if (failed) throw failed.error;
+  if (version === viewportVersion && !loading && !lods.some((lod) => lod.pending) && nearTiles.every((tiles) => tiles.settled)) break;
 }
 const loadMs = performance.now() - started;
 loaded("first frame");
@@ -231,10 +235,10 @@ function live(): void {
   frameMs += (now - last - frameMs) * 0.1;
   last = now;
   frame(dt);
-  void pipeline.timing();
-  ui.showTime(playback.time, playback.playing);
+  if (pipeline.timed) void pipeline.timing();
   if (now - shown < 250) return;
   shown = now;
+  ui.showTime(playback.time, playback.playing);
   ui.showStats({ ms: frameMs, gpu: pipeline.gpuMs, ...pipeline.drawn });
 }
 pipeline.renderer.setAnimationLoop(live);

@@ -31,7 +31,7 @@ export interface LodLevel {
    * Largest on-screen height, in CSS pixels × Lod.quality, at which this level draws: Infinity for level 0, the finest;
    * every later one at most (1 - Lod.fade) of its finer neighbour's, which leaves room for the fades. A level without
    * one gets the height its impostor is sharp to (see `texelPixels`), else half its finer neighbour's (512 for level 1),
-   * raised to leave room for the fades; `lod.levels` holds what it got.
+   * raised to leave room for the fades. Level 1 at Infinity never draws level 0, and the level after it defaults to 512.
    */
   maxPixels?: number;
   /**
@@ -64,7 +64,7 @@ export function checkLevels(levels: readonly ThresholdedLevel[], who: string): v
 /** Throws unless `thresholds` are maxPixels as `LodLevel` says. */
 function checkThresholds(thresholds: readonly number[], who: string): void {
   thresholds.forEach((maxPixels, i) => {
-    if (i === 0 && maxPixels !== Infinity) throw new Error(`${who}: level 0, the source, is used at any height: its maxPixels is Infinity, not ${maxPixels}`);
+    if (i === 0 && maxPixels !== Infinity) throw new Error(`${who}: level 0 needs maxPixels Infinity, got ${maxPixels}`);
     if (!(maxPixels > 0)) throw new Error(`${who}: maxPixels must be > 0, got ${maxPixels}`);
     const finer = thresholds[i - 1];
     if (finer !== undefined && maxPixels > finer * (1 - FADE))
@@ -114,7 +114,8 @@ export function resolveThresholds(levels: readonly Unresolved[], who: string): n
   let finer = 1024;
   const defaults = levels.map(({ maxPixels, texels }, index) => {
     if (index === 0) return Infinity;
-    finer = maxPixels ?? texels ?? finer / 2;
+    // A finer level drawn at any height leaves the default as it is after the source.
+    finer = maxPixels ?? texels ?? (finer === Infinity ? 1024 : finer) / 2;
     return finer;
   });
   const thresholds = levels.map(() => Infinity);

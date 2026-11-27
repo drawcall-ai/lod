@@ -30,6 +30,7 @@ import { ARRIVAL_MS } from "../src/levels/manager.js";
 import { checkRenderer } from "../src/levels/renderer.js";
 import { Lod } from "../src/lod.js";
 import { Wind } from "../src/wind/index.js";
+import { opaqueSort } from "../src/index.js";
 import { ImpostorMesh } from "../src/impostor/mesh/index.js";
 import type { Impostor } from "../src/impostor/impostor.js";
 import { GPU_TIMEOUT, eventually, render, renderer, nextLevel, renderLod } from "./renderer.js";
@@ -209,6 +210,37 @@ describe("a Lod in shadow maps", { timeout: GPU_TIMEOUT }, () => {
     } finally {
       dispose();
       lod.dispose();
+    }
+  });
+
+  it("keeps both visible instances on screen when the first receiver draws a shadow map containing only one", async () => {
+    const source = new Mesh(new BoxGeometry(), new MeshStandardMaterial({ emissive: 0xffffff }));
+    source.castShadow = source.receiveShadow = true;
+    const lod = lodOf(
+      [{ object: source }],
+      [-3, 3].map((x) => new Matrix4().makeTranslation(x, 0, 0)),
+    );
+    const camera = new OrthographicCamera(-4, 4, 4, -4, 0.1, 20);
+    camera.position.z = 10;
+    const { scene, sun, dispose } = sunlit([lod], { height: 10, texels: 64, extent: 2 });
+    sun.position.x = sun.target.position.x = -3;
+    sun.shadow.autoUpdate = false;
+    // The receiver starts its camera draw, then renders itself into the map before that draw reaches the GPU.
+    for (const mesh of drawnMeshes(lod)) mesh.renderOrder = -1;
+    try {
+      sun.shadow.needsUpdate = true;
+      await render(scene, camera);
+      await render(scene, camera);
+      for (const refresh of [false, true, false]) {
+        sun.shadow.needsUpdate = refresh;
+        const pixels = await render(scene, camera);
+        for (const x of [8, 56]) expect(pixels[(32 * 64 + x) * 4], `x=${x}, refresh=${refresh}`).toBeGreaterThan(200);
+      }
+    } finally {
+      dispose();
+      lod.dispose();
+      source.geometry.dispose();
+      source.material.dispose();
     }
   });
 
@@ -462,6 +494,47 @@ describe("a Lod's instances", { timeout: GPU_TIMEOUT }, () => {
 });
 
 describe("a Lod's level loads", { timeout: GPU_TIMEOUT }, () => {
+  it("sorts a later-arriving fine level before its coarse impostor at equal depth", async () => {
+    const coarse = new ImpostorMesh(impostor());
+    coarse.name = "coarse";
+    const lod = lodOf(
+      [
+        { load: async () => box("fine"), box: new Box3(new Vector3(-1, -1, -1), new Vector3(1, 1, 1)) },
+        { object: coarse, maxPixels: 12 },
+      ],
+      onAxis([4, 80]),
+    );
+    const scene = new Scene().add(lod);
+    const camera = new PerspectiveCamera(60, 1, 0.1, 200);
+    renderer.setOpaqueSort(opaqueSort);
+    try {
+      await nextLevel(lod, camera);
+      const [first, later] = drawnMeshes(lod);
+      const far = must(first);
+      const fine = must(later);
+      expect([far.name, fine.name]).toEqual(["coarse", "fine"]);
+      expect(far.geometry.boundingSphere).toBe(fine.geometry.boundingSphere);
+      const draws: string[] = [];
+      for (const mesh of [far, fine]) {
+        const after = mesh.onAfterRender;
+        mesh.onAfterRender = (...args) => {
+          after.call(mesh, ...args);
+          draws.push(mesh.name);
+        };
+      }
+      await render(scene, camera);
+      expect(draws).toEqual(["fine", "coarse"]);
+      draws.length = 0;
+      far.renderOrder = -1;
+      await render(scene, camera);
+      expect(draws).toEqual(["coarse", "fine"]);
+    } finally {
+      renderer.setOpaqueSort(null);
+      lod.dispose();
+      coarse.dispose();
+    }
+  });
+
   it("loads shared decoded detail only in Lods near enough to draw it", async () => {
     // Memoized, as a load shared across Lods is to share one object.
     const make = vi.fn(async () => box());

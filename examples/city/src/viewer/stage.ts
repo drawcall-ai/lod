@@ -1,6 +1,6 @@
 import * as THREE from "three/webgpu";
-import { terrain } from "../render/ground/material.ts";
-import type { Textures } from "../render/materials.ts";
+import { Textures } from "../render/materials.ts";
+import { terrain } from "../render/ground.ts";
 import { loadSky } from "../render/sky.ts";
 
 /**
@@ -11,10 +11,14 @@ import { loadSky } from "../render/sky.ts";
 export class Stage {
   readonly scene = new THREE.Scene();
   readonly sun = new THREE.DirectionalLight("#fff3e2", 3);
+  private readonly textures: Textures;
+  private readonly lawn: THREE.Material;
   private readonly ground: THREE.Mesh<THREE.PlaneGeometry, THREE.Material>;
   private sunDirection = new THREE.Vector3(0.5, 0.8, 0.3).normalize();
 
-  constructor(private readonly textures: Textures) {
+  constructor(private readonly manager: THREE.LoadingManager) {
+    this.textures = new Textures(manager);
+    this.lawn = terrain(this.textures);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(4096, 4096);
     this.scene.add(this.sun, this.sun.target);
@@ -23,14 +27,14 @@ export class Stage {
     const plane = new THREE.PlaneGeometry(size, size).rotateX(-Math.PI / 2);
     const uv = plane.getAttribute("uv");
     for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getX(i) - 0.5) * size, (uv.getY(i) - 0.5) * size);
-    this.ground = new THREE.Mesh(plane, terrain(textures));
+    this.ground = new THREE.Mesh(plane, this.lawn);
     this.ground.receiveShadow = true;
     this.scene.add(this.ground);
   }
 
   async loadSky(renderer: THREE.Renderer): Promise<void> {
     // turn the sky so the sun rakes across content facing +z from the front left
-    const sky = await loadSky(this.textures.manager, renderer, Math.atan2(0.8, -0.6));
+    const [sky] = await Promise.all([loadSky(this.manager, renderer, Math.atan2(0.8, -0.6)), this.textures.ready()]);
     this.sunDirection = sky.sun;
     this.sun.intensity = sky.irradiance;
     this.scene.environment = sky.environment;
@@ -38,7 +42,7 @@ export class Stage {
     this.scene.environmentRotation.y = this.scene.backgroundRotation.y = sky.turn;
   }
 
-  setGround(material: THREE.Material): void {
+  setGround(material: THREE.Material = this.lawn): void {
     this.ground.material = material;
   }
 
