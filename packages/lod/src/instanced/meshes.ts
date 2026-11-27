@@ -142,6 +142,9 @@ function levelMesh({ template, placement, group }: Part, offset: () => number | 
   // Three sorts by the geometry's sphere, including for instanced impostors.
   mesh.geometry.boundingSphere = bounds;
   mesh.geometry.boundingBox = box;
+  // Three can draw this same mesh into a shadow map between onBeforeRender and the camera's GPU draw.
+  const active: (InstanceSlots["args"] | null)[] = [];
+  const bind = (args: InstanceSlots["args"] | null, start: number) => mesh.geometry.setIndirect(args?.attribute ?? NOTHING, args ? args.offset + start : 0);
   const previous = mesh.onBeforeRender;
   // Each camera draws the instances in its own lists. A level compiling to join draws nothing yet: its pipelines do not
   // depend on the indirect draw.
@@ -150,8 +153,14 @@ function levelMesh({ template, placement, group }: Part, offset: () => number | 
     const start = offset();
     if (start === null) return;
     const args = drawFor(renderer, camera);
-    if (args) mesh.geometry.setIndirect(args.attribute, args.offset + start);
-    else mesh.geometry.setIndirect(NOTHING, 0);
+    active.push(args);
+    bind(args, start);
+  };
+  mesh.onAfterRender = () => {
+    active.pop();
+    const outer = active.at(-1);
+    const start = offset();
+    if (outer !== undefined && start !== null) bind(outer, start);
   };
   return mesh;
 }

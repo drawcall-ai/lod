@@ -213,6 +213,37 @@ describe("a Lod in shadow maps", { timeout: GPU_TIMEOUT }, () => {
     }
   });
 
+  it("keeps both visible instances on screen when the first receiver draws a shadow map containing only one", async () => {
+    const source = new Mesh(new BoxGeometry(), new MeshStandardMaterial({ emissive: 0xffffff }));
+    source.castShadow = source.receiveShadow = true;
+    const lod = lodOf(
+      [{ object: source }],
+      [-3, 3].map((x) => new Matrix4().makeTranslation(x, 0, 0)),
+    );
+    const camera = new OrthographicCamera(-4, 4, 4, -4, 0.1, 20);
+    camera.position.z = 10;
+    const { scene, sun, dispose } = sunlit([lod], { height: 10, texels: 64, extent: 2 });
+    sun.position.x = sun.target.position.x = -3;
+    sun.shadow.autoUpdate = false;
+    // The receiver starts its camera draw, then renders itself into the map before that draw reaches the GPU.
+    for (const mesh of drawnMeshes(lod)) mesh.renderOrder = -1;
+    try {
+      sun.shadow.needsUpdate = true;
+      await render(scene, camera);
+      await render(scene, camera);
+      for (const refresh of [false, true, false]) {
+        sun.shadow.needsUpdate = refresh;
+        const pixels = await render(scene, camera);
+        for (const x of [8, 56]) expect(pixels[(32 * 64 + x) * 4], `x=${x}, refresh=${refresh}`).toBeGreaterThan(200);
+      }
+    } finally {
+      dispose();
+      lod.dispose();
+      source.geometry.dispose();
+      source.material.dispose();
+    }
+  });
+
   it("holds a shadow map's lists however seldom the map is redrawn, until its target is disposed", async () => {
     const lod = lodOf([{ object: box("source") }], onAxis([distanceAt(50)]));
     const camera = new PerspectiveCamera(60, 1, 0.1, 1e5);
@@ -484,8 +515,13 @@ describe("a Lod's level loads", { timeout: GPU_TIMEOUT }, () => {
       expect([far.name, fine.name]).toEqual(["coarse", "fine"]);
       expect(far.geometry.boundingSphere).toBe(fine.geometry.boundingSphere);
       const draws: string[] = [];
-      far.onAfterRender = () => draws.push(far.name);
-      fine.onAfterRender = () => draws.push(fine.name);
+      for (const mesh of [far, fine]) {
+        const after = mesh.onAfterRender;
+        mesh.onAfterRender = (...args) => {
+          after.call(mesh, ...args);
+          draws.push(mesh.name);
+        };
+      }
       await render(scene, camera);
       expect(draws).toEqual(["fine", "coarse"]);
       draws.length = 0;
