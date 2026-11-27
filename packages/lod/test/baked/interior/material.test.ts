@@ -17,8 +17,9 @@ import {
   Vector3,
   type Object3D,
 } from "three/webgpu";
+import { vec3 } from "three/tsl";
 import { CSMShadowNode } from "three/addons/csm/CSMShadowNode.js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { bakeMesh } from "../../../src/baked/index.js";
 import { disposeRecursive } from "../../../src/dispose.js";
 import { Lod } from "../../../src/lod.js";
@@ -153,6 +154,23 @@ describe("interiors", { timeout: GPU_TIMEOUT }, () => {
     const { device } = renderer.backend as unknown as { device: GPUDevice };
     const { messages } = await device.createShaderModule({ code: strict }).getCompilationInfo();
     expect(messages.filter((message) => message.type === "error").map((message) => message.message)).toEqual([]);
+  });
+
+  it("reports an environment node it cannot light the rooms with", async () => {
+    const rooms = interior();
+    const baked = await bakeMesh(house().add(rooms), { low: box(), textureSize: 32, interior: rooms, renderer: bakeRenderer });
+    const scene = new Scene().add(baked);
+    scene.environmentNode = vec3(1);
+    const camera = new PerspectiveCamera(30, 1, 0.1, 100);
+    camera.position.set(0, 0, 5);
+    // three draws a failed build with a plain material and logs why.
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await renderer.debug.getShaderAsync(scene, camera, baked);
+      expect(logged.mock.calls.flat().join(" ")).toContain("not a scene's environmentNode");
+    } finally {
+      logged.mockRestore();
+    }
   });
 
   it("shows the next room through a doorway in the room behind the window", async () => {

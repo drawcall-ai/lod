@@ -8,7 +8,6 @@ import {
   type DataTexture,
   type Node,
   type NodeBuilder,
-  type Object3D,
   type StorageBufferNode,
   type Texture,
   type Vector3,
@@ -51,7 +50,7 @@ import {
   vec4,
 } from "three/tsl";
 import { instanceMatrixOf, spaceOf } from "../../levels/fade.js";
-import { isScene, rootOf } from "../../three.js";
+import { isScene } from "../../three.js";
 import { affine, column, contextNode, isNodeOf, isOrthographic } from "../../tsl.js";
 import { FACES, type Faces } from "./faces.js";
 
@@ -111,7 +110,9 @@ export class InteriorMappingMaterial extends MeshStandardNodeMaterial {
   }
 
   override setupLightingModel(): PhysicalLightingModel {
-    return this.rooms && this.bounds ? new InteriorLightingModel(this.rooms, this.bounds) : super.setupLightingModel();
+    if (!this.rooms || !this.bounds) return super.setupLightingModel();
+    if (this.envNode) throw new Error("InteriorMappingMaterial: rooms are lit by an environment texture, not an envNode");
+    return new InteriorLightingModel(this.rooms, this.bounds, this.envMap);
   }
 
   override copy(source: InteriorMappingMaterial): this {
@@ -134,6 +135,8 @@ class InteriorLightingModel extends PhysicalLightingModel {
     private readonly rooms: Rooms,
     /** see `InteriorMappingMaterial.bounds` */
     private readonly boxes: StorageBufferNode<"vec4">,
+    /** the material's own environment, which takes precedence over the scene's */
+    private readonly envMap: Texture | null,
   ) {
     super();
   }
@@ -213,7 +216,7 @@ class InteriorLightingModel extends PhysicalLightingModel {
         select(far.y.lessThanEqual(far.z), vec3(0, sign(direction.y).negate(), 0), vec3(0, 0, sign(direction.z).negate())),
       );
       const wallNormal = normalize(x.mul(inward.x).add(y.mul(inward.y)).add(z.mul(inward.z)));
-      const environment = environmentOf(builder.object);
+      const environment = this.envMap ?? sceneEnvironment(builder);
       const ibl = environment ? pmremTexture(environment, wallNormal, float(1)).rgb.mul(Math.PI).mul(materialEnvIntensity) : vec3(0, 0, 0);
       const light = irradiance.add(ibl);
       let shown = texture(rooms.response, at).depth(layer).level(level).rgb.mul(light).div(Math.PI);
@@ -226,10 +229,15 @@ class InteriorLightingModel extends PhysicalLightingModel {
   }
 }
 
-/** The environment of the scene `object` is in, if any. */
-function environmentOf(object: Object3D): Texture | null {
-  const root = rootOf(object);
-  return isScene(root) ? root.environment : null;
+/**
+ * The environment of the scene being drawn. A Lod's level builds its shader while detached from that scene, so it comes
+ * from the builder (whose `scene` three's types leave out), not from the object's root.
+ */
+function sceneEnvironment(builder: NodeBuilder): Texture | null {
+  const scene: unknown = Reflect.get(builder, "scene");
+  if (!isScene(scene)) return null;
+  if (scene.environmentNode) throw new Error("InteriorMappingMaterial: rooms are lit by an environment texture, not a scene's environmentNode");
+  return scene.environment;
 }
 
 /** The inverse of an affine `m`, as a matrix: the linear part's inverse and the translation undone. */
